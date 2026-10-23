@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use umlcraft_model::{
-    ActivityNodeKind, DiagramKind, ElementKind, Model, Point, PseudostateKind, Shape,
+    ActivityNodeKind, DiagramKind, ElementKind, InstanceKind, Model, Point, PseudostateKind, Shape,
     TransitionProps, TypeRef,
 };
 
@@ -270,6 +270,47 @@ fn sample_state_machine_diagram() {
     }
     let view = model.view(diagram.id()).unwrap();
     assert_eq!(view.presentations().iter().filter(|p| p.is_edge()).count(), 10, "and an anchor");
+}
+
+#[test]
+fn sample_component_and_deployment_diagrams() {
+    let Some(path) = astah_file("Sample.asta") else { return };
+    let imported = umlcraft_asta::import(&path).unwrap();
+    let model = &imported.model;
+    for class in ["UComponentImp", "UArtifactImp", "UNodeImp", "UNodeInstanceImp"] {
+        assert!(!imported.skipped.contains_key(class), "{class}: {:?}", imported.skipped);
+    }
+
+    let catalog = find(model, "Catalog", |k| matches!(k, ElementKind::Component(_)));
+    assert_eq!(catalog.data().stereotypes, vec!["ejbEntity"]);
+    find(model, "CatalogJAR", |k| matches!(k, ElementKind::Artifact(_)));
+    let [components] = diagrams(model, DiagramKind::Component)[..] else { panic!("one") };
+    let view = model.view(components.id()).unwrap();
+    assert_eq!(view.presentations().iter().filter(|p| p.is_edge()).count(), 6);
+
+    let deployments = diagrams(model, DiagramKind::Deployment);
+    assert_eq!(deployments.len(), 2);
+    let server = find(model, "videoStoreServer", |k| matches!(k, ElementKind::Instance(_)));
+    let ElementKind::Instance(p) = server.kind() else { unreachable!() };
+    assert_eq!(p.instance, InstanceKind::Node);
+    assert_eq!(model.get(p.classifier.unwrap()).unwrap().name(), "AppServer");
+    // Instances depend on interfaces; a component providing one is a realization, not a usage.
+    let realizations: Vec<_> = model
+        .elements()
+        .filter(|e| matches!(e.kind(), ElementKind::Realization(_)))
+        .filter(|e| e.data().stereotypes.iter().any(|s| s == "use"))
+        .collect();
+    assert!(realizations.is_empty(), "realizations marked «use»");
+    let from_instances = model
+        .elements()
+        .filter(|e| match e.kind() {
+            ElementKind::Dependency(d) | ElementKind::Realization(d) => {
+                matches!(model.get(d.client).unwrap().kind(), ElementKind::Instance(_))
+            }
+            _ => false,
+        })
+        .count();
+    assert_eq!(from_instances, 13);
 }
 
 /// Ulf's reference class diagram (`.asta` files are not in Git); its layout must match Astah's.

@@ -12,10 +12,10 @@ use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, AssociationProps,
     AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
     DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps, GeneralizationProps, Id,
-    IncludeProps, InteractionOperandProps, InteractionOperator, LifelineProps, MessageProps,
-    MessageSort, Model, Multiplicity, Navigability, Op, OperationProps, ParameterDirection,
-    ParameterProps, Point, Presentation, PseudostateKind, Rect, Shape, StateProps, Style,
-    TaggedValue, TransitionProps, TypeRef, Visibility,
+    IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
+    LifelineProps, MessageProps, MessageSort, Model, Multiplicity, Navigability, Op,
+    OperationProps, ParameterDirection, ParameterProps, Point, Presentation, PseudostateKind, Rect,
+    Shape, StateProps, Style, TaggedValue, TransitionProps, TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::scene::border_point_from;
@@ -275,6 +275,8 @@ struct Importer<'g> {
     /// Calls that have a reply message.
     replied: HashSet<ObjId>,
     relationships: Vec<(Id, ObjId)>,
+    /// Instance specifications, created once their classifiers exist.
+    instances: Vec<(Id, ObjId)>,
     /// Activity graphs and state machines with the element they belong to.
     behaviors: Vec<(Id, ObjId)>,
     diagrams: Vec<(Id, ObjId)>,
@@ -293,6 +295,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         queued: HashSet::new(),
         replied: HashSet::new(),
         relationships: Vec::new(),
+        instances: Vec::new(),
         behaviors: Vec::new(),
         diagrams: Vec::new(),
     };
@@ -300,6 +303,10 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     im.walk(root, root_id);
     for (owner, feature) in std::mem::take(&mut im.features) {
         im.feature(owner, feature);
+    }
+    // Dependencies may connect instances, so they come first.
+    for (owner, instance) in std::mem::take(&mut im.instances) {
+        im.instance(owner, instance);
     }
     for (owner, relationship) in std::mem::take(&mut im.relationships) {
         im.relationship(owner, relationship);
@@ -418,7 +425,8 @@ impl Importer<'_> {
                         self.walk(child, package);
                     }
                 }
-                "UClassifierImp" | "UInterfaceImp" | "UActorImp" | "UUseCaseImp" => {
+                "UClassifierImp" | "UInterfaceImp" | "UActorImp" | "UUseCaseImp"
+                | "UComponentImp" | "UArtifactImp" | "UNodeImp" => {
                     // Anonymous classifiers bind a template to arguments; they live on as type
                     // names such as `List<Projekt>` (see `Reader::type_name`).
                     if !self.r.list(child, "templateBinding").is_empty()
@@ -467,6 +475,9 @@ impl Importer<'_> {
                     self.relationships.push((id, child));
                 }
                 "UDiagramImp" | "USequenceDiagramImp" => self.diagrams.push((id, child)),
+                "UComponentInstanceImp" | "UNodeInstanceImp" | "UObjectImp" => {
+                    self.instances.push((id, child));
+                }
                 // Bindings live on in the bound types' names, see `Reader::type_name`.
                 "UTemplateBindingImp" => {}
                 // Constraints on association ends come with their association.
@@ -514,6 +525,9 @@ impl Importer<'_> {
         let has = |s: &str| stereotypes.iter().any(|t| t == s);
         match self.r.class(object) {
             "UUseCaseImp" => (ElementKind::UseCase(props), &[]),
+            "UComponentImp" => (ElementKind::Component(props), &[]),
+            "UArtifactImp" => (ElementKind::Artifact(props), &[]),
+            "UNodeImp" => (ElementKind::Node(props), &[]),
             "UInterfaceImp" => (ElementKind::Interface(props), &["interface"]),
             "UActorImp" => (ElementKind::Actor(props), &["actor"]),
             _ if has("interface") => (ElementKind::Interface(props), &["interface"]),
@@ -524,6 +538,20 @@ impl Importer<'_> {
             }
             _ => (ElementKind::Class(props), &[]),
         }
+    }
+
+    /// An object, component instance or node instance of the first of its classifiers.
+    fn instance(&mut self, owner: Id, object: ObjId) {
+        let instance = match self.r.class(object) {
+            "UComponentInstanceImp" => InstanceKind::Component,
+            "UNodeInstanceImp" => InstanceKind::Node,
+            _ => InstanceKind::Object,
+        };
+        let classifier =
+            self.r.list(object, "classifiers").first().and_then(|&c| self.classifier(c));
+        let data =
+            self.data(object, ElementKind::Instance(InstanceProps { instance, classifier }), &[]);
+        self.create(owner, data, Some(object));
     }
 
     /// A type reference: a classifier of the model, or the type's name as text.
@@ -664,8 +692,11 @@ impl Importer<'_> {
             ElementKind::Realization(_) => &["realize", "realization"],
             _ => &[],
         };
+        let usage = matches!(kind, ElementKind::Dependency(_));
         let mut data = self.data(object, kind, hide);
-        if class == "UUsageImp" && !data.stereotypes.iter().any(|s| s == "use") {
+        // A usage is a dependency marked «use», unless Astah made it a realization (a component
+        // providing an interface on a deployment diagram).
+        if class == "UUsageImp" && usage && !data.stereotypes.iter().any(|s| s == "use") {
             data.stereotypes.insert(0, "use".into());
         }
         self.create(owner, data, Some(object));
@@ -899,6 +930,8 @@ impl Importer<'_> {
             ("UStateChartDiagramImp", _) => DiagramKind::StateMachine,
             (_, "Class Diagram") => DiagramKind::Class,
             (_, "UseCase Diagram") => DiagramKind::UseCase,
+            (_, "Component Diagram") => DiagramKind::Component,
+            (_, "Deployment Diagram") => DiagramKind::Deployment,
             _ => {
                 self.skip(object);
                 return;
