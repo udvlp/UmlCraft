@@ -12,6 +12,7 @@ publish = false
 umlcraft-model = { path = "crates/umlcraft-model" }
 umlcraft-format = { path = "crates/umlcraft-format" }
 umlcraft-notation = { path = "crates/umlcraft-notation" }
+umlcraft-asta = { path = "crates/umlcraft-asta" }
 
 # gpui-kit pins the matching GPUI release (gpui-pre) together with gpui-component.
 gpui-kit = "=0.8.0"
@@ -25,6 +26,8 @@ anyhow = "1"
 pretty_assertions = "1"
 rust-i18n = "4"
 sys-locale = "0.3"
+# Reading Astah files only needs inflate; zopfli would only help writing.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

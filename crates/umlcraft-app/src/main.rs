@@ -19,6 +19,7 @@ actions!(
     [
         NewProject,
         OpenProject,
+        ImportAstah,
         SaveProject,
         SaveProjectAs,
         Quit,

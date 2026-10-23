@@ -10,6 +10,7 @@ menu:
   file: File
   new: New project
   open: Open …
+  import_astah: Import Astah project …
   recent: Open recent
   no_recent: (none)
   save: Save
@@ -121,6 +122,9 @@ dialog:
   cancel: Cancel
   open_failed: The project could not be opened.
   save_failed: The project could not be saved.
+  import_failed: The Astah project could not be imported.
+  import_partial: "%{count} elements of the Astah project were not carried over."
+  import_partial_detail: "UmlCraft does not know these kinds of elements yet: %{kinds}"
 project:
   untitled: New project
 edit:

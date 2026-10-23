@@ -23,8 +23,15 @@ importing `.asta` files (read only).
 - **M4** Use case diagram: system boundary (clickable only on its border and title, moves the
   contained elements along, as packages do); use cases with wrapped names and extension points;
   extend with condition and choice of extension points.
+- **M6** `.asta` import (`umlcraft-asta`, File › Import Astah project, or simply open an `.asta`
+  file): packages, classes, interfaces, enumerations, actors and use cases with attributes,
+  operations, parameters and extension points; associations, generalizations, dependencies,
+  realizations, include and extend; class and use case diagrams with positions, sizes, waypoints,
+  notes and colors; sequence diagrams as interactions with lifelines, messages and combined
+  fragments (the diagrams show the lifelines). Anything UmlCraft cannot represent yet is skipped
+  and reported.
 
-Next steps: sequence diagram in detail (M5) and the `.asta` import (M6).
+Next step: sequence diagram in detail (M5).
 
 ## Build and run
 
@@ -43,6 +50,7 @@ cargo test --workspace
 | `crates/umlcraft-model` | Metamodel, diagrams/presentations, `Op`, `Document`/`Tx` (undo/redo) |
 | `crates/umlcraft-format` | `.ucraft` files: JSON, stably sorted, versioned |
 | `crates/umlcraft-notation` | UML notation without UI: scene, hit testing, palettes, connection rules |
+| `crates/umlcraft-asta` | Read-only import of Astah `.asta` files |
 | `crates/umlcraft-app` | GPUI application (`gpui-kit` 0.8) |
 
 Details: [docs/architecture.md](docs/architecture.md).

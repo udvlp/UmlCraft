@@ -248,6 +248,15 @@ impl MainView {
     }
 
     fn open_project(&mut self, _: &OpenProject, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_and_open(window, cx);
+    }
+
+    /// Opening an `.asta` file imports it, so this is the same as "Open".
+    fn import_astah(&mut self, _: &ImportAstah, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_and_open(window, cx);
+    }
+
+    fn prompt_and_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.confirm_discard(
             window,
             cx,
@@ -278,12 +287,38 @@ impl MainView {
     }
 
     fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("asta")) {
+            self.import(&path, window, cx);
+            return;
+        }
         match umlcraft_format::load(&path) {
             Ok(model) => {
                 self.replace_document(Document::new(model), Some(path.clone()), cx);
                 self.remember(&path, cx);
             }
             Err(err) => self.show_error(&t!("dialog.open_failed"), &err.to_string(), window, cx),
+        }
+    }
+
+    /// Imports an Astah project as a new, not yet saved project. Says so when parts of it
+    /// could not be carried over.
+    fn import(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        match umlcraft_asta::import(path) {
+            Ok(imported) => {
+                self.replace_document(Document::new(imported.model), None, cx);
+                let count: usize = imported.skipped.values().sum();
+                if count > 0 {
+                    let kinds: Vec<String> = imported
+                        .skipped
+                        .iter()
+                        .map(|(class, n)| format!("{} ({n})", astah_class_label(class)))
+                        .collect();
+                    let message = t!("dialog.import_partial", count = count);
+                    let detail = t!("dialog.import_partial_detail", kinds = kinds.join(", "));
+                    self.inform(PromptLevel::Info, &message, &detail, window, cx);
+                }
+            }
+            Err(err) => self.show_error(&t!("dialog.import_failed"), &err.to_string(), window, cx),
         }
     }
 
@@ -368,8 +403,24 @@ impl MainView {
     }
 
     fn show_error(&self, message: &str, detail: &str, window: &mut Window, cx: &mut Context<Self>) {
-        // Only informs; nobody waits for the answer.
-        drop(window.prompt(PromptLevel::Critical, message, Some(detail), &["OK"], cx));
+        self.inform(PromptLevel::Critical, message, detail, window, cx);
+    }
+
+    /// Shows a message with an OK button. The answer has to be awaited even though nobody
+    /// needs it: dropping the receiver cancels the dialog before it appears.
+    fn inform(
+        &self,
+        level: PromptLevel,
+        message: &str,
+        detail: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rx = window.prompt(level, message, Some(detail), &["OK"], cx);
+        cx.spawn_in(window, async move |_, _| {
+            rx.await.ok();
+        })
+        .detach();
     }
 
     fn quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
@@ -783,6 +834,12 @@ fn panel_header(title: impl Into<SharedString>, cx: &App) -> impl IntoElement {
         .child(title.into())
 }
 
+/// A readable name for an Astah metaclass, e.g. `UMatrixDiagramImp` → `MatrixDiagram`.
+fn astah_class_label(class: &str) -> &str {
+    let name = class.strip_suffix("Imp").unwrap_or(class);
+    name.strip_prefix('U').filter(|rest| rest.starts_with(char::is_uppercase)).unwrap_or(name)
+}
+
 fn menu_item(key: &str, action: impl Action) -> MenuItem {
     MenuItem::action(t!(key).to_string(), action)
 }
@@ -802,6 +859,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
             menu_item("menu.new", NewProject),
             menu_item("menu.open", OpenProject),
             MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
+            menu_item("menu.import_astah", ImportAstah),
             MenuItem::separator(),
             menu_item("menu.save", SaveProject),
             menu_item("menu.save_as", SaveProjectAs),
@@ -913,6 +971,7 @@ impl Render for MainView {
             .text_color(theme.foreground)
             .on_action(cx.listener(Self::new_project))
             .on_action(cx.listener(Self::open_project))
+            .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::open_recent))
             .on_action(cx.listener(Self::open_sample))
             .on_action(cx.listener(Self::save_project))

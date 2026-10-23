@@ -1,0 +1,19 @@
+[package]
+name = "umlcraft-asta"
+description = "Read-only import of Astah project files (.asta)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+umlcraft-model.workspace = true
+umlcraft-notation.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+umlcraft-format.workspace = true
+
+[lints]
+workspace = true
