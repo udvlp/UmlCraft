@@ -2,19 +2,20 @@
 //!
 //! Astah follows the UML 1.4 metamodel (`JP.co.esm.caddies.uml.*`) plus its own presentation
 //! classes (`JP.co.esm.caddies.jomt.jmodel.*`). Only what UmlCraft can represent is imported:
-//! packages, classifiers with their features, use cases, the relationships between them, and
-//! class, use case and sequence diagrams. Everything else is counted in
-//! [`Imported::skipped`].
+//! packages, classifiers with their features, use cases, the relationships between them,
+//! activities, and class, use case, sequence and activity diagrams. Everything else is counted
+//! in [`Imported::skipped`].
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use umlcraft_model::{
-    Aggregation, AssociationEnd, AssociationProps, AttributeProps, ClassifierProps,
-    CombinedFragmentProps, CommentProps, DiagramKind, DirectedProps, EdgeLabels, ElementData,
-    ElementKind, ExtendProps, GeneralizationProps, Id, IncludeProps, InteractionOperandProps,
-    InteractionOperator, LifelineProps, MessageProps, MessageSort, Model, Multiplicity,
-    Navigability, Op, OperationProps, ParameterDirection, ParameterProps, Point, Presentation,
-    Rect, Shape, Style, TaggedValue, TypeRef, Visibility,
+    ActivityEdgeProps, ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd,
+    AssociationProps, AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps,
+    DiagramKind, DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps,
+    GeneralizationProps, Id, IncludeProps, InteractionOperandProps, InteractionOperator,
+    LifelineProps, MessageProps, MessageSort, Model, Multiplicity, Navigability, Op,
+    OperationProps, ParameterDirection, ParameterProps, Point, Presentation, Rect, Shape, Style,
+    TaggedValue, TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::scene::border_point_from;
@@ -208,11 +209,24 @@ fn is_language_marker(stereotype: &str) -> bool {
 /// Astah marks elements of its ER, data flow and requirement notations with tagged values on
 /// otherwise plain UML elements.
 fn is_foreign_notation(tags: &[(String, String)]) -> bool {
-    tags.iter().any(|(key, value)| {
-        key.starts_with("jude.er.")
-            || key.starts_with("jude.dfd.")
-            || key.starts_with("jude.require.")
-            || (key == "jude.type" && value.starts_with("er_"))
+    foreign_notation(tags).is_some()
+}
+
+/// The notation that tagged values mark, as reported among the skipped kinds. Data flow
+/// diagrams and flowcharts are activity diagrams with such tags.
+fn foreign_notation(tags: &[(String, String)]) -> Option<&'static str> {
+    tags.iter().find_map(|(key, value)| {
+        if key.starts_with("jude.er.") || (key == "jude.type" && value.starts_with("er_")) {
+            Some("EntityRelationship")
+        } else if key.starts_with("jude.dfd.") {
+            Some("DataFlowDiagram")
+        } else if key.starts_with("jude.biz.") {
+            Some("Flowchart")
+        } else if key.starts_with("jude.require.") {
+            Some("Requirement")
+        } else {
+            None
+        }
     })
 }
 
@@ -227,6 +241,8 @@ struct Importer<'g> {
     /// Calls that have a reply message.
     replied: HashSet<ObjId>,
     relationships: Vec<(Id, ObjId)>,
+    /// Activity graphs with the element they belong to.
+    activities: Vec<(Id, ObjId)>,
     diagrams: Vec<(Id, ObjId)>,
 }
 
@@ -243,6 +259,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         queued: HashSet::new(),
         replied: HashSet::new(),
         relationships: Vec::new(),
+        activities: Vec::new(),
         diagrams: Vec::new(),
     };
     let root_id = im.model.root();
@@ -252,6 +269,9 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     }
     for (owner, relationship) in std::mem::take(&mut im.relationships) {
         im.relationship(owner, relationship);
+    }
+    for (owner, graph) in std::mem::take(&mut im.activities) {
+        im.activity(owner, graph);
     }
     im.unowned_diagrams();
     for (owner, diagram) in std::mem::take(&mut im.diagrams) {
@@ -340,6 +360,13 @@ impl Importer<'_> {
     /// Creates the elements owned by `object`. Features, relationships and diagrams wait until
     /// every classifier exists, so their references can be resolved.
     fn walk(&mut self, object: ObjId, id: Id) {
+        // Behaviors are not owned elements; the element they describe lists them.
+        for behavior in self.r.list(object, "behavior") {
+            match self.r.class(behavior) {
+                "UActivityGraphImp" => self.activities.push((id, behavior)),
+                _ => self.skip(behavior),
+            }
+        }
         for ownership in self.r.list(object, "ownedElementOwnership") {
             let Some(child) = self.r.obj(ownership, "ownedElement") else { continue };
             if is_foreign_notation(&self.r.tagged_values(child)) {
@@ -631,9 +658,87 @@ impl Importer<'_> {
         Some(result)
     }
 
+    /// Creates an activity with its nodes, flows and partitions, and queues its diagram.
+    /// Astah keeps UML 1.4's activity graphs: states of a state machine connected by
+    /// transitions.
+    fn activity(&mut self, owner: Id, graph: ObjId) {
+        let r = self.r;
+        let diagram = r.obj(graph, "diagram");
+        let mut tags = r.tagged_values(graph);
+        tags.extend(diagram.map(|d| r.tagged_values(d)).unwrap_or_default());
+        if let Some(notation) = foreign_notation(&tags) {
+            *self.skipped.entry(notation.to_owned()).or_default() += 1;
+            return;
+        }
+        let data = self.data(graph, ElementKind::Activity, &[]);
+        let Some(activity) = self.create(owner, data, Some(graph)) else { return };
+        for partition in r.list(graph, "partition") {
+            self.partition(activity, partition);
+        }
+        let vertices = r.obj(graph, "top").map(|top| r.list(top, "subvertex")).unwrap_or_default();
+        for vertex in vertices {
+            let Some(node) = self.activity_node_kind(vertex) else {
+                self.skip(vertex);
+                continue;
+            };
+            // Object nodes have a classifier in a state as their type; the state is left out.
+            let type_ref = (node == ActivityNodeKind::Object)
+                .then(|| r.obj(vertex, "type").and_then(|t| self.type_ref(t)))
+                .flatten();
+            let data = self.data(
+                vertex,
+                ElementKind::ActivityNode(ActivityNodeProps { node, type_ref }),
+                &[],
+            );
+            self.create(activity, data, Some(vertex));
+        }
+        for transition in r.list(graph, "transition") {
+            let end = |field| r.obj(transition, field).and_then(|v| self.ids.get(&v).copied());
+            let (Some(source), Some(target)) = (end("source"), end("target")) else {
+                self.skip(transition);
+                continue;
+            };
+            let guard = r.obj(transition, "guard").map(|g| r.name(g)).unwrap_or_default();
+            let kind = ElementKind::ActivityEdge(ActivityEdgeProps { source, target, guard });
+            let data = self.data(transition, kind, &[]);
+            self.create(activity, data, Some(transition));
+        }
+        if let Some(diagram) = diagram {
+            self.diagrams.push((activity, diagram));
+        }
+    }
+
+    fn partition(&mut self, owner: Id, partition: ObjId) {
+        let data = self.data(partition, ElementKind::Partition, &[]);
+        let Some(id) = self.create(owner, data, Some(partition)) else { return };
+        for sub in self.r.list(partition, "subGroup") {
+            self.partition(id, sub);
+        }
+    }
+
+    fn activity_node_kind(&self, vertex: ObjId) -> Option<ActivityNodeKind> {
+        Some(match self.r.class(vertex) {
+            // A subactivity calls another activity; UmlCraft shows it as an action.
+            "UActionStateImp" | "USubactivityStateImp" => ActivityNodeKind::Action,
+            "UObjectFlowStateImp" => ActivityNodeKind::Object,
+            "UFinalStateImp" => ActivityNodeKind::ActivityFinal,
+            "UFlowFinalNodeImp" => ActivityNodeKind::FlowFinal,
+            "UPseudostateImp" => match self.r.text(vertex, "kind").as_str() {
+                "initial" => ActivityNodeKind::Initial,
+                "fork" => ActivityNodeKind::Fork,
+                "join" => ActivityNodeKind::Join,
+                "choice" => ActivityNodeKind::Decision,
+                "junction" => ActivityNodeKind::Merge,
+                _ => return None,
+            },
+            _ => return None,
+        })
+    }
+
     fn diagram(&mut self, owner: Id, object: ObjId) {
         let kind = match (self.r.class(object), self.r.text(object, "type").as_str()) {
             ("USequenceDiagramImp", _) => DiagramKind::Sequence,
+            ("UActivityDiagramImp", _) => DiagramKind::Activity,
             (_, "Class Diagram") => DiagramKind::Class,
             (_, "UseCase Diagram") => DiagramKind::UseCase,
             _ => {
@@ -1149,6 +1254,7 @@ fn edge_ends(kind: &ElementKind) -> Option<(Id, Id)> {
         ElementKind::Include(p) => Some((p.including, p.addition)),
         ElementKind::Extend(p) => Some((p.extension, p.extended)),
         ElementKind::Message(p) => Some((p.from, p.to)),
+        ElementKind::ActivityEdge(p) => Some((p.source, p.target)),
         _ => None,
     }
 }

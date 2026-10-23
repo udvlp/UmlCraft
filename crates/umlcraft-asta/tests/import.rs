@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use umlcraft_model::{DiagramKind, ElementKind, Model, Point, Shape, TypeRef};
+use umlcraft_model::{ActivityNodeKind, DiagramKind, ElementKind, Model, Point, Shape, TypeRef};
 
 const ASTAH: &str = r"C:\Program Files\astah-professional";
 
@@ -161,7 +161,55 @@ fn sample_project() {
     assert_eq!(umlcraft_format::from_str(&json).unwrap(), *model);
 }
 
-/// Ulf's reference class diagram (`docs/` is not in Git); its layout must match Astah's.
+#[test]
+fn sample_activity_diagram() {
+    let Some(path) = astah_file("Sample.asta") else { return };
+    let imported = umlcraft_asta::import(&path).unwrap();
+    let model = &imported.model;
+    // Data flow diagrams and flowcharts are activity diagrams to Astah, but other notations.
+    assert_eq!(imported.skipped.get("DataFlowDiagram"), Some(&4));
+    assert_eq!(imported.skipped.get("Flowchart"), Some(&1));
+
+    let [diagram] = diagrams(model, DiagramKind::Activity)[..] else { panic!("one activity") };
+    let activity = model.get(diagram.owner().unwrap()).unwrap();
+    assert!(matches!(activity.kind(), ElementKind::Activity));
+    // The activity belongs to the use case it describes.
+    let sales = model.get(activity.owner().unwrap()).unwrap();
+    assert!(matches!(sales.kind(), ElementKind::UseCase(_)), "{}", sales.name());
+
+    let count = |pred: &dyn Fn(&ElementKind) -> bool| {
+        model
+            .subtree(activity.id())
+            .iter()
+            .filter(|&&id| pred(model.get(id).unwrap().kind()))
+            .count()
+    };
+    let node = |kind: ActivityNodeKind| move |k: &ElementKind| matches!(k, ElementKind::ActivityNode(p) if p.node == kind);
+    assert_eq!(count(&node(ActivityNodeKind::Action)), 6);
+    assert_eq!(count(&node(ActivityNodeKind::Object)), 4);
+    assert_eq!(count(&node(ActivityNodeKind::Initial)), 1);
+    assert_eq!(count(&node(ActivityNodeKind::Fork)), 1);
+    assert_eq!(count(&node(ActivityNodeKind::Join)), 1);
+    assert_eq!(count(&node(ActivityNodeKind::ActivityFinal)), 1);
+    assert_eq!(count(&|k| matches!(k, ElementKind::ActivityEdge(_))), 14);
+    // The lanes sit below one dimension.
+    let lanes: Vec<&str> = model
+        .subtree(activity.id())
+        .iter()
+        .map(|&id| model.get(id).unwrap())
+        .filter(|e| matches!(e.kind(), ElementKind::Partition))
+        .map(|e| e.name())
+        .collect();
+    assert_eq!(lanes.len(), 4, "{lanes:?}");
+    assert!(lanes.contains(&"Stockroom "), "{lanes:?}");
+
+    // Everything is shown: 14 activity nodes, 4 lanes, a note and 14 flows.
+    let view = model.view(diagram.id()).unwrap();
+    assert_eq!(view.presentations().iter().filter(|p| p.is_edge()).count(), 14);
+    assert_eq!(view.presentations().iter().filter(|p| !p.is_edge()).count(), 19);
+}
+
+/// Ulf's reference class diagram (`.asta` files are not in Git); its layout must match Astah's.
 #[test]
 fn reference_class_diagram() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/Klassendiagramm.asta");
