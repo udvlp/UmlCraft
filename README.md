@@ -1,33 +1,32 @@
 # UmlCraft
 
-UML-Modellierungswerkzeug in Rust mit [GPUI](https://gpui.rs), als Neubau nach dem Vorbild von
-Astah Professional. Meilenstein 1 umfasst Klassen-, Use-Case- und Sequenzdiagramme sowie den Import
-von `.asta`-Dateien (nur lesen).
+A UML modeling tool written in Rust with [GPUI](https://gpui.rs), built from scratch after the
+model of Astah Professional. Milestone 1 covers class, use case and sequence diagrams, plus
+importing `.asta` files (read only).
 
-## Stand
+## Status
 
-- **M0** Workspace und GPUI-Spike: Modellbaum, Zeichenfläche mit Pan/Zoom, Auswahl, Ziehen mit
-  Rasterfang, Undo/Redo, Hell/Dunkel, DE/EN.
-- **M1** Modellkern (`umlcraft-model`) mit validierten, umkehrbaren Operationen und
-  Transaktionen; JSON-Projektformat (`umlcraft-format`).
-- **M2** Editor-Shell: Menüleiste, Diagramm-Tabs, Werkzeugpalette je Diagrammart mit
-  Verbindungsregeln, Rahmen- und Mehrfachauswahl, Größe ändern, Ausrichten, Einpassen,
-  bearbeitbares Eigenschaftenpanel, Kontextmenü im Modellbaum, Neu/Öffnen/Speichern/Zuletzt
-  geöffnet mit Rückfrage bei ungespeicherten Änderungen; Kopieren/Ausschneiden/Einfügen (als Kopie
-  oder als dieselben Elemente), Knickpunkte an Kanten, Drag & Drop im Modellbaum und vom Baum auf
-  die Zeichenfläche.
-- **M3** Klassendiagramm: Klassen wachsen mit ihrem Inhalt; Inline-Bearbeitung per Doppelklick
-  mit Parser für `+ name : Typ [0..*] = init` und `+ op(p : T) : R`; Attribute, Operationen und
-  Aufzählungswerte mit Statisch/Abstrakt/Abfrage/Schreibgeschützt; Assoziationsenden mit Rolle,
-  Multiplizität, Navigierbarkeit und Aggregation/Komposition; Selbstassoziationen; Abschnitte
-  ausblenden; Schnittstelle als Kreis („Lollipop“).
-- **M4** Use-Case-Diagramm: Systemgrenze (nur am Rand und Titel anklickbar, nimmt beim Verschieben
-  die enthaltenen Elemente mit, ebenso Pakete); Anwendungsfälle mit umbrochenem Namen und
-  Erweiterungspunkten; Extend mit Bedingung und Auswahl der Erweiterungspunkte.
+- **M0** Workspace and GPUI spike: model tree, canvas with pan/zoom, selection, dragging with grid
+  snapping, undo/redo, light/dark theme, German/English.
+- **M1** Model core (`umlcraft-model`) with validated, invertible operations and transactions;
+  JSON project format (`umlcraft-format`).
+- **M2** Editor shell: menu bar, diagram tabs, tool palette per diagram type with connection rules,
+  rubber-band and multiple selection, resizing, alignment, zoom to fit, editable properties panel,
+  context menu in the model tree, New/Open/Save/Recent files with a prompt for unsaved changes;
+  copy/cut/paste (as a copy or as the same elements), waypoints on edges, drag and drop within the
+  model tree and from the tree onto the canvas.
+- **M3** Class diagram: classes grow with their content; inline editing by double-click with a
+  parser for `+ name : Type [0..*] = init` and `+ op(p : T) : R`; attributes, operations and
+  enumeration literals with static/abstract/query/read-only; association ends with role,
+  multiplicity, navigability and aggregation/composition; self-associations; hiding compartments;
+  interface as a circle ("lollipop").
+- **M4** Use case diagram: system boundary (clickable only on its border and title, moves the
+  contained elements along, as packages do); use cases with wrapped names and extension points;
+  extend with condition and choice of extension points.
 
-Nächste Schritte: Sequenzdiagramm im Detail (M5) und der `.asta`-Import (M6).
+Next steps: sequence diagram in detail (M5) and the `.asta` import (M6).
 
-## Bauen und starten
+## Build and run
 
 ```bash
 cargo run -p umlcraft-app
@@ -37,13 +36,29 @@ cargo run -p umlcraft-app
 cargo test --workspace
 ```
 
-## Aufbau
+## Structure
 
-| Crate | Aufgabe |
+| Crate | Purpose |
 | --- | --- |
-| `crates/umlcraft-model` | Metamodell, Diagramme/Presentations, `Op`, `Document`/`Tx` (Undo/Redo) |
-| `crates/umlcraft-format` | `.ucraft`-Dateien: JSON, stabil sortiert, versioniert |
-| `crates/umlcraft-notation` | UML-Notation ohne UI: Szene, Treffertest, Paletten, Verbindungsregeln |
-| `crates/umlcraft-app` | GPUI-Anwendung (`gpui-kit` 0.8) |
+| `crates/umlcraft-model` | Metamodel, diagrams/presentations, `Op`, `Document`/`Tx` (undo/redo) |
+| `crates/umlcraft-format` | `.ucraft` files: JSON, stably sorted, versioned |
+| `crates/umlcraft-notation` | UML notation without UI: scene, hit testing, palettes, connection rules |
+| `crates/umlcraft-app` | GPUI application (`gpui-kit` 0.8) |
 
-Details: [docs/architektur.md](docs/architektur.md).
+Details: [docs/architecture.md](docs/architecture.md).
+
+## License
+
+UmlCraft is licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+UmlCraft by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
+additional terms or conditions.
+
+UmlCraft is an independent reimplementation and is not affiliated with Change Vision, Inc., the
+maker of Astah. "Astah" is a trademark of Change Vision, Inc.

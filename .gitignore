@@ -1,5 +1,38 @@
+# Rust build output
 /target
+**/*.rs.bk
+*.pdb
+
+# Astah's own project files are not ours to publish
 *.asta
-*.bak
+
+# UmlCraft temporary files (atomic save)
+*.ucraft.tmp
+
+# Documentation stays local for now
+docs/
+
+# Claude Code
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+
+# Editors and IDEs
 .vs/
+.vscode/
 .idea/
+*.iml
+*.swp
+*.swo
+*~
+*.bak
+
+# Operating systems
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and local environment
+*.log
+.env
+.env.*
