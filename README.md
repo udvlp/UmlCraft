@@ -23,6 +23,12 @@ importing `.asta` files (read only).
 - **M4** Use case diagram: system boundary (clickable only on its border and title, moves the
   contained elements along, as packages do); use cases with wrapped names and extension points;
   extend with condition and choice of extension points.
+- **M5** Sequence diagram: messages run from top to bottom in the order of the interaction, so
+  inserting or moving one moves the rest along; synchronous, asynchronous, reply, create and
+  destroy messages, self messages, activation bars derived from calls and replies; combined
+  fragments (alt, opt, loop, par, …) with operands, guards and covered lifelines, placed with the
+  palette or around selected messages (Ctrl+G); messages and fragments are dragged up and down
+  (also into and out of fragments); labels and guards are edited in place.
 - **M6** `.asta` import (`umlcraft-asta`, File › Import Astah project, or simply open an `.asta`
   file): packages, classes, interfaces, enumerations, actors and use cases with attributes,
   operations, parameters and extension points; associations, generalizations, dependencies,
@@ -31,7 +37,7 @@ importing `.asta` files (read only).
   fragments (the diagrams show the lifelines). Anything UmlCraft cannot represent yet is skipped
   and reported.
 
-Next step: sequence diagram in detail (M5).
+This completes milestone 1. Next: further diagram kinds (activity, state) and image export.
 
 ## Build and run
 

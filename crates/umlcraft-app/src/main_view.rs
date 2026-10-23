@@ -817,7 +817,7 @@ fn tree_item(
     meta.insert(key.clone(), TreeMeta { id, kind: e.kind().clone(), is_root: id == model.root() });
     let children: Vec<TreeItem> =
         e.children().iter().map(|&c| tree_item(model, c, collapsed, meta)).collect();
-    TreeItem::new(key.clone(), labels::display_name(e))
+    TreeItem::new(key.clone(), labels::tree_name(model, e))
         .expanded(!collapsed.contains(&key))
         .children(children)
 }
@@ -887,6 +887,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
                 menu_item("menu.align_middle", AlignMiddle),
                 menu_item("menu.align_bottom", AlignBottom),
             ])),
+            menu_item("menu.wrap_in_fragment", WrapInFragment),
         ]),
         Menu::new(t!("menu.view").to_string()).items([
             menu_item("menu.zoom_in", ZoomIn),
@@ -1002,6 +1003,9 @@ impl Render for MainView {
             }))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
                 this.with_workspace(cx, Workspace::select_all)
+            }))
+            .on_action(cx.listener(|this, _: &WrapInFragment, _, cx| {
+                this.with_workspace(cx, Workspace::wrap_selection_in_fragment)
             }))
             .on_action(cx.listener(|this, _: &AlignLeft, _, cx| this.align(Alignment::Left, cx)))
             .on_action(cx.listener(|this, _: &AlignCenter, _, cx| {

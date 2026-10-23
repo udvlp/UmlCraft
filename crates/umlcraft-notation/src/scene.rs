@@ -4,11 +4,12 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    Aggregation, ElementKind, Id, MessageSort, Model, Navigability, Point, Presentation, Rect,
-    Shape, Style,
+    Aggregation, DiagramKind, ElementKind, Id, MessageSort, Model, Navigability, Point,
+    Presentation, Rect, Shape, Style,
 };
 
 use crate::member::member_text;
+use crate::sequence::{self, SequenceLayout};
 
 /// Measures text, so nodes can grow with their content. The app measures with the real font;
 /// [`ApproxMeasure`] is good enough for tests and headless use.
@@ -27,11 +28,13 @@ impl TextMeasure for ApproxMeasure {
 pub struct Scene {
     pub nodes: Vec<NodeShape>,
     pub edges: Vec<EdgeShape>,
+    /// Activations, insertion slots etc. of a sequence diagram.
+    pub sequence: Option<SequenceLayout>,
 }
 
 impl Scene {
     pub fn empty() -> Self {
-        Self { nodes: Vec::new(), edges: Vec::new() }
+        Self { nodes: Vec::new(), edges: Vec::new(), sequence: None }
     }
 
     pub fn node(&self, id: Id) -> Option<&NodeShape> {
@@ -58,17 +61,28 @@ pub struct NodeShape {
 }
 
 impl NodeShape {
-    /// Whether `p` hits the node. Hollow frames (system boundaries) only count at their border
-    /// and title, so clicks inside reach what they contain or the empty canvas.
+    /// Whether `p` hits the node. Hollow frames (system boundaries, combined fragments) only
+    /// count at their border and texts, so clicks inside reach what they contain or the empty
+    /// canvas. Lifelines count at their head and along their dashed line.
     pub fn hit(&self, p: Point, tolerance: f32) -> bool {
         if !self.rect.inflate(tolerance).contains(p) {
             return false;
         }
-        if !matches!(self.figure, Figure::Boundary) {
-            return self.rect.contains(p);
+        match &self.figure {
+            Figure::Boundary | Figure::Fragment { .. } => {
+                let inner = self.rect.inflate(-2.0 * tolerance.max(3.0));
+                !inner.contains(p) || self.rows.iter().any(|r| r.rect.contains(p))
+            }
+            Figure::Lifeline { head } => {
+                head.contains(p) || (p.x - head.center().x).abs() <= tolerance + 4.0
+            }
+            _ => self.rect.contains(p),
         }
-        let inner = self.rect.inflate(-2.0 * tolerance.max(3.0));
-        !inner.contains(p) || self.rows.iter().any(|r| r.rect.contains(p))
+    }
+
+    /// Whether the user may resize the node. Lifelines and fragments size themselves.
+    pub fn resizable(&self) -> bool {
+        !matches!(self.figure, Figure::Lifeline { .. } | Figure::Fragment { .. })
     }
 }
 
@@ -92,6 +106,12 @@ pub enum Figure {
     Boundary,
     Lifeline {
         head: Rect,
+    },
+    /// Combined fragment: a frame with the operator in a tab at the top left and dashed lines
+    /// between the operands.
+    Fragment {
+        tab: Rect,
+        separators: Vec<f32>,
     },
     Note,
     Other,
@@ -121,13 +141,13 @@ pub struct Row {
     pub element: Option<Id>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineStyle {
     Solid,
     Dashed,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndMarker {
     None,
     OpenArrow,
@@ -145,6 +165,8 @@ pub struct EdgeShape {
     pub source_marker: EndMarker,
     pub target_marker: EndMarker,
     pub labels: Vec<EdgeLabel>,
+    /// The route follows from the layout (sequence messages); it has no waypoints to drag.
+    pub fixed: bool,
 }
 
 /// A grip on a selected edge: an existing waypoint, or the middle of a segment where dragging
@@ -162,6 +184,9 @@ impl EdgeShape {
 
     /// Grips in drawing order: waypoints first, then segment middles.
     pub fn handles(&self) -> Vec<(EdgeHandle, Point)> {
+        if self.fixed {
+            return Vec::new();
+        }
         let waypoints =
             self.waypoints().iter().enumerate().map(|(i, &p)| (EdgeHandle::Waypoint(i), p));
         let inserts = self.points.windows(2).enumerate().map(|(i, w)| {
@@ -287,17 +312,28 @@ impl Line {
 /// Builds the scene of `diagram`, with `preview` applied.
 pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMeasure) -> Scene {
     let Some(view) = model.view(diagram) else { return Scene::empty() };
-    let mut rects: HashMap<Id, Rect> = HashMap::new();
-    let nodes: Vec<NodeShape> = view
+    let mut nodes: Vec<NodeShape> = view
         .presentations()
         .iter()
         .filter_map(|p| {
             let bounds = preview.rect(p.id, p.bounds()?);
-            let node = layout_node(model, p, bounds, measure);
-            rects.insert(p.id, node.rect);
-            Some(node)
+            Some(layout_node(model, p, bounds, measure))
         })
         .collect();
+    let is_sequence =
+        model.get(diagram).and_then(|d| d.kind().as_diagram()) == Some(DiagramKind::Sequence);
+    let (sequence, messages) = if is_sequence {
+        let (layout, messages) = sequence::arrange(model, diagram, view, &mut nodes, measure);
+        (Some(layout), messages)
+    } else {
+        (None, Vec::new())
+    };
+    let rects: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
+    let is_message = |p: &Presentation| {
+        p.element
+            .and_then(|e| model.get(e))
+            .is_some_and(|e| matches!(e.kind(), ElementKind::Message(_)))
+    };
 
     let iconic_interfaces: HashSet<Id> = view
         .presentations()
@@ -305,9 +341,11 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         .filter(|p| p.style.iconic && is_interface(model, p.element))
         .map(|p| p.id)
         .collect();
-    let edges = view
+    let mut edges: Vec<EdgeShape> = view
         .presentations()
         .iter()
+        // On sequence diagrams the layout draws the messages.
+        .filter(|p| !(is_sequence && is_message(p)))
         .filter_map(|p| {
             let Shape::Edge { source, target, waypoints } = &p.shape else { return None };
             let (source_rect, target_rect) = (*rects.get(source)?, *rects.get(target)?);
@@ -345,7 +383,8 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             ))
         })
         .collect();
-    Scene { nodes, edges }
+    edges.extend(messages);
+    Scene { nodes, edges, sequence }
 }
 
 fn is_interface(model: &Model, element: Option<Id>) -> bool {
@@ -434,7 +473,7 @@ fn layout_element(
             let line = Line::new(header, 12.0, RowRole::Name, Some(id));
             let w = bounds.width.max(line.width(measure) + 16.0);
             let r = Rect::new(bounds.x, bounds.y, w, bounds.height.max(60.0));
-            let head = Rect::new(r.x, r.y, r.width, 32.0);
+            let head = Rect::new(r.x, r.y, r.width, sequence::HEAD_HEIGHT);
             let h = line_height(12.0);
             let row = line
                 .place(Rect::new(r.x, head.center().y - h / 2.0, r.width, h), LabelAlign::Center);
@@ -741,6 +780,7 @@ fn edge_for(
         source_marker: EndMarker::None,
         target_marker: EndMarker::None,
         labels: Vec::new(),
+        fixed: false,
     };
     let (mut source_label, mut target_label) = (None, None);
     let mut label = name_label;
@@ -843,7 +883,7 @@ fn end_label(text: String, tip: Point, from: Point) -> EdgeLabel {
 }
 
 /// Places a name or stereotype label at the middle of the segment `a`–`b`.
-fn middle_label(text: String, a: Point, b: Point) -> EdgeLabel {
+pub(crate) fn middle_label(text: String, a: Point, b: Point) -> EdgeLabel {
     let mid = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
     if (b.x - a.x).abs() >= (b.y - a.y).abs() {
         EdgeLabel {

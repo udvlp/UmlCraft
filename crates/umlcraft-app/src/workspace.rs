@@ -10,6 +10,7 @@ use umlcraft_notation::clipboard::{self, Clip};
 use umlcraft_notation::member;
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Alignment};
+use umlcraft_notation::sequence::Slot;
 
 /// The open project and what the user is looking at. Shared by all panels as a GPUI entity.
 pub struct Workspace {
@@ -178,13 +179,78 @@ impl Workspace {
         }
     }
 
+    /// Draws a message on the active sequence diagram at `slot` and selects it.
+    pub fn connect_message(&mut self, tool: EdgeTool, source: Id, target: Id, slot: Option<Slot>) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.connect").to_string();
+        let result = self
+            .doc
+            .edit(label, |tx| palette::connect_message(tx, diagram, tool, source, target, slot));
+        if let Some(edge) = self.report(result) {
+            self.select(vec![edge]);
+        }
+    }
+
+    /// Adds a combined fragment to the active sequence diagram and selects it.
+    pub fn create_fragment(&mut self, slot: Option<Slot>, covered: Vec<Id>, origin: Point) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.create").to_string();
+        let result =
+            self.doc.edit(label, |tx| palette::create_fragment(tx, diagram, slot, covered, origin));
+        if let Some((fragment, node)) = self.report(result) {
+            self.selection = vec![node];
+            self.selected_element = Some(fragment);
+        }
+    }
+
+    /// Puts the selected messages and fragments into a new combined fragment.
+    pub fn wrap_selection_in_fragment(&mut self) {
+        let Some(diagram) = self.active_diagram else { return };
+        let Some(view) = self.doc.model().view(diagram) else { return };
+        let items: Vec<Id> = self.selection.iter().filter_map(|&p| view.get(p)?.element).collect();
+        let label = t!("edit.wrap_in_fragment").to_string();
+        let result = self.doc.edit(label, |tx| palette::wrap_in_fragment(tx, diagram, &items));
+        if let Some((fragment, node)) = self.report(result) {
+            self.selection = vec![node];
+            self.selected_element = Some(fragment);
+        }
+    }
+
+    /// Moves a message or fragment to another place in its interaction.
+    pub fn move_to_slot(&mut self, item: Id, slot: Slot) {
+        let label = t!("edit.move_element").to_string();
+        let result = self.doc.edit(label, |tx| palette::move_to_slot(tx, item, slot));
+        self.report(result);
+    }
+
+    /// Adds an operand to a combined fragment and selects it.
+    pub fn add_operand(&mut self, fragment: Id) {
+        let label = t!("edit.create").to_string();
+        let result = self.doc.edit(label, |tx| palette::add_operand(tx, fragment));
+        if let Some(operand) = self.report(result) {
+            self.selected_element = Some(operand);
+        }
+    }
+
     /// Moves the given nodes of the active diagram by (`dx`, `dy`) as one undo step.
     pub fn move_nodes(&mut self, presentations: &[Id], dx: f32, dy: f32) {
         let Some(diagram) = self.active_diagram else { return };
-        let Some(view) = self.doc.model().view(diagram) else { return };
+        let model = self.doc.model();
+        let Some(view) = model.view(diagram) else { return };
+        let kind_of = |p: &umlcraft_model::Presentation| p.element.and_then(|e| model.get(e));
+        // New bounds per node. On sequence diagrams lifelines only move sideways, and fragments
+        // follow their content.
         let nodes: Vec<(Id, Rect)> = presentations
             .iter()
-            .filter_map(|&p| view.get(p).and_then(|pr| pr.bounds()).map(|b| (p, b)))
+            .filter_map(|&p| view.get(p))
+            .filter_map(|p| {
+                let bounds = p.bounds()?;
+                match kind_of(p).map(|e| e.kind()) {
+                    Some(ElementKind::CombinedFragment(_)) => None,
+                    Some(ElementKind::Lifeline(_)) => Some((p.id, bounds.translate(dx, 0.0))),
+                    _ => Some((p.id, bounds.translate(dx, dy))),
+                }
+            })
             .collect();
         if nodes.is_empty() || (dx == 0.0 && dy == 0.0) {
             return;
@@ -213,7 +279,7 @@ impl Workspace {
             .unwrap_or_default();
         let label = t!("edit.move").to_string();
         let result = self.doc.edit(label, |tx| {
-            nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b.translate(dx, dy)))?;
+            nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
             edges.into_iter().try_for_each(|(e, w)| tx.set_waypoints(diagram, e, w))
         });
         self.report(result);
@@ -241,24 +307,37 @@ impl Workspace {
         self.report(result);
     }
 
-    /// Applies text typed in place: member declarations are parsed, note texts and names set.
+    /// Applies text typed in place: member declarations are parsed, note texts, guards and names
+    /// set. A message takes `name(arguments)`, a reply its return value.
     pub fn apply_text(&mut self, element: Id, text: &str) {
         let label = t!("edit.properties").to_string();
-        let is_note = self
-            .doc
-            .model()
-            .get(element)
-            .is_some_and(|e| matches!(e.kind(), ElementKind::Comment(_)));
-        let result = self.doc.edit(label, |tx| {
-            if is_note {
-                tx.update(element, |d| {
-                    if let ElementKind::Comment(p) = &mut d.kind {
-                        p.body = text.to_owned();
-                    }
-                })
-            } else {
-                member::apply_member_text(tx, element, text)
-            }
+        let Some(kind) = self.doc.model().get(element).map(|e| e.kind().clone()) else { return };
+        let result = self.doc.edit(label, |tx| match kind {
+            ElementKind::Comment(_) => tx.update(element, |d| {
+                if let ElementKind::Comment(p) = &mut d.kind {
+                    p.body = text.to_owned();
+                }
+            }),
+            ElementKind::InteractionOperand(_) => tx.update(element, |d| {
+                if let ElementKind::InteractionOperand(p) = &mut d.kind {
+                    let guard = text.trim();
+                    let guard = guard.strip_prefix('[').unwrap_or(guard);
+                    p.guard = guard.strip_suffix(']').unwrap_or(guard).trim().to_owned();
+                }
+            }),
+            ElementKind::Message(_) => tx.update(element, |d| {
+                let text = text.trim();
+                let ElementKind::Message(p) = &mut d.kind else { return };
+                if p.sort == umlcraft_model::MessageSort::Reply {
+                    p.return_value = text.to_owned();
+                } else if let Some((name, rest)) = text.split_once('(') {
+                    d.name = name.trim().to_owned();
+                    p.arguments = rest.strip_suffix(')').unwrap_or(rest).trim().to_owned();
+                } else {
+                    d.name = text.to_owned();
+                }
+            }),
+            _ => member::apply_member_text(tx, element, text),
         });
         self.report(result);
     }

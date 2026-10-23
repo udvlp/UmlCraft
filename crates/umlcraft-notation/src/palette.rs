@@ -2,9 +2,12 @@
 //! that create them.
 
 use umlcraft_model::{
-    ClassifierProps, CommentProps, DiagramKind, DirectedProps, ElementData, ElementKind,
-    ExtendProps, Id, IncludeProps, LifelineProps, Model, ModelError, Point, Rect, Result, Size, Tx,
+    ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind, DirectedProps, ElementData,
+    ElementKind, ExtendProps, Id, IncludeProps, InteractionOperandProps, InteractionOperator,
+    LifelineProps, MessageSort, Model, ModelError, Point, Rect, Result, Size, Tx,
 };
+
+use crate::sequence::Slot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NodeTool {
@@ -17,6 +20,7 @@ pub enum NodeTool {
     UseCase,
     Lifeline,
     SystemBoundary,
+    CombinedFragment,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -28,6 +32,11 @@ pub enum EdgeTool {
     Include,
     Extend,
     NoteAnchor,
+    Message,
+    AsyncMessage,
+    Reply,
+    CreateMessage,
+    DestroyMessage,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -69,7 +78,17 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
                 E::NoteAnchor,
             ],
         ),
-        DiagramKind::Sequence => (&[N::Lifeline, N::Note], &[E::NoteAnchor]),
+        DiagramKind::Sequence => (
+            &[N::Lifeline, N::CombinedFragment, N::Note],
+            &[
+                E::Message,
+                E::AsyncMessage,
+                E::Reply,
+                E::CreateMessage,
+                E::DestroyMessage,
+                E::NoteAnchor,
+            ],
+        ),
     };
     std::iter::once(Tool::Select)
         .chain(nodes.iter().map(|&n| Tool::Node(n)))
@@ -89,6 +108,7 @@ impl NodeTool {
             Self::UseCase => "useCase",
             Self::Lifeline => "lifeline",
             Self::SystemBoundary => "systemBoundary",
+            Self::CombinedFragment => "combinedFragment",
         }
     }
 
@@ -104,6 +124,10 @@ impl NodeTool {
             Self::UseCase => ElementKind::UseCase(classifier),
             Self::Lifeline => ElementKind::Lifeline(LifelineProps::default()),
             Self::SystemBoundary => ElementKind::SystemBoundary,
+            Self::CombinedFragment => ElementKind::CombinedFragment(CombinedFragmentProps {
+                operator: InteractionOperator::Opt,
+                covered: Vec::new(),
+            }),
         }
     }
 
@@ -117,6 +141,8 @@ impl NodeTool {
             Self::UseCase => Size::new(140.0, 60.0),
             Self::Lifeline => Size::new(100.0, 300.0),
             Self::SystemBoundary => Size::new(300.0, 360.0),
+            // The layout sizes fragments; this is only what the file keeps.
+            Self::CombinedFragment => Size::new(200.0, 80.0),
         }
     }
 }
@@ -145,6 +171,23 @@ impl EdgeTool {
             Self::Include => "include",
             Self::Extend => "extend",
             Self::NoteAnchor => "noteAnchor",
+            Self::Message => "message",
+            Self::AsyncMessage => "asyncMessage",
+            Self::Reply => "reply",
+            Self::CreateMessage => "createMessage",
+            Self::DestroyMessage => "destroyMessage",
+        }
+    }
+
+    /// The kind of message this tool draws, `None` for other tools.
+    pub fn message_sort(self) -> Option<MessageSort> {
+        match self {
+            Self::Message => Some(MessageSort::Synchronous),
+            Self::AsyncMessage => Some(MessageSort::Asynchronous),
+            Self::Reply => Some(MessageSort::Reply),
+            Self::CreateMessage => Some(MessageSort::Create),
+            Self::DestroyMessage => Some(MessageSort::Destroy),
+            _ => None,
         }
     }
 
@@ -153,6 +196,13 @@ impl EdgeTool {
     pub fn accepts(self, source: &ElementKind, target: &ElementKind, same: bool) -> bool {
         use ElementKind as K;
         match self {
+            Self::Message | Self::AsyncMessage | Self::Reply => {
+                matches!((source, target), (K::Lifeline(_), K::Lifeline(_)))
+            }
+            // A lifeline can neither create nor destroy itself.
+            Self::CreateMessage | Self::DestroyMessage => {
+                !same && matches!((source, target), (K::Lifeline(_), K::Lifeline(_)))
+            }
             Self::Association => source.is_classifier() && target.is_classifier(),
             Self::Generalization => {
                 !same
@@ -194,6 +244,13 @@ impl EdgeTool {
                 condition: String::new(),
             })),
             Self::NoteAnchor => None,
+            Self::Message
+            | Self::AsyncMessage
+            | Self::Reply
+            | Self::CreateMessage
+            | Self::DestroyMessage => {
+                Some(ElementKind::message(self.message_sort()?, source, target))
+            }
         }
     }
 }
@@ -211,9 +268,10 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
                 | ElementKind::SystemBoundary
                 | ElementKind::Comment(_)
         ),
-        DiagramKind::Sequence => {
-            matches!(kind, ElementKind::Lifeline(_) | ElementKind::Comment(_))
-        }
+        DiagramKind::Sequence => matches!(
+            kind,
+            ElementKind::Lifeline(_) | ElementKind::CombinedFragment(_) | ElementKind::Comment(_)
+        ),
     }
 }
 
@@ -228,6 +286,7 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::UseCase(_) => NodeTool::UseCase,
         ElementKind::Lifeline(_) => NodeTool::Lifeline,
         ElementKind::SystemBoundary => NodeTool::SystemBoundary,
+        ElementKind::CombinedFragment(_) => NodeTool::CombinedFragment,
         _ => NodeTool::Class,
     };
     tool.default_size()
@@ -253,7 +312,8 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
     // Relationships connecting the element to something shown, as (relationship, source, target)
     // with `None` standing for the new node.
     let mut edges = Vec::new();
-    for e in model.elements().filter(|e| e.kind().is_relationship()) {
+    let shows_edge = |k: &ElementKind| k.is_relationship() || matches!(k, ElementKind::Message(_));
+    for e in model.elements().filter(|e| shows_edge(e.kind())) {
         let ends: Vec<Id> = e
             .kind()
             .references()
@@ -304,11 +364,29 @@ pub fn is_container(kind: &ElementKind) -> bool {
     matches!(kind, ElementKind::SystemBoundary | ElementKind::Package)
 }
 
-/// Adds a node for `element`. System boundaries go to the back, so they never hide the use
-/// cases drawn inside them.
+/// Adds a node for `element`. System boundaries and fragments go to the back, so they never hide
+/// what is drawn inside them. Lifelines line up with the heads of the others.
 fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Result<Id> {
+    let model = tx.model();
+    let kind = model.element(element)?.kind();
+    let mut bounds = bounds;
+    if matches!(kind, ElementKind::Lifeline(_))
+        && let Some(top) = model
+            .view(diagram)
+            .into_iter()
+            .flat_map(|v| v.presentations())
+            .filter(|p| {
+                p.element
+                    .and_then(|e| model.get(e))
+                    .is_some_and(|e| matches!(e.kind(), ElementKind::Lifeline(_)))
+            })
+            .filter_map(|p| p.bounds().map(|b| b.y))
+            .reduce(f32::min)
+    {
+        bounds.y = top;
+    }
     let presentation = umlcraft_model::Presentation::node(Some(element), bounds);
-    if matches!(tx.model().element(element)?.kind(), ElementKind::SystemBoundary) {
+    if matches!(kind, ElementKind::SystemBoundary | ElementKind::CombinedFragment(_)) {
         let id = presentation.id;
         tx.apply(umlcraft_model::Op::InsertPresentation { diagram, index: 0, presentation })?;
         Ok(id)
@@ -347,6 +425,9 @@ pub fn create_node(
     origin: Point,
     base_name: &str,
 ) -> Result<(Id, Id)> {
+    if tool == NodeTool::CombinedFragment {
+        return create_fragment(tx, diagram, None, Vec::new(), origin);
+    }
     let kind = tool.element_kind();
     let diagram_owner = tx.model().element(diagram)?.owner().ok_or(ModelError::Root)?;
     let owner = owner_for(tx.model(), diagram_owner, &kind)
@@ -365,6 +446,9 @@ pub fn create_node(
 /// Connects two presentations of `diagram` with `tool`. Creates the relationship element in the
 /// namespace of the source element and returns the new edge presentation.
 pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target: Id) -> Result<Id> {
+    if tool.message_sort().is_some() {
+        return connect_message(tx, diagram, tool, source, target, None);
+    }
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let element_of = |p: Id| -> Result<Id> {
@@ -408,6 +492,133 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
             tx.add_edge(diagram, None, source, target, Vec::new())
         }
     }
+}
+
+/// Owner and index for something new in the sequence diagram's interaction: `slot`, or else
+/// after everything.
+fn slot_or_end(model: &Model, diagram: Id, slot: Option<Slot>) -> Result<(Id, usize)> {
+    match slot {
+        Some(slot) => Ok((slot.owner, slot.index)),
+        None => {
+            let interaction = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
+            Ok((interaction, model.children(interaction).len()))
+        }
+    }
+}
+
+/// Draws a message from one lifeline node of a sequence diagram to another (or the same).
+/// It goes to `slot` in the interaction, or after everything. Returns the new edge.
+pub fn connect_message(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    tool: EdgeTool,
+    source: Id,
+    target: Id,
+    slot: Option<Slot>,
+) -> Result<Id> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let element_of = |p: Id| -> Result<Id> {
+        view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
+    };
+    let (s, t) = (element_of(source)?, element_of(target)?);
+    let (sk, tk) = (model.element(s)?.kind(), model.element(t)?.kind());
+    let kind =
+        tool.element_kind(s, t).filter(|_| tool.accepts(sk, tk, s == t)).ok_or_else(|| {
+            ModelError::Invalid(format!(
+                "{} cannot connect {} to {}",
+                tool.key(),
+                sk.type_name(),
+                tk.type_name()
+            ))
+        })?;
+    let (owner, index) = slot_or_end(model, diagram, slot)?;
+    let message = tx.create_at(owner, index, ElementData::new("", kind))?;
+    tx.add_edge(diagram, Some(message), source, target, Vec::new())
+}
+
+/// Puts a new combined fragment with one empty operand at `slot` (or after everything),
+/// covering the lifelines `covered`. Returns (fragment, node).
+pub fn create_fragment(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    slot: Option<Slot>,
+    covered: Vec<Id>,
+    origin: Point,
+) -> Result<(Id, Id)> {
+    let (owner, index) = slot_or_end(tx.model(), diagram, slot)?;
+    let kind = ElementKind::CombinedFragment(CombinedFragmentProps {
+        operator: InteractionOperator::Opt,
+        covered,
+    });
+    let fragment = tx.create_at(owner, index, ElementData::new("", kind))?;
+    add_operand(tx, fragment)?;
+    let bounds = Rect::from_origin_size(origin, NodeTool::CombinedFragment.default_size());
+    let node = add_node_for(tx, diagram, fragment, bounds)?;
+    Ok((fragment, node))
+}
+
+/// Adds an empty operand at the end of `fragment`.
+pub fn add_operand(tx: &mut Tx<'_>, fragment: Id) -> Result<Id> {
+    let operand = ElementKind::InteractionOperand(InteractionOperandProps::default());
+    tx.create(fragment, ElementData::new("", operand))
+}
+
+/// Puts the messages and fragments `items` into a new combined fragment, together with
+/// everything between them. They must all be in the same interaction or operand.
+/// Returns (fragment, node).
+pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(Id, Id)> {
+    let model = tx.model();
+    let invalid = |msg: &str| ModelError::Invalid(msg.to_owned());
+    let mut owners = items.iter().map(|&i| model.element(i).map(|e| e.owner()));
+    let owner = owners.next().ok_or_else(|| invalid("nothing to put into a fragment"))??;
+    if owners.any(|o| o.ok().flatten() != owner) {
+        return Err(invalid("only messages at the same level can go into one fragment"));
+    }
+    let owner = owner.ok_or(ModelError::Root)?;
+    let children = model.children(owner);
+    let positions: Vec<usize> =
+        items.iter().filter_map(|i| children.iter().position(|c| c == i)).collect();
+    let (Some(&first), Some(&last)) = (positions.iter().min(), positions.iter().max()) else {
+        return Err(invalid("nothing to put into a fragment"));
+    };
+    let moved: Vec<Id> = children[first..=last]
+        .iter()
+        .copied()
+        .filter(|&c| {
+            model.get(c).is_some_and(|e| {
+                matches!(e.kind(), ElementKind::Message(_) | ElementKind::CombinedFragment(_))
+            })
+        })
+        .collect();
+    if moved.is_empty() {
+        return Err(invalid("only messages and fragments can go into a fragment"));
+    }
+    let slot = Slot { y: 0.0, owner, index: first };
+    let (fragment, node) = create_fragment(tx, diagram, Some(slot), Vec::new(), Point::default())?;
+    let operand = tx.model().children(fragment)[0];
+    for (i, item) in moved.into_iter().enumerate() {
+        tx.move_element(item, operand, i)?;
+    }
+    Ok((fragment, node))
+}
+
+/// Moves a message or fragment to `slot`, e.g. after dragging it up or down.
+pub fn move_to_slot(tx: &mut Tx<'_>, item: Id, slot: Slot) -> Result<()> {
+    let model = tx.model();
+    let owner = model.element(item)?.owner().ok_or(ModelError::Root)?;
+    let mut index = slot.index;
+    if owner == slot.owner {
+        let old = model.children(owner).iter().position(|&c| c == item).expect("owned");
+        // The index counts the item itself, which leaves its old place first.
+        if old < index {
+            index -= 1;
+        }
+        if old == index {
+            return Ok(());
+        }
+    }
+    tx.move_element(item, slot.owner, index)
 }
 
 #[cfg(test)]

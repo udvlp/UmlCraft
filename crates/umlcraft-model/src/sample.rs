@@ -4,8 +4,8 @@
 use crate::diagram::DiagramKind;
 use crate::document::Document;
 use crate::element::{
-    Aggregation, ElementData, ElementKind, LifelineProps, MessageSort, Multiplicity, TypeRef,
-    Visibility,
+    Aggregation, CombinedFragmentProps, ElementData, ElementKind, InteractionOperandProps,
+    InteractionOperator, LifelineProps, MessageSort, Multiplicity, TypeRef, Visibility,
 };
 use crate::geometry::Rect;
 use crate::id::Id;
@@ -121,7 +121,38 @@ pub fn order_system() -> (Document, OrderSystem) {
                     ElementKind::Lifeline(LifelineProps { represents: Some(order) }),
                 ),
             )?;
-            tx.create(
+            // Messages and fragments in the order they happen.
+            let items = tx.create(
+                interaction,
+                ElementData::new(
+                    "",
+                    ElementKind::CombinedFragment(CombinedFragmentProps {
+                        operator: InteractionOperator::Loop,
+                        covered: Vec::new(),
+                    }),
+                ),
+            )?;
+            let each_item = tx.create(
+                items,
+                ElementData::new(
+                    "",
+                    ElementKind::InteractionOperand(InteractionOperandProps {
+                        guard: "more items".into(),
+                    }),
+                ),
+            )?;
+            let add_item = tx.create(each_item, {
+                let mut kind = ElementKind::message(
+                    MessageSort::Synchronous,
+                    customer_lifeline,
+                    order_lifeline,
+                );
+                if let ElementKind::Message(p) = &mut kind {
+                    p.arguments = "item".into();
+                }
+                ElementData::new("addItem", kind)
+            })?;
+            let submit = tx.create(
                 interaction,
                 ElementData::new(
                     "submit",
@@ -132,20 +163,36 @@ pub fn order_system() -> (Document, OrderSystem) {
                     ),
                 ),
             )?;
+            let confirmation = tx.create(interaction, {
+                let mut kind =
+                    ElementKind::message(MessageSort::Reply, order_lifeline, customer_lifeline);
+                if let ElementKind::Message(p) = &mut kind {
+                    p.return_value = "confirmation".into();
+                }
+                ElementData::new("", kind)
+            })?;
             let sequence_diagram = tx.create(
                 interaction,
                 ElementData::new("Place order", ElementKind::diagram(DiagramKind::Sequence)),
             )?;
-            tx.add_node(
+            tx.add_node(sequence_diagram, Some(items), Rect::new(40.0, 100.0, 320.0, 80.0))?;
+            let n_customer = tx.add_node(
                 sequence_diagram,
                 Some(customer_lifeline),
                 Rect::new(60.0, 40.0, 100.0, 300.0),
             )?;
-            tx.add_node(
+            let n_order = tx.add_node(
                 sequence_diagram,
                 Some(order_lifeline),
                 Rect::new(260.0, 40.0, 100.0, 300.0),
             )?;
+            for (message, from, to) in [
+                (add_item, n_customer, n_order),
+                (submit, n_customer, n_order),
+                (confirmation, n_order, n_customer),
+            ] {
+                tx.add_edge(sequence_diagram, Some(message), from, to, vec![])?;
+            }
 
             Ok(OrderSystem {
                 domain,

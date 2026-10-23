@@ -46,6 +46,7 @@ actions!(
         Cut,
         Paste,
         PasteAsReference,
+        WrapInFragment,
     ]
 );
 
@@ -98,6 +99,7 @@ fn main() {
             KeyBinding::new("ctrl-v", Paste, Some("Canvas")),
             KeyBinding::new("ctrl-shift-v", PasteAsReference, Some("Canvas")),
             KeyBinding::new("escape", Cancel, Some("Canvas")),
+            KeyBinding::new("ctrl-g", WrapInFragment, Some("Canvas")),
             KeyBinding::new("ctrl-0", ResetZoom, None),
             KeyBinding::new("ctrl-=", ZoomIn, None),
             KeyBinding::new("ctrl--", ZoomOut, None),

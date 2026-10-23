@@ -10,11 +10,12 @@ use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 use umlcraft_model::{ElementKind, Id, Point as MPoint, Rect};
 use umlcraft_notation::member::member_text;
-use umlcraft_notation::palette::{EdgeTool, Tool};
+use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{
     self, EdgeHandle, EdgeShape, EndMarker, Figure, Handle, LabelAlign, LineStyle, NodeShape,
     Preview, Row, RowRole, Scene, TextMeasure,
 };
+use umlcraft_notation::sequence::SequenceLayout;
 
 use crate::workspace::Workspace;
 use crate::{Cancel, DeleteSelection, RemoveFromDiagram, ResetZoom, SelectAll, ZoomToFit};
@@ -89,6 +90,13 @@ enum Drag {
     /// drag-and-drop and click-click work.
     Connect {
         source: Id,
+        start: MPoint,
+        current: MPoint,
+    },
+    /// Dragging a message or fragment of a sequence diagram up or down to another place.
+    Reorder {
+        element: Id,
+        start: MPoint,
         current: MPoint,
     },
     Pan {
@@ -263,8 +271,35 @@ impl DiagramCanvas {
         }
     }
 
+    /// The node under `p` for connecting. Fragment frames only count at their border, so
+    /// messages can be drawn between the lifelines they cover.
     fn node_at(&self, p: MPoint) -> Option<Id> {
-        self.scene.nodes.iter().rev().find(|n| n.rect.contains(p)).map(|n| n.id)
+        let tolerance = 4.0 / self.zoom;
+        self.scene
+            .nodes
+            .iter()
+            .rev()
+            .find(|n| match n.figure {
+                Figure::Fragment { .. } => n.hit(p, tolerance),
+                _ => n.rect.contains(p),
+            })
+            .map(|n| n.id)
+    }
+
+    /// The sequence element behind a message edge or fragment node, if `presentation` is one:
+    /// such items move up and down instead of freely.
+    fn reorderable(&self, presentation: Id, cx: &App) -> Option<Id> {
+        self.scene.sequence.as_ref()?;
+        let fixed_edge = self.scene.edge(presentation).is_some_and(|e| e.fixed);
+        let fragment = self
+            .scene
+            .node(presentation)
+            .is_some_and(|n| matches!(n.figure, Figure::Fragment { .. }));
+        if !fixed_edge && !fragment {
+            return None;
+        }
+        let ws = self.workspace.read(cx);
+        ws.doc.model().view(ws.active_diagram?)?.get(presentation)?.element
     }
 
     fn on_left_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -280,19 +315,31 @@ impl DiagramCanvas {
         match tool {
             Tool::Node(node_tool) => {
                 let origin = snap_point(p);
+                // A fragment goes where it is placed in the sequence, around the lifelines there.
+                let place = self
+                    .scene
+                    .sequence
+                    .as_ref()
+                    .filter(|_| node_tool == NodeTool::CombinedFragment)
+                    .map(|l| (l.slot_at(p.y), l.lanes_around(p.x)));
                 self.workspace.update(cx, |ws, cx| {
-                    ws.create_node(node_tool, origin);
+                    match place {
+                        Some((slot, covered)) => ws.create_fragment(slot, covered, origin),
+                        None => ws.create_node(node_tool, origin),
+                    }
                     ws.tool = Tool::Select;
                     cx.notify();
                 });
             }
             Tool::Edge(edge_tool) => match (self.drag.clone(), self.node_at(p)) {
                 // Second click of click-click mode; a second click on the source makes a loop.
-                (Some(Drag::Connect { source, .. }), Some(target)) => {
+                (Some(Drag::Connect { source, start, .. }), Some(target)) => {
                     self.drag = None;
-                    self.finish_connect(edge_tool, source, target, cx);
+                    self.finish_connect(edge_tool, source, target, start, cx);
                 }
-                (_, Some(source)) => self.drag = Some(Drag::Connect { source, current: p }),
+                (_, Some(source)) => {
+                    self.drag = Some(Drag::Connect { source, start: p, current: p });
+                }
                 (_, None) => self.drag = None,
             },
             Tool::Select => {
@@ -321,8 +368,11 @@ impl DiagramCanvas {
                             }
                             cx.notify();
                         });
-                        let is_node = self.scene.node(id).is_some();
-                        if is_node && self.workspace.read(cx).selection.contains(&id) {
+                        let selected = self.workspace.read(cx).selection.contains(&id);
+                        let reorder = self.reorderable(id, cx).filter(|_| selected && !extend);
+                        if let Some(element) = reorder {
+                            self.drag = Some(Drag::Reorder { element, start: p, current: p });
+                        } else if self.scene.node(id).is_some() && selected {
                             let reselect =
                                 (already && !extend && selection.len() > 1).then_some(id);
                             self.drag = Some(Drag::Move { start: p, dx: 0.0, dy: 0.0, reselect });
@@ -354,7 +404,7 @@ impl DiagramCanvas {
     ) -> bool {
         let [single] = selection[..] else { return false };
         let tolerance = HANDLE_GRAB / self.zoom;
-        if let Some(node) = self.scene.node(single)
+        if let Some(node) = self.scene.node(single).filter(|n| n.resizable())
             && let Some(handle) = Handle::at(node.rect, p, tolerance)
         {
             self.drag = Some(Drag::Resize {
@@ -383,9 +433,22 @@ impl DiagramCanvas {
         true
     }
 
-    fn finish_connect(&mut self, tool: EdgeTool, source: Id, target: Id, cx: &mut Context<Self>) {
+    /// Connects `source` to `target`. Messages go where the drawing started (`start`).
+    fn finish_connect(
+        &mut self,
+        tool: EdgeTool,
+        source: Id,
+        target: Id,
+        start: MPoint,
+        cx: &mut Context<Self>,
+    ) {
+        let slot = self.scene.sequence.as_ref().and_then(|l| l.slot_at(start.y));
         self.workspace.update(cx, |ws, cx| {
-            ws.connect(tool, source, target);
+            if tool.message_sort().is_some() {
+                ws.connect_message(tool, source, target, slot);
+            } else {
+                ws.connect(tool, source, target);
+            }
             ws.tool = Tool::Select;
             cx.notify();
         });
@@ -410,7 +473,9 @@ impl DiagramCanvas {
                     handle.resize(*original, snap(p.x - start.x), snap(p.y - start.y), MIN_NODE);
             }
             Drag::Waypoint { current, .. } => *current = snap_point(p),
-            Drag::RubberBand { current, .. } | Drag::Connect { current, .. } => *current = p,
+            Drag::RubberBand { current, .. }
+            | Drag::Connect { current, .. }
+            | Drag::Reorder { current, .. } => *current = p,
             Drag::Pan { last } => {
                 let delta = position - *last;
                 *last = position;
@@ -453,17 +518,25 @@ impl DiagramCanvas {
                     }
                 });
             }
-            Some(Drag::Connect { source, current }) => {
+            Some(Drag::Connect { source, start, current }) => {
                 let tool = self.workspace.read(cx).tool;
                 match (tool, self.node_at(p)) {
                     (Tool::Edge(edge_tool), Some(target)) if target != source => {
-                        self.finish_connect(edge_tool, source, target, cx);
+                        self.finish_connect(edge_tool, source, target, start, cx);
                     }
                     // Released on the source: wait for the second click.
                     (Tool::Edge(_), Some(_)) => {
-                        self.drag = Some(Drag::Connect { source, current });
+                        self.drag = Some(Drag::Connect { source, start, current });
                     }
                     _ => {}
+                }
+            }
+            Some(Drag::Reorder { element, start, current })
+                if (current.y - start.y).abs() > 6.0 =>
+            {
+                if let Some(slot) = self.scene.sequence.as_ref().and_then(|l| l.slot_at(current.y))
+                {
+                    self.update_workspace(cx, |ws| ws.move_to_slot(element, slot));
                 }
             }
             _ => {}
@@ -508,16 +581,43 @@ impl DiagramCanvas {
 
     /// Starts editing the name or member row under `p`. Returns whether there was one.
     fn start_edit_at(&mut self, p: MPoint, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some((node, row)) = scene::row_at(&self.scene, p) else { return false };
-        let Some(element) = row.element else { return false };
+        let row = scene::row_at(&self.scene, p);
+        let (presentation, element, role, rect) = match row {
+            Some((node, row)) => {
+                let Some(element) = row.element else { return false };
+                let rect = if row.role == RowRole::Name && matches!(node.figure, Figure::Note) {
+                    node.rect.inflate(-4.0)
+                } else {
+                    row.rect
+                };
+                (node.id, element, row.role, rect)
+            }
+            // A message of a sequence diagram: edit its label.
+            None => {
+                let Some(id) = scene::hit_test(&self.scene, p, 4.0 / self.zoom) else {
+                    return false;
+                };
+                let Some(edge) = self.scene.edge(id).filter(|e| e.fixed) else { return false };
+                let Some(element) = self.reorderable(id, cx) else { return false };
+                let (a, b) = (edge.points[0], edge.points[1]);
+                let x = if edge.points.len() > 2 { a.x } else { (a.x + b.x) / 2.0 - 70.0 };
+                (id, element, RowRole::Name, Rect::new(x, a.y - 20.0, 140.0, 16.0))
+            }
+        };
         let model = self.workspace.read(cx).doc.model();
         let Some(e) = model.get(element) else { return false };
-        let (text, rect, multi_line) = match (e.kind(), row.role) {
-            (ElementKind::Comment(c), _) => (c.body.clone(), node.rect.inflate(-4.0), true),
-            (_, RowRole::Member) => (member_text(model, element), row.rect, false),
-            _ => (e.name().to_owned(), row.rect, false),
+        let (text, multi_line) = match e.kind() {
+            ElementKind::Comment(c) => (c.body.clone(), true),
+            ElementKind::InteractionOperand(o) => (o.guard.clone(), false),
+            ElementKind::Message(m) if m.sort == umlcraft_model::MessageSort::Reply => {
+                (m.return_value.clone(), false)
+            }
+            ElementKind::Message(m) if m.arguments.is_empty() => (e.name().to_owned(), false),
+            ElementKind::Message(m) => (format!("{}({})", e.name(), m.arguments), false),
+            _ if role == RowRole::Member => (member_text(model, element), false),
+            _ => (e.name().to_owned(), false),
         };
-        let node_id = node.id;
+        let node_id = presentation;
         self.workspace.update(cx, |ws, cx| {
             ws.select(vec![node_id]);
             ws.selected_element = Some(element);
@@ -826,6 +926,26 @@ impl Painter<'_> {
                 let stem = [MPoint::new(x, head.bottom()), MPoint::new(x, r.bottom())];
                 self.line(&stem, 1.0, c.line, LineStyle::Dashed);
             }
+            Figure::Fragment { tab, separators } => {
+                self.rect(r, transparent_black(), c.line, BorderStyle::Solid);
+                // The operator sits in a pentagon with a cut-off bottom right corner.
+                let cut = 6.0;
+                self.polygon(
+                    &[
+                        tab.origin(),
+                        MPoint::new(tab.right(), tab.y),
+                        MPoint::new(tab.right(), tab.bottom() - cut),
+                        MPoint::new(tab.right() - cut, tab.bottom()),
+                        MPoint::new(tab.x, tab.bottom()),
+                    ],
+                    Some(c.fill),
+                    c.line,
+                );
+                for &y in separators {
+                    let line = [MPoint::new(r.x, y), MPoint::new(r.right(), y)];
+                    self.line(&line, 1.0, c.line, LineStyle::Dashed);
+                }
+            }
             Figure::Note => {
                 let fold = 10.0;
                 self.polygon(
@@ -949,6 +1069,27 @@ impl Painter<'_> {
                 ));
             }
         }
+    }
+
+    /// Activation bars and the crosses of destroyed lifelines.
+    fn sequence(&mut self, layout: &SequenceLayout) {
+        let c = self.c;
+        for &bar in &layout.activations {
+            self.rect(bar, c.fill, c.line, BorderStyle::Solid);
+        }
+        for &p in &layout.destructions {
+            let d = 8.0;
+            let solid = LineStyle::Solid;
+            self.line(&[p.offset(-d, -d), p.offset(d, d)], 1.5, c.line, solid);
+            self.line(&[p.offset(-d, d), p.offset(d, -d)], 1.5, c.line, solid);
+        }
+    }
+
+    /// Where a dragged message or fragment would land.
+    fn insertion_line(&mut self, layout: &SequenceLayout, y: f32) {
+        let line = [MPoint::new(layout.left - 20.0, y), MPoint::new(layout.right + 20.0, y)];
+        let s = self.c.selection;
+        self.line(&line, 2.0, s, LineStyle::Solid);
     }
 
     fn rubber_band(&mut self, area: Rect) {
@@ -1083,6 +1224,9 @@ impl Render for DiagramCanvas {
                             for node in &scene.nodes {
                                 p.node(node, editing_element);
                             }
+                            if let Some(layout) = &scene.sequence {
+                                p.sequence(layout);
+                            }
                             for edge in &scene.edges {
                                 p.edge(edge, selection.contains(&edge.id));
                             }
@@ -1090,7 +1234,7 @@ impl Render for DiagramCanvas {
                                 scene.nodes.iter().filter(|n| selection.contains(&n.id)).collect();
                             let single = selection.len() == 1;
                             for node in &selected_nodes {
-                                p.selection(node.rect, single);
+                                p.selection(node.rect, single && node.resizable());
                             }
                             if single && let Some(edge) = scene.edge(selection[0]) {
                                 p.edge_handles(edge);
@@ -1099,7 +1243,17 @@ impl Render for DiagramCanvas {
                                 Some(Drag::RubberBand { start, current, .. }) => {
                                     p.rubber_band(Rect::from_corners(*start, *current));
                                 }
-                                Some(Drag::Connect { source, current }) => {
+                                Some(Drag::Reorder { start, current, .. })
+                                    if (current.y - start.y).abs() > 6.0 =>
+                                {
+                                    let layout = scene.sequence.as_ref();
+                                    if let Some((layout, slot)) =
+                                        layout.and_then(|l| l.slot_at(current.y).map(|s| (l, s)))
+                                    {
+                                        p.insertion_line(layout, slot.y);
+                                    }
+                                }
+                                Some(Drag::Connect { source, current, .. }) => {
                                     if let Some(node) = scene.node(*source) {
                                         let from = scene::border_point(node.rect, *current);
                                         let s = p.c.selection;

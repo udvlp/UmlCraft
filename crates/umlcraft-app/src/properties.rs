@@ -3,6 +3,7 @@
 //! Text fields commit on Enter or when they lose focus, so typing is one undo step, and always
 //! into the element shown when editing began. Selects and checkboxes apply immediately.
 
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
@@ -10,9 +11,11 @@ use gpui_kit::component::{ActiveTheme, IndexPath, Sizable, StyledExt, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    Aggregation, ElementData, ElementKind, Id, Multiplicity, Navigability, Style,
+    Aggregation, ElementData, ElementKind, Id, InteractionOperator, MessageSort, Model,
+    Multiplicity, Navigability, Style,
 };
 use umlcraft_notation::member::member_text;
+use umlcraft_notation::sequence::operator_keyword;
 
 use crate::labels::{self, VISIBILITIES};
 use crate::workspace::Workspace;
@@ -23,6 +26,27 @@ const NAVIGABILITIES: [Navigability; 3] =
     [Navigability::Unspecified, Navigability::Navigable, Navigability::NonNavigable];
 const AGGREGATIONS: [Aggregation; 3] =
     [Aggregation::None, Aggregation::Shared, Aggregation::Composite];
+const SORTS: [MessageSort; 5] = [
+    MessageSort::Synchronous,
+    MessageSort::Asynchronous,
+    MessageSort::Reply,
+    MessageSort::Create,
+    MessageSort::Destroy,
+];
+const OPERATORS: [InteractionOperator; 12] = [
+    InteractionOperator::Alt,
+    InteractionOperator::Opt,
+    InteractionOperator::Loop,
+    InteractionOperator::Par,
+    InteractionOperator::Break,
+    InteractionOperator::Critical,
+    InteractionOperator::Neg,
+    InteractionOperator::Assert,
+    InteractionOperator::Strict,
+    InteractionOperator::Seq,
+    InteractionOperator::Ignore,
+    InteractionOperator::Consider,
+];
 
 #[derive(Clone, Copy)]
 enum Field {
@@ -33,7 +57,21 @@ enum Field {
     Role(usize),
     Multiplicity(usize),
     Condition,
+    Arguments,
+    ReturnValue,
+    Guard,
 }
+
+const TEXT_FIELDS: [Field; 8] = [
+    Field::Name,
+    Field::Declaration,
+    Field::Stereotypes,
+    Field::Text,
+    Field::Condition,
+    Field::Arguments,
+    Field::ReturnValue,
+    Field::Guard,
+];
 
 /// Inputs for one association end.
 struct EndFields {
@@ -52,6 +90,17 @@ pub struct PropertiesPanel {
     text: Entity<TextareaState>,
     visibility: Entity<Choice>,
     ends: [EndFields; 2],
+    arguments: Entity<InputState>,
+    return_value: Entity<InputState>,
+    guard: Entity<InputState>,
+    sort: Entity<Choice>,
+    operator: Entity<Choice>,
+    /// Operations a message can invoke, with their ids (`None` for "no operation").
+    operation: Entity<Choice>,
+    operation_ids: Vec<Option<Id>>,
+    /// Classifiers a lifeline can represent, with their ids (`None` for "none").
+    represents: Entity<Choice>,
+    represents_ids: Vec<Option<Id>>,
     /// Element, document revision and locale the fields currently show.
     shown: Option<(Id, u64, String)>,
     /// Element whose text fields are being edited. Edits always go back to this element, even
@@ -76,6 +125,56 @@ fn visibility_items() -> Vec<SharedString> {
     VISIBILITIES.iter().map(|&v| labels::visibility_label(v).into()).collect()
 }
 
+fn sort_items() -> Vec<SharedString> {
+    ["synchronous", "asynchronous", "reply", "create", "destroy"]
+        .map(|k| t!(format!("message_sort.{k}")).to_string().into())
+        .to_vec()
+}
+
+fn operator_items() -> Vec<SharedString> {
+    OPERATORS.iter().map(|&o| operator_keyword(o).into()).collect()
+}
+
+/// Choices for a reference: "—" for none, then `targets` by name.
+fn reference_items(model: &Model, targets: &[Option<Id>]) -> Vec<SharedString> {
+    targets
+        .iter()
+        .map(|t| match t.and_then(|t| model.get(t)) {
+            Some(e) => labels::display_name(e).into(),
+            None => "—".into(),
+        })
+        .collect()
+}
+
+/// The operations a message can call: those of the classifier its receiver represents.
+fn operations_for(model: &Model, message: Id) -> Vec<Option<Id>> {
+    let classifier = model.get(message).and_then(|m| match m.kind() {
+        ElementKind::Message(p) => model.get(p.to).and_then(|l| match l.kind() {
+            ElementKind::Lifeline(l) => l.represents,
+            _ => None,
+        }),
+        _ => None,
+    });
+    let operations = classifier.into_iter().flat_map(|c| model.children(c).iter().copied());
+    std::iter::once(None)
+        .chain(
+            operations
+                .filter(|&o| {
+                    model.get(o).is_some_and(|e| matches!(e.kind(), ElementKind::Operation(_)))
+                })
+                .map(Some),
+        )
+        .collect()
+}
+
+/// The classifiers a lifeline can represent, by name.
+fn classifiers(model: &Model) -> Vec<Option<Id>> {
+    let mut all: Vec<(&str, Id)> =
+        model.elements().filter(|e| e.kind().is_classifier()).map(|e| (e.name(), e.id())).collect();
+    all.sort_by(|a, b| a.0.cmp(b.0));
+    std::iter::once(None).chain(all.into_iter().map(|(_, id)| Some(id))).collect()
+}
+
 impl PropertiesPanel {
     pub fn new(workspace: Entity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input =
@@ -93,6 +192,13 @@ impl PropertiesPanel {
             aggregation: cx.new(|cx| SelectState::new(aggregation_items(), None, window, cx)),
         };
         let ends = [end(window, cx), end(window, cx)];
+        let arguments = input(window, cx);
+        let return_value = input(window, cx);
+        let guard = input(window, cx);
+        let sort = cx.new(|cx| SelectState::new(sort_items(), None, window, cx));
+        let operator = cx.new(|cx| SelectState::new(operator_items(), None, window, cx));
+        let operation = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
+        let represents = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
 
         let mut subscriptions =
             vec![cx.observe_in(&workspace, window, |this, _, window, cx| this.sync(window, cx))];
@@ -109,6 +215,9 @@ impl PropertiesPanel {
         watch(&declaration, Field::Declaration, cx);
         watch(&condition, Field::Condition, cx);
         watch(&stereotypes, Field::Stereotypes, cx);
+        watch(&arguments, Field::Arguments, cx);
+        watch(&return_value, Field::ReturnValue, cx);
+        watch(&guard, Field::Guard, cx);
         for (i, end) in ends.iter().enumerate() {
             watch(&end.role, Field::Role(i), cx);
             watch(&end.multiplicity, Field::Multiplicity(i), cx);
@@ -128,6 +237,64 @@ impl PropertiesPanel {
                     return;
                 };
                 this.apply_shown(cx, move |data| data.visibility = v);
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &sort,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(s) = selected(state, cx).and_then(|ix| SORTS.get(ix).copied()) else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::Message(p) = &mut data.kind {
+                        p.sort = s;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &operator,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(o) = selected(state, cx).and_then(|ix| OPERATORS.get(ix).copied()) else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::CombinedFragment(p) = &mut data.kind {
+                        p.operator = o;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &operation,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(&target) = selected(state, cx).and_then(|ix| this.operation_ids.get(ix))
+                else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::Message(p) = &mut data.kind {
+                        p.operation = target;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &represents,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(&target) = selected(state, cx).and_then(|ix| this.represents_ids.get(ix))
+                else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::Lifeline(p) = &mut data.kind {
+                        p.represents = target;
+                    }
+                });
             },
         ));
         for (i, end) in ends.iter().enumerate() {
@@ -173,6 +340,15 @@ impl PropertiesPanel {
             text,
             visibility,
             ends,
+            arguments,
+            return_value,
+            guard,
+            sort,
+            operator,
+            operation,
+            operation_ids: Vec::new(),
+            represents,
+            represents_ids: Vec::new(),
             shown: None,
             editing: None,
             _subscriptions: subscriptions,
@@ -252,6 +428,30 @@ impl PropertiesPanel {
                     }
                 });
             }
+            Field::Arguments => {
+                let value = Self::value(&self.arguments, cx);
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::Message(p) = &mut data.kind {
+                        p.arguments = value;
+                    }
+                });
+            }
+            Field::ReturnValue => {
+                let value = Self::value(&self.return_value, cx);
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::Message(p) = &mut data.kind {
+                        p.return_value = value;
+                    }
+                });
+            }
+            Field::Guard => {
+                let value = Self::value(&self.guard, cx);
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::InteractionOperand(p) = &mut data.kind {
+                        p.guard = value;
+                    }
+                });
+            }
             Field::Role(i) => {
                 let value = Self::value(&self.ends[i].role, cx);
                 self.apply(id, cx, move |data| {
@@ -308,15 +508,8 @@ impl PropertiesPanel {
         if let Some(editing) = self.editing
             && selected != Some(editing)
         {
-            let fields = [
-                Field::Name,
-                Field::Declaration,
-                Field::Stereotypes,
-                Field::Text,
-                Field::Condition,
-            ];
             let ends = (0..2).flat_map(|i| [Field::Role(i), Field::Multiplicity(i)]);
-            for field in fields.into_iter().chain(ends) {
+            for field in TEXT_FIELDS.into_iter().chain(ends) {
                 self.commit(field, cx);
             }
             self.editing = None;
@@ -336,6 +529,13 @@ impl PropertiesPanel {
         let model = ws.doc.model();
         let data = model.get(id).expect("checked above").data().clone();
         let declaration = member_text(model, id);
+        // What a message or lifeline may refer to.
+        let references = match &data.kind {
+            ElementKind::Message(_) => operations_for(model, id),
+            ElementKind::Lifeline(_) => classifiers(model),
+            _ => Vec::new(),
+        };
+        let reference_labels = reference_items(model, &references);
         self.shown = Some(key);
 
         let set = |state: &Entity<InputState>,
@@ -371,6 +571,28 @@ impl PropertiesPanel {
         };
         let vis = VISIBILITIES.iter().position(|&v| v == data.visibility);
         choose(&self.visibility, vis, locale_changed.then(visibility_items), window, cx);
+        match &data.kind {
+            ElementKind::Message(p) => {
+                set(&self.arguments, p.arguments.clone(), window, cx);
+                set(&self.return_value, p.return_value.clone(), window, cx);
+                let s = SORTS.iter().position(|&s| s == p.sort);
+                choose(&self.sort, s, locale_changed.then(sort_items), window, cx);
+                let ix = references.iter().position(|&o| o == p.operation);
+                choose(&self.operation, ix, Some(reference_labels), window, cx);
+                self.operation_ids = references;
+            }
+            ElementKind::Lifeline(p) => {
+                let ix = references.iter().position(|&c| c == p.represents);
+                choose(&self.represents, ix, Some(reference_labels), window, cx);
+                self.represents_ids = references;
+            }
+            ElementKind::CombinedFragment(p) => {
+                let ix = OPERATORS.iter().position(|&o| o == p.operator);
+                choose(&self.operator, ix, None, window, cx);
+            }
+            ElementKind::InteractionOperand(p) => set(&self.guard, p.guard.clone(), window, cx),
+            _ => {}
+        }
         if let ElementKind::Association(p) = &data.kind {
             for (i, end) in p.ends.iter().enumerate() {
                 set(&self.ends[i].role, end.role.clone(), window, cx);
@@ -468,12 +690,24 @@ impl Render for PropertiesPanel {
             t!("prop.type").into(),
             div().text_sm().child(labels::kind_label(e)).into_any_element(),
         ));
+        let unnamed = matches!(
+            kind,
+            ElementKind::Comment(_)
+                | ElementKind::CombinedFragment(_)
+                | ElementKind::InteractionOperand(_)
+        );
         match &kind {
-            ElementKind::Comment(_) => {}
+            _ if unnamed => {}
             k if is_member(k) => {
                 body = body.child(field(
                     t!("prop.declaration").into(),
                     Input::new(&self.declaration).small().into_any_element(),
+                ));
+            }
+            ElementKind::Message(_) | ElementKind::Lifeline(_) => {
+                body = body.child(field(
+                    t!("prop.name").into(),
+                    Input::new(&self.name).small().into_any_element(),
                 ));
             }
             _ => {
@@ -488,7 +722,7 @@ impl Render for PropertiesPanel {
                     ));
             }
         }
-        if !matches!(kind, ElementKind::Comment(_)) {
+        if !unnamed {
             body = body.child(field(
                 t!("prop.stereotypes").into(),
                 Input::new(&self.stereotypes).small().into_any_element(),
@@ -645,6 +879,130 @@ impl Render for PropertiesPanel {
                         ));
                 }
             }
+            ElementKind::Message(_) => {
+                body = body
+                    .child(field(
+                        t!("prop.message_sort").into(),
+                        Select::new(&self.sort).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.arguments").into(),
+                        Input::new(&self.arguments).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.return_value").into(),
+                        Input::new(&self.return_value).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.operation").into(),
+                        Select::new(&self.operation).small().into_any_element(),
+                    ));
+            }
+            ElementKind::Lifeline(_) => {
+                body = body.child(field(
+                    t!("prop.represents").into(),
+                    Select::new(&self.represents).small().into_any_element(),
+                ));
+            }
+            ElementKind::CombinedFragment(p) => {
+                body = body
+                    .child(field(
+                        t!("prop.operator").into(),
+                        Select::new(&self.operator).small().into_any_element(),
+                    ))
+                    .child(heading(t!("prop.operands").to_string()));
+                for (ix, &operand) in model.children(id).iter().enumerate() {
+                    let Some(ElementKind::InteractionOperand(o)) =
+                        model.get(operand).map(|e| e.kind())
+                    else {
+                        continue;
+                    };
+                    let label = match o.guard.trim() {
+                        "" => format!("{} {}", t!("kind.interactionOperand"), ix + 1),
+                        guard => format!("[{guard}]"),
+                    };
+                    let workspace = workspace.clone();
+                    body = body.child(
+                        Button::new(("operand", ix)).ghost().small().label(label).on_click(
+                            move |_, _, cx| {
+                                workspace.update(cx, |ws, cx| {
+                                    ws.selected_element = Some(operand);
+                                    cx.notify();
+                                });
+                            },
+                        ),
+                    );
+                }
+                let add = workspace.clone();
+                body = body.child(
+                    Button::new("add-operand").small().label(t!("prop.add_operand")).on_click(
+                        move |_, _, cx| {
+                            add.update(cx, |ws, cx| {
+                                ws.add_operand(id);
+                                cx.notify();
+                            });
+                        },
+                    ),
+                );
+                // The lifelines of the interaction; none ticked means "as the messages need".
+                let interaction = model.ancestors(id).into_iter().find(|&a| {
+                    model.get(a).is_some_and(|e| matches!(e.kind(), ElementKind::Interaction))
+                });
+                let lifelines: Vec<(Id, String)> = interaction
+                    .into_iter()
+                    .flat_map(|i| model.children(i).iter().copied())
+                    .filter_map(|c| model.get(c))
+                    .filter(|c| matches!(c.kind(), ElementKind::Lifeline(_)))
+                    .map(|c| (c.id(), labels::display_name(c)))
+                    .collect();
+                body = body.child(heading(t!("prop.covered").to_string()));
+                if p.covered.is_empty() {
+                    body = body.child(
+                        div().text_xs().text_color(muted).child(t!("prop.covered_automatic")),
+                    );
+                }
+                for (ix, (lifeline, name)) in lifelines.into_iter().enumerate() {
+                    let workspace = workspace.clone();
+                    body = body.child(
+                        Checkbox::new(("covered", ix))
+                            .label(name)
+                            .checked(p.covered.contains(&lifeline))
+                            .on_click(move |checked: &bool, _, cx| {
+                                let checked = *checked;
+                                workspace.update(cx, |ws, cx| {
+                                    ws.update_element(id, |d| {
+                                        if let ElementKind::CombinedFragment(p) = &mut d.kind {
+                                            p.covered.retain(|&l| l != lifeline);
+                                            if checked {
+                                                p.covered.push(lifeline);
+                                            }
+                                        }
+                                    });
+                                    cx.notify();
+                                });
+                            }),
+                    );
+                }
+            }
+            ElementKind::InteractionOperand(_) => {
+                let delete = workspace.clone();
+                body = body
+                    .child(field(
+                        t!("prop.guard").into(),
+                        Input::new(&self.guard).small().into_any_element(),
+                    ))
+                    .child(
+                        Button::new("delete-operand")
+                            .small()
+                            .label(t!("prop.delete_operand"))
+                            .on_click(move |_, _, cx| {
+                                delete.update(cx, |ws, cx| {
+                                    ws.delete_element(id);
+                                    cx.notify();
+                                });
+                            }),
+                    );
+            }
             _ => {}
         }
 
@@ -661,10 +1019,18 @@ impl Render for PropertiesPanel {
             ));
 
         // Display options of the one selected node.
+        // Fragments size themselves, so they have no display options.
+        let is_fragment = |p: &umlcraft_model::Presentation| {
+            p.element
+                .and_then(|e| model.get(e))
+                .is_some_and(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)))
+        };
         let presentation = match (ws.active_diagram, ws.selection.as_slice()) {
-            (Some(d), [p]) => {
-                model.view(d).and_then(|v| v.get(*p)).filter(|p| !p.is_edge()).cloned()
-            }
+            (Some(d), [p]) => model
+                .view(d)
+                .and_then(|v| v.get(*p))
+                .filter(|p| !p.is_edge() && !is_fragment(p))
+                .cloned(),
             _ => None,
         };
         if let Some(p) = presentation {

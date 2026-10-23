@@ -31,6 +31,7 @@ menu:
   align_top: Align top
   align_middle: Center vertically
   align_bottom: Align bottom
+  wrap_in_fragment: Surround with fragment
   view: View
   zoom_in: Zoom in
   zoom_out: Zoom out
@@ -58,6 +59,12 @@ tool:
   include: Include
   extend: Extend
   noteAnchor: Note anchor
+  combinedFragment: Fragment
+  message: Message
+  asyncMessage: Asynchronous
+  reply: Reply
+  createMessage: Create
+  destroyMessage: Destroy
 diagram:
   class: Class diagram
   useCase: Use case diagram
@@ -91,6 +98,24 @@ prop:
   text: Text
   bounds: Position and size
   nothing_selected: Nothing selected
+  message_sort: Kind of message
+  arguments: Arguments
+  return_value: Return value
+  operation: Operation
+  represents: Type
+  operator: Operator
+  operands: Operands
+  add_operand: Add operand
+  delete_operand: Delete operand
+  guard: Guard
+  covered: Covered lifelines
+  covered_automatic: None ticked – the fragment covers the lifelines of its messages.
+message_sort:
+  synchronous: synchronous
+  asynchronous: asynchronous
+  reply: reply
+  create: create
+  destroy: destroy
 navigability:
   unspecified: unspecified
   navigable: navigable
@@ -140,6 +165,7 @@ edit:
   show: Show on diagram
   move_element: Move in model
   paste: Paste
+  wrap_in_fragment: Surround with fragment
 kind:
   model: Project
   package: Package
