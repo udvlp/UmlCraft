@@ -450,10 +450,10 @@ impl PropertiesPanel {
             }
             Field::Guard => {
                 let value = Self::value(&self.guard, cx);
-                self.apply(id, cx, move |data| {
-                    if let ElementKind::InteractionOperand(p) = &mut data.kind {
-                        p.guard = value;
-                    }
+                self.apply(id, cx, move |data| match &mut data.kind {
+                    ElementKind::InteractionOperand(p) => p.guard = value,
+                    ElementKind::ActivityEdge(p) => p.guard = value,
+                    _ => {}
                 });
             }
             Field::Role(i) => {
@@ -611,6 +611,7 @@ impl PropertiesPanel {
                 choose(&self.operator, ix, None, window, cx);
             }
             ElementKind::InteractionOperand(p) => set(&self.guard, p.guard.clone(), window, cx),
+            ElementKind::ActivityEdge(p) => set(&self.guard, p.guard.clone(), window, cx),
             _ => {}
         }
         if let ElementKind::Association(p) = &data.kind {
@@ -725,7 +726,13 @@ impl Render for PropertiesPanel {
                     Input::new(&self.declaration).small().into_any_element(),
                 ));
             }
-            ElementKind::Message(_) | ElementKind::Lifeline(_) => {
+            // Behavior parts have a name but no visibility worth editing.
+            ElementKind::Message(_)
+            | ElementKind::Lifeline(_)
+            | ElementKind::Activity
+            | ElementKind::ActivityNode(_)
+            | ElementKind::ActivityEdge(_)
+            | ElementKind::Partition => {
                 body = body.child(field(
                     t!("prop.name").into(),
                     Input::new(&self.name).small().into_any_element(),
@@ -1027,6 +1034,12 @@ impl Render for PropertiesPanel {
                                 });
                             }),
                     );
+            }
+            ElementKind::ActivityEdge(_) => {
+                body = body.child(field(
+                    t!("prop.guard").into(),
+                    Input::new(&self.guard).small().into_any_element(),
+                ));
             }
             _ => {}
         }

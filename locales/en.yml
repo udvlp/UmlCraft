@@ -68,10 +68,22 @@ tool:
   reply: Reply
   createMessage: Create
   destroyMessage: Destroy
+  action: Action
+  initialNode: Initial
+  activityFinal: Activity final
+  flowFinal: Flow final
+  decision: Decision
+  merge: Merge
+  fork: Fork
+  join: Join
+  objectNode: Object node
+  partition: Partition
+  flow: Flow
 diagram:
   class: Class diagram
   useCase: Use case diagram
   sequence: Sequence diagram
+  activity: Activity diagram
 panel:
   model: Model
   properties: Properties
@@ -224,3 +236,16 @@ kind:
   extend: Extend
   comment: Note
   diagram: Diagram
+  activity: Activity
+  activityNode: Activity node
+  activityEdge: Flow
+  action: Action
+  initialNode: Initial node
+  activityFinal: Activity final node
+  flowFinal: Flow final node
+  decision: Decision node
+  merge: Merge node
+  fork: Fork node
+  join: Join node
+  objectNode: Object node
+  partition: Partition

@@ -404,6 +404,59 @@ pub struct CommentProps {
     pub annotated: Vec<Id>,
 }
 
+/// What an activity node does: an action, a control node or an object node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActivityNodeKind {
+    #[default]
+    Action,
+    Initial,
+    /// Ends the whole activity.
+    ActivityFinal,
+    /// Ends only the flow that reaches it.
+    FlowFinal,
+    Decision,
+    Merge,
+    Fork,
+    Join,
+    /// Objects passed along object flows.
+    Object,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityNodeProps {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub node: ActivityNodeKind,
+    /// Object nodes: the type of the objects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_ref: Option<TypeRef>,
+}
+
+impl ActivityNodeKind {
+    /// Whether flows may leave a node of this kind.
+    pub fn has_outgoing(self) -> bool {
+        !matches!(self, Self::ActivityFinal | Self::FlowFinal)
+    }
+
+    /// Whether flows may enter a node of this kind.
+    pub fn has_incoming(self) -> bool {
+        self != Self::Initial
+    }
+}
+
+/// A control or object flow between two activity nodes. It is an object flow when one of its
+/// ends is an object node.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityEdgeProps {
+    pub source: Id,
+    pub target: Id,
+    /// Condition for taking the flow, without brackets.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guard: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagramProps {
@@ -435,6 +488,12 @@ pub enum ElementKind {
     Message(MessageProps),
     CombinedFragment(CombinedFragmentProps),
     InteractionOperand(InteractionOperandProps),
+    /// Owns the nodes, flows and partitions of activity diagrams.
+    Activity,
+    ActivityNode(ActivityNodeProps),
+    ActivityEdge(ActivityEdgeProps),
+    /// A swimlane. Which nodes lie in it follows from the diagram, as for system boundaries.
+    Partition,
     Association(AssociationProps),
     Generalization(GeneralizationProps),
     Realization(DirectedProps),
@@ -464,6 +523,7 @@ pub enum RefRole {
     Covered,
     ExtensionPoint,
     Annotated,
+    FlowEnd,
 }
 
 impl RefRole {
@@ -482,6 +542,7 @@ impl RefRole {
                 | Self::Extension
                 | Self::Extended
                 | Self::MessageEnd
+                | Self::FlowEnd
         )
     }
 
@@ -499,6 +560,7 @@ impl RefRole {
             Self::MessageEnd | Self::Covered => matches!(target, ElementKind::Lifeline(_)),
             Self::Operation => matches!(target, ElementKind::Operation(_)),
             Self::ExtensionPoint => matches!(target, ElementKind::ExtensionPoint),
+            Self::FlowEnd => matches!(target, ElementKind::ActivityNode(_)),
             Self::Client | Self::Supplier | Self::Annotated => {
                 !matches!(target, ElementKind::Model | ElementKind::Diagram(_))
             }
@@ -552,6 +614,14 @@ impl ElementKind {
         })
     }
 
+    pub fn activity_node(node: ActivityNodeKind) -> Self {
+        Self::ActivityNode(ActivityNodeProps { node, type_ref: None })
+    }
+
+    pub fn flow(source: Id, target: Id) -> Self {
+        Self::ActivityEdge(ActivityEdgeProps { source, target, guard: String::new() })
+    }
+
     pub fn diagram(diagram: DiagramKind) -> Self {
         Self::Diagram(DiagramProps { diagram })
     }
@@ -578,6 +648,10 @@ impl ElementKind {
             Self::Message(_) => "message",
             Self::CombinedFragment(_) => "combinedFragment",
             Self::InteractionOperand(_) => "interactionOperand",
+            Self::Activity => "activity",
+            Self::ActivityNode(_) => "activityNode",
+            Self::ActivityEdge(_) => "activityEdge",
+            Self::Partition => "partition",
             Self::Association(_) => "association",
             Self::Generalization(_) => "generalization",
             Self::Realization(_) => "realization",
@@ -601,6 +675,8 @@ impl ElementKind {
         )
     }
 
+    /// Binary connections drawn as edges between the nodes they connect, including activity
+    /// flows. Messages are not: sequence diagrams lay them out themselves.
     pub fn is_relationship(&self) -> bool {
         matches!(
             self,
@@ -610,6 +686,7 @@ impl ElementKind {
                 | Self::Dependency(_)
                 | Self::Include(_)
                 | Self::Extend(_)
+                | Self::ActivityEdge(_)
         )
     }
 
@@ -645,6 +722,9 @@ impl ElementKind {
                 matches!(self, K::Interaction | K::InteractionOperand(_))
             }
             K::InteractionOperand(_) => matches!(self, K::CombinedFragment(_)),
+            K::Activity => self.is_namespace() || matches!(self, K::Class(_) | K::UseCase(_)),
+            K::ActivityNode(_) | K::ActivityEdge(_) => matches!(self, K::Activity),
+            K::Partition => matches!(self, K::Activity | K::Partition),
             K::Association(_)
             | K::Generalization(_)
             | K::Realization(_)
@@ -653,7 +733,9 @@ impl ElementKind {
             | K::Extend(_) => self.is_namespace() || self.is_classifier(),
             K::Comment(_) => !matches!(self, K::Diagram(_) | K::Comment(_)),
             K::Diagram(_) => {
-                self.is_namespace() || self.is_classifier() || matches!(self, K::Interaction)
+                self.is_namespace()
+                    || self.is_classifier()
+                    || matches!(self, K::Interaction | K::Activity)
             }
         }
     }
@@ -678,6 +760,10 @@ impl ElementKind {
             }
             Self::CombinedFragment(p) => {
                 p.covered.iter().map(|&id| (id, RefRole::Covered)).collect()
+            }
+            Self::ActivityNode(p) => type_ref(&p.type_ref),
+            Self::ActivityEdge(p) => {
+                vec![(p.source, RefRole::FlowEnd), (p.target, RefRole::FlowEnd)]
             }
             Self::Association(p) => {
                 p.ends.iter().map(|end| (end.participant, RefRole::AssociationEnd)).collect()
@@ -721,6 +807,11 @@ impl ElementKind {
                 p.operation.iter_mut().for_each(f);
             }
             Self::CombinedFragment(p) => p.covered.iter_mut().for_each(f),
+            Self::ActivityNode(p) => type_ref(&mut p.type_ref, &mut f),
+            Self::ActivityEdge(p) => {
+                f(&mut p.source);
+                f(&mut p.target);
+            }
             Self::Association(p) => p.ends.iter_mut().for_each(|end| f(&mut end.participant)),
             Self::Generalization(p) => {
                 f(&mut p.specific);
@@ -790,6 +881,7 @@ impl ElementKind {
             Self::Lifeline(p) => unlink_opt(&mut p.represents),
             Self::Message(p) => unlink_opt(&mut p.operation),
             Self::CombinedFragment(p) => unlink_vec(&mut p.covered),
+            Self::ActivityNode(p) => unlink_type(&mut p.type_ref),
             Self::Extend(p) => unlink_vec(&mut p.extension_points),
             Self::Comment(p) => unlink_vec(&mut p.annotated),
             _ => false,
@@ -852,6 +944,11 @@ mod tests {
             ElementKind::attribute(Some(TypeRef::Element(a))),
             ElementKind::message(MessageSort::Reply, a, b),
             ElementKind::Comment(CommentProps { body: String::new(), annotated: vec![a, b] }),
+            ElementKind::flow(a, b),
+            ElementKind::ActivityNode(ActivityNodeProps {
+                node: ActivityNodeKind::Object,
+                type_ref: Some(TypeRef::Element(a)),
+            }),
         ];
         let map = std::collections::HashMap::from([(a, c)]);
         for kind in &mut kinds {
@@ -872,5 +969,11 @@ mod tests {
         assert!(!ElementKind::attribute(None).can_own(&ElementKind::class()));
         assert!(!ElementKind::Package.can_own(&ElementKind::Model));
         assert!(ElementKind::Interaction.can_own(&ElementKind::Lifeline(LifelineProps::default())));
+        let action = ElementKind::activity_node(ActivityNodeKind::Action);
+        assert!(ElementKind::Activity.can_own(&action));
+        assert!(!ElementKind::Package.can_own(&action));
+        assert!(ElementKind::Partition.can_own(&ElementKind::Partition));
+        assert!(!ElementKind::Partition.can_own(&action));
+        assert!(ElementKind::Activity.can_own(&ElementKind::diagram(DiagramKind::Activity)));
     }
 }

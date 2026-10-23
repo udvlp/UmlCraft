@@ -4,10 +4,11 @@
 use crate::diagram::DiagramKind;
 use crate::document::Document;
 use crate::element::{
-    Aggregation, CombinedFragmentProps, ElementData, ElementKind, InteractionOperandProps,
-    InteractionOperator, LifelineProps, MessageSort, Multiplicity, TypeRef, Visibility,
+    ActivityNodeKind, Aggregation, CombinedFragmentProps, ElementData, ElementKind,
+    InteractionOperandProps, InteractionOperator, LifelineProps, MessageSort, Multiplicity,
+    TypeRef, Visibility,
 };
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::id::Id;
 use crate::model::Model;
 
@@ -24,6 +25,7 @@ pub struct OrderSystem {
     pub use_case_diagram: Id,
     pub sequence_diagram: Id,
     pub customer_lifeline: Id,
+    pub activity_diagram: Id,
 }
 
 pub fn order_system() -> (Document, OrderSystem) {
@@ -194,6 +196,51 @@ pub fn order_system() -> (Document, OrderSystem) {
                 tx.add_edge(sequence_diagram, Some(message), from, to, vec![])?;
             }
 
+            // The activity: the clerk checks the stock, the warehouse ships or the clerk cancels.
+            let activity =
+                tx.create(place_order, ElementData::new("Handle order", ElementKind::Activity))?;
+            let activity_diagram = tx.create(
+                activity,
+                ElementData::new("Handle order", ElementKind::diagram(DiagramKind::Activity)),
+            )?;
+            let node = ElementKind::activity_node;
+            let mut nodes = Vec::new();
+            for (name, kind, (x, y, w, h)) in [
+                ("Clerk", ElementKind::Partition, (40.0, 40.0, 220.0, 420.0)),
+                ("Warehouse", ElementKind::Partition, (260.0, 40.0, 220.0, 420.0)),
+                ("", node(ActivityNodeKind::Initial), (140.0, 100.0, 20.0, 20.0)),
+                ("Check stock", node(ActivityNodeKind::Action), (90.0, 150.0, 120.0, 36.0)),
+                ("", node(ActivityNodeKind::Decision), (138.0, 226.0, 24.0, 24.0)),
+                ("Ship order", node(ActivityNodeKind::Action), (310.0, 300.0, 120.0, 36.0)),
+                ("Cancel order", node(ActivityNodeKind::Action), (90.0, 300.0, 120.0, 36.0)),
+                ("", node(ActivityNodeKind::ActivityFinal), (360.0, 400.0, 20.0, 20.0)),
+                ("", node(ActivityNodeKind::ActivityFinal), (140.0, 400.0, 20.0, 20.0)),
+            ] {
+                let bounds = Rect::new(x, y, w, h);
+                let element = tx.create(activity, ElementData::new(name, kind))?;
+                let presentation = tx.add_node(activity_diagram, Some(element), bounds)?;
+                nodes.push((element, presentation));
+            }
+            let [_, _, initial, check, decision, ship, cancel, shipped, cancelled] = nodes[..]
+            else {
+                unreachable!()
+            };
+            for (from, to, guard, waypoints) in [
+                (initial, check, "", vec![]),
+                (check, decision, "", vec![]),
+                (decision, ship, "in stock", vec![Point::new(370.0, 238.0)]),
+                (decision, cancel, "else", vec![]),
+                (ship, shipped, "", vec![]),
+                (cancel, cancelled, "", vec![]),
+            ] {
+                let mut kind = ElementKind::flow(from.0, to.0);
+                if let ElementKind::ActivityEdge(p) = &mut kind {
+                    p.guard = guard.into();
+                }
+                let flow = tx.create(activity, ElementData::new("", kind))?;
+                tx.add_edge(activity_diagram, Some(flow), from.1, to.1, waypoints)?;
+            }
+
             Ok(OrderSystem {
                 domain,
                 customer,
@@ -205,6 +252,7 @@ pub fn order_system() -> (Document, OrderSystem) {
                 use_case_diagram,
                 sequence_diagram,
                 customer_lifeline,
+                activity_diagram,
             })
         })
         .expect("sample model is valid");

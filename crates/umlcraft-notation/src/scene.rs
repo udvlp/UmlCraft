@@ -4,8 +4,9 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    Aggregation, AssociationEnd, DiagramKind, EdgeLabels, ElementKind, Id, MessageSort, Model,
-    Navigability, Point, Presentation, Rect, Shape, Style,
+    ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, DiagramKind, EdgeLabels,
+    ElementKind, Id, MessageSort, Model, Navigability, Point, Presentation, Rect, Shape, Style,
+    TypeRef,
 };
 
 use crate::member::member_text;
@@ -69,7 +70,7 @@ impl NodeShape {
             return false;
         }
         match &self.figure {
-            Figure::Boundary | Figure::Fragment { .. } => {
+            Figure::Boundary | Figure::Fragment { .. } | Figure::Partition { .. } => {
                 let inner = self.rect.inflate(-2.0 * tolerance.max(3.0));
                 !inner.contains(p) || self.rows.iter().any(|r| r.rect.contains(p))
             }
@@ -114,7 +115,80 @@ pub enum Figure {
         separators: Vec<f32>,
     },
     Note,
+    /// Activity diagrams: an action, drawn with rounded corners.
+    Action,
+    /// Initial node: a filled circle.
+    Initial,
+    /// Activity final node: a ring around a filled circle.
+    ActivityFinal,
+    /// Flow final node: a crossed-out circle.
+    FlowFinal,
+    /// Decision or merge node.
+    Diamond,
+    /// Fork or join node: a filled bar.
+    Bar,
+    /// Object node.
+    Rectangle,
+    /// Swimlane with its name above a line at `header`. Hollow like a system boundary.
+    Partition {
+        header: f32,
+    },
     Other,
+}
+
+impl Figure {
+    /// The figure's outline, where edges end.
+    fn outline(&self) -> Outline {
+        match self {
+            Self::Initial | Self::ActivityFinal | Self::FlowFinal => Outline::Ellipse,
+            Self::Diamond => Outline::Diamond,
+            _ => Outline::Rect,
+        }
+    }
+}
+
+/// Shapes whose border edges are clipped at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outline {
+    Rect,
+    Ellipse,
+    Diamond,
+}
+
+impl Outline {
+    fn contains(self, rect: Rect, p: Point) -> bool {
+        let c = rect.center();
+        let (dx, dy) = ((p.x - c.x) / (rect.width / 2.0), (p.y - c.y) / (rect.height / 2.0));
+        match self {
+            Self::Rect => dx.abs() <= 1.0 && dy.abs() <= 1.0,
+            Self::Ellipse => dx * dx + dy * dy <= 1.0,
+            Self::Diamond => dx.abs() + dy.abs() <= 1.0,
+        }
+    }
+
+    /// Where the line from `inside` toward `toward` leaves the outline.
+    fn border_point(self, rect: Rect, inside: Point, toward: Point) -> Point {
+        if self == Self::Rect || rect.width <= 0.0 || rect.height <= 0.0 {
+            return border_point_from(rect, inside, toward);
+        }
+        if self.contains(rect, toward) || !self.contains(rect, inside) {
+            return inside;
+        }
+        // Both outlines are convex, so the line crosses them once: bisect.
+        let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+        let at = |t: f32| {
+            Point::new(inside.x + (toward.x - inside.x) * t, inside.y + (toward.y - inside.y) * t)
+        };
+        for _ in 0..24 {
+            let mid = (lo + hi) / 2.0;
+            if self.contains(rect, at(mid)) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        at(lo)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,6 +454,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         (None, Vec::new())
     };
     let rects: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
+    let outlines: HashMap<Id, Outline> = nodes.iter().map(|n| (n.id, n.figure.outline())).collect();
     let is_message = |p: &Presentation| {
         p.element
             .and_then(|e| model.get(e))
@@ -427,10 +502,11 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 (!parts.is_empty()).then(|| parts.join(" "))
             });
             let to_lollipop = iconic_interfaces.contains(target);
+            let outline = |id| outlines.get(id).copied().unwrap_or(Outline::Rect);
             Some(edge_for(
                 p.id,
                 element.map(|e| e.kind()),
-                (source_rect, target_rect),
+                ((source_rect, outline(source)), (target_rect, outline(target))),
                 (*source_anchor, *target_anchor),
                 &points,
                 label,
@@ -535,6 +611,22 @@ fn layout_element(
                 .place(Rect::new(r.x, head.center().y - h / 2.0, r.width, h), LabelAlign::Center);
             (r, Figure::Lifeline { head }, vec![row])
         }
+        ElementKind::ActivityNode(p) => layout_activity_node(model, id, p, bounds, measure),
+        ElementKind::Partition => {
+            let line = name_line(FONT_SIZE, false);
+            let h = line_height(FONT_SIZE);
+            let r = Rect::new(
+                bounds.x,
+                bounds.y,
+                bounds.width.max(line.width(measure) + 20.0).max(40.0),
+                bounds.height.max(PARTITION_HEADER),
+            );
+            let row = line.place(
+                Rect::new(r.x, r.y + (PARTITION_HEADER - h) / 2.0, r.width, h),
+                LabelAlign::Center,
+            );
+            (r, Figure::Partition { header: r.y + PARTITION_HEADER }, vec![row])
+        }
         ElementKind::Comment(p) => {
             let lines: Vec<Line> = p
                 .body
@@ -570,6 +662,70 @@ fn layout_element(
             (bounds, Figure::Other, vec![row])
         }
     }
+}
+
+/// Height of a swimlane's name block; Astah's is 35 px.
+pub const PARTITION_HEADER: f32 = 35.0;
+
+/// Activity nodes: control nodes keep their size and show no name; actions and object nodes
+/// grow around their wrapped name.
+fn layout_activity_node(
+    model: &Model,
+    id: Id,
+    props: &ActivityNodeProps,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    const PAD_X: f32 = 10.0;
+    const PAD_Y: f32 = 4.0;
+    let e = model.get(id).expect("caller checked");
+    let figure = match props.node {
+        ActivityNodeKind::Action => Figure::Action,
+        ActivityNodeKind::Object => Figure::Rectangle,
+        ActivityNodeKind::Initial => Figure::Initial,
+        ActivityNodeKind::ActivityFinal => Figure::ActivityFinal,
+        ActivityNodeKind::FlowFinal => Figure::FlowFinal,
+        ActivityNodeKind::Decision | ActivityNodeKind::Merge => Figure::Diamond,
+        ActivityNodeKind::Fork | ActivityNodeKind::Join => Figure::Bar,
+    };
+    if !matches!(figure, Figure::Action | Figure::Rectangle) {
+        return (bounds, figure, Vec::new());
+    }
+    let text = match props.type_ref.as_ref() {
+        Some(t) if props.node == ActivityNodeKind::Object => {
+            let type_name = match t {
+                TypeRef::Element(t) => model.get(*t).map(|t| t.name().to_owned()),
+                TypeRef::Text(t) => Some(t.clone()),
+            };
+            match type_name.filter(|t| !t.is_empty()) {
+                Some(t) if e.name().is_empty() => format!(": {t}"),
+                Some(t) => format!("{} : {t}", e.name()),
+                None => e.name().to_owned(),
+            }
+        }
+        _ => e.name().to_owned(),
+    };
+    let width = bounds.width.max(40.0);
+    let names = wrap(&text, width - 2.0 * PAD_X, FONT_SIZE, measure);
+    let h = line_height(FONT_SIZE);
+    let widest = names.iter().map(|n| measure.width(n, FONT_SIZE, false)).fold(0.0, f32::max);
+    let block = h * names.len() as f32;
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        width.max(widest + 2.0 * PAD_X),
+        bounds.height.max(block + 2.0 * PAD_Y),
+    );
+    let top = r.center().y - block / 2.0;
+    let rows = names
+        .into_iter()
+        .enumerate()
+        .map(|(i, n)| {
+            Line::new(n, FONT_SIZE, RowRole::Name, Some(id))
+                .place(Rect::new(r.x, top + h * i as f32, r.width, h), LabelAlign::Center)
+        })
+        .collect();
+    (r, figure, rows)
 }
 
 /// Splits `text` into lines no wider than `max`; words longer than a line stay whole.
@@ -656,7 +812,10 @@ pub fn with_contents(scene: &Scene, ids: &[Id]) -> Vec<Id> {
     let mut i = 0;
     while i < result.len() {
         if let Some(container) = scene.node(result[i])
-            && matches!(container.figure, Figure::Boundary | Figure::Package { .. })
+            && matches!(
+                container.figure,
+                Figure::Boundary | Figure::Package { .. } | Figure::Partition { .. }
+            )
         {
             for n in &scene.nodes {
                 if n.id != container.id
@@ -827,7 +986,7 @@ fn anchor_point(rect: Rect, anchor: Option<Point>) -> Point {
 fn edge_for(
     id: Id,
     kind: Option<&ElementKind>,
-    (source, target): (Rect, Rect),
+    ((source, source_outline), (target, target_outline)): ((Rect, Outline), (Rect, Outline)),
     (source_anchor, target_anchor): (Option<Point>, Option<Point>),
     waypoints: &[Point],
     name_label: Option<String>,
@@ -840,9 +999,9 @@ fn edge_for(
     let mut points = Vec::with_capacity(waypoints.len() + 2);
     let first_toward = waypoints.first().copied().unwrap_or(to);
     let last_from = waypoints.last().copied().unwrap_or(from);
-    points.push(border_point_from(source, from, first_toward));
+    points.push(source_outline.border_point(source, from, first_toward));
     points.extend_from_slice(waypoints);
-    points.push(border_point_from(target, to, last_from));
+    points.push(target_outline.border_point(target, to, last_from));
 
     let mut edge = EdgeShape {
         id,
@@ -910,6 +1069,17 @@ fn edge_for(
             }
             _ => edge.target_marker = EndMarker::FilledArrow,
         },
+        Some(ElementKind::ActivityEdge(p)) => {
+            edge.target_marker = EndMarker::OpenArrow;
+            let guard = p.guard.trim();
+            if !guard.is_empty() {
+                let guard = format!("[{guard}]");
+                label = Some(match label {
+                    Some(name) => format!("{name} {guard}"),
+                    None => guard,
+                });
+            }
+        }
         _ => edge.line = LineStyle::Dashed,
     }
 
@@ -1550,5 +1720,47 @@ mod tests {
         assert_eq!(align(&rects, Alignment::Right)[1], Rect::new(40.0, 80.0, 60.0, 30.0));
         assert_eq!(align(&rects, Alignment::VerticalCenter)[1], Rect::new(200.0, 10.0, 60.0, 30.0));
         assert_eq!(align(&rects, Alignment::Top)[0], rects[0]);
+    }
+
+    #[test]
+    fn activity_diagram_scene() {
+        let (doc, ids) = order_system();
+        let scene = build(doc.model(), ids.activity_diagram, &Preview::default(), &ApproxMeasure);
+        let figure = |name: &str| {
+            scene
+                .nodes
+                .iter()
+                .find(|n| n.rows.first().is_some_and(|r| r.text == name))
+                .map(|n| &n.figure)
+        };
+        assert!(matches!(figure("Check stock"), Some(Figure::Action)));
+        assert!(matches!(figure("Clerk"), Some(Figure::Partition { .. })));
+        // Control nodes show no name.
+        let initial = scene.nodes.iter().find(|n| matches!(n.figure, Figure::Initial)).unwrap();
+        assert!(initial.rows.is_empty());
+        assert_eq!(initial.rect, Rect::new(140.0, 100.0, 20.0, 20.0));
+
+        assert_eq!(scene.edges.len(), 6);
+        assert!(scene.edges.iter().all(|e| e.target_marker == EndMarker::OpenArrow));
+        let guards: Vec<&str> =
+            scene.edges.iter().flat_map(|e| &e.labels).map(|l| l.text.as_str()).collect();
+        assert_eq!(guards, vec!["[in stock]", "[else]"]);
+        // The flow from the initial node starts on its circle, straight below the center.
+        let first = scene.edges.iter().find(|e| e.points[0].y < 125.0).unwrap();
+        assert!((first.points[0].x - 150.0).abs() < 0.01, "{:?}", first.points);
+        assert!((first.points[0].y - 120.0).abs() < 0.01, "{:?}", first.points);
+    }
+
+    #[test]
+    fn edges_end_on_circles_and_diamonds() {
+        let r = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let center = r.center();
+        let p = Outline::Ellipse.border_point(r, center, Point::new(100.0, 100.0));
+        assert!((p.distance(center) - 10.0).abs() < 0.01, "{p:?}");
+        let p = Outline::Diamond.border_point(r, center, Point::new(100.0, 10.0));
+        assert!((p.x - 20.0).abs() < 0.01 && (p.y - 10.0).abs() < 0.01, "{p:?}");
+        // On the diagonal the diamond's edge is closer than the circle.
+        let p = Outline::Diamond.border_point(r, center, Point::new(100.0, 100.0));
+        assert!((p.x - 15.0).abs() < 0.01, "{p:?}");
     }
 }

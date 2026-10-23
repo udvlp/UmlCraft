@@ -19,12 +19,12 @@ pub use diagram::{
 };
 pub use document::{Document, Tx};
 pub use element::{
-    Aggregation, AssociationEnd, AssociationProps, AttributeProps, ClassifierProps,
-    CombinedFragmentProps, CommentProps, DiagramProps, DirectedProps, ElementData, ElementKind,
-    ExtendProps, GeneralizationProps, IncludeProps, InteractionOperandProps, InteractionOperator,
-    LifelineProps, MessageProps, MessageSort, Multiplicity, Navigability, OperationProps,
-    ParameterDirection, ParameterProps, ParseMultiplicityError, RefRole, TaggedValue, TypeRef,
-    Visibility,
+    ActivityEdgeProps, ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd,
+    AssociationProps, AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps,
+    DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, GeneralizationProps,
+    IncludeProps, InteractionOperandProps, InteractionOperator, LifelineProps, MessageProps,
+    MessageSort, Multiplicity, Navigability, OperationProps, ParameterDirection, ParameterProps,
+    ParseMultiplicityError, RefRole, TaggedValue, TypeRef, Visibility,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

@@ -2,9 +2,10 @@
 //! that create them.
 
 use umlcraft_model::{
-    ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind, DirectedProps, ElementData,
-    ElementKind, ExtendProps, Id, IncludeProps, InteractionOperandProps, InteractionOperator,
-    LifelineProps, MessageSort, Model, ModelError, Point, Rect, Result, Size, Tx,
+    ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
+    DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps,
+    InteractionOperandProps, InteractionOperator, LifelineProps, MessageSort, Model, ModelError,
+    Point, Rect, Result, Size, Tx,
 };
 
 use crate::sequence::Slot;
@@ -21,6 +22,16 @@ pub enum NodeTool {
     Lifeline,
     SystemBoundary,
     CombinedFragment,
+    Action,
+    InitialNode,
+    ActivityFinal,
+    FlowFinal,
+    Decision,
+    Merge,
+    Fork,
+    Join,
+    ObjectNode,
+    Partition,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -37,6 +48,7 @@ pub enum EdgeTool {
     Reply,
     CreateMessage,
     DestroyMessage,
+    Flow,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -89,6 +101,22 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
                 E::NoteAnchor,
             ],
         ),
+        DiagramKind::Activity => (
+            &[
+                N::Action,
+                N::InitialNode,
+                N::ActivityFinal,
+                N::FlowFinal,
+                N::Decision,
+                N::Merge,
+                N::Fork,
+                N::Join,
+                N::ObjectNode,
+                N::Partition,
+                N::Note,
+            ],
+            &[E::Flow, E::NoteAnchor],
+        ),
     };
     std::iter::once(Tool::Select)
         .chain(nodes.iter().map(|&n| Tool::Node(n)))
@@ -109,11 +137,54 @@ impl NodeTool {
             Self::Lifeline => "lifeline",
             Self::SystemBoundary => "systemBoundary",
             Self::CombinedFragment => "combinedFragment",
+            Self::Action => "action",
+            Self::InitialNode => "initialNode",
+            Self::ActivityFinal => "activityFinal",
+            Self::FlowFinal => "flowFinal",
+            Self::Decision => "decision",
+            Self::Merge => "merge",
+            Self::Fork => "fork",
+            Self::Join => "join",
+            Self::ObjectNode => "objectNode",
+            Self::Partition => "partition",
+        }
+    }
+
+    /// The kind of activity node this tool creates, `None` for other tools.
+    pub fn activity_node(self) -> Option<ActivityNodeKind> {
+        match self.element_kind() {
+            ElementKind::ActivityNode(p) => Some(p.node),
+            _ => None,
+        }
+    }
+
+    /// The tool that creates activity nodes of `kind`.
+    pub fn for_activity_node(kind: ActivityNodeKind) -> Self {
+        match kind {
+            ActivityNodeKind::Action => Self::Action,
+            ActivityNodeKind::Initial => Self::InitialNode,
+            ActivityNodeKind::ActivityFinal => Self::ActivityFinal,
+            ActivityNodeKind::FlowFinal => Self::FlowFinal,
+            ActivityNodeKind::Decision => Self::Decision,
+            ActivityNodeKind::Merge => Self::Merge,
+            ActivityNodeKind::Fork => Self::Fork,
+            ActivityNodeKind::Join => Self::Join,
+            ActivityNodeKind::Object => Self::ObjectNode,
+        }
+    }
+
+    /// Whether new elements of this tool get a generated name. Notes and control nodes stay
+    /// unnamed; their names are not shown.
+    pub fn is_named(self) -> bool {
+        match self.activity_node() {
+            Some(kind) => matches!(kind, ActivityNodeKind::Action | ActivityNodeKind::Object),
+            None => self != Self::Note,
         }
     }
 
     pub fn element_kind(self) -> ElementKind {
         let classifier = ClassifierProps::default();
+        let node = ElementKind::activity_node;
         match self {
             Self::Class => ElementKind::Class(classifier),
             Self::Interface => ElementKind::Interface(classifier),
@@ -128,6 +199,16 @@ impl NodeTool {
                 operator: InteractionOperator::Opt,
                 covered: Vec::new(),
             }),
+            Self::Action => node(ActivityNodeKind::Action),
+            Self::InitialNode => node(ActivityNodeKind::Initial),
+            Self::ActivityFinal => node(ActivityNodeKind::ActivityFinal),
+            Self::FlowFinal => node(ActivityNodeKind::FlowFinal),
+            Self::Decision => node(ActivityNodeKind::Decision),
+            Self::Merge => node(ActivityNodeKind::Merge),
+            Self::Fork => node(ActivityNodeKind::Fork),
+            Self::Join => node(ActivityNodeKind::Join),
+            Self::ObjectNode => node(ActivityNodeKind::Object),
+            Self::Partition => ElementKind::Partition,
         }
     }
 
@@ -143,6 +224,13 @@ impl NodeTool {
             Self::SystemBoundary => Size::new(300.0, 360.0),
             // The layout sizes fragments; this is only what the file keeps.
             Self::CombinedFragment => Size::new(200.0, 80.0),
+            Self::Action => Size::new(120.0, 36.0),
+            // Astah's control nodes: 20 px circles, 5 px bars.
+            Self::InitialNode | Self::ActivityFinal | Self::FlowFinal => Size::new(20.0, 20.0),
+            Self::Decision | Self::Merge => Size::new(24.0, 24.0),
+            Self::Fork | Self::Join => Size::new(60.0, 5.0),
+            Self::ObjectNode => Size::new(80.0, 36.0),
+            Self::Partition => Size::new(200.0, 400.0),
         }
     }
 }
@@ -176,6 +264,7 @@ impl EdgeTool {
             Self::Reply => "reply",
             Self::CreateMessage => "createMessage",
             Self::DestroyMessage => "destroyMessage",
+            Self::Flow => "flow",
         }
     }
 
@@ -218,6 +307,13 @@ impl EdgeTool {
             Self::Include | Self::Extend => {
                 !same && matches!(source, K::UseCase(_)) && matches!(target, K::UseCase(_))
             }
+            // Nothing flows into an initial node or out of a final node.
+            Self::Flow => match (source, target) {
+                (K::ActivityNode(s), K::ActivityNode(t)) => {
+                    !same && s.node.has_outgoing() && t.node.has_incoming()
+                }
+                _ => false,
+            },
             Self::NoteAnchor => {
                 matches!(source, K::Comment(_)) != matches!(target, K::Comment(_))
                     && !matches!(source, K::Diagram(_) | K::Model)
@@ -243,6 +339,7 @@ impl EdgeTool {
                 extension_points: Vec::new(),
                 condition: String::new(),
             })),
+            Self::Flow => Some(ElementKind::flow(source, target)),
             Self::NoteAnchor => None,
             Self::Message
             | Self::AsyncMessage
@@ -272,6 +369,10 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
             kind,
             ElementKind::Lifeline(_) | ElementKind::CombinedFragment(_) | ElementKind::Comment(_)
         ),
+        DiagramKind::Activity => matches!(
+            kind,
+            ElementKind::ActivityNode(_) | ElementKind::Partition | ElementKind::Comment(_)
+        ),
     }
 }
 
@@ -287,6 +388,8 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::Lifeline(_) => NodeTool::Lifeline,
         ElementKind::SystemBoundary => NodeTool::SystemBoundary,
         ElementKind::CombinedFragment(_) => NodeTool::CombinedFragment,
+        ElementKind::ActivityNode(p) => NodeTool::for_activity_node(p.node),
+        ElementKind::Partition => NodeTool::Partition,
         _ => NodeTool::Class,
     };
     tool.default_size()
@@ -361,11 +464,11 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
 
 /// Whether nodes of this kind contain other nodes drawn inside them.
 pub fn is_container(kind: &ElementKind) -> bool {
-    matches!(kind, ElementKind::SystemBoundary | ElementKind::Package)
+    matches!(kind, ElementKind::SystemBoundary | ElementKind::Package | ElementKind::Partition)
 }
 
-/// Adds a node for `element`. System boundaries and fragments go to the back, so they never hide
-/// what is drawn inside them. Lifelines line up with the heads of the others.
+/// Adds a node for `element`. System boundaries, fragments and partitions go to the back, so
+/// they never hide what is drawn inside them. Lifelines line up with the heads of the others.
 fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Result<Id> {
     let model = tx.model();
     let kind = model.element(element)?.kind();
@@ -386,7 +489,10 @@ fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Resu
         bounds.y = top;
     }
     let presentation = umlcraft_model::Presentation::node(Some(element), bounds);
-    if matches!(kind, ElementKind::SystemBoundary | ElementKind::CombinedFragment(_)) {
+    if matches!(
+        kind,
+        ElementKind::SystemBoundary | ElementKind::CombinedFragment(_) | ElementKind::Partition
+    ) {
         let id = presentation.id;
         tx.apply(umlcraft_model::Op::InsertPresentation { diagram, index: 0, presentation })?;
         Ok(id)
@@ -432,11 +538,8 @@ pub fn create_node(
     let diagram_owner = tx.model().element(diagram)?.owner().ok_or(ModelError::Root)?;
     let owner = owner_for(tx.model(), diagram_owner, &kind)
         .ok_or_else(|| ModelError::Invalid(format!("no owner for a new {}", kind.type_name())))?;
-    let name = if tool == NodeTool::Note {
-        String::new()
-    } else {
-        unique_name(tx.model(), owner, base_name)
-    };
+    let name =
+        if tool.is_named() { unique_name(tx.model(), owner, base_name) } else { String::new() };
     let element = tx.create(owner, ElementData::new(name, kind))?;
     let bounds = Rect::from_origin_size(origin, tool.default_size());
     let node = add_node_for(tx, diagram, element, bounds)?;
@@ -755,6 +858,53 @@ mod tests {
         assert!(
             doc.edit("bad", |tx| connect(tx, d, EdgeTool::Generalization, node, node)).is_err()
         );
+    }
+
+    #[test]
+    fn flows_connect_activity_nodes_in_their_direction() {
+        let node = ElementKind::activity_node;
+        let (initial, action, last) = (
+            node(ActivityNodeKind::Initial),
+            node(ActivityNodeKind::Action),
+            node(ActivityNodeKind::ActivityFinal),
+        );
+        assert!(EdgeTool::Flow.accepts(&initial, &action, false));
+        assert!(EdgeTool::Flow.accepts(&action, &last, false));
+        assert!(!EdgeTool::Flow.accepts(&action, &initial, false));
+        assert!(!EdgeTool::Flow.accepts(&last, &action, false));
+        assert!(!EdgeTool::Flow.accepts(&action, &action, true));
+        assert!(!EdgeTool::Flow.accepts(&action, &ElementKind::class(), false));
+    }
+
+    #[test]
+    fn activity_nodes_go_into_the_activity() {
+        let (mut doc, ids) = order_system();
+        let d = ids.activity_diagram;
+        let activity = doc.model().get(d).unwrap().owner().unwrap();
+        let (action, fork, flow) = doc
+            .edit("create", |tx| {
+                let (a, na) =
+                    create_node(tx, d, NodeTool::Action, Point::new(600.0, 80.0), "Action")?;
+                let (f, nf) = create_node(tx, d, NodeTool::Fork, Point::new(600.0, 200.0), "Fork")?;
+                let flow = connect(tx, d, EdgeTool::Flow, na, nf)?;
+                Ok((a, f, flow))
+            })
+            .unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        assert_eq!(model.get(action).unwrap().owner(), Some(activity));
+        assert_eq!(model.get(action).unwrap().name(), "Action1");
+        // Control nodes stay unnamed.
+        assert_eq!(model.get(fork).unwrap().name(), "");
+        let flow = model.view(d).unwrap().get(flow).unwrap().element.unwrap();
+        assert_eq!(model.get(flow).unwrap().owner(), Some(activity));
+        // Partitions go behind everything.
+        let (_, lane) = doc
+            .edit("lane", |tx| {
+                create_node(tx, d, NodeTool::Partition, Point::new(560.0, 40.0), "Partition")
+            })
+            .unwrap();
+        assert_eq!(doc.model().view(d).unwrap().presentations()[0].id, lane);
     }
 
     #[test]

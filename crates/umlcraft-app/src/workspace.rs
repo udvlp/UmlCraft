@@ -159,8 +159,7 @@ impl Workspace {
     /// Creates an element with `tool` at `origin` on the active diagram and selects it.
     pub fn create_node(&mut self, tool: NodeTool, origin: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let keep_words = matches!(tool, NodeTool::UseCase | NodeTool::SystemBoundary);
-        let base = name_base(&format!("kind.{}", tool.key()), keep_words);
+        let base = name_base(&format!("kind.{}", tool.key()), keeps_words(tool));
         let label = t!("edit.create").to_string();
         let result =
             self.doc.edit(label, |tx| palette::create_node(tx, diagram, tool, origin, &base));
@@ -479,8 +478,10 @@ impl NewItem {
             Self::Operation => kind.can_own(&ElementKind::operation(None)),
             Self::Literal => kind.can_own(&ElementKind::EnumerationLiteral),
             Self::ExtensionPoint => kind.can_own(&ElementKind::ExtensionPoint),
-            // Sequence diagrams bring their own interaction, which namespaces can own.
+            // Sequence and activity diagrams bring their own interaction or activity, which
+            // namespaces can own.
             Self::Diagram(DiagramKind::Sequence) => kind.can_own(&ElementKind::Interaction),
+            Self::Diagram(DiagramKind::Activity) => kind.can_own(&ElementKind::Activity),
             Self::Diagram(d) => kind.can_own(&ElementKind::diagram(d)),
         }
     }
@@ -496,6 +497,7 @@ impl NewItem {
             Self::Diagram(DiagramKind::Class) => "diagram.class".into(),
             Self::Diagram(DiagramKind::UseCase) => "diagram.useCase".into(),
             Self::Diagram(DiagramKind::Sequence) => "diagram.sequence".into(),
+            Self::Diagram(DiagramKind::Activity) => "diagram.activity".into(),
         }
     }
 }
@@ -504,19 +506,18 @@ impl Workspace {
     /// Adds a new element below `owner` (model only, no diagram) and selects it. Diagrams are
     /// opened right away.
     pub fn add_item(&mut self, owner: Id, item: NewItem) {
-        let keep_words = matches!(
-            item,
-            NewItem::Diagram(_)
-                | NewItem::Element(NodeTool::UseCase | NodeTool::SystemBoundary)
-                | NewItem::ExtensionPoint
-        );
+        let keep_words = match item {
+            NewItem::Diagram(_) | NewItem::ExtensionPoint => true,
+            NewItem::Element(tool) => keeps_words(tool),
+            _ => false,
+        };
         let base = name_base(&item.key(), keep_words);
         let label = t!("edit.create").to_string();
         let result = self.doc.edit(label, |tx| {
             let name = palette::unique_name(tx.model(), owner, &base);
             match item {
                 NewItem::Element(tool) => {
-                    let name = if tool == NodeTool::Note { String::new() } else { name };
+                    let name = if tool.is_named() { name } else { String::new() };
                     tx.create(owner, ElementData::new(name, tool.element_kind()))
                 }
                 NewItem::Attribute => tx.create(
@@ -534,11 +535,14 @@ impl Workspace {
                 NewItem::Operation => {
                     tx.create(owner, ElementData::new(name, ElementKind::operation(None)))
                 }
-                NewItem::Diagram(DiagramKind::Sequence) => {
-                    let interaction =
-                        tx.create(owner, ElementData::new(name.clone(), ElementKind::Interaction))?;
-                    let kind = ElementKind::diagram(DiagramKind::Sequence);
-                    tx.create(interaction, ElementData::new(name, kind))
+                NewItem::Diagram(kind @ (DiagramKind::Sequence | DiagramKind::Activity)) => {
+                    let behavior = if kind == DiagramKind::Sequence {
+                        ElementKind::Interaction
+                    } else {
+                        ElementKind::Activity
+                    };
+                    let behavior = tx.create(owner, ElementData::new(name.clone(), behavior))?;
+                    tx.create(behavior, ElementData::new(name, ElementKind::diagram(kind)))
                 }
                 NewItem::Diagram(kind) => {
                     tx.create(owner, ElementData::new(name, ElementKind::diagram(kind)))
@@ -571,6 +575,18 @@ impl Workspace {
             }
         }
     }
+}
+
+/// Whether names generated for `tool` keep their words apart, as phrases do ("Use case 1").
+fn keeps_words(tool: NodeTool) -> bool {
+    matches!(
+        tool,
+        NodeTool::UseCase
+            | NodeTool::SystemBoundary
+            | NodeTool::Action
+            | NodeTool::ObjectNode
+            | NodeTool::Partition
+    )
 }
 
 /// Base for generated names. Class-like names join the words ("Class1"); use cases and diagrams

@@ -30,6 +30,7 @@ pub fn render(scene: &Scene, measure: &dyn TextMeasure) -> String {
     svg.primitive(&Primitive::Frame {
         rect: area,
         width: 0.0,
+        radius: 0.0,
         fill: Paint::Background,
         border: Paint::None,
         style: LineStyle::Solid,
@@ -101,14 +102,20 @@ impl Svg<'_> {
                 points_attr(points),
                 fill_attr(*fill),
             ),
-            Primitive::Ellipse { center, rx, ry } => format!(
-                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"{WHITE}\" stroke=\"{BLACK}\"/>",
+            Primitive::Ellipse { center, rx, ry, fill } => format!(
+                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{} stroke=\"{BLACK}\"/>",
                 num(center.x),
                 num(center.y),
                 num(*rx),
                 num(*ry),
+                fill_attr(*fill),
             ),
-            Primitive::Frame { rect, width, fill, border, style } => {
+            Primitive::Frame { rect, width, radius, fill, border, style } => {
+                let corners = if *radius > 0.0 {
+                    format!(" rx=\"{0}\" ry=\"{0}\"", num(*radius))
+                } else {
+                    String::new()
+                };
                 let stroke = match border {
                     Paint::None => String::new(),
                     paint => format!(
@@ -119,7 +126,7 @@ impl Svg<'_> {
                     ),
                 };
                 format!(
-                    "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{}{stroke}/>",
+                    "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{corners}{}{stroke}/>",
                     num(rect.x),
                     num(rect.y),
                     num(rect.width),

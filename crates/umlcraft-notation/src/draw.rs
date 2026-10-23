@@ -2,6 +2,8 @@
 //! the same figures. Texts stay in [`Row`](crate::scene::Row) and
 //! [`EdgeLabel`](crate::scene::EdgeLabel); this module only says where their baselines go.
 
+use std::f32::consts::FRAC_1_SQRT_2;
+
 use umlcraft_model::{Point, Rect};
 
 use crate::scene::{
@@ -40,10 +42,11 @@ pub enum Primitive {
     Polyline { points: Vec<Point>, width: f32, style: LineStyle },
     /// A closed polygon with a 1 px [`Paint::Line`] border.
     Polygon { points: Vec<Point>, fill: Paint },
-    /// An ellipse in [`Paint::Fill`] with a 1 px [`Paint::Line`] border.
-    Ellipse { center: Point, rx: f32, ry: f32 },
+    /// An ellipse with a 1 px [`Paint::Line`] border.
+    Ellipse { center: Point, rx: f32, ry: f32, fill: Paint },
     /// A rectangle whose border of `width` is centered on its outline, like a Java stroke.
-    Frame { rect: Rect, width: f32, fill: Paint, border: Paint, style: LineStyle },
+    /// `radius` rounds its corners.
+    Frame { rect: Rect, width: f32, radius: f32, fill: Paint, border: Paint, style: LineStyle },
 }
 
 fn line(points: Vec<Point>, style: LineStyle) -> Primitive {
@@ -51,7 +54,18 @@ fn line(points: Vec<Point>, style: LineStyle) -> Primitive {
 }
 
 fn frame(rect: Rect, fill: Paint) -> Primitive {
-    Primitive::Frame { rect, width: 1.0, fill, border: Paint::Line, style: LineStyle::Solid }
+    Primitive::Frame {
+        rect,
+        width: 1.0,
+        radius: 0.0,
+        fill,
+        border: Paint::Line,
+        style: LineStyle::Solid,
+    }
+}
+
+fn ellipse(center: Point, rx: f32, ry: f32) -> Primitive {
+    Primitive::Ellipse { center, rx, ry, fill: Paint::Fill }
 }
 
 /// The outline of a node, in drawing order.
@@ -64,6 +78,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             let mut result = vec![Primitive::Frame {
                 rect: r,
                 width: 2.0,
+                radius: 0.0,
                 fill: Paint::Fill,
                 border: Paint::Line,
                 style: solid,
@@ -76,7 +91,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             result
         }
         Figure::Lollipop => {
-            vec![Primitive::Ellipse { center: r.center(), rx: r.width / 2.0, ry: r.height / 2.0 }]
+            vec![ellipse(r.center(), r.width / 2.0, r.height / 2.0)]
         }
         Figure::Package { tab } => {
             let body = Rect::new(r.x, r.y + tab.height, r.width, r.height - tab.height);
@@ -89,7 +104,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             let hip = r.y + r.height * 0.62;
             let arms = r.y + r.height * 0.38;
             vec![
-                Primitive::Ellipse { center: Point::new(cx, r.y + head), rx: head, ry: head },
+                ellipse(Point::new(cx, r.y + head), head, head),
                 line(vec![Point::new(cx, neck), Point::new(cx, hip)], solid),
                 line(vec![Point::new(r.x, arms), Point::new(r.right(), arms)], solid),
                 line(
@@ -105,7 +120,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
         Figure::UseCase { separator } => {
             let (rx, ry) = (r.width / 2.0, r.height / 2.0);
             let center = r.center();
-            let mut result = vec![Primitive::Ellipse { center, rx, ry }];
+            let mut result = vec![ellipse(center, rx, ry)];
             // A chord across the ellipse at the separator's height.
             if let Some(y) = *separator {
                 let t = ((y - center.y) / ry).clamp(-1.0, 1.0);
@@ -162,15 +177,83 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                 fill: Paint::Fill,
             }]
         }
+        Figure::Action => vec![Primitive::Frame {
+            rect: r,
+            width: 1.0,
+            radius: ACTION_RADIUS.min(r.height / 2.0).min(r.width / 2.0),
+            fill: Paint::Fill,
+            border: Paint::Line,
+            style: solid,
+        }],
+        Figure::Initial => {
+            vec![Primitive::Ellipse {
+                center: r.center(),
+                rx: r.width / 2.0,
+                ry: r.height / 2.0,
+                fill: Paint::Line,
+            }]
+        }
+        Figure::ActivityFinal => {
+            // A ring around a filled circle.
+            let (rx, ry) = (r.width / 2.0, r.height / 2.0);
+            vec![
+                ellipse(r.center(), rx, ry),
+                Primitive::Ellipse {
+                    center: r.center(),
+                    rx: rx * 0.6,
+                    ry: ry * 0.6,
+                    fill: Paint::Line,
+                },
+            ]
+        }
+        Figure::FlowFinal => {
+            // A circle crossed out at 45°.
+            let c = r.center();
+            let (dx, dy) = (r.width / 2.0 * FRAC_1_SQRT_2, r.height / 2.0 * FRAC_1_SQRT_2);
+            vec![
+                ellipse(c, r.width / 2.0, r.height / 2.0),
+                line(vec![c.offset(-dx, -dy), c.offset(dx, dy)], solid),
+                line(vec![c.offset(-dx, dy), c.offset(dx, -dy)], solid),
+            ]
+        }
+        Figure::Diamond => {
+            let c = r.center();
+            vec![Primitive::Polygon {
+                points: vec![
+                    Point::new(c.x, r.y),
+                    Point::new(r.right(), c.y),
+                    Point::new(c.x, r.bottom()),
+                    Point::new(r.x, c.y),
+                ],
+                fill: Paint::Fill,
+            }]
+        }
+        Figure::Bar => vec![Primitive::Frame {
+            rect: r,
+            width: 1.0,
+            radius: 0.0,
+            fill: Paint::Line,
+            border: Paint::Line,
+            style: solid,
+        }],
+        Figure::Rectangle => vec![frame(r, Paint::Fill)],
+        Figure::Partition { header } => vec![
+            frame(r, Paint::Translucent),
+            line(vec![Point::new(r.x, *header), Point::new(r.right(), *header)], solid),
+        ],
         Figure::Other => vec![Primitive::Frame {
             rect: r,
             width: 1.0,
+            radius: 0.0,
             fill: Paint::Fill,
             border: Paint::Muted,
             style: LineStyle::Dashed,
         }],
     }
 }
+
+/// Corner radius of actions, as far as their size allows.
+const ACTION_RADIUS: f32 = 12.0;
 
 /// The end markers of an edge; the line itself is [`EdgeShape::points`].
 pub fn markers(edge: &EdgeShape) -> Vec<Primitive> {
@@ -211,7 +294,7 @@ fn marker(tip: Point, from: Point, marker: EndMarker) -> Vec<Primitive> {
         }
         EndMarker::Cross => {
             // 19 px from the end, arms of 5 px at 45° to the line.
-            let arm = 5.0 * std::f32::consts::FRAC_1_SQRT_2;
+            let arm = 5.0 * FRAC_1_SQRT_2;
             vec![
                 line(vec![at(19.0 - arm, arm), at(19.0 + arm, -arm)], solid),
                 line(vec![at(19.0 - arm, -arm), at(19.0 + arm, arm)], solid),

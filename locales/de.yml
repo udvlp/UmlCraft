@@ -68,10 +68,22 @@ tool:
   reply: Antwort
   createMessage: Erzeugen
   destroyMessage: Zerstören
+  action: Aktion
+  initialNode: Start
+  activityFinal: Aktivitätsende
+  flowFinal: Ablaufende
+  decision: Entscheidung
+  merge: Zusammenführung
+  fork: Gabelung
+  join: Vereinigung
+  objectNode: Objektknoten
+  partition: Partition
+  flow: Fluss
 diagram:
   class: Klassendiagramm
   useCase: Anwendungsfalldiagramm
   sequence: Sequenzdiagramm
+  activity: Aktivitätsdiagramm
 panel:
   model: Modell
   properties: Eigenschaften
@@ -224,3 +236,16 @@ kind:
   extend: Extend
   comment: Notiz
   diagram: Diagramm
+  activity: Aktivität
+  activityNode: Aktivitätsknoten
+  activityEdge: Fluss
+  action: Aktion
+  initialNode: Startknoten
+  activityFinal: Aktivitätsendknoten
+  flowFinal: Ablaufendknoten
+  decision: Entscheidungsknoten
+  merge: Zusammenführungsknoten
+  fork: Gabelung
+  join: Vereinigung
+  objectNode: Objektknoten
+  partition: Partition

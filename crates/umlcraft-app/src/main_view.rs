@@ -868,6 +868,7 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::Element(NodeTool::Actor),
         NewItem::Element(NodeTool::UseCase),
         NewItem::Element(NodeTool::SystemBoundary),
+        NewItem::Element(NodeTool::Partition),
         NewItem::Attribute,
         NewItem::Operation,
         NewItem::Literal,
@@ -884,7 +885,9 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         menu = menu.separator();
     }
     let mut any = false;
-    for kind in [DiagramKind::Class, DiagramKind::UseCase, DiagramKind::Sequence] {
+    for kind in
+        [DiagramKind::Class, DiagramKind::UseCase, DiagramKind::Sequence, DiagramKind::Activity]
+    {
         let item = NewItem::Diagram(kind);
         if item.applies_to(&meta.kind) {
             let key = item.key();

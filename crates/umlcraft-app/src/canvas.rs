@@ -284,8 +284,8 @@ impl DiagramCanvas {
         }
     }
 
-    /// The node under `p` for connecting. Fragment frames only count at their border, so
-    /// messages can be drawn between the lifelines they cover.
+    /// The node under `p` for connecting. Fragment frames and swimlanes only count at their
+    /// border, so messages and flows can be drawn between what lies inside them.
     fn node_at(&self, p: MPoint) -> Option<Id> {
         let tolerance = 4.0 / self.zoom;
         self.scene
@@ -293,7 +293,7 @@ impl DiagramCanvas {
             .iter()
             .rev()
             .find(|n| match n.figure {
-                Figure::Fragment { .. } => n.hit(p, tolerance),
+                Figure::Fragment { .. } | Figure::Partition { .. } => n.hit(p, tolerance),
                 _ => n.rect.contains(p),
             })
             .map(|n| n.id)
@@ -794,25 +794,38 @@ impl Painter<'_> {
     }
 
     fn primitive(&mut self, primitive: &Primitive) {
-        let (fill, line) = (self.c.fill, self.c.line);
+        let line = self.c.line;
         match primitive {
             Primitive::Polyline { points, width, style } => self.line(points, *width, line, *style),
             Primitive::Polygon { points, fill } => self.polygon(points, self.paint(*fill), line),
-            Primitive::Ellipse { center, rx, ry } => self.ellipse(*center, *rx, *ry, fill, line),
-            Primitive::Frame { rect, width, fill, border, style } => {
+            Primitive::Ellipse { center, rx, ry, fill } => {
+                self.ellipse(*center, *rx, *ry, self.paint(*fill), line)
+            }
+            Primitive::Frame { rect, width, radius, fill, border, style } => {
                 let style = match style {
                     LineStyle::Solid => BorderStyle::Solid,
                     LineStyle::Dashed => BorderStyle::Dashed,
                 };
-                self.frame(*rect, *width, self.paint(*fill), self.paint(*border), style);
+                let (fill, border) = (self.paint(*fill), self.paint(*border));
+                self.frame(*rect, *width, *radius, fill, border, style);
             }
         }
     }
 
-    /// A rectangle with a border of `width`, centered on its outline like a Java stroke.
-    fn frame(&mut self, r: Rect, width: f32, fill: Hsla, border: Hsla, style: BorderStyle) {
+    /// A rectangle with a border of `width`, centered on its outline like a Java stroke, and
+    /// corners rounded by `radius`.
+    fn frame(
+        &mut self,
+        r: Rect,
+        width: f32,
+        radius: f32,
+        fill: Hsla,
+        border: Hsla,
+        style: BorderStyle,
+    ) {
         let outer = self.t.rect(r.inflate(width / 2.0));
-        self.window.paint_quad(quad(outer, px(0.0), fill, self.t.len(width), border, style));
+        let corners = if radius > 0.0 { self.t.len(radius + width / 2.0) } else { px(0.0) };
+        self.window.paint_quad(quad(outer, corners, fill, self.t.len(width), border, style));
     }
 
     /// Draws one line of text inside `area` and returns the logical text width.

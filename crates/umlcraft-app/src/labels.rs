@@ -2,10 +2,16 @@
 
 use rust_i18n::t;
 use umlcraft_model::{Element, ElementKind, Id, Model, Visibility};
+use umlcraft_notation::palette::NodeTool;
 use umlcraft_notation::sequence::{message_text, operator_keyword};
 
+/// The element's metaclass; activity nodes say which kind of node they are.
 pub fn kind_label(e: &Element) -> String {
-    t!(format!("kind.{}", e.kind().type_name())).to_string()
+    let key = match e.kind() {
+        ElementKind::ActivityNode(p) => NodeTool::for_activity_node(p.node).key(),
+        kind => kind.type_name(),
+    };
+    t!(format!("kind.{key}")).to_string()
 }
 
 /// The element's name, or its kind in parentheses when it has none.
@@ -13,16 +19,17 @@ pub fn display_name(e: &Element) -> String {
     if e.name().is_empty() { format!("({})", kind_label(e)) } else { e.name().to_owned() }
 }
 
-/// Like [`display_name`], but unnamed sequence elements show what the diagram shows: a
-/// message its label, a fragment its operator, an operand its guard.
+/// Like [`display_name`], but unnamed sequence elements and flows show what the diagram shows:
+/// a message its label, a fragment its operator, an operand or flow its guard.
 pub fn tree_name(model: &Model, e: &Element) -> String {
+    let guard =
+        |g: &str| if g.trim().is_empty() { String::new() } else { format!("[{}]", g.trim()) };
     let shown = match e.kind() {
         _ if !e.name().is_empty() => String::new(),
         ElementKind::Message(_) => message_text(model, e.id()),
         ElementKind::CombinedFragment(p) => operator_keyword(p.operator).to_owned(),
-        ElementKind::InteractionOperand(p) if !p.guard.trim().is_empty() => {
-            format!("[{}]", p.guard.trim())
-        }
+        ElementKind::InteractionOperand(p) => guard(&p.guard),
+        ElementKind::ActivityEdge(p) => guard(&p.guard),
         _ => String::new(),
     };
     if shown.is_empty() { display_name(e) } else { shown }

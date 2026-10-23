@@ -14,6 +14,7 @@ pub enum DiagramKind {
     Class,
     UseCase,
     Sequence,
+    Activity,
 }
 
 /// One visible item on a diagram. Presentations of a diagram are kept in z-order (back to front).
