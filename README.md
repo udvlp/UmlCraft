@@ -46,6 +46,12 @@ importing `.asta` files and exporting them through an installed Astah.
 
 This completes milestone 1. Next: further diagram kinds (activity, state) and image export.
 
+## Download
+
+Releases for Windows (x64), macOS (universal) and Linux (x64) are on the
+[releases page](https://github.com/udvlp/UmlCraft/releases). The builds are not signed yet; the
+release notes explain how to start them anyway.
+
 ## Build and run
 
 ```bash
@@ -55,6 +61,21 @@ cargo run -p umlcraft-app
 ```bash
 cargo test --workspace
 ```
+
+On Debian/Ubuntu, GPUI needs some system libraries first:
+`bash packaging/linux/install-build-deps.sh`.
+
+## Releasing
+
+1. Set the version in `Cargo.toml` (`workspace.package.version`) and commit.
+2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
+3. The [release workflow](.github/workflows/release.yml) checks that the tag matches the version,
+   builds the Windows `.zip`, Linux `.tar.gz` and macOS `.dmg`, adds the third-party license
+   notices (`cargo about`, configured in `about.toml`) and creates a draft release.
+4. Review the draft on GitHub and publish it.
+
+Running the workflow by hand (Actions › Release › Run workflow) only builds the packages and
+keeps them as workflow artifacts.
 
 ## Structure
 

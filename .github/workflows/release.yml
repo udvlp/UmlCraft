@@ -1,0 +1,166 @@
+# Builds the release packages for Windows, Linux and macOS.
+#
+# Pushing a tag `vX.Y.Z` (matching the workspace version) builds everything and creates a draft
+# GitHub release with the packages attached. Running the workflow by hand only builds the packages
+# and keeps them as workflow artifacts, to try packaging without a release.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        name: Read the workspace version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "umlcraft-app") | .version')
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the workspace version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  licenses:
+    name: Third-party licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: cargo about generate --locked about.hbs -o THIRD-PARTY-LICENSES.html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: licenses
+          path: THIRD-PARTY-LICENSES.html
+
+  build:
+    name: Package (${{ matrix.name }})
+    needs: [version, licenses]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            targets: x86_64-pc-windows-msvc
+          # The oldest available Ubuntu keeps the glibc requirement low.
+          - name: Linux x64
+            os: ubuntu-22.04
+            targets: x86_64-unknown-linux-gnu
+          - name: macOS universal
+            os: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install GPUI build dependencies
+        if: runner.os == 'Linux'
+        run: bash packaging/linux/install-build-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.targets }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: licenses
+
+      - name: Build
+        run: |
+          IFS=, read -ra targets <<< "${{ matrix.targets }}"
+          for target in "${targets[@]}"; do
+            cargo build --release --locked -p umlcraft-app --target "$target"
+          done
+
+      - name: Package for Windows
+        if: runner.os == 'Windows'
+        run: |
+          name="UmlCraft-$VERSION-windows-x64"
+          mkdir -p "dist/$name"
+          cp target/x86_64-pc-windows-msvc/release/umlcraft.exe "dist/$name/"
+          cp README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.html "dist/$name/"
+          (cd dist && 7z a -tzip "$name.zip" "$name")
+
+      - name: Package for Linux
+        if: runner.os == 'Linux'
+        run: |
+          name="UmlCraft-$VERSION-linux-x64"
+          mkdir -p "dist/$name"
+          cp target/x86_64-unknown-linux-gnu/release/umlcraft "dist/$name/"
+          cp README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.html "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+
+      - name: Package for macOS
+        if: runner.os == 'macOS'
+        run: |
+          app="dist/dmg/UmlCraft.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          lipo -create -output "$app/Contents/MacOS/umlcraft" \
+            target/aarch64-apple-darwin/release/umlcraft \
+            target/x86_64-apple-darwin/release/umlcraft
+          sed "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.html "$app/Contents/Resources/"
+          # Ad-hoc signature: not a Developer ID, but Apple Silicon refuses unsigned code.
+          codesign --force --sign - "$app"
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname UmlCraft -srcfolder dist/dmg -format UDZO \
+            "dist/UmlCraft-$VERSION-macos-universal.dmg"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ runner.os }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.dmg
+          if-no-files-found: error
+
+  publish:
+    name: Draft release
+    if: github.ref_type == 'tag'
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          merge-multiple: true
+          path: dist
+      - name: Create the draft release
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "UmlCraft $VERSION" \
+            --notes-file ../packaging/release-notes.md --generate-notes \
+            *

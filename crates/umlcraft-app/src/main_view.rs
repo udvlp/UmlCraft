@@ -1069,7 +1069,9 @@ fn sanitize_file_name(name: &str) -> String {
 }
 
 fn documents_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join("Documents"))
+    let home = PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?);
+    let documents = home.join("Documents");
+    Some(if documents.is_dir() { documents } else { home })
 }
 
 impl Render for MainView {
@@ -1197,6 +1199,8 @@ mod tests {
         assert_eq!(sanitize_file_name("  "), "project");
     }
 
+    // Windows paths: elsewhere the backslashes are not separators.
+    #[cfg(windows)]
     #[test]
     fn recent_labels_put_the_file_name_first_and_shorten_folders() {
         let short = PathBuf::from(r"C:\Projekte\shop.ucraft");

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>UmlCraft – Third-party licenses</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h2 { margin-top: 2.5rem; border-bottom: 1px solid #ccc; }
+    ul.crates { columns: 2; }
+    pre { white-space: pre-wrap; background: #f5f5f5; padding: 1rem; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <h1>Third-party licenses</h1>
+  <p>UmlCraft is built with the following open source software. Each license text below lists the
+    crates it applies to.</p>
+
+  <h2>Overview</h2>
+  <ul>
+    {{#each overview}}
+    <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+    {{/each}}
+  </ul>
+
+  {{#each licenses}}
+  <h2 id="{{id}}">{{name}}</h2>
+  <p>Used by:</p>
+  <ul class="crates">
+    {{#each used_by}}
+    <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+    {{/each}}
+  </ul>
+  <pre>{{text}}</pre>
+  {{/each}}
+</body>
+</html>
