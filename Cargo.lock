@@ -6603,7 +6603,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -6620,7 +6620,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-asta"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror 2.0.21",
  "umlcraft-format",
@@ -6631,7 +6631,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-asta-export"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -6645,7 +6645,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-format"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -6656,7 +6656,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-model"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "indexmap",
  "pretty_assertions",
@@ -6667,7 +6667,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-notation"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "pretty_assertions",
  "umlcraft-model",
