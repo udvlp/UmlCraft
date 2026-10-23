@@ -719,9 +719,11 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::Element(NodeTool::Enumeration),
         NewItem::Element(NodeTool::Actor),
         NewItem::Element(NodeTool::UseCase),
+        NewItem::Element(NodeTool::SystemBoundary),
         NewItem::Attribute,
         NewItem::Operation,
         NewItem::Literal,
+        NewItem::ExtensionPoint,
     ];
     let mut any = false;
     for item in items.into_iter().filter(|i| i.applies_to(&meta.kind)) {

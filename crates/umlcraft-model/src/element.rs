@@ -424,6 +424,8 @@ pub enum ElementKind {
     Actor(ClassifierProps),
     UseCase(ClassifierProps),
     ExtensionPoint,
+    /// The system (subject) whose use cases are drawn inside its boundary.
+    SystemBoundary,
     Interaction,
     Lifeline(LifelineProps),
     Message(MessageProps),
@@ -566,6 +568,7 @@ impl ElementKind {
             Self::Actor(_) => "actor",
             Self::UseCase(_) => "useCase",
             Self::ExtensionPoint => "extensionPoint",
+            Self::SystemBoundary => "systemBoundary",
             Self::Interaction => "interaction",
             Self::Lifeline(_) => "lifeline",
             Self::Message(_) => "message",
@@ -619,7 +622,7 @@ impl ElementKind {
             K::Class(_) | K::Interface(_) | K::Enumeration(_) | K::DataType(_) => {
                 self.is_namespace() || matches!(self, K::Class(_) | K::Interface(_))
             }
-            K::Actor(_) | K::UseCase(_) => self.is_namespace(),
+            K::Actor(_) | K::UseCase(_) | K::SystemBoundary => self.is_namespace(),
             K::Attribute(_) | K::Operation(_) => matches!(
                 self,
                 K::Class(_)

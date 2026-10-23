@@ -247,7 +247,7 @@ impl DiagramCanvas {
     fn preview(&self, ws: &Workspace) -> Preview {
         match &self.drag {
             Some(Drag::Move { dx, dy, .. }) => Preview {
-                moved: ws.selection.iter().copied().collect(),
+                moved: scene::with_contents(&self.scene, &ws.selection).into_iter().collect(),
                 dx: *dx,
                 dy: *dy,
                 ..Preview::default()
@@ -427,7 +427,10 @@ impl DiagramCanvas {
                 self.update_workspace(cx, |ws| ws.select(vec![id]));
             }
             Some(Drag::Move { dx, dy, .. }) => {
-                self.update_workspace(cx, |ws| ws.move_selection(dx, dy))
+                // Containers (boundaries, packages) take the nodes drawn inside them along.
+                let selection = self.workspace.read(cx).selection.clone();
+                let moved = scene::with_contents(&self.scene, &selection);
+                self.update_workspace(cx, |ws| ws.move_nodes(&moved, dx, dy))
             }
             Some(Drag::Resize { presentation, original, rect, .. }) if rect != original => {
                 self.update_workspace(cx, |ws| ws.set_bounds(presentation, rect));
@@ -802,8 +805,20 @@ impl Painter<'_> {
                 ];
                 self.line(&legs, 1.0, c.line, solid);
             }
-            Figure::UseCase => {
-                self.ellipse(r.center(), r.width / 2.0, r.height / 2.0, Some(c.fill), c.line);
+            Figure::UseCase { separator } => {
+                let (rx, ry) = (r.width / 2.0, r.height / 2.0);
+                let center = r.center();
+                self.ellipse(center, rx, ry, Some(c.fill), c.line);
+                // A chord across the ellipse at the separator's height.
+                if let Some(y) = *separator {
+                    let t = ((y - center.y) / ry).clamp(-1.0, 1.0);
+                    let half = rx * (1.0 - t * t).sqrt();
+                    let chord = [MPoint::new(center.x - half, y), MPoint::new(center.x + half, y)];
+                    self.line(&chord, 1.0, c.line, solid);
+                }
+            }
+            Figure::Boundary => {
+                self.rect(r, Hsla { a: 0.35, ..c.fill }, c.line, BorderStyle::Solid)
             }
             Figure::Lifeline { head } => {
                 self.rect(*head, c.fill, c.line, BorderStyle::Solid);

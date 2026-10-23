@@ -32,6 +32,7 @@ enum Field {
     Text,
     Role(usize),
     Multiplicity(usize),
+    Condition,
 }
 
 /// Inputs for one association end.
@@ -46,6 +47,7 @@ pub struct PropertiesPanel {
     workspace: Entity<Workspace>,
     name: Entity<InputState>,
     declaration: Entity<InputState>,
+    condition: Entity<InputState>,
     stereotypes: Entity<InputState>,
     text: Entity<TextareaState>,
     visibility: Entity<Choice>,
@@ -80,6 +82,7 @@ impl PropertiesPanel {
             |window: &mut Window, cx: &mut Context<Self>| cx.new(|cx| InputState::new(window, cx));
         let name = input(window, cx);
         let declaration = input(window, cx);
+        let condition = input(window, cx);
         let stereotypes = cx.new(|cx| InputState::new(window, cx).placeholder("entity, control"));
         let text = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 12));
         let visibility = cx.new(|cx| SelectState::new(visibility_items(), None, window, cx));
@@ -104,6 +107,7 @@ impl PropertiesPanel {
         };
         watch(&name, Field::Name, cx);
         watch(&declaration, Field::Declaration, cx);
+        watch(&condition, Field::Condition, cx);
         watch(&stereotypes, Field::Stereotypes, cx);
         for (i, end) in ends.iter().enumerate() {
             watch(&end.role, Field::Role(i), cx);
@@ -164,6 +168,7 @@ impl PropertiesPanel {
             workspace,
             name,
             declaration,
+            condition,
             stereotypes,
             text,
             visibility,
@@ -239,6 +244,14 @@ impl PropertiesPanel {
                     _ => data.documentation = value,
                 });
             }
+            Field::Condition => {
+                let value = Self::value(&self.condition, cx);
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::Extend(p) = &mut data.kind {
+                        p.condition = value;
+                    }
+                });
+            }
             Field::Role(i) => {
                 let value = Self::value(&self.ends[i].role, cx);
                 self.apply(id, cx, move |data| {
@@ -295,7 +308,13 @@ impl PropertiesPanel {
         if let Some(editing) = self.editing
             && selected != Some(editing)
         {
-            let fields = [Field::Name, Field::Declaration, Field::Stereotypes, Field::Text];
+            let fields = [
+                Field::Name,
+                Field::Declaration,
+                Field::Stereotypes,
+                Field::Text,
+                Field::Condition,
+            ];
             let ends = (0..2).flat_map(|i| [Field::Role(i), Field::Multiplicity(i)]);
             for field in fields.into_iter().chain(ends) {
                 self.commit(field, cx);
@@ -327,6 +346,11 @@ impl PropertiesPanel {
         };
         set(&self.name, data.name.clone(), window, cx);
         set(&self.declaration, declaration, window, cx);
+        let condition = match &data.kind {
+            ElementKind::Extend(p) => p.condition.clone(),
+            _ => String::new(),
+        };
+        set(&self.condition, condition, window, cx);
         set(&self.stereotypes, data.stereotypes.join(", "), window, cx);
         let text = match &data.kind {
             ElementKind::Comment(p) => p.body.clone(),
@@ -551,6 +575,46 @@ impl Render for PropertiesPanel {
                             }
                         },
                     ));
+            }
+            ElementKind::Extend(p) => {
+                body = body.child(field(
+                    t!("prop.condition").into(),
+                    Input::new(&self.condition).small().into_any_element(),
+                ));
+                // The extension points of the extended use case, ticked where this extends.
+                let points: Vec<(Id, String)> = model
+                    .children(p.extended)
+                    .iter()
+                    .filter_map(|&c| model.get(c))
+                    .filter(|c| matches!(c.kind(), ElementKind::ExtensionPoint))
+                    .map(|c| (c.id(), c.name().to_owned()))
+                    .collect();
+                if !points.is_empty() {
+                    body = body.child(heading(t!("prop.extension_points").to_string()));
+                }
+                for (ix, (point, name)) in points.into_iter().enumerate() {
+                    let workspace = workspace.clone();
+                    let checked = p.extension_points.contains(&point);
+                    body = body.child(
+                        Checkbox::new(("extension-point", ix))
+                            .label(name)
+                            .checked(checked)
+                            .on_click(move |checked: &bool, _, cx| {
+                                let checked = *checked;
+                                workspace.update(cx, |ws, cx| {
+                                    ws.update_element(id, |d| {
+                                        if let ElementKind::Extend(p) = &mut d.kind {
+                                            p.extension_points.retain(|&e| e != point);
+                                            if checked {
+                                                p.extension_points.push(point);
+                                            }
+                                        }
+                                    });
+                                    cx.notify();
+                                });
+                            }),
+                    );
+                }
             }
             ElementKind::Association(p) => {
                 for (i, end) in p.ends.iter().enumerate() {

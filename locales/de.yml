@@ -49,6 +49,7 @@ tool:
   actor: Akteur
   useCase: Anwendungsfall
   lifeline: Lebenslinie
+  systemBoundary: Systemgrenze
   association: Assoziation
   generalization: Generalisierung
   realization: Realisierung
@@ -82,6 +83,8 @@ prop:
   hide_attributes: Attribute ausblenden
   hide_operations: Operationen ausblenden
   iconic: Als Kreis darstellen
+  condition: Bedingung
+  extension_points: Erweiterungspunkte
   owner: Besitzer
   documentation: Dokumentation
   text: Text
@@ -147,6 +150,7 @@ kind:
   actor: Akteur
   useCase: Anwendungsfall
   extensionPoint: Erweiterungspunkt
+  systemBoundary: Systemgrenze
   interaction: Interaktion
   lifeline: Lebenslinie
   message: Nachricht

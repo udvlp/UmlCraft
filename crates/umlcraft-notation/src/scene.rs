@@ -57,6 +57,21 @@ pub struct NodeShape {
     pub rows: Vec<Row>,
 }
 
+impl NodeShape {
+    /// Whether `p` hits the node. Hollow frames (system boundaries) only count at their border
+    /// and title, so clicks inside reach what they contain or the empty canvas.
+    pub fn hit(&self, p: Point, tolerance: f32) -> bool {
+        if !self.rect.inflate(tolerance).contains(p) {
+            return false;
+        }
+        if !matches!(self.figure, Figure::Boundary) {
+            return self.rect.contains(p);
+        }
+        let inner = self.rect.inflate(-2.0 * tolerance.max(3.0));
+        !inner.contains(p) || self.rows.iter().any(|r| r.rect.contains(p))
+    }
+}
+
 /// The outline of a node; its texts are in [`NodeShape::rows`].
 pub enum Figure {
     /// Box with compartment separators at the given y positions.
@@ -69,7 +84,12 @@ pub enum Figure {
         tab: Rect,
     },
     Actor,
-    UseCase,
+    /// Ellipse; with extension points, a line at `separator` divides name and points.
+    UseCase {
+        separator: Option<f32>,
+    },
+    /// System boundary: a frame around the use cases of a system.
+    Boundary,
     Lifeline {
         head: Rect,
     },
@@ -392,18 +412,18 @@ fn layout_element(
             );
             (r, Figure::Actor, vec![row])
         }
-        ElementKind::UseCase(_) => {
-            let line = name_line(12.0, false);
+        ElementKind::UseCase(_) => layout_use_case(model, id, bounds, measure),
+        ElementKind::SystemBoundary => {
+            let line = name_line(13.0, true);
             let r = Rect::new(
                 bounds.x,
                 bounds.y,
-                bounds.width.max(line.width(measure) + 30.0),
-                bounds.height.max(40.0),
+                bounds.width.max(line.width(measure) + 20.0).max(120.0),
+                bounds.height.max(80.0),
             );
-            let h = line_height(12.0);
-            let row =
-                line.place(Rect::new(r.x, r.center().y - h / 2.0, r.width, h), LabelAlign::Center);
-            (r, Figure::UseCase, vec![row])
+            let row = line
+                .place(Rect::new(r.x, r.y + 6.0, r.width, line_height(13.0)), LabelAlign::Center);
+            (r, Figure::Boundary, vec![row])
         }
         ElementKind::Lifeline(p) => {
             let type_name = p.represents.and_then(|t| model.get(t)).map(|t| t.name());
@@ -455,6 +475,106 @@ fn layout_element(
             (bounds, Figure::Other, vec![row])
         }
     }
+}
+
+/// Splits `text` into lines no wider than `max`; words longer than a line stay whole.
+fn wrap(text: &str, max: f32, size: f32, measure: &dyn TextMeasure) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let candidate =
+            if current.is_empty() { word.to_owned() } else { format!("{current} {word}") };
+        if !current.is_empty() && measure.width(&candidate, size, false) > max {
+            lines.push(std::mem::replace(&mut current, word.to_owned()));
+        } else {
+            current = candidate;
+        }
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Use case ellipse: the wrapped name and, below a line, its extension points.
+fn layout_use_case(
+    model: &Model,
+    id: Id,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    /// Share of the ellipse's width and height that text may use.
+    const INNER: f32 = 0.72;
+    let e = model.get(id).expect("caller checked");
+    let extension_points: Vec<(Id, &str)> = e
+        .children()
+        .iter()
+        .filter_map(|&c| model.get(c))
+        .filter(|c| matches!(c.kind(), ElementKind::ExtensionPoint))
+        .map(|c| (c.id(), c.name()))
+        .collect();
+
+    let width = bounds.width.max(80.0);
+    let names = wrap(e.name(), width * INNER, 12.0, measure);
+    let mut lines: Vec<Line> =
+        names.into_iter().map(|n| Line::new(n, 12.0, RowRole::Name, Some(id))).collect();
+    let name_count = lines.len();
+    if !extension_points.is_empty() {
+        let mut heading = Line::new("extension points", 10.0, RowRole::Stereotype, Some(id));
+        heading.italic = true;
+        lines.push(heading);
+        lines.extend(
+            extension_points
+                .iter()
+                .map(|&(ep, name)| Line::new(name, 11.0, RowRole::Member, Some(ep))),
+        );
+    }
+    let gap = if extension_points.is_empty() { 0.0 } else { 4.0 };
+    let block_h: f32 = lines.iter().map(|l| line_height(l.size)).sum::<f32>() + gap;
+    let widest = lines.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        width.max(widest / INNER + 10.0),
+        bounds.height.max(40.0).max(block_h / INNER + 10.0),
+    );
+
+    let mut y = r.center().y - block_h / 2.0;
+    let mut separator = None;
+    let mut rows = Vec::new();
+    for (i, line) in lines.into_iter().enumerate() {
+        if i == name_count {
+            separator = Some(y + gap / 2.0);
+            y += gap;
+        }
+        let h = line_height(line.size);
+        rows.push(line.place(Rect::new(r.x, y, r.width, h), LabelAlign::Center));
+        y += h;
+    }
+    (r, Figure::UseCase { separator }, rows)
+}
+
+/// Nodes drawn completely inside container nodes (system boundaries, packages) among `ids`,
+/// recursively, together with `ids` themselves. Moving a container moves its contents.
+pub fn with_contents(scene: &Scene, ids: &[Id]) -> Vec<Id> {
+    let mut result: Vec<Id> = ids.to_vec();
+    let mut i = 0;
+    while i < result.len() {
+        if let Some(container) = scene.node(result[i])
+            && matches!(container.figure, Figure::Boundary | Figure::Package { .. })
+        {
+            for n in &scene.nodes {
+                if n.id != container.id
+                    && !result.contains(&n.id)
+                    && container.rect.contains_rect(&n.rect)
+                {
+                    result.push(n.id);
+                }
+            }
+        }
+        i += 1;
+    }
+    result
 }
 
 fn is_boxed_classifier(kind: &ElementKind) -> bool {
@@ -667,10 +787,13 @@ fn edge_for(
             edge.target_marker = EndMarker::OpenArrow;
             label = Some("«include»".to_owned());
         }
-        Some(ElementKind::Extend(_)) => {
+        Some(ElementKind::Extend(p)) => {
             edge.line = LineStyle::Dashed;
             edge.target_marker = EndMarker::OpenArrow;
-            label = Some("«extend»".to_owned());
+            label = Some(match p.condition.trim() {
+                "" => "«extend»".to_owned(),
+                condition => format!("«extend» [{condition}]"),
+            });
         }
         Some(ElementKind::Message(p)) => match p.sort {
             MessageSort::Asynchronous => edge.target_marker = EndMarker::OpenArrow,
@@ -772,7 +895,7 @@ pub fn hit_test(scene: &Scene, p: Point, tolerance: f32) -> Option<Id> {
     if let Some(edge) = edge {
         return Some(edge.id);
     }
-    scene.nodes.iter().rev().find(|n| n.rect.contains(p)).map(|n| n.id)
+    scene.nodes.iter().rev().find(|n| n.hit(p, tolerance)).map(|n| n.id)
 }
 
 /// Nodes lying completely inside `area`, e.g. a rubber band.
@@ -987,6 +1110,104 @@ mod tests {
         assert_eq!(circle.rect.size(), umlcraft_model::Size::new(24.0, 24.0));
         let edge = scene.edge(realization).unwrap();
         assert!(edge.line == LineStyle::Solid && edge.target_marker == EndMarker::None);
+    }
+
+    #[test]
+    fn system_boundaries_are_hollow_and_carry_their_contents() {
+        let (mut doc, ids) = order_system();
+        let d = ids.use_case_diagram;
+        let boundary = doc
+            .edit("boundary", |tx| {
+                let (_, node) = crate::palette::create_node(
+                    tx,
+                    d,
+                    crate::palette::NodeTool::SystemBoundary,
+                    Point::new(180.0, 60.0),
+                    "System",
+                )?;
+                Ok(node)
+            })
+            .unwrap();
+        let view = doc.model().view(d).unwrap();
+        assert_eq!(view.presentations()[0].id, boundary, "boundaries go to the back");
+
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let frame = scene.node(boundary).unwrap();
+        assert!(matches!(frame.figure, Figure::Boundary));
+        // Inside the frame, away from border and title: not the boundary.
+        let inside = Point::new(frame.rect.x + 40.0, frame.rect.bottom() - 40.0);
+        assert_ne!(hit_test(&scene, inside, 4.0), Some(boundary));
+        assert_eq!(hit_test(&scene, Point::new(frame.rect.x + 1.0, inside.y), 4.0), Some(boundary));
+        assert_eq!(hit_test(&scene, frame.rows[0].rect.center(), 4.0), Some(boundary));
+
+        // The "Place order" use case (220,110 140x60) lies inside the boundary (180,60 300x360).
+        let use_case = doc.model().shown_on(doc.model().children(doc.model().root())[2])[0].1;
+        let moved = with_contents(&scene, &[boundary]);
+        assert!(moved.contains(&boundary) && moved.contains(&use_case), "{moved:?}");
+        assert_eq!(moved.len(), 2, "the actor at x=60 is outside");
+    }
+
+    #[test]
+    fn use_cases_wrap_names_and_list_extension_points() {
+        let (mut doc, ids) = order_system();
+        let d = ids.use_case_diagram;
+        let place_order = doc.model().children(doc.model().root())[2];
+        doc.edit("edit", |tx| {
+            tx.rename(place_order, "Place an order with express delivery and gift wrapping")?;
+            tx.create(
+                place_order,
+                umlcraft_model::ElementData::new("payment", ElementKind::ExtensionPoint),
+            )?;
+            tx.create(
+                place_order,
+                umlcraft_model::ElementData::new("shipping", ElementKind::ExtensionPoint),
+            )
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let node = scene.nodes.iter().find(|n| n.element == Some(place_order)).unwrap();
+        let Figure::UseCase { separator: Some(sep) } = node.figure else { panic!("separator") };
+        let names: Vec<&Row> = node.rows.iter().filter(|r| r.role == RowRole::Name).collect();
+        assert!(names.len() >= 3, "wrapped into {} lines", names.len());
+        let members: Vec<&str> = node
+            .rows
+            .iter()
+            .filter(|r| r.role == RowRole::Member)
+            .map(|r| r.text.as_str())
+            .collect();
+        assert_eq!(members, ["payment", "shipping"]);
+        assert!(names.iter().all(|r| r.rect.bottom() <= sep));
+        assert!(node.rect.height > 60.0, "the ellipse grew: {:?}", node.rect);
+    }
+
+    #[test]
+    fn extend_shows_its_condition() {
+        let (mut doc, ids) = order_system();
+        let d = ids.use_case_diagram;
+        let place_order = doc.model().children(doc.model().root())[2];
+        let node = doc.model().shown_on(place_order)[0].1;
+        let edge = doc
+            .edit("extend", |tx| {
+                let (_, other) = crate::palette::create_node(
+                    tx,
+                    d,
+                    crate::palette::NodeTool::UseCase,
+                    Point::new(220.0, 300.0),
+                    "Use case ",
+                )?;
+                let edge =
+                    crate::palette::connect(tx, d, crate::palette::EdgeTool::Extend, other, node)?;
+                let relationship = tx.model().view(d).unwrap().get(edge).unwrap().element.unwrap();
+                tx.update(relationship, |data| {
+                    if let ElementKind::Extend(p) = &mut data.kind {
+                        p.condition = "express".into();
+                    }
+                })?;
+                Ok(edge)
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        assert_eq!(scene.edge(edge).unwrap().labels[0].text, "«extend» [express]");
     }
 
     #[test]

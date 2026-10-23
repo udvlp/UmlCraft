@@ -158,7 +158,8 @@ impl Workspace {
     /// Creates an element with `tool` at `origin` on the active diagram and selects it.
     pub fn create_node(&mut self, tool: NodeTool, origin: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let base = name_base(&format!("kind.{}", tool.key()), tool == NodeTool::UseCase);
+        let keep_words = matches!(tool, NodeTool::UseCase | NodeTool::SystemBoundary);
+        let base = name_base(&format!("kind.{}", tool.key()), keep_words);
         let label = t!("edit.create").to_string();
         let result =
             self.doc.edit(label, |tx| palette::create_node(tx, diagram, tool, origin, &base));
@@ -177,10 +178,14 @@ impl Workspace {
         }
     }
 
-    /// Moves the selected nodes by (`dx`, `dy`) as one undo step.
-    pub fn move_selection(&mut self, dx: f32, dy: f32) {
+    /// Moves the given nodes of the active diagram by (`dx`, `dy`) as one undo step.
+    pub fn move_nodes(&mut self, presentations: &[Id], dx: f32, dy: f32) {
         let Some(diagram) = self.active_diagram else { return };
-        let nodes = self.selected_nodes();
+        let Some(view) = self.doc.model().view(diagram) else { return };
+        let nodes: Vec<(Id, Rect)> = presentations
+            .iter()
+            .filter_map(|&p| view.get(p).and_then(|pr| pr.bounds()).map(|b| (p, b)))
+            .collect();
         if nodes.is_empty() || (dx == 0.0 && dy == 0.0) {
             return;
         }
@@ -382,6 +387,7 @@ pub enum NewItem {
     Attribute,
     Operation,
     Literal,
+    ExtensionPoint,
     Diagram(DiagramKind),
 }
 
@@ -393,6 +399,7 @@ impl NewItem {
             Self::Attribute => kind.can_own(&ElementKind::attribute(None)),
             Self::Operation => kind.can_own(&ElementKind::operation(None)),
             Self::Literal => kind.can_own(&ElementKind::EnumerationLiteral),
+            Self::ExtensionPoint => kind.can_own(&ElementKind::ExtensionPoint),
             // Sequence diagrams bring their own interaction, which namespaces can own.
             Self::Diagram(DiagramKind::Sequence) => kind.can_own(&ElementKind::Interaction),
             Self::Diagram(d) => kind.can_own(&ElementKind::diagram(d)),
@@ -406,6 +413,7 @@ impl NewItem {
             Self::Attribute => "kind.attribute".into(),
             Self::Operation => "kind.operation".into(),
             Self::Literal => "kind.enumerationLiteral".into(),
+            Self::ExtensionPoint => "kind.extensionPoint".into(),
             Self::Diagram(DiagramKind::Class) => "diagram.class".into(),
             Self::Diagram(DiagramKind::UseCase) => "diagram.useCase".into(),
             Self::Diagram(DiagramKind::Sequence) => "diagram.sequence".into(),
@@ -417,7 +425,12 @@ impl Workspace {
     /// Adds a new element below `owner` (model only, no diagram) and selects it. Diagrams are
     /// opened right away.
     pub fn add_item(&mut self, owner: Id, item: NewItem) {
-        let keep_words = matches!(item, NewItem::Diagram(_) | NewItem::Element(NodeTool::UseCase));
+        let keep_words = matches!(
+            item,
+            NewItem::Diagram(_)
+                | NewItem::Element(NodeTool::UseCase | NodeTool::SystemBoundary)
+                | NewItem::ExtensionPoint
+        );
         let base = name_base(&item.key(), keep_words);
         let label = t!("edit.create").to_string();
         let result = self.doc.edit(label, |tx| {
@@ -432,6 +445,9 @@ impl Workspace {
                     ElementData::new(name, ElementKind::attribute(None))
                         .with_visibility(Visibility::Private),
                 ),
+                NewItem::ExtensionPoint => {
+                    tx.create(owner, ElementData::new(name, ElementKind::ExtensionPoint))
+                }
                 NewItem::Literal => tx.create(
                     owner,
                     ElementData::new(name.to_uppercase(), ElementKind::EnumerationLiteral),

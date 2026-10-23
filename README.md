@@ -21,8 +21,11 @@ von `.asta`-Dateien (nur lesen).
   Aufzählungswerte mit Statisch/Abstrakt/Abfrage/Schreibgeschützt; Assoziationsenden mit Rolle,
   Multiplizität, Navigierbarkeit und Aggregation/Komposition; Selbstassoziationen; Abschnitte
   ausblenden; Schnittstelle als Kreis („Lollipop“).
+- **M4** Use-Case-Diagramm: Systemgrenze (nur am Rand und Titel anklickbar, nimmt beim Verschieben
+  die enthaltenen Elemente mit, ebenso Pakete); Anwendungsfälle mit umbrochenem Namen und
+  Erweiterungspunkten; Extend mit Bedingung und Auswahl der Erweiterungspunkte.
 
-Nächste Schritte: Use-Case- und Sequenzdiagramm im Detail (M4–M5) und der `.asta`-Import (M6).
+Nächste Schritte: Sequenzdiagramm im Detail (M5) und der `.asta`-Import (M6).
 
 ## Bauen und starten
 

@@ -49,6 +49,7 @@ tool:
   actor: Actor
   useCase: Use case
   lifeline: Lifeline
+  systemBoundary: System boundary
   association: Association
   generalization: Generalization
   realization: Realization
@@ -82,6 +83,8 @@ prop:
   hide_attributes: Hide attributes
   hide_operations: Hide operations
   iconic: Show as circle
+  condition: Condition
+  extension_points: Extension points
   owner: Owner
   documentation: Documentation
   text: Text
@@ -147,6 +150,7 @@ kind:
   actor: Actor
   useCase: Use case
   extensionPoint: Extension point
+  systemBoundary: System boundary
   interaction: Interaction
   lifeline: Lifeline
   message: Message

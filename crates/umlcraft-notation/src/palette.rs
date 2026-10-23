@@ -16,6 +16,7 @@ pub enum NodeTool {
     Actor,
     UseCase,
     Lifeline,
+    SystemBoundary,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -58,7 +59,7 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
             &[E::Association, E::Generalization, E::Realization, E::Dependency, E::NoteAnchor],
         ),
         DiagramKind::UseCase => (
-            &[N::Actor, N::UseCase, N::Note],
+            &[N::Actor, N::UseCase, N::SystemBoundary, N::Note],
             &[
                 E::Association,
                 E::Generalization,
@@ -87,6 +88,7 @@ impl NodeTool {
             Self::Actor => "actor",
             Self::UseCase => "useCase",
             Self::Lifeline => "lifeline",
+            Self::SystemBoundary => "systemBoundary",
         }
     }
 
@@ -101,6 +103,7 @@ impl NodeTool {
             Self::Actor => ElementKind::Actor(classifier),
             Self::UseCase => ElementKind::UseCase(classifier),
             Self::Lifeline => ElementKind::Lifeline(LifelineProps::default()),
+            Self::SystemBoundary => ElementKind::SystemBoundary,
         }
     }
 
@@ -113,6 +116,7 @@ impl NodeTool {
             Self::Actor => Size::new(40.0, 80.0),
             Self::UseCase => Size::new(140.0, 60.0),
             Self::Lifeline => Size::new(100.0, 300.0),
+            Self::SystemBoundary => Size::new(300.0, 360.0),
         }
     }
 }
@@ -202,7 +206,10 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
         }
         DiagramKind::UseCase => matches!(
             kind,
-            ElementKind::Actor(_) | ElementKind::UseCase(_) | ElementKind::Comment(_)
+            ElementKind::Actor(_)
+                | ElementKind::UseCase(_)
+                | ElementKind::SystemBoundary
+                | ElementKind::Comment(_)
         ),
         DiagramKind::Sequence => {
             matches!(kind, ElementKind::Lifeline(_) | ElementKind::Comment(_))
@@ -220,6 +227,7 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::Actor(_) => NodeTool::Actor,
         ElementKind::UseCase(_) => NodeTool::UseCase,
         ElementKind::Lifeline(_) => NodeTool::Lifeline,
+        ElementKind::SystemBoundary => NodeTool::SystemBoundary,
         _ => NodeTool::Class,
     };
     tool.default_size()
@@ -268,9 +276,10 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
             edges.push((e.id(), source, target));
         }
     }
-    let node = tx.add_node(
+    let node = add_node_for(
+        tx,
         diagram,
-        Some(element),
+        element,
         Rect::from_origin_size(origin, default_size_for(&kind)),
     )?;
     for (relationship, source, target) in edges {
@@ -288,6 +297,24 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
         )?;
     }
     Ok(node)
+}
+
+/// Whether nodes of this kind contain other nodes drawn inside them.
+pub fn is_container(kind: &ElementKind) -> bool {
+    matches!(kind, ElementKind::SystemBoundary | ElementKind::Package)
+}
+
+/// Adds a node for `element`. System boundaries go to the back, so they never hide the use
+/// cases drawn inside them.
+fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Result<Id> {
+    let presentation = umlcraft_model::Presentation::node(Some(element), bounds);
+    if matches!(tx.model().element(element)?.kind(), ElementKind::SystemBoundary) {
+        let id = presentation.id;
+        tx.apply(umlcraft_model::Op::InsertPresentation { diagram, index: 0, presentation })?;
+        Ok(id)
+    } else {
+        tx.add_presentation(diagram, presentation)
+    }
 }
 
 /// The closest element, starting at `start` and walking up the owners, that may own `kind`.
@@ -331,7 +358,7 @@ pub fn create_node(
     };
     let element = tx.create(owner, ElementData::new(name, kind))?;
     let bounds = Rect::from_origin_size(origin, tool.default_size());
-    let node = tx.add_node(diagram, Some(element), bounds)?;
+    let node = add_node_for(tx, diagram, element, bounds)?;
     Ok((element, node))
 }
 
