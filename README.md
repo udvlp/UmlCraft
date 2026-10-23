@@ -36,8 +36,8 @@ importing `.asta` files and exporting them through an installed Astah.
   notes and colors; sequence diagrams with lifelines, messages in their order and combined
   fragments with operands and guards. Anything UmlCraft cannot represent yet is skipped and
   reported.
-- **Astah export** (`umlcraft-asta-export`, File › Export › Astah project …, shown when Astah is
-  installed): writes `.asta` files through Astah's official API instead of its fragile file
+- **Astah export** (`umlcraft-asta-export`, File › Export › Astah project …, needs an installed
+  Astah; without one the menu item explains what is missing): writes `.asta` files through Astah's official API instead of its fragile file
   format. A small Java tool (`tools/asta-export`) runs on the JRE that comes with Astah and
   rebuilds packages, classifiers, features, relationships, notes and the class, use case and
   sequence diagrams with positions, sizes, waypoints, message order and combined fragments.

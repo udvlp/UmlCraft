@@ -326,9 +326,14 @@ impl MainView {
         }
     }
 
-    /// Asks for a file, then has the installed Astah build it in the background.
+    /// Asks for a file, then has the installed Astah build it in the background. Exporting
+    /// needs Astah, whose API writes the file; without it, says how to provide one.
     fn export_astah(&mut self, _: &ExportAstah, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(astah) = astah() else { return };
+        let Some(astah) = astah() else {
+            let (message, detail) = (t!("dialog.astah_missing"), t!("dialog.astah_missing_detail"));
+            self.inform(PromptLevel::Info, &message, &detail, window, cx);
+            return;
+        };
         if self.exporting {
             return;
         }
@@ -952,12 +957,10 @@ fn menus(settings: &Settings) -> Vec<Menu> {
         MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
         menu_item("menu.import_astah", ImportAstah),
     ];
-    let mut export = vec![menu_item("menu.export_svg", ExportSvg)];
-    // Exporting to Astah needs an installed Astah, whose API writes the file.
-    if astah().is_some() {
-        export.push(menu_item("menu.export_astah", ExportAstah));
-    }
-    file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items(export)));
+    file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items([
+        menu_item("menu.export_svg", ExportSvg),
+        menu_item("menu.export_astah", ExportAstah),
+    ])));
     file.extend([
         MenuItem::separator(),
         menu_item("menu.save", SaveProject),

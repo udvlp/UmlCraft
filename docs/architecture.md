@@ -115,8 +115,8 @@ changes between Astah versions. So `umlcraft-asta-export` has an installed Astah
 through its official API (`astah-api.jar`):
 
 - `Astah::find` looks for an installation (`ASTAH_HOME`, else `astah-professional`, `astah-uml`
-  or `astah-sysml` under "Program Files") with `astah-api.jar` and an edition jar. The menu item
-  File › Export › Astah project … only appears when one is found.
+  or `astah-sysml` under "Program Files") with `astah-api.jar` and an edition jar. Without one,
+  File › Export › Astah project … shows a dialog saying what is needed.
 - `Export::new` serializes the model as `.ucraft` and adds a layout sidecar: node bounds as drawn
   (nodes grow with their content) and, for sequence diagrams, the rows of the messages and the
   frames of the fragments, which UmlCraft derives instead of storing. The app prepares this on
