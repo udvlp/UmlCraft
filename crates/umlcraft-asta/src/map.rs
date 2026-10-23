@@ -9,13 +9,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use umlcraft_model::{
-    ActivityEdgeProps, ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd,
-    AssociationProps, AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps,
-    DiagramKind, DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps,
-    GeneralizationProps, Id, IncludeProps, InteractionOperandProps, InteractionOperator,
-    LifelineProps, MessageProps, MessageSort, Model, Multiplicity, Navigability, Op,
-    OperationProps, ParameterDirection, ParameterProps, Point, Presentation, Rect, Shape, Style,
-    TaggedValue, TypeRef, Visibility,
+    ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, AssociationProps,
+    AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
+    DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps, GeneralizationProps, Id,
+    IncludeProps, InteractionOperandProps, InteractionOperator, LifelineProps, MessageProps,
+    MessageSort, Model, Multiplicity, Navigability, Op, OperationProps, ParameterDirection,
+    ParameterProps, Point, Presentation, Rect, Shape, Style, TaggedValue, TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::scene::border_point_from;
@@ -228,6 +227,31 @@ fn foreign_notation(tags: &[(String, String)]) -> Option<&'static str> {
             None
         }
     })
+}
+
+/// Names Astah gives control nodes by itself, such as `ActivityNode0` or `ForkNode1`, and the
+/// ones UmlCraft's export hands out.
+fn is_default_node_name(name: &str) -> bool {
+    let stem = name.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+    matches!(
+        stem,
+        "" | "ActivityNode"
+            | "InitialNode"
+            | "ActivityFinal"
+            | "FinalNode"
+            | "FlowFinal"
+            | "FlowFinalNode"
+            | "ForkNode"
+            | "JoinNode"
+            | "DecisionNode"
+            | "MergeNode"
+            | "Decision Node & Merge Node"
+    )
+}
+
+/// The name Astah gives a dimension of lanes it creates by itself.
+fn is_default_dimension_name(name: &str) -> bool {
+    name.strip_prefix("Dimension").is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
 }
 
 struct Importer<'g> {
@@ -685,11 +709,17 @@ impl Importer<'_> {
             let type_ref = (node == ActivityNodeKind::Object)
                 .then(|| r.obj(vertex, "type").and_then(|t| self.type_ref(t)))
                 .flatten();
-            let data = self.data(
+            let mut data = self.data(
                 vertex,
                 ElementKind::ActivityNode(ActivityNodeProps { node, type_ref }),
                 &[],
             );
+            // Astah names control nodes by itself; UmlCraft neither shows nor needs those names.
+            if !matches!(node, ActivityNodeKind::Action | ActivityNodeKind::Object)
+                && is_default_node_name(&data.name)
+            {
+                data.name.clear();
+            }
             self.create(activity, data, Some(vertex));
         }
         for transition in r.list(graph, "transition") {
@@ -699,8 +729,12 @@ impl Importer<'_> {
                 continue;
             };
             let guard = r.obj(transition, "guard").map(|g| r.name(g)).unwrap_or_default();
-            let kind = ElementKind::ActivityEdge(ActivityEdgeProps { source, target, guard });
-            let data = self.data(transition, kind, &[]);
+            let mut data = self.data(transition, ElementKind::flow(source, target), &[]);
+            // Astah names a transition after its whole label, "trigger [guard] / effect".
+            data.name = data.name.replace(&format!("[{guard}]"), "").trim().to_owned();
+            if let ElementKind::ActivityEdge(p) = &mut data.kind {
+                p.guard = guard;
+            }
             self.create(activity, data, Some(transition));
         }
         if let Some(diagram) = diagram {
@@ -709,6 +743,17 @@ impl Importer<'_> {
     }
 
     fn partition(&mut self, owner: Id, partition: ObjId) {
+        // Astah puts every set of lanes into a "dimension" of its own, drawn as a header above
+        // them. Unless the user named it, it is left out and its lanes take its place.
+        let is_dimension =
+            self.model.get(owner).is_some_and(|e| matches!(e.kind(), ElementKind::Activity))
+                && is_default_dimension_name(&self.r.name(partition));
+        if is_dimension {
+            for sub in self.r.list(partition, "subGroup") {
+                self.partition(owner, sub);
+            }
+            return;
+        }
         let data = self.data(partition, ElementKind::Partition, &[]);
         let Some(id) = self.create(owner, data, Some(partition)) else { return };
         for sub in self.r.list(partition, "subGroup") {
@@ -727,8 +772,15 @@ impl Importer<'_> {
                 "initial" => ActivityNodeKind::Initial,
                 "fork" => ActivityNodeKind::Fork,
                 "join" => ActivityNodeKind::Join,
-                "choice" => ActivityNodeKind::Decision,
-                "junction" => ActivityNodeKind::Merge,
+                // Astah draws one "decision and merge" node; its flows tell which it is.
+                "choice" | "junction" => {
+                    let count = |field| self.r.list(vertex, field).len();
+                    if count("incoming") > 1 && count("outgoing") <= 1 {
+                        ActivityNodeKind::Merge
+                    } else {
+                        ActivityNodeKind::Decision
+                    }
+                }
                 _ => return None,
             },
             _ => return None,

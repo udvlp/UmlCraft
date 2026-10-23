@@ -37,17 +37,24 @@ importing `.asta` files and exporting them through an installed Astah.
   fragments with operands and guards. Anything UmlCraft cannot represent yet is skipped and
   reported.
 - **Astah export** (`umlcraft-asta-export`, File › Export › Astah project …, needs an installed
-  Astah; without one the menu item explains what is missing): writes `.asta` files through Astah's official API instead of its fragile file
-  format. A small Java tool (`tools/asta-export`) runs on the JRE that comes with Astah and
-  rebuilds packages, classifiers, features, relationships, notes and the class, use case and
-  sequence diagrams with positions, sizes, waypoints, message order and combined fragments.
-  What the API cannot express is reported. In a test with Astah Professional 12 this worked
-  without a license file; see [docs/architecture.md](docs/architecture.md#astah-export).
-
+  Astah; without one the menu item explains what is missing): writes `.asta` files through
+  Astah's official API instead of its fragile file format. A small Java tool
+  (`tools/asta-export`) runs on the JRE that comes with Astah and rebuilds packages,
+  classifiers, features, relationships, notes and the class, use case, sequence and activity
+  diagrams with positions, sizes, waypoints, message order and combined fragments. What the API
+  cannot express is reported. In a test with Astah Professional 12 this worked without a license
+  file; see [docs/architecture.md](docs/architecture.md#astah-export).
 - **SVG export** (File › Export › Diagram as SVG …): the open diagram as a standalone SVG image,
   drawn like the canvas in black on white, with real text so it stays sharp and searchable.
 
-This completes milestone 1. Next: further diagram kinds (activity, state) and PNG export.
+This completes milestone 1.
+
+- **M7** Activity diagrams: actions, initial, activity final and flow final nodes, decision,
+  merge, fork and join, object nodes, flows with guards and partitions (swimlanes, nested as
+  well). New activity diagrams bring their own activity. Imported from and exported to Astah,
+  whose UML 1.4 activity graphs are translated; data flow diagrams and flowcharts stay skipped.
+
+Next: state machine diagrams and PNG export.
 
 ## Download
 

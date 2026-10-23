@@ -148,7 +148,10 @@ fn tree(model: &Model) -> BTreeSet<String> {
             ElementKind::Lifeline(p) => {
                 format!(" : {}", p.represents.map(|r| name(model, r)).unwrap_or_default())
             }
-            ElementKind::Package
+            ElementKind::ActivityNode(p) => format!(" {:?}", p.node),
+            ElementKind::Activity
+            | ElementKind::Partition
+            | ElementKind::Package
             | ElementKind::Class(_)
             | ElementKind::Interface(_)
             | ElementKind::Enumeration(_)
@@ -206,6 +209,9 @@ fn relationships(model: &Model) -> BTreeSet<String> {
                     format!("include {} → {}", n(p.including), n(p.addition))
                 }
                 ElementKind::Extend(p) => format!("extend {} → {}", n(p.extension), n(p.extended)),
+                ElementKind::ActivityEdge(p) => {
+                    format!("flow {:?} {} → {} [{}]", e.name(), n(p.source), n(p.target), p.guard)
+                }
                 ElementKind::Comment(p) => {
                     let annotated: Vec<String> = p.annotated.iter().map(|&a| n(a)).collect();
                     format!("comment {:?} on {}", p.body, annotated.join(", "))
@@ -216,7 +222,7 @@ fn relationships(model: &Model) -> BTreeSet<String> {
         .collect()
 }
 
-/// What the class and use case diagrams show.
+/// What the class, use case and activity diagrams show.
 #[derive(Default)]
 struct Contents {
     /// Nodes with their position, edges by the elements they connect.
@@ -230,7 +236,7 @@ struct Contents {
 
 fn diagram_contents(model: &Model) -> Contents {
     let mut contents = Contents::default();
-    let kinds = [Some(DiagramKind::Class), Some(DiagramKind::UseCase)];
+    let kinds = [Some(DiagramKind::Class), Some(DiagramKind::UseCase), Some(DiagramKind::Activity)];
     for d in model.elements().filter(|e| kinds.contains(&e.kind().as_diagram())) {
         let scene = scene::build(model, d.id(), &Preview::default(), &ApproxMeasure);
         let view = model.view(d.id()).unwrap();

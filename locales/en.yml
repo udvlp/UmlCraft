@@ -189,6 +189,13 @@ export_dropped:
   messageOperation: Operations called by messages
   emptyOperand: Empty operands of combined fragments
   nestedEnumeration: Nested enumerations (moved to the package)
+  activity: Activities without a diagram
+  activityDiagram: Further diagrams of an activity (Astah has one per activity)
+  activityNode: Activity nodes not shown on their diagram
+  activityEdge: Flows not shown on their diagram
+  partition: Partitions not shown on their diagram
+  mergeNode: Merge nodes (exported as decision and merge nodes)
+  objectNodeType: Types of object nodes that are not classes
   renamed: Elements renamed because of empty or duplicate names
   details: Stereotypes, tagged values or documentation
   presentation: Diagram shapes

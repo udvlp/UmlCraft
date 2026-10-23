@@ -125,7 +125,8 @@ through its official API (`astah-api.jar`):
   (embedded with `include_str!`) to a temporary folder, and runs the tool with Astah's bundled
   JRE in source-file mode, so no JDK and no build step are needed. The tool creates packages,
   classifiers, features and relationships with `BasicModelEditor` and `UseCaseModelEditor`, then
-  the diagrams with the class, use case and sequence diagram editors, all in one transaction. It
+  the diagrams with the class, use case, sequence and activity diagram editors, all in one
+  transaction. It
   reports what the API cannot express (`Report::dropped`) and single failures
   (`Report::problems`).
 
@@ -147,6 +148,15 @@ through its official API (`astah-api.jar`):
   the end of the activation) ends up below the calls it follows. Activations are tracked the way
   `sequence` derives them. A reply's return value is stored on the call it answers, as Astah
   does.
+- Activity diagrams: `createActivityDiagram` brings its own activity, so an activity exports its
+  first diagram only. Astah creates activity nodes only on a diagram; nodes, flows and
+  partitions not shown are dropped. Partitions are created left to right with
+  `createPartition(superPartition, previous, …)`; Astah wraps top-level lanes in a "dimension"
+  header of its own and lines them up below it, so the header is moved above UmlCraft's lanes
+  before the lanes are placed. The API creates decision and merge nodes as one kind; the import
+  tells them apart by their flows. Unnamed control nodes get Astah-like default names
+  (`InitialNode0`), which the import drops again, together with Astah's own (`ForkNode1`) and the
+  default dimension (`Dimension0`).
 - Combined fragments are built around their messages: `createCombinedFragment(operator,
   messages)` for the first operand, `addInteractionOperand` for the others, outer fragments
   before inner ones. Astah sizes the frames itself and they cannot be moved afterwards, so a

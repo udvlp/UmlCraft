@@ -26,6 +26,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 import com.change_vision.jude.api.inf.AstahAPI;
+import com.change_vision.jude.api.inf.editor.ActivityDiagramEditor;
 import com.change_vision.jude.api.inf.editor.BasicDiagramEditor;
 import com.change_vision.jude.api.inf.editor.BasicModelEditor;
 import com.change_vision.jude.api.inf.editor.ClassDiagramEditor;
@@ -35,6 +36,7 @@ import com.change_vision.jude.api.inf.editor.TransactionManager;
 import com.change_vision.jude.api.inf.editor.UseCaseDiagramEditor;
 import com.change_vision.jude.api.inf.editor.UseCaseModelEditor;
 import com.change_vision.jude.api.inf.exception.InvalidEditingException;
+import com.change_vision.jude.api.inf.model.IActivityDiagram;
 import com.change_vision.jude.api.inf.model.IAssociation;
 import com.change_vision.jude.api.inf.model.IAttribute;
 import com.change_vision.jude.api.inf.model.IClass;
@@ -43,6 +45,7 @@ import com.change_vision.jude.api.inf.model.IDependency;
 import com.change_vision.jude.api.inf.model.IDiagram;
 import com.change_vision.jude.api.inf.model.IElement;
 import com.change_vision.jude.api.inf.model.IEnumeration;
+import com.change_vision.jude.api.inf.model.IFlow;
 import com.change_vision.jude.api.inf.model.IInteractionOperand;
 import com.change_vision.jude.api.inf.model.ILifeline;
 import com.change_vision.jude.api.inf.model.IMessage;
@@ -51,6 +54,7 @@ import com.change_vision.jude.api.inf.model.IMultiplicityRange;
 import com.change_vision.jude.api.inf.model.INamedElement;
 import com.change_vision.jude.api.inf.model.IOperation;
 import com.change_vision.jude.api.inf.model.IPackage;
+import com.change_vision.jude.api.inf.model.IPartition;
 import com.change_vision.jude.api.inf.model.IParameter;
 import com.change_vision.jude.api.inf.model.ISequenceDiagram;
 import com.change_vision.jude.api.inf.model.IUseCase;
@@ -124,6 +128,8 @@ public final class AstaExport {
     private final Set<String> shownComments = new HashSet<>();
     /// Associations whose ends the API created in the other order.
     private final Set<String> swappedEnds = new HashSet<>();
+    /// Default names handed out to unnamed control nodes, by stem.
+    private final Map<String, Integer> controlNames = new HashMap<>();
     private final TreeMap<String, Integer> dropped = new TreeMap<>();
     private final List<String> problems = new ArrayList<>();
 
@@ -233,6 +239,21 @@ public final class AstaExport {
                         drop("interaction");
                     }
                     diagrams.addAll(own);
+                }
+                case "activity" -> {
+                    List<String> own = new ArrayList<>();
+                    for (String d : children(child)) {
+                        if ("diagram".equals(type(elements.get(d)))) {
+                            own.add(d);
+                        }
+                    }
+                    if (own.isEmpty()) {
+                        drop("activity");
+                    } else if (own.size() > 1) {
+                        // Astah's activity has exactly one diagram.
+                        drop("activityDiagram");
+                    }
+                    diagrams.addAll(own.subList(0, Math.min(1, own.size())));
                 }
                 case "comment" -> {
                 }
@@ -524,6 +545,21 @@ public final class AstaExport {
                 new Sequence(id, sd).build();
                 diagram = d;
             }
+            case "activity" -> {
+                // An activity diagram brings its own activity, owned by the activity's owner.
+                String activity = owners.get(id);
+                Object activityOwner = created.get(owners.get(activity));
+                ActivityDiagramEditor ad = accessor.getDiagramEditorFactory().getActivityDiagramEditor();
+                IActivityDiagram d =
+                    (IActivityDiagram) named(id, n -> ad.createActivityDiagram((INamedElement) activityOwner, n));
+                String activityName = name(elements.get(activity));
+                if (!activityName.isEmpty()) {
+                    d.getActivity().setName(activityName);
+                }
+                common(activity, d.getActivity(), Set.of());
+                activityDiagram(id, activity, ad);
+                diagram = d;
+            }
             default -> throw new IllegalStateException(kind);
         }
         common(id, diagram, Set.of());
@@ -566,6 +602,194 @@ public final class AstaExport {
         }
     }
 
+    // ----- Activity diagrams ------------------------------------------------------------------
+
+    /// Partitions first, since Astah lines up the lanes itself; then the other nodes, the flows
+    /// and the note anchors. Nodes, flows and partitions of the activity that the diagram does
+    /// not show are lost: Astah creates them only on a diagram.
+    private void activityDiagram(String diagram, String activity, ActivityDiagramEditor editor) throws Exception {
+        Map<String, IPresentation> shown = new HashMap<>();
+        List<Map<String, Object>> presentations = view(diagram);
+        partitions(diagram, activity, null, editor, presentations, shown);
+        for (Map<String, Object> p : presentations) {
+            if (!"node".equals(p.get("shape")) || !(p.get("element") instanceof String element)
+                    || created.containsKey(element) && !"comment".equals(type(elements.get(element)))) {
+                continue;
+            }
+            Map<String, Object> r = rect(diagram, p);
+            Point2D at = new Point2D.Double(num(r, "x"), num(r, "y"));
+            Map<String, Object> e = elements.get(element);
+            INodePresentation node;
+            if ("comment".equals(type(e))) {
+                node = note(editor, element, at);
+            } else if ("activityNode".equals(type(e))) {
+                node = (INodePresentation) attempt(element, () -> activityNode(editor, element, at));
+            } else {
+                continue;
+            }
+            if (node == null) {
+                continue;
+            }
+            node.setLocation(at);
+            resize(node, num(r, "width"), num(r, "height"));
+            fill(node, p);
+            shown.put((String) p.get("id"), node);
+        }
+        for (Map<String, Object> p : presentations) {
+            if ("edge".equals(p.get("shape"))) {
+                edge(editor, diagram, p, shown);
+            }
+        }
+        for (String child : children(activity)) {
+            String type = type(elements.get(child));
+            if (!created.containsKey(child) && !"diagram".equals(type)) {
+                drop(type);
+            }
+        }
+    }
+
+    /// The lanes owned by `owner`, left to right, each followed by its own lanes.
+    private void partitions(String diagram, String owner, INodePresentation superLane, ActivityDiagramEditor editor,
+            List<Map<String, Object>> presentations, Map<String, IPresentation> shown) throws Exception {
+        List<Map<String, Object>> lanes = new ArrayList<>();
+        for (Map<String, Object> p : presentations) {
+            if (p.get("element") instanceof String element && "partition".equals(type(elements.get(element)))
+                    && owner.equals(owners.get(element)) && !created.containsKey(element)) {
+                lanes.add(p);
+            }
+        }
+        lanes.sort((a, b) -> Double.compare(num(rect(diagram, a), "x"), num(rect(diagram, b), "x")));
+        INodePresentation previous = null;
+        for (Map<String, Object> p : lanes) {
+            String element = (String) p.get("element");
+            INodePresentation after = previous;
+            // Astah lines the lane up after `after`, inside `superLane`.
+            INodePresentation lane = (INodePresentation) attempt(element,
+                () -> named(element, n -> editor.createPartition(superLane, after, n, false)));
+            if (lane == null) {
+                continue;
+            }
+            created.put(element, lane.getModel());
+            common(element, lane.getModel(), Set.of());
+            Map<String, Object> r = rect(diagram, p);
+            resize(lane, num(r, "width"), num(r, "height"));
+            fill(lane, p);
+            shown.put((String) p.get("id"), lane);
+            previous = lane;
+            partitions(diagram, element, lane, editor, presentations, shown);
+        }
+        if (superLane == null && previous != null) {
+            attempt(owner, () -> {
+                placeLanes(diagram, lanes, shown);
+                return null;
+            });
+        }
+    }
+
+    /// Astah puts top-level lanes below a "dimension" header of its own, at a place of its own,
+    /// and only moves a lane within its header. So the header goes above UmlCraft's lanes first,
+    /// as wide as they are; then the lanes follow.
+    private void placeLanes(String diagram, List<Map<String, Object>> lanes, Map<String, IPresentation> shown)
+            throws Exception {
+        double left = Double.MAX_VALUE;
+        double top = Double.MAX_VALUE;
+        double right = -Double.MAX_VALUE;
+        INodePresentation any = null;
+        for (Map<String, Object> p : lanes) {
+            if (shown.get(p.get("id")) instanceof INodePresentation lane) {
+                Map<String, Object> r = rect(diagram, p);
+                left = Math.min(left, num(r, "x"));
+                top = Math.min(top, num(r, "y"));
+                right = Math.max(right, num(r, "x") + num(r, "width"));
+                any = lane;
+            }
+        }
+        IPartition dimension = any == null ? null : ((IPartition) any.getModel()).getSuperPartition();
+        if (dimension == null) {
+            return;
+        }
+        for (IPresentation p : dimension.getPresentations()) {
+            if (p instanceof INodePresentation header) {
+                header.setLocation(new Point2D.Double(left, top - header.getHeight()));
+                resize(header, right - left, header.getHeight());
+            }
+        }
+        for (Map<String, Object> p : lanes) {
+            if (shown.get(p.get("id")) instanceof INodePresentation lane) {
+                Map<String, Object> r = rect(diagram, p);
+                lane.setLocation(new Point2D.Double(num(r, "x"), num(r, "y")));
+            }
+        }
+    }
+
+    private INodePresentation activityNode(ActivityDiagramEditor editor, String id, Point2D at) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        INodePresentation node = switch (text(e, "node")) {
+            case "", "action" -> (INodePresentation) named(id, n -> editor.createAction(n, at));
+            case "initial" -> editor.createInitialNode(controlName(e, "InitialNode"), at);
+            case "activityFinal" -> editor.createFinalNode(controlName(e, "ActivityFinal"), at);
+            case "flowFinal" -> editor.createFlowFinalNode(controlName(e, "FlowFinal"), at);
+            case "decision" -> editor.createDecisionMergeNode(null, at);
+            case "merge" -> {
+                // The API only creates combined decision and merge nodes.
+                drop("mergeNode");
+                yield editor.createDecisionMergeNode(null, at);
+            }
+            case "fork" -> editor.createForkNode(null, at);
+            case "join" -> editor.createJoinNode(null, at);
+            case "object" -> {
+                Object t = e.get("typeRef") == null ? null : type(e.get("typeRef"));
+                IClass base = t instanceof IClass c ? c : null;
+                if (t != null && base == null) {
+                    drop("objectNodeType");
+                }
+                yield (INodePresentation) named(id, n -> editor.createObjectNode(n, base, at));
+            }
+            default -> throw new IllegalStateException(text(e, "node"));
+        };
+        if (!name(e).isEmpty() && !name(e).equals(((INamedElement) node.getModel()).getName())) {
+            ((INamedElement) node.getModel()).setName(name(e));
+        }
+        created.put(id, node.getModel());
+        common(id, (IElement) node.getModel(), Set.of());
+        return node;
+    }
+
+    /// UmlCraft leaves control nodes unnamed, Astah wants a name: an unnamed one gets a numbered
+    /// default name such as Astah gives (`InitialNode0`), which the import drops again.
+    private String controlName(Map<String, Object> e, String stem) {
+        if (!name(e).isEmpty()) {
+            return name(e);
+        }
+        int n = controlNames.merge(stem, 1, Integer::sum) - 1;
+        return stem + n;
+    }
+
+    /// A flow between two shown activity nodes, with its name and guard.
+    private ILinkPresentation flow(ActivityDiagramEditor editor, String id, INodePresentation source,
+            INodePresentation target) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        ILinkPresentation link = editor.createFlow(source, target);
+        IFlow flow = (IFlow) link.getModel();
+        if (!name(e).isEmpty()) {
+            flow.setName(name(e));
+        }
+        if (!text(e, "guard").isEmpty()) {
+            flow.setGuard(text(e, "guard"));
+        }
+        common(id, flow, Set.of());
+        created.put(id, flow);
+        return link;
+    }
+
+    /// A fill color of the node's own; Astah's defaults stay otherwise.
+    private static void fill(INodePresentation node, Map<String, Object> p) throws InvalidEditingException {
+        Map<String, Object> style = (Map<String, Object>) p.get("style");
+        if (style != null && style.get("fill") instanceof String f && f.length() >= 7) {
+            node.setProperty("fill.color", f.substring(0, 7).toUpperCase());
+        }
+    }
+
     private INodePresentation note(BasicDiagramEditor editor, String comment, Point2D at) throws Exception {
         shownComments.add(comment);
         INodePresentation note = editor.createNote(text(elements.get(comment), "body"), at);
@@ -574,7 +798,7 @@ public final class AstaExport {
     }
 
     private void edge(
-        StructureDiagramEditor editor, String diagram, Map<String, Object> p, Map<String, IPresentation> shown
+        BasicDiagramEditor editor, String diagram, Map<String, Object> p, Map<String, IPresentation> shown
     ) {
         IPresentation source = shown.get(p.get("source"));
         IPresentation target = shown.get(p.get("target"));
@@ -593,9 +817,13 @@ public final class AstaExport {
                 } else {
                     return null;
                 }
-            } else if (created.get(element) instanceof IElement model
+            } else if (editor instanceof ActivityDiagramEditor ad
+                    && "activityEdge".equals(type(elements.get(element)))
                     && source instanceof INodePresentation s && target instanceof INodePresentation t) {
-                link = editor.createLinkPresentation(model, s, t);
+                link = flow(ad, (String) element, s, t);
+            } else if (editor instanceof StructureDiagramEditor sd && created.get(element) instanceof IElement model
+                    && source instanceof INodePresentation s && target instanceof INodePresentation t) {
+                link = sd.createLinkPresentation(model, s, t);
             } else {
                 return null;
             }

@@ -192,21 +192,26 @@ fn sample_activity_diagram() {
     assert_eq!(count(&node(ActivityNodeKind::Join)), 1);
     assert_eq!(count(&node(ActivityNodeKind::ActivityFinal)), 1);
     assert_eq!(count(&|k| matches!(k, ElementKind::ActivityEdge(_))), 14);
-    // The lanes sit below one dimension.
-    let lanes: Vec<&str> = model
-        .subtree(activity.id())
+    // Astah's dimension "Dimension0" around the lanes is left out; the lanes belong to the
+    // activity.
+    let lanes: Vec<&str> = activity
+        .children()
         .iter()
         .map(|&id| model.get(id).unwrap())
         .filter(|e| matches!(e.kind(), ElementKind::Partition))
         .map(|e| e.name())
         .collect();
-    assert_eq!(lanes.len(), 4, "{lanes:?}");
-    assert!(lanes.contains(&"Stockroom "), "{lanes:?}");
+    assert_eq!(lanes, vec!["Sales", "Stockroom ", "Customer"]);
+    // Control nodes lose the names Astah gave them.
+    let fork = model.subtree(activity.id()).into_iter().map(|id| model.get(id).unwrap()).find(
+        |e| matches!(e.kind(), ElementKind::ActivityNode(p) if p.node == ActivityNodeKind::Fork),
+    );
+    assert_eq!(fork.unwrap().name(), "");
 
-    // Everything is shown: 14 activity nodes, 4 lanes, a note and 14 flows.
+    // Everything is shown: 14 activity nodes, 3 lanes, a note and 14 flows.
     let view = model.view(diagram.id()).unwrap();
     assert_eq!(view.presentations().iter().filter(|p| p.is_edge()).count(), 14);
-    assert_eq!(view.presentations().iter().filter(|p| !p.is_edge()).count(), 19);
+    assert_eq!(view.presentations().iter().filter(|p| !p.is_edge()).count(), 18);
 }
 
 /// Ulf's reference class diagram (`.asta` files are not in Git); its layout must match Astah's.
