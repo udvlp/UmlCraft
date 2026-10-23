@@ -157,6 +157,12 @@ through its official API (`astah-api.jar`):
   tells them apart by their flows. Unnamed control nodes get Astah-like default names
   (`InitialNode0`), which the import drops again, together with Astah's own (`ForkNode1`) and the
   default dimension (`Dimension0`).
+- State machine diagrams: `createStatemachineDiagram` brings its own state machine. States are
+  created from the outside in, each composite state at its size before its substates go into it
+  (`createState(name, parent, …)`). The API gives a transition leaving a state an event called
+  "Trigger"; `setEvent(null)` removes it again. Astah keeps room for entry, do and exit, which
+  makes a state at least 81 high, so states without them have that compartment hidden
+  (`action_visibility`). Astah routes the first and last segment of a self-transition itself.
 - Combined fragments are built around their messages: `createCombinedFragment(operator,
   messages)` for the first operand, `addInteractionOperand` for the others, outer fragments
   before inner ones. Astah sizes the frames itself and they cannot be moved afterwards, so a

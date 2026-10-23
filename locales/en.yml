@@ -212,6 +212,12 @@ export_dropped:
   partition: Partitions not shown on their diagram
   mergeNode: Merge nodes (exported as decision and merge nodes)
   objectNodeType: Types of object nodes that are not classes
+  stateMachine: State machines without a diagram
+  stateMachineDiagram: Further diagrams of a state machine (Astah has one per state machine)
+  state: States not shown on their diagram
+  finalState: Final states not shown on their diagram
+  pseudostate: Pseudostates not shown on their diagram
+  transition: Transitions not shown on their diagram
   renamed: Elements renamed because of empty or duplicate names
   details: Stereotypes, tagged values or documentation
   presentation: Diagram shapes

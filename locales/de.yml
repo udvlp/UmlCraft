@@ -212,6 +212,12 @@ export_dropped:
   partition: Partitionen, die nicht auf ihrem Diagramm stehen
   mergeNode: Zusammenführungsknoten (als Entscheidungs- und Zusammenführungsknoten exportiert)
   objectNodeType: Typen von Objektknoten, die keine Klassen sind
+  stateMachine: Zustandsautomaten ohne Diagramm
+  stateMachineDiagram: Weitere Diagramme eines Zustandsautomaten (Astah kennt eines je Automat)
+  state: Zustände, die nicht auf ihrem Diagramm stehen
+  finalState: Endzustände, die nicht auf ihrem Diagramm stehen
+  pseudostate: Pseudozustände, die nicht auf ihrem Diagramm stehen
+  transition: Transitionen, die nicht auf ihrem Diagramm stehen
   renamed: Wegen leerer oder doppelter Namen umbenannte Elemente
   details: Stereotypen, Eigenschaftswerte oder Dokumentation
   presentation: Diagrammelemente

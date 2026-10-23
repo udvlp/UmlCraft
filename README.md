@@ -54,7 +54,12 @@ This completes milestone 1.
   well). New activity diagrams bring their own activity. Imported from and exported to Astah,
   whose UML 1.4 activity graphs are translated; data flow diagrams and flowcharts stay skipped.
 
-Next: state machine diagrams and PNG export.
+- **M8** State machine diagrams: states with entry, do and exit, composite states with
+  substates, final states, initial, choice, junction, fork, join and history pseudostates, and
+  transitions labeled `trigger [guard] / effect`. Imported from and exported to Astah;
+  orthogonal regions and internal transitions are not supported yet.
+
+Next: PNG export, orthogonal regions.
 
 ## Download
 

@@ -149,7 +149,13 @@ fn tree(model: &Model) -> BTreeSet<String> {
                 format!(" : {}", p.represents.map(|r| name(model, r)).unwrap_or_default())
             }
             ElementKind::ActivityNode(p) => format!(" {:?}", p.node),
-            ElementKind::Activity
+            ElementKind::State(p) => {
+                format!(" entry {:?} do {:?} exit {:?}", p.entry, p.do_activity, p.exit)
+            }
+            ElementKind::Pseudostate(p) => format!(" {:?}", p.pseudostate),
+            ElementKind::StateMachine
+            | ElementKind::FinalState
+            | ElementKind::Activity
             | ElementKind::Partition
             | ElementKind::Package
             | ElementKind::Class(_)
@@ -212,6 +218,15 @@ fn relationships(model: &Model) -> BTreeSet<String> {
                 ElementKind::ActivityEdge(p) => {
                     format!("flow {:?} {} → {} [{}]", e.name(), n(p.source), n(p.target), p.guard)
                 }
+                ElementKind::Transition(p) => {
+                    format!(
+                        "transition {:?} {} → {} {}",
+                        e.name(),
+                        n(p.source),
+                        n(p.target),
+                        p.label()
+                    )
+                }
                 ElementKind::Comment(p) => {
                     let annotated: Vec<String> = p.annotated.iter().map(|&a| n(a)).collect();
                     format!("comment {:?} on {}", p.body, annotated.join(", "))
@@ -222,7 +237,7 @@ fn relationships(model: &Model) -> BTreeSet<String> {
         .collect()
 }
 
-/// What the class, use case and activity diagrams show.
+/// What the class, use case, activity and state machine diagrams show.
 #[derive(Default)]
 struct Contents {
     /// Nodes with their position, edges by the elements they connect.
@@ -236,7 +251,12 @@ struct Contents {
 
 fn diagram_contents(model: &Model) -> Contents {
     let mut contents = Contents::default();
-    let kinds = [Some(DiagramKind::Class), Some(DiagramKind::UseCase), Some(DiagramKind::Activity)];
+    let kinds = [
+        Some(DiagramKind::Class),
+        Some(DiagramKind::UseCase),
+        Some(DiagramKind::Activity),
+        Some(DiagramKind::StateMachine),
+    ];
     for d in model.elements().filter(|e| kinds.contains(&e.kind().as_diagram())) {
         let scene = scene::build(model, d.id(), &Preview::default(), &ApproxMeasure);
         let view = model.view(d.id()).unwrap();
@@ -256,8 +276,12 @@ fn diagram_contents(model: &Model) -> Contents {
                     line
                 }
                 Shape::Edge { source, target, waypoints, source_anchor, target_anchor, labels } => {
-                    let points: Vec<String> =
-                        waypoints.iter().map(|w| format!("{:.0},{:.0}", w.x, w.y)).collect();
+                    // Astah routes the first and last segment of a loop itself.
+                    let points: Vec<String> = if source == target {
+                        vec![format!("loop of {}", waypoints.len())]
+                    } else {
+                        waypoints.iter().map(|w| format!("{:.0},{:.0}", w.x, w.y)).collect()
+                    };
                     let line = format!(
                         "{}: {what} {} → {} via [{}]",
                         d.name(),

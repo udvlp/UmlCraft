@@ -31,6 +31,7 @@ import com.change_vision.jude.api.inf.editor.BasicDiagramEditor;
 import com.change_vision.jude.api.inf.editor.BasicModelEditor;
 import com.change_vision.jude.api.inf.editor.ClassDiagramEditor;
 import com.change_vision.jude.api.inf.editor.SequenceDiagramEditor;
+import com.change_vision.jude.api.inf.editor.StateMachineDiagramEditor;
 import com.change_vision.jude.api.inf.editor.StructureDiagramEditor;
 import com.change_vision.jude.api.inf.editor.TransactionManager;
 import com.change_vision.jude.api.inf.editor.UseCaseDiagramEditor;
@@ -57,6 +58,9 @@ import com.change_vision.jude.api.inf.model.IPackage;
 import com.change_vision.jude.api.inf.model.IPartition;
 import com.change_vision.jude.api.inf.model.IParameter;
 import com.change_vision.jude.api.inf.model.ISequenceDiagram;
+import com.change_vision.jude.api.inf.model.IState;
+import com.change_vision.jude.api.inf.model.IStateMachineDiagram;
+import com.change_vision.jude.api.inf.model.ITransition;
 import com.change_vision.jude.api.inf.model.IUseCase;
 import com.change_vision.jude.api.inf.presentation.ILinkPresentation;
 import com.change_vision.jude.api.inf.presentation.INodePresentation;
@@ -240,7 +244,7 @@ public final class AstaExport {
                     }
                     diagrams.addAll(own);
                 }
-                case "activity" -> {
+                case "activity", "stateMachine" -> {
                     List<String> own = new ArrayList<>();
                     for (String d : children(child)) {
                         if ("diagram".equals(type(elements.get(d)))) {
@@ -248,10 +252,10 @@ public final class AstaExport {
                         }
                     }
                     if (own.isEmpty()) {
-                        drop("activity");
+                        drop(type);
                     } else if (own.size() > 1) {
-                        // Astah's activity has exactly one diagram.
-                        drop("activityDiagram");
+                        // Astah's activities and state machines have exactly one diagram.
+                        drop(type + "Diagram");
                     }
                     diagrams.addAll(own.subList(0, Math.min(1, own.size())));
                 }
@@ -560,6 +564,21 @@ public final class AstaExport {
                 activityDiagram(id, activity, ad);
                 diagram = d;
             }
+            case "stateMachine" -> {
+                // A state machine diagram brings its own state machine, like an activity diagram.
+                String machine = owners.get(id);
+                Object machineOwner = created.get(owners.get(machine));
+                StateMachineDiagramEditor sm = accessor.getDiagramEditorFactory().getStateMachineDiagramEditor();
+                IStateMachineDiagram d =
+                    (IStateMachineDiagram) named(id, n -> sm.createStatemachineDiagram((INamedElement) machineOwner, n));
+                String machineName = name(elements.get(machine));
+                if (!machineName.isEmpty()) {
+                    d.getStateMachine().setName(machineName);
+                }
+                common(machine, d.getStateMachine(), Set.of());
+                stateDiagram(id, machine, sm);
+                diagram = d;
+            }
             default -> throw new IllegalStateException(kind);
         }
         common(id, diagram, Set.of());
@@ -765,6 +784,139 @@ public final class AstaExport {
         return stem + n;
     }
 
+    // ----- State machine diagrams -------------------------------------------------------------
+
+    /// States from the outside in, so every composite state exists, at its size, before its
+    /// substates go into it; then transitions and note anchors. What the diagram does not show
+    /// is lost, as on activity diagrams.
+    private void stateDiagram(String diagram, String machine, StateMachineDiagramEditor editor) throws Exception {
+        Map<String, IPresentation> shown = new HashMap<>();
+        Map<String, INodePresentation> nodeOf = new HashMap<>();
+        List<Map<String, Object>> presentations = new ArrayList<>(view(diagram));
+        presentations.sort((a, b) -> Integer.compare(depth(a.get("element")), depth(b.get("element"))));
+        for (Map<String, Object> p : presentations) {
+            if (!"node".equals(p.get("shape")) || !(p.get("element") instanceof String element)) {
+                continue;
+            }
+            Map<String, Object> r = rect(diagram, p);
+            Point2D at = new Point2D.Double(num(r, "x"), num(r, "y"));
+            Map<String, Object> e = elements.get(element);
+            INodePresentation node;
+            if ("comment".equals(type(e))) {
+                node = note(editor, element, at);
+            } else if (Set.of("state", "finalState", "pseudostate").contains(type(e)) && !created.containsKey(element)) {
+                INodePresentation parent = nodeOf.get(owners.get(element));
+                node = (INodePresentation) attempt(element, () -> vertex(editor, element, parent, at, r));
+            } else {
+                continue;
+            }
+            if (node == null) {
+                continue;
+            }
+            node.setLocation(at);
+            // Astah keeps room for entry, do and exit, which makes a state at least 81 high;
+            // a state without them does not need it.
+            if ("state".equals(type(e)) && text(e, "entry").isEmpty() && text(e, "doActivity").isEmpty()
+                    && text(e, "exit").isEmpty()) {
+                node.setProperty("action_visibility", "false");
+            }
+            resize(node, num(r, "width"), num(r, "height"));
+            fill(node, p);
+            shown.put((String) p.get("id"), node);
+            nodeOf.putIfAbsent(element, node);
+        }
+        for (Map<String, Object> p : view(diagram)) {
+            if ("edge".equals(p.get("shape"))) {
+                edge(editor, diagram, p, shown);
+            }
+        }
+        for (String child : subtree(machine)) {
+            String type = type(elements.get(child));
+            if (!created.containsKey(child) && Set.of("state", "finalState", "pseudostate", "transition").contains(type)) {
+                drop(type);
+            }
+        }
+    }
+
+    private INodePresentation vertex(StateMachineDiagramEditor editor, String id, INodePresentation parent, Point2D at,
+            Map<String, Object> r) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        INodePresentation node = switch (type(e)) {
+            case "state" -> (INodePresentation) named(id, n -> editor.createState(n, parent, at));
+            case "finalState" -> editor.createFinalState(parent, at);
+            default -> switch (text(e, "pseudostate")) {
+                case "", "initial" -> editor.createInitialPseudostate(parent, at);
+                case "choice" -> editor.createChoicePseudostate(parent, at);
+                case "junction" -> editor.createJunctionPseudostate(parent, at);
+                case "fork" -> editor.createForkPseudostate(parent, at, num(r, "width"), num(r, "height"));
+                case "join" -> editor.createJoinPseudostate(parent, at, num(r, "width"), num(r, "height"));
+                case "shallowHistory" -> editor.createShallowHistoryPseudostate(parent, at);
+                case "deepHistory" -> editor.createDeepHistoryPseudostate(parent, at);
+                default -> throw new IllegalStateException(text(e, "pseudostate"));
+            };
+        };
+        INamedElement model = (INamedElement) node.getModel();
+        if (!name(e).isEmpty() && !name(e).equals(model.getName())) {
+            model.setName(name(e));
+        }
+        if (model instanceof IState state && "state".equals(type(e))) {
+            state.setEntry(text(e, "entry"));
+            state.setDoActivity(text(e, "doActivity"));
+            state.setExit(text(e, "exit"));
+        }
+        created.put(id, model);
+        common(id, model, Set.of());
+        return node;
+    }
+
+    /// A transition between two shown vertices, with its trigger, guard and effect.
+    private ILinkPresentation transition(StateMachineDiagramEditor editor, String id, INodePresentation source,
+            INodePresentation target) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        ILinkPresentation link = editor.createTransition(source, target);
+        ITransition transition = (ITransition) link.getModel();
+        if (!text(e, "trigger").isEmpty()) {
+            transition.setEvent(text(e, "trigger"));
+        } else if (!transition.getEvent().isEmpty()) {
+            // The API gives a transition leaving a state an event called "Trigger"; null removes
+            // it, an empty text is refused.
+            transition.setEvent(null);
+        }
+        if (!text(e, "guard").isEmpty()) {
+            transition.setGuard(text(e, "guard"));
+        }
+        if (!text(e, "effect").isEmpty()) {
+            transition.setAction(text(e, "effect"));
+        }
+        if (!name(e).isEmpty()) {
+            transition.setName(name(e));
+        }
+        common(id, transition, Set.of());
+        created.put(id, transition);
+        return link;
+    }
+
+    /// How deep `id` lies in the ownership tree; presentations without an element come last.
+    private int depth(Object id) {
+        if (!(id instanceof String element)) {
+            return Integer.MAX_VALUE;
+        }
+        int depth = 0;
+        for (String o = owners.get(element); o != null; o = owners.get(o)) {
+            depth++;
+        }
+        return depth;
+    }
+
+    private List<String> subtree(String id) {
+        List<String> result = new ArrayList<>();
+        for (String child : children(id)) {
+            result.add(child);
+            result.addAll(subtree(child));
+        }
+        return result;
+    }
+
     /// A flow between two shown activity nodes, with its name and guard.
     private ILinkPresentation flow(ActivityDiagramEditor editor, String id, INodePresentation source,
             INodePresentation target) throws Exception {
@@ -821,6 +973,10 @@ public final class AstaExport {
                     && "activityEdge".equals(type(elements.get(element)))
                     && source instanceof INodePresentation s && target instanceof INodePresentation t) {
                 link = flow(ad, (String) element, s, t);
+            } else if (editor instanceof StateMachineDiagramEditor sm
+                    && "transition".equals(type(elements.get(element)))
+                    && source instanceof INodePresentation s && target instanceof INodePresentation t) {
+                link = transition(sm, (String) element, s, t);
             } else if (editor instanceof StructureDiagramEditor sd && created.get(element) instanceof IElement model
                     && source instanceof INodePresentation s && target instanceof INodePresentation t) {
                 link = sd.createLinkPresentation(model, s, t);
