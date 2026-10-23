@@ -6607,6 +6607,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
+ "resvg 0.46.0",
  "rust-i18n",
  "serde",
  "serde_json",

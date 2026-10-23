@@ -50,6 +50,8 @@ changes. On load, `Model::check` verifies all invariants.
 - `properties.rs` commits text fields on Enter or when the field loses focus, always to the element
   that was shown when the field got focus.
 - `main_view.rs` contains menus, tabs, palette, model tree and the file operations.
+- `png.rs` rasterizes the SVG export (`umlcraft_notation::svg`) with `resvg` for PNG export, at
+  twice the canvas size and with the system's fonts, on a background thread.
 - `settings.rs` stores recent files, language and theme in `%APPDATA%\UmlCraft\settings.json`.
 - Texts come from `locales/{de,en}.yml` (rust-i18n). Without a setting, the system language is used.
 

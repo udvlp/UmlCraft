@@ -27,6 +27,8 @@ anyhow = "1"
 pretty_assertions = "1"
 rust-i18n = "4"
 sys-locale = "0.3"
+# PNG export rasterizes the SVG export; diagrams contain no raster images.
+resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 # Reading Astah files only needs inflate; zopfli would only help writing.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 

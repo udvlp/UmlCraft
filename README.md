@@ -44,8 +44,9 @@ importing `.asta` files and exporting them through an installed Astah.
   diagrams with positions, sizes, waypoints, message order and combined fragments. What the API
   cannot express is reported. In a test with Astah Professional 12 this worked without a license
   file; see [docs/architecture.md](docs/architecture.md#astah-export).
-- **SVG export** (File › Export › Diagram as SVG …): the open diagram as a standalone SVG image,
-  drawn like the canvas in black on white, with real text so it stays sharp and searchable.
+- **Image export** (File › Export › Diagram as SVG … / Diagram as PNG …): the open diagram
+  drawn like the canvas in black on white. SVG keeps real text, so it stays sharp and
+  searchable; PNG is the same image rasterized at twice the canvas size.
 
 This completes milestone 1.
 
@@ -53,13 +54,12 @@ This completes milestone 1.
   merge, fork and join, object nodes, flows with guards and partitions (swimlanes, nested as
   well). New activity diagrams bring their own activity. Imported from and exported to Astah,
   whose UML 1.4 activity graphs are translated; data flow diagrams and flowcharts stay skipped.
-
 - **M8** State machine diagrams: states with entry, do and exit, composite states with
   substates, final states, initial, choice, junction, fork, join and history pseudostates, and
   transitions labeled `trigger [guard] / effect`. Imported from and exported to Astah;
   orthogonal regions and internal transitions are not supported yet.
 
-Next: PNG export, orthogonal regions.
+Next: orthogonal regions, moving states into other states.
 
 ## Download
 

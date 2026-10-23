@@ -3,6 +3,7 @@
 mod canvas;
 mod labels;
 mod main_view;
+mod png;
 mod properties;
 mod settings;
 mod workspace;
@@ -22,6 +23,7 @@ actions!(
         ImportAstah,
         ExportAstah,
         ExportSvg,
+        ExportPng,
         SaveProject,
         SaveProjectAs,
         Quit,

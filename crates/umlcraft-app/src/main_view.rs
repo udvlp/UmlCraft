@@ -374,21 +374,43 @@ impl MainView {
 
     /// Writes the open diagram as an SVG image, drawn as on the canvas in the light theme.
     fn export_svg(&mut self, _: &ExportSvg, window: &mut Window, cx: &mut Context<Self>) {
+        self.export_image(false, window, cx);
+    }
+
+    fn export_png(&mut self, _: &ExportPng, window: &mut Window, cx: &mut Context<Self>) {
+        self.export_image(true, window, cx);
+    }
+
+    /// Writes the open diagram as an SVG image, or rasterized as PNG, drawn as on the canvas
+    /// in the light theme.
+    fn export_image(&mut self, png: bool, window: &mut Window, cx: &mut Context<Self>) {
         let ws = self.workspace.read(cx);
         let Some(diagram) = ws.active_diagram else { return };
         let model = ws.doc.model();
         let measure = FontMeasure::new(window);
         let scene = scene::build(model, diagram, &Preview::default(), &measure);
         let svg = umlcraft_notation::svg::render(&scene, &measure);
+        let extension = if png { "png" } else { "svg" };
         let name = model.element(diagram).map(|e| e.name().to_owned()).unwrap_or_default();
-        let suggested = format!("{}.svg", sanitize_file_name(&name));
+        let suggested = format!("{}.{extension}", sanitize_file_name(&name));
         let rx = cx.prompt_for_new_path(&start_directory(ws.path.as_deref()), Some(&suggested));
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(path))) = rx.await else { return };
-            let path = with_extension(path, "svg");
-            if let Err(err) = std::fs::write(&path, svg) {
+            let path = with_extension(path, extension);
+            let written = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = if png {
+                        crate::png::from_svg(&svg, crate::png::SCALE)?
+                    } else {
+                        svg.into()
+                    };
+                    anyhow::Ok(std::fs::write(&path, bytes)?)
+                })
+                .await;
+            if let Err(err) = written {
                 this.update_in(cx, |this, window, cx| {
-                    this.show_error(&t!("dialog.svg_failed"), &err.to_string(), window, cx);
+                    this.show_error(&t!("dialog.image_failed"), &err.to_string(), window, cx);
                 })
                 .ok();
             }
@@ -967,6 +989,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
     ];
     file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items([
         menu_item("menu.export_svg", ExportSvg),
+        menu_item("menu.export_png", ExportPng),
         menu_item("menu.export_astah", ExportAstah),
     ])));
     file.extend([
@@ -1121,6 +1144,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::export_astah))
             .on_action(cx.listener(Self::export_svg))
+            .on_action(cx.listener(Self::export_png))
             .on_action(cx.listener(Self::open_recent))
             .on_action(cx.listener(Self::open_sample))
             .on_action(cx.listener(Self::save_project))

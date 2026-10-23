@@ -13,6 +13,7 @@ menu:
   import_astah: Astah-Projekt importieren …
   export: Exportieren
   export_svg: Diagramm als SVG …
+  export_png: Diagramm als PNG …
   export_astah: Astah-Projekt …
   recent: Zuletzt geöffnet
   no_recent: (keine)
@@ -187,7 +188,7 @@ dialog:
   export_failed: Das Astah-Projekt konnte nicht exportiert werden.
   export_partial: "%{count} Details des Projekts konnten nicht nach Astah übernommen werden."
   export_partial_detail: "Die Astah-API kann Folgendes nicht abbilden:\n%{items}"
-  svg_failed: Das Diagramm konnte nicht als SVG gespeichert werden.
+  image_failed: Das Diagramm konnte nicht als Bild gespeichert werden.
   astah_missing: Für den Export nach Astah muss Astah installiert sein.
   astah_missing_detail: "UmlCraft schreibt Astah-Projekte über die API von Astah Professional, UML oder SysML. Dazu muss eines davon installiert sein oder die Umgebungsvariable ASTAH_HOME auf seinen Installationsordner zeigen; danach UmlCraft neu starten."
 export_dropped:
