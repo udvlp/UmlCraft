@@ -119,7 +119,16 @@ fn main() {
                 ..Default::default()
             },
             cx,
-            move |window, cx| cx.new(|cx| main_view::MainView::new(settings, window, cx)),
+            move |window, cx| {
+                cx.new(|cx| {
+                    let mut view = main_view::MainView::new(settings, window, cx);
+                    // A file given on the command line, e.g. by "Open with".
+                    if let Some(path) = std::env::args_os().nth(1) {
+                        view.open(path.into(), window, cx);
+                    }
+                    view
+                })
+            },
         )
         .expect("failed to open the main window");
         cx.activate(true);

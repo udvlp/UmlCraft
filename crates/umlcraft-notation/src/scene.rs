@@ -4,8 +4,8 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    Aggregation, DiagramKind, ElementKind, Id, MessageSort, Model, Navigability, Point,
-    Presentation, Rect, Shape, Style,
+    Aggregation, AssociationEnd, DiagramKind, EdgeLabels, ElementKind, Id, MessageSort, Model,
+    Navigability, Point, Presentation, Rect, Shape, Style,
 };
 
 use crate::member::member_text;
@@ -155,6 +155,8 @@ pub enum EndMarker {
     HollowTriangle,
     HollowDiamond,
     FilledDiamond,
+    /// A small x across the line near the end: the end is not navigable.
+    Cross,
 }
 
 pub struct EdgeShape {
@@ -223,8 +225,12 @@ pub fn self_loop(r: Rect) -> Vec<Point> {
     ]
 }
 
-/// Height of an edge label line (11 pt text) in logical units.
-pub const LABEL_HEIGHT: f32 = 14.0;
+/// Size of the diagram font. Astah draws all class diagram texts in 12 px "Dialog" (Arial).
+pub const FONT_SIZE: f32 = 12.0;
+/// Line height relative to the font size; 15.09375 for 12 px, as Java lays out "Dialog".
+pub const LINE_SPACING: f32 = 1.2578125;
+/// Height of an edge label line in logical units.
+pub const LABEL_HEIGHT: f32 = FONT_SIZE * LINE_SPACING;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LabelAlign {
@@ -262,11 +268,17 @@ impl Preview {
     }
 }
 
-fn line_height(size: f32) -> f32 {
-    (size * 1.3).ceil()
+pub fn line_height(size: f32) -> f32 {
+    size * LINE_SPACING
+}
+
+/// Stereotypes as Astah writes them: `<<entity, control>>`.
+pub fn stereotype_text(names: &[String]) -> String {
+    format!("<<{}>>", names.join(", "))
 }
 
 /// A row before it is positioned.
+#[derive(Clone)]
 struct Line {
     text: String,
     size: f32,
@@ -292,6 +304,45 @@ impl Line {
 
     fn width(&self, measure: &dyn TextMeasure) -> f32 {
         measure.width(&self.text, self.size, self.bold)
+    }
+
+    /// Pieces the text may break between. A leading visibility symbol stays with the next word.
+    fn words(&self) -> Vec<String> {
+        let mut words: Vec<String> = self.text.split(' ').map(str::to_owned).collect();
+        if words.len() > 1 && matches!(words[0].as_str(), "+" | "-" | "#" | "~") {
+            let first = words.remove(0);
+            words[0] = format!("{first} {}", words[0]);
+        }
+        words
+    }
+
+    /// Width of the longest piece that cannot break.
+    fn widest_word(&self, measure: &dyn TextMeasure) -> f32 {
+        self.words().iter().map(|w| measure.width(w, self.size, self.bold)).fold(0.0, f32::max)
+    }
+
+    /// This line, broken at spaces into lines no wider than `max`.
+    fn wrapped(self, max: f32, measure: &dyn TextMeasure) -> Vec<Line> {
+        if self.width(measure) <= max {
+            return vec![self];
+        }
+        let mut texts = Vec::new();
+        let mut current = String::new();
+        for word in self.words() {
+            let candidate =
+                if current.is_empty() { word.clone() } else { format!("{current} {word}") };
+            if !current.is_empty() && measure.width(&candidate, self.size, self.bold) > max {
+                texts.push(std::mem::replace(&mut current, word));
+            } else {
+                current = candidate;
+            }
+        }
+        texts.push(current);
+        texts.into_iter().map(|text| Line { text, ..self.clone_style() }).collect()
+    }
+
+    fn clone_style(&self) -> Line {
+        Line { text: String::new(), ..*self }
     }
 
     fn place(self, rect: Rect, align: LabelAlign) -> Row {
@@ -347,7 +398,11 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         // On sequence diagrams the layout draws the messages.
         .filter(|p| !(is_sequence && is_message(p)))
         .filter_map(|p| {
-            let Shape::Edge { source, target, waypoints } = &p.shape else { return None };
+            let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, labels } =
+                &p.shape
+            else {
+                return None;
+            };
             let (source_rect, target_rect) = (*rects.get(source)?, *rects.get(target)?);
             let mut points = match &preview.waypoints {
                 Some((id, w)) if *id == p.id => w.clone(),
@@ -363,7 +418,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             let label = element.and_then(|e| {
                 let stereotypes = e.data().stereotypes.join(", ");
                 let parts: Vec<String> = [
-                    (!stereotypes.is_empty()).then(|| format!("«{stereotypes}»")),
+                    (!stereotypes.is_empty()).then(|| format!("<<{stereotypes}>>")),
                     (!e.name().is_empty()).then(|| e.name().to_owned()),
                 ]
                 .into_iter()
@@ -375,11 +430,12 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             Some(edge_for(
                 p.id,
                 element.map(|e| e.kind()),
-                source_rect,
-                target_rect,
+                (source_rect, target_rect),
+                (*source_anchor, *target_anchor),
                 &points,
                 label,
                 to_lollipop,
+                labels,
             ))
         })
         .collect();
@@ -633,7 +689,10 @@ fn layout_classifier(
     bounds: Rect,
     measure: &dyn TextMeasure,
 ) -> (Rect, Figure, Vec<Row>) {
-    const PAD: f32 = 6.0;
+    // Astah's metrics: 10 px left and right of the texts, 4 px above and below the content of
+    // each compartment; an empty compartment is 8 px high.
+    const PAD_X: f32 = 10.0;
+    const PAD_Y: f32 = 4.0;
     let e = model.get(id).expect("caller checked");
     let kind = e.kind();
 
@@ -647,13 +706,13 @@ fn layout_classifier(
     let mut header = Vec::new();
     if !stereotypes.is_empty() {
         header.push(Line::new(
-            format!("«{}»", stereotypes.join(", ")),
-            11.0,
+            stereotype_text(&stereotypes),
+            FONT_SIZE,
             RowRole::Stereotype,
             Some(id),
         ));
     }
-    let mut name = Line::new(e.name(), 13.0, RowRole::Name, Some(id));
+    let mut name = Line::new(e.name(), FONT_SIZE, RowRole::Name, Some(id));
     name.bold = true;
     name.italic = matches!(kind, ElementKind::Class(p) if p.is_abstract);
     header.push(name);
@@ -665,7 +724,7 @@ fn layout_classifier(
             .filter(|c| pick(c.kind()))
             .map(|c| {
                 let mut line =
-                    Line::new(member_text(model, c.id()), 12.0, RowRole::Member, Some(c.id()));
+                    Line::new(member_text(model, c.id()), FONT_SIZE, RowRole::Member, Some(c.id()));
                 match c.kind() {
                     ElementKind::Attribute(p) => line.underline = p.is_static,
                     ElementKind::Operation(p) => {
@@ -709,42 +768,41 @@ fn layout_classifier(
         }
     }
 
-    let all_widths =
-        header.iter().chain(compartments.iter().flatten()).map(|l| l.width(measure) + 2.0 * PAD);
-    let width = all_widths.fold(60.0, f32::max);
-    let header_h: f32 = 4.0 + header.iter().map(|l| line_height(l.size)).sum::<f32>() + 4.0;
-    let compartments_h: f32 = compartments
-        .iter()
-        .map(|c| (6.0 + c.iter().map(|l| line_height(l.size)).sum::<f32>()).max(8.0))
-        .sum();
-    let r = Rect::new(
-        bounds.x,
-        bounds.y,
-        bounds.width.max(width),
-        bounds.height.max(header_h + compartments_h),
-    );
+    // The box keeps its width; it only grows for the header and for words that cannot break.
+    // Longer members continue on further lines, as in Astah.
+    let header_w = header.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+    let word_w = compartments.iter().flatten().map(|l| l.widest_word(measure)).fold(0.0, f32::max);
+    let width = bounds.width.max(header_w.max(word_w) + 2.0 * PAD_X).max(40.0);
+    let compartments: Vec<Vec<Line>> = compartments
+        .into_iter()
+        .map(|c| c.into_iter().flat_map(|l| l.wrapped(width - 2.0 * PAD_X, measure)).collect())
+        .collect();
+    let block =
+        |lines: &[Line]| 2.0 * PAD_Y + lines.iter().map(|l| line_height(l.size)).sum::<f32>();
+    let header_h = block(&header);
+    let compartments_h: f32 = compartments.iter().map(|c| block(c)).sum();
+    let r = Rect::new(bounds.x, bounds.y, width, bounds.height.max(header_h + compartments_h));
 
     let mut rows = Vec::new();
-    let mut y = r.y + 4.0;
+    let mut y = r.y + PAD_Y;
     for line in header {
         let h = line_height(line.size);
         rows.push(line.place(Rect::new(r.x, y, r.width, h), LabelAlign::Center));
         y += h;
     }
-    y += 4.0;
+    y += PAD_Y;
     let mut separators = Vec::new();
     for compartment in compartments {
-        let top = y;
-        separators.push(top);
-        y += 3.0;
+        separators.push(y);
+        y += PAD_Y;
         for line in compartment {
             let h = line_height(line.size);
             rows.push(
-                line.place(Rect::new(r.x + PAD, y, r.width - 2.0 * PAD, h), LabelAlign::Left),
+                line.place(Rect::new(r.x + PAD_X, y, r.width - 2.0 * PAD_X, h), LabelAlign::Left),
             );
             y += h;
         }
-        y = (y + 3.0).max(top + 8.0);
+        y += PAD_Y;
     }
     (r, Figure::Classifier { separators }, rows)
 }
@@ -757,21 +815,34 @@ pub fn row_at(scene: &Scene, p: Point) -> Option<(&NodeShape, &Row)> {
     })
 }
 
+/// The point at relative position `anchor` inside `rect`; its center when unset.
+fn anchor_point(rect: Rect, anchor: Option<Point>) -> Point {
+    match anchor {
+        Some(a) => Point::new(rect.x + a.x * rect.width, rect.y + a.y * rect.height),
+        None => rect.center(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn edge_for(
     id: Id,
     kind: Option<&ElementKind>,
-    source: Rect,
-    target: Rect,
+    (source, target): (Rect, Rect),
+    (source_anchor, target_anchor): (Option<Point>, Option<Point>),
     waypoints: &[Point],
     name_label: Option<String>,
     to_lollipop: bool,
+    placed: &EdgeLabels,
 ) -> EdgeShape {
+    // The line runs from the source anchor through the waypoints to the target anchor; it is
+    // drawn from where it leaves the source to where it enters the target.
+    let (from, to) = (anchor_point(source, source_anchor), anchor_point(target, target_anchor));
     let mut points = Vec::with_capacity(waypoints.len() + 2);
-    let first_toward = waypoints.first().copied().unwrap_or(target.center());
-    let last_from = waypoints.last().copied().unwrap_or(source.center());
-    points.push(border_point(source, first_toward));
+    let first_toward = waypoints.first().copied().unwrap_or(to);
+    let last_from = waypoints.last().copied().unwrap_or(from);
+    points.push(border_point_from(source, from, first_toward));
     points.extend_from_slice(waypoints);
-    points.push(border_point(target, last_from));
+    points.push(border_point_from(target, to, last_from));
 
     let mut edge = EdgeShape {
         id,
@@ -782,34 +853,30 @@ fn edge_for(
         labels: Vec::new(),
         fixed: false,
     };
-    let (mut source_label, mut target_label) = (None, None);
+    let mut ends: [(Option<String>, Option<String>); 2] = [(None, None), (None, None)];
     let mut label = name_label;
-    let diamond = |a: Aggregation| match a {
-        Aggregation::None => EndMarker::None,
-        Aggregation::Shared => EndMarker::HollowDiamond,
-        Aggregation::Composite => EndMarker::FilledDiamond,
+    let end_marker = |end: &AssociationEnd| match (end.aggregation, end.navigability) {
+        (Aggregation::Shared, _) => EndMarker::HollowDiamond,
+        (Aggregation::Composite, _) => EndMarker::FilledDiamond,
+        (Aggregation::None, Navigability::Navigable) => EndMarker::OpenArrow,
+        (Aggregation::None, Navigability::NonNavigable) => EndMarker::Cross,
+        (Aggregation::None, Navigability::Unspecified) => EndMarker::None,
     };
     match kind {
         Some(ElementKind::Association(p)) => {
             let [a, b] = &p.ends;
-            edge.source_marker = diamond(a.aggregation);
-            edge.target_marker = diamond(b.aggregation);
-            if b.navigability == Navigability::Navigable && edge.target_marker == EndMarker::None {
-                edge.target_marker = EndMarker::OpenArrow;
-            }
-            if a.navigability == Navigability::Navigable && edge.source_marker == EndMarker::None {
-                edge.source_marker = EndMarker::OpenArrow;
-            }
-            let end_label = |role: &str, m: Option<umlcraft_model::Multiplicity>| {
-                let text = [role.to_owned(), m.map(|m| m.to_string()).unwrap_or_default()]
-                    .into_iter()
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                (!text.is_empty()).then_some(text)
+            edge.source_marker = end_marker(a);
+            edge.target_marker = end_marker(b);
+            // Role names show their visibility, as Astah does: "- customer". Constraints follow
+            // in the same label: "- customer {ordered}".
+            let texts = |end: &AssociationEnd| {
+                let role = (!end.role.is_empty())
+                    .then(|| format!("{} {}", end.visibility.symbol(), end.role));
+                let constraints = end.constraints.iter().map(|c| format!("{{{c}}}"));
+                let role = role.into_iter().chain(constraints).collect::<Vec<_>>().join(" ");
+                ((!role.is_empty()).then_some(role), end.multiplicity.map(|m| m.to_string()))
             };
-            source_label = end_label(&a.role, a.multiplicity);
-            target_label = end_label(&b.role, b.multiplicity);
+            ends = [texts(a), texts(b)];
         }
         Some(ElementKind::Generalization(_)) => edge.target_marker = EndMarker::HollowTriangle,
         // Realizing an interface drawn as a circle is a plain line ("lollipop").
@@ -825,14 +892,14 @@ fn edge_for(
         Some(ElementKind::Include(_)) => {
             edge.line = LineStyle::Dashed;
             edge.target_marker = EndMarker::OpenArrow;
-            label = Some("«include»".to_owned());
+            label = Some("<<include>>".to_owned());
         }
         Some(ElementKind::Extend(p)) => {
             edge.line = LineStyle::Dashed;
             edge.target_marker = EndMarker::OpenArrow;
             label = Some(match p.condition.trim() {
-                "" => "«extend»".to_owned(),
-                condition => format!("«extend» [{condition}]"),
+                "" => "<<extend>>".to_owned(),
+                condition => format!("<<extend>> [{condition}]"),
             });
         }
         Some(ElementKind::Message(p)) => match p.sort {
@@ -848,36 +915,61 @@ fn edge_for(
 
     let pts = &edge.points;
     let n = pts.len();
-    edge.labels.extend(label.map(|text| middle_label(text, pts[n / 2 - 1], pts[n / 2])));
-    edge.labels.extend(source_label.map(|text| end_label(text, pts[0], pts[1])));
-    edge.labels.extend(target_label.map(|text| end_label(text, pts[n - 1], pts[n - 2])));
+    let at = |text: String, base: Point, offset: Point| EdgeLabel {
+        text,
+        anchor: base.offset(offset.x, offset.y),
+        align: LabelAlign::Left,
+    };
+    let (a, b) = (pts[n / 2 - 1], pts[n / 2]);
+    let middle = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+    edge.labels.extend(label.map(|text| match placed.name {
+        Some(offset) => at(text, middle, offset),
+        None => middle_label(text, a, b),
+    }));
+    let [(source_role, source_mult), (target_role, target_mult)] = ends;
+    let (source_tip, source_from) = (pts[0], pts[1]);
+    let (target_tip, target_from) = (pts[n - 1], pts[n - 2]);
+    let place = |text: Option<String>, offset: Option<Point>, tip: Point, from: Point, role| {
+        text.map(|text| match offset {
+            Some(offset) => at(text, tip, offset),
+            None => end_label(text, tip, from, role),
+        })
+    };
+    let labels = [
+        place(source_role, placed.source_role, source_tip, source_from, true),
+        place(source_mult, placed.source_multiplicity, source_tip, source_from, false),
+        place(target_role, placed.target_role, target_tip, target_from, true),
+        place(target_mult, placed.target_multiplicity, target_tip, target_from, false),
+    ];
+    edge.labels.extend(labels.into_iter().flatten());
     edge
 }
 
-/// Below this slope a segment counts as horizontal (resp. vertical) for label placement.
-const STRAIGHT: f32 = 0.2;
-
-/// Places an end label (role, multiplicity) next to the segment `tip`–`from`, a little away
-/// from the node at `tip`, on the side of the line it does not run into.
-fn end_label(text: String, tip: Point, from: Point) -> EdgeLabel {
-    const GAP: f32 = 10.0;
+/// Places a role name (`role`) or multiplicity next to the end of the line at `tip`, which
+/// continues toward `from`. As in Astah, roles go right of vertical lines and below horizontal
+/// ones, multiplicities to the other side.
+fn end_label(text: String, tip: Point, from: Point, role: bool) -> EdgeLabel {
+    /// Distance from the node along the line.
+    const ALONG: f32 = 9.0;
+    /// Distance from the line across it.
+    const ACROSS: f32 = 9.0;
     let len = tip.distance(from).max(1.0);
     let (ux, uy) = ((from.x - tip.x) / len, (from.y - tip.y) / len);
-    let base = Point::new(tip.x + ux * GAP, tip.y + uy * GAP);
     if ux.abs() >= uy.abs() {
-        // Mostly horizontal: the text extends away from the node, above the line unless the
-        // line rises noticeably in that direction.
-        let align = if ux >= 0.0 { LabelAlign::Left } else { LabelAlign::Right };
-        let y = if uy < -STRAIGHT { base.y + 3.0 } else { base.y - LABEL_HEIGHT - 3.0 };
-        EdgeLabel { text, anchor: Point::new(base.x, y), align }
-    } else {
-        // Mostly vertical: beside the line, right of it unless the line leans to the right.
-        let (x, align) = if ux > STRAIGHT {
-            (base.x - 6.0, LabelAlign::Right)
+        let (x, align) = if ux >= 0.0 {
+            (tip.x + ALONG, LabelAlign::Left)
         } else {
-            (base.x + 6.0, LabelAlign::Left)
+            (tip.x - ALONG, LabelAlign::Right)
         };
-        let y = if uy >= 0.0 { base.y } else { base.y - LABEL_HEIGHT };
+        let y = if role { tip.y + 8.0 } else { tip.y - 4.0 - LABEL_HEIGHT };
+        EdgeLabel { text, anchor: Point::new(x, y), align }
+    } else {
+        let (x, align) = if role {
+            (tip.x + ACROSS, LabelAlign::Left)
+        } else {
+            (tip.x - ACROSS, LabelAlign::Right)
+        };
+        let y = if uy >= 0.0 { tip.y + ALONG } else { tip.y - ALONG - LABEL_HEIGHT };
         EdgeLabel { text, anchor: Point::new(x, y), align }
     }
 }
@@ -902,15 +994,26 @@ pub(crate) fn middle_label(text: String, a: Point, b: Point) -> EdgeLabel {
 
 /// Where the line from the center of `rect` toward `toward` leaves the rectangle.
 pub fn border_point(rect: Rect, toward: Point) -> Point {
-    let c = rect.center();
-    let (dx, dy) = (toward.x - c.x, toward.y - c.y);
-    if dx == 0.0 && dy == 0.0 {
-        return c;
-    }
-    let sx = if dx != 0.0 { (rect.width / 2.0) / dx.abs() } else { f32::INFINITY };
-    let sy = if dy != 0.0 { (rect.height / 2.0) / dy.abs() } else { f32::INFINITY };
-    let s = sx.min(sy).min(1.0);
-    Point::new(c.x + dx * s, c.y + dy * s)
+    border_point_from(rect, rect.center(), toward)
+}
+
+/// Where the line from `inside` (a point in `rect`) toward `toward` leaves the rectangle; `toward`
+/// itself if it lies inside too.
+pub fn border_point_from(rect: Rect, inside: Point, toward: Point) -> Point {
+    let (dx, dy) = (toward.x - inside.x, toward.y - inside.y);
+    let exit = |d: f32, pos: f32, low: f32, high: f32| {
+        if d > 0.0 {
+            (high - pos) / d
+        } else if d < 0.0 {
+            (low - pos) / d
+        } else {
+            f32::INFINITY
+        }
+    };
+    let t = exit(dx, inside.x, rect.x, rect.right())
+        .min(exit(dy, inside.y, rect.y, rect.bottom()))
+        .clamp(0.0, 1.0);
+    Point::new(inside.x + dx * t, inside.y + dy * t)
 }
 
 /// Distance from `p` to the segment `a`–`b`.
@@ -1247,7 +1350,7 @@ mod tests {
             })
             .unwrap();
         let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
-        assert_eq!(scene.edge(edge).unwrap().labels[0].text, "«extend» [express]");
+        assert_eq!(scene.edge(edge).unwrap().labels[0].text, "<<extend>> [express]");
     }
 
     #[test]
@@ -1255,7 +1358,7 @@ mod tests {
         let (doc, ids) = order_system();
         let d = ids.class_diagram;
         let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
-        let edge = scene.edges.iter().find(|e| e.labels.len() == 2).unwrap();
+        let edge = scene.edges.iter().find(|e| e.labels.len() == 3).unwrap();
         assert!(edge.waypoints().is_empty());
         let handles = edge.handles();
         assert_eq!(handles.len(), 1, "one segment, one insert grip");
@@ -1272,45 +1375,144 @@ mod tests {
     }
 
     #[test]
-    fn association_end_labels_sit_above_a_horizontal_line() {
+    fn roles_and_multiplicities_go_to_opposite_sides() {
         let (doc, ids) = order_system();
         let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
-        let association = scene.edges.iter().find(|e| e.labels.len() == 2).unwrap();
-        // Order (source, right) → Customer (target, left): the line slopes from y ≈ 128.7 to 126.3.
+        let association = scene.edges.iter().find(|e| e.labels.len() == 3).unwrap();
+        // Order (source, right) → Customer (target, left), roughly horizontal.
         let pts = &association.points;
-        let [star, role] = [&association.labels[0], &association.labels[1]];
-        assert_eq!(star.text, "*");
-        assert_eq!(role.text, "customer 1");
-        for (label, end) in [(star, pts[0]), (role, pts[pts.len() - 1])] {
-            let clearance = end.y - (label.anchor.y + LABEL_HEIGHT);
-            assert!(clearance >= 2.5, "{label:?} is only {clearance} above the line");
-        }
+        let texts: Vec<&str> = association.labels.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["*", "+ customer", "1"], "roles show their visibility");
+        let [star, role, one] = [0, 1, 2].map(|i| &association.labels[i]);
+        let end = pts[pts.len() - 1];
+        assert!(role.anchor.y > end.y, "the role goes below the line");
+        assert!(one.anchor.y + LABEL_HEIGHT < end.y, "the multiplicity above it");
+        assert!(star.anchor.y + LABEL_HEIGHT < pts[0].y);
         // Each label extends from its node into the gap between the classes.
-        assert_eq!(role.align, LabelAlign::Left);
-        assert!((role.anchor.x - 250.0).abs() < 0.5);
-        assert_eq!(star.align, LabelAlign::Right);
-        assert!((star.anchor.x - 370.0).abs() < 0.5);
+        assert_eq!(
+            (role.align, one.align, star.align),
+            (LabelAlign::Left, LabelAlign::Left, LabelAlign::Right)
+        );
+        assert!((role.anchor.x - (end.x + 9.0)).abs() < 0.01);
     }
 
     #[test]
-    fn end_labels_avoid_sloped_and_vertical_lines() {
+    fn end_constraints_join_the_role() {
+        let (mut doc, ids) = order_system();
+        doc.edit("Constrain", |tx| {
+            tx.update(ids.order_customer, |data| {
+                if let ElementKind::Association(p) = &mut data.kind {
+                    p.ends[0].constraints = vec!["ordered".into()];
+                    p.ends[1].constraints = vec!["ordered".into(), "unique".into()];
+                }
+            })
+        })
+        .unwrap();
+        let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
+        let association = scene.edges.iter().find(|e| e.labels.len() == 4).unwrap();
+        let texts: Vec<&str> = association.labels.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, ["{ordered}", "*", "+ customer {ordered} {unique}", "1"]);
+    }
+
+    #[test]
+    fn end_labels_beside_vertical_lines() {
         let text = || "1".to_owned();
-        // Line rising to the right of the node: label goes below it.
-        let l = end_label(text(), Point::new(0.0, 100.0), Point::new(100.0, 50.0));
-        assert_eq!(l.align, LabelAlign::Left);
-        assert!(l.anchor.y > 100.0 - 10.0 * 0.45);
-        // Vertical line going down: label right of it, starting below the tip.
-        let l = end_label(text(), Point::new(50.0, 0.0), Point::new(50.0, 100.0));
-        assert_eq!((l.align, l.anchor), (LabelAlign::Left, Point::new(56.0, 10.0)));
-        // Vertical line leaning right: label moves to the left side.
-        let l = end_label(text(), Point::new(50.0, 0.0), Point::new(90.0, 100.0));
-        assert_eq!(l.align, LabelAlign::Right);
-        assert!(l.anchor.x < 50.0 + 10.0 * 0.38);
+        // Line going down from the node: roles right of it, multiplicities left of it.
+        let role = end_label(text(), Point::new(50.0, 0.0), Point::new(50.0, 100.0), true);
+        assert_eq!((role.align, role.anchor), (LabelAlign::Left, Point::new(59.0, 9.0)));
+        let mult = end_label(text(), Point::new(50.0, 0.0), Point::new(50.0, 100.0), false);
+        assert_eq!((mult.align, mult.anchor), (LabelAlign::Right, Point::new(41.0, 9.0)));
+        // Line going up: the labels end 9 px above the node.
+        let role = end_label(text(), Point::new(50.0, 100.0), Point::new(50.0, 0.0), true);
+        assert_eq!(role.anchor.y + LABEL_HEIGHT, 91.0);
         // Middle labels: centered above horizontal, beside vertical segments.
         let m = middle_label(text(), Point::new(0.0, 0.0), Point::new(100.0, 0.0));
-        assert_eq!((m.align, m.anchor), (LabelAlign::Center, Point::new(50.0, -17.0)));
+        assert_eq!(m.align, LabelAlign::Center);
+        assert!((m.anchor.y + LABEL_HEIGHT + 3.0).abs() < 0.01);
         let m = middle_label(text(), Point::new(0.0, 0.0), Point::new(0.0, 100.0));
-        assert_eq!((m.align, m.anchor), (LabelAlign::Left, Point::new(6.0, 43.0)));
+        assert_eq!((m.align, m.anchor.x), (LabelAlign::Left, 6.0));
+    }
+
+    /// Sizes measured in an SVG export of Astah 12.
+    #[test]
+    fn classifier_boxes_use_astahs_metrics() {
+        let (doc, ids) = order_system();
+        let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
+        let customer = scene.nodes.iter().find(|n| n.element == Some(ids.customer)).unwrap();
+        let Figure::Classifier { separators } = &customer.figure else { panic!() };
+        let (top, x) = (customer.rect.y, customer.rect.x);
+        // Header: 4 px, one 15.09 px line, 4 px; then the attributes the same way; operations empty.
+        assert!((separators[0] - (top + 23.09375)).abs() < 1e-3);
+        assert!((separators[1] - (separators[0] + 23.09375)).abs() < 1e-3);
+        let name = &customer.rows[0];
+        assert_eq!((name.size, name.bold, name.rect.y), (12.0, true, top + 4.0));
+        let attribute = &customer.rows[1];
+        assert_eq!((attribute.rect.x, attribute.rect.y), (x + 10.0, separators[0] + 4.0));
+        assert!((attribute.rect.height - 15.09375).abs() < 1e-4);
+    }
+
+    #[test]
+    fn long_members_wrap_and_keep_the_box_width() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        doc.edit("long", |tx| {
+            crate::member::apply_member_text(
+                tx,
+                doc_operation(tx.model(), ids.order),
+                "+ submit(first : String, second : String, third : String) : Boolean",
+            )
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let order = scene.nodes.iter().find(|n| n.element == Some(ids.order)).unwrap();
+        let stored = doc.model().view(d).unwrap().presentations_of(ids.order).next().unwrap();
+        assert_eq!(order.rect.width, stored.bounds().unwrap().width);
+        let operation = doc_operation(doc.model(), ids.order);
+        let lines: Vec<&Row> = order.rows.iter().filter(|r| r.element == Some(operation)).collect();
+        assert!(lines.len() >= 2, "wrapped into {} lines", lines.len());
+        assert!(lines[0].text.starts_with("+ submit(first"), "{:?}", lines[0].text);
+        assert!(lines.iter().all(|l| l.rect.x == order.rect.x + 10.0));
+    }
+
+    fn doc_operation(model: &Model, class: Id) -> Id {
+        model
+            .children(class)
+            .iter()
+            .copied()
+            .find(|&c| matches!(model.get(c).unwrap().kind(), ElementKind::Operation(_)))
+            .unwrap()
+    }
+
+    #[test]
+    fn anchors_and_placed_labels_follow_astah() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let edge = doc.model().shown_on(ids.order_customer)[0].1;
+        let order = doc.model().shown_on(ids.order)[0].1;
+        doc.edit("astah", |tx| {
+            // Put Order right below Customer and aim both ends at x = 120.
+            tx.set_bounds(d, order, Rect::new(80.0, 300.0, 160.0, 60.0))?;
+            tx.update_presentation(d, edge, |p| {
+                if let Shape::Edge { source_anchor, target_anchor, labels, .. } = &mut p.shape {
+                    *source_anchor = Some(Point::new(0.25, 0.5));
+                    *target_anchor = Some(Point::new(0.25, 0.5));
+                    labels.target_role = Some(Point::new(5.0, 6.0));
+                }
+            })?;
+            tx.update(ids.order_customer, |data| {
+                if let ElementKind::Association(p) = &mut data.kind {
+                    p.ends[0].navigability = Navigability::NonNavigable;
+                }
+            })
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let e = scene.edge(edge).unwrap();
+        // Straight up from Order's top to Customer's bottom at x = 80 + 0.25 · 160.
+        assert_eq!(e.points, vec![Point::new(120.0, 300.0), Point::new(120.0, 170.0)]);
+        assert_eq!(e.source_marker, EndMarker::Cross);
+        let role = e.labels.iter().find(|l| l.text == "+ customer").unwrap();
+        assert_eq!((role.anchor, role.align), (Point::new(125.0, 176.0), LabelAlign::Left));
     }
 
     #[test]

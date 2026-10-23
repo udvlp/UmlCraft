@@ -337,6 +337,9 @@ pub struct AssociationEnd {
     pub aggregation: Aggregation,
     #[serde(default, skip_serializing_if = "is_default")]
     pub visibility: Visibility,
+    /// Constraints on this end, without braces, e.g. `ordered` for `{ordered}`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<String>,
 }
 
 impl AssociationEnd {
@@ -348,6 +351,7 @@ impl AssociationEnd {
             navigability: Navigability::default(),
             aggregation: Aggregation::default(),
             visibility: Visibility::default(),
+            constraints: Vec::new(),
         }
     }
 }

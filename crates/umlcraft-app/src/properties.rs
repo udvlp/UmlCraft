@@ -56,6 +56,7 @@ enum Field {
     Text,
     Role(usize),
     Multiplicity(usize),
+    Constraints(usize),
     Condition,
     Arguments,
     ReturnValue,
@@ -77,6 +78,7 @@ const TEXT_FIELDS: [Field; 8] = [
 struct EndFields {
     role: Entity<InputState>,
     multiplicity: Entity<InputState>,
+    constraints: Entity<InputState>,
     navigability: Entity<Choice>,
     aggregation: Entity<Choice>,
 }
@@ -188,6 +190,7 @@ impl PropertiesPanel {
         let end = |window: &mut Window, cx: &mut Context<Self>| EndFields {
             role: cx.new(|cx| InputState::new(window, cx)),
             multiplicity: cx.new(|cx| InputState::new(window, cx).placeholder("0..*")),
+            constraints: cx.new(|cx| InputState::new(window, cx).placeholder("ordered, unique")),
             navigability: cx.new(|cx| SelectState::new(navigability_items(), None, window, cx)),
             aggregation: cx.new(|cx| SelectState::new(aggregation_items(), None, window, cx)),
         };
@@ -221,6 +224,7 @@ impl PropertiesPanel {
         for (i, end) in ends.iter().enumerate() {
             watch(&end.role, Field::Role(i), cx);
             watch(&end.multiplicity, Field::Multiplicity(i), cx);
+            watch(&end.constraints, Field::Constraints(i), cx);
         }
         subscriptions.push(cx.subscribe_in(&text, window, |this, _, ev: &InputEvent, _, cx| {
             // Enter makes a new line in the text area; only leaving it commits.
@@ -476,6 +480,21 @@ impl PropertiesPanel {
                     }),
                 }
             }
+            Field::Constraints(i) => {
+                // Written without braces, separated by commas: "ordered, unique".
+                let list: Vec<String> = Self::value(&self.ends[i].constraints, cx)
+                    .split(',')
+                    .map(|c| {
+                        c.trim().trim_start_matches('{').trim_end_matches('}').trim().to_owned()
+                    })
+                    .filter(|c| !c.is_empty())
+                    .collect();
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::Association(p) = &mut data.kind {
+                        p.ends[i].constraints = list;
+                    }
+                });
+            }
         }
     }
 
@@ -508,7 +527,8 @@ impl PropertiesPanel {
         if let Some(editing) = self.editing
             && selected != Some(editing)
         {
-            let ends = (0..2).flat_map(|i| [Field::Role(i), Field::Multiplicity(i)]);
+            let ends = (0..2)
+                .flat_map(|i| [Field::Role(i), Field::Multiplicity(i), Field::Constraints(i)]);
             for field in TEXT_FIELDS.into_iter().chain(ends) {
                 self.commit(field, cx);
             }
@@ -598,6 +618,7 @@ impl PropertiesPanel {
                 set(&self.ends[i].role, end.role.clone(), window, cx);
                 let m = end.multiplicity.map(|m| m.to_string()).unwrap_or_default();
                 set(&self.ends[i].multiplicity, m, window, cx);
+                set(&self.ends[i].constraints, end.constraints.join(", "), window, cx);
                 let n = NAVIGABILITIES.iter().position(|&x| x == end.navigability);
                 choose(
                     &self.ends[i].navigability,
@@ -868,6 +889,10 @@ impl Render for PropertiesPanel {
                         .child(field(
                             t!("prop.multiplicity").into(),
                             Input::new(&fields.multiplicity).small().into_any_element(),
+                        ))
+                        .child(field(
+                            t!("prop.constraints").into(),
+                            Input::new(&fields.constraints).small().into_any_element(),
                         ))
                         .child(field(
                             t!("prop.navigability").into(),

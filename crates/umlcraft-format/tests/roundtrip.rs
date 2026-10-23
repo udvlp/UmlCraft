@@ -1,7 +1,7 @@
 use pretty_assertions::assert_eq;
 use umlcraft_format::{FORMAT_VERSION, FormatError, from_str, load, save, to_string};
 use umlcraft_model::sample::order_system;
-use umlcraft_model::{ElementData, ElementKind, Multiplicity, TypeRef, Visibility};
+use umlcraft_model::{ElementData, ElementKind, Multiplicity, Point, Shape, TypeRef, Visibility};
 
 #[test]
 fn sample_roundtrips_byte_for_byte() {
@@ -36,11 +36,21 @@ fn every_property_survives() {
         tx.update_presentation(ids.class_diagram, node, |p| {
             p.style.fill = Some("#ffeecc".parse().unwrap());
             p.style.font_size = Some(13.5);
+        })?;
+        let edge = tx.model().shown_on(ids.order_customer)[0].1;
+        tx.update_presentation(ids.class_diagram, edge, |p| {
+            if let Shape::Edge { source_anchor, labels, .. } = &mut p.shape {
+                *source_anchor = Some(Point::new(0.25, 1.0));
+                labels.target_role = Some(Point::new(9.5, -23.25));
+            }
         })
     })
     .unwrap();
     let json = to_string(doc.model());
     assert_eq!(from_str(&json).unwrap(), *doc.model());
+    // Edge fields are camelCase like everything else.
+    assert!(json.contains("\"sourceAnchor\"") && json.contains("\"targetRole\""), "{json}");
+    assert!(!json.contains("source_anchor"));
 }
 
 #[test]

@@ -12,8 +12,8 @@ use umlcraft_model::{ElementKind, Id, Point as MPoint, Rect};
 use umlcraft_notation::member::member_text;
 use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{
-    self, EdgeHandle, EdgeShape, EndMarker, Figure, Handle, LabelAlign, LineStyle, NodeShape,
-    Preview, Row, RowRole, Scene, TextMeasure,
+    self, EdgeHandle, EdgeShape, EndMarker, FONT_SIZE, Figure, Handle, LABEL_HEIGHT, LabelAlign,
+    LineStyle, NodeShape, Preview, Row, RowRole, Scene, TextMeasure,
 };
 use umlcraft_notation::sequence::SequenceLayout;
 
@@ -21,6 +21,14 @@ use crate::workspace::Workspace;
 use crate::{Cancel, DeleteSelection, RemoveFromDiagram, ResetZoom, SelectAll, ZoomToFit};
 
 const MIN_ZOOM: f32 = 0.25;
+/// The font of diagram texts. Astah uses Java's "Dialog", which is Arial on Windows.
+const DIAGRAM_FONT: &str = "Arial";
+/// How far below the top of its line Java puts the baseline of 12 px "Dialog" (12.06) minus
+/// where GPUI puts it (11.70), relative to the font size.
+const BASELINE_SHIFT: f32 = 0.36 / 12.0;
+/// Edge labels: Astah puts the baseline 13 px below the label's top, about 1 px lower than in
+/// a row.
+const LABEL_SHIFT: f32 = 0.94;
 const MAX_ZOOM: f32 = 4.0;
 const GRID: f32 = 20.0;
 /// Smallest node edge when resizing.
@@ -724,7 +732,7 @@ impl Painter<'_> {
         if points.len() < 2 {
             return;
         }
-        let mut path = PathBuilder::stroke(px(width));
+        let mut path = PathBuilder::stroke(self.t.len(width));
         if style == LineStyle::Dashed {
             path = path.dash_array(&[px(6.0 * self.t.zoom), px(4.0 * self.t.zoom)]);
         }
@@ -746,7 +754,7 @@ impl Painter<'_> {
                 self.window.paint_path(path, fill);
             }
         }
-        let mut path = PathBuilder::stroke(px(1.0));
+        let mut path = PathBuilder::stroke(self.t.len(1.0));
         path.add_polygon(&screen, true);
         if let Ok(path) = path.build() {
             self.window.paint_path(path, stroke);
@@ -767,13 +775,19 @@ impl Painter<'_> {
         {
             self.window.paint_path(path, fill);
         }
-        if let Ok(path) = build(PathBuilder::stroke(px(1.0)), &self.t) {
+        if let Ok(path) = build(PathBuilder::stroke(self.t.len(1.0)), &self.t) {
             self.window.paint_path(path, stroke);
         }
     }
 
     fn rect(&mut self, r: Rect, fill: Hsla, border: Hsla, style: BorderStyle) {
-        self.window.paint_quad(quad(self.t.rect(r), px(0.0), fill, px(1.0), border, style));
+        self.frame(r, 1.0, fill, border, style);
+    }
+
+    /// A rectangle with a border of `width`, centered on its outline like a Java stroke.
+    fn frame(&mut self, r: Rect, width: f32, fill: Hsla, border: Hsla, style: BorderStyle) {
+        let outer = self.t.rect(r.inflate(width / 2.0));
+        self.window.paint_quad(quad(outer, px(0.0), fill, self.t.len(width), border, style));
     }
 
     /// Draws one line of text inside `area` and returns the logical text width.
@@ -801,14 +815,15 @@ impl Painter<'_> {
         let text: SharedString = text.to_owned().into();
         let run = TextRun { len: text.len(), font: f, color, ..Default::default() };
         let line = self.window.text_system().shape_line(text, self.t.len(font_size), &[run], None);
-        let line_height = self.t.len(font_size * 1.3);
+        let line_height = self.t.len(scene::line_height(font_size));
         let measured = f32::from(line.width()) / self.t.zoom;
         let (align, width) = match align {
             LabelAlign::Left => (TextAlign::Left, None),
             LabelAlign::Center => (TextAlign::Center, Some(self.t.len(area.width))),
             LabelAlign::Right => (TextAlign::Right, Some(self.t.len(area.width))),
         };
-        line.paint(self.t.pt(area.origin()), line_height, align, width, self.window, self.cx).ok();
+        let origin = area.origin().offset(0.0, font_size * BASELINE_SHIFT);
+        line.paint(self.t.pt(origin), line_height, align, width, self.window, self.cx).ok();
         measured
     }
 
@@ -822,7 +837,8 @@ impl Painter<'_> {
                 LabelAlign::Center => row.rect.x + (row.rect.width - width) / 2.0,
                 LabelAlign::Right => row.rect.right() - width,
             };
-            let y = row.rect.y + row.size * 1.15;
+            // Astah underlines 2.3 px below the baseline.
+            let y = row.rect.y + row.size * (14.34 / 12.0);
             self.line(
                 &[MPoint::new(x, y), MPoint::new(x + width, y)],
                 1.0,
@@ -866,7 +882,8 @@ impl Painter<'_> {
         let solid = LineStyle::Solid;
         match &node.figure {
             Figure::Classifier { separators } => {
-                self.rect(r, c.fill, c.line, BorderStyle::Solid);
+                // Astah draws classifier boxes with a 2 px border, compartment lines with 1 px.
+                self.frame(r, 2.0, c.fill, c.line, BorderStyle::Solid);
                 for &y in separators {
                     self.line(
                         &[MPoint::new(r.x, y), MPoint::new(r.right(), y)],
@@ -981,16 +998,25 @@ impl Painter<'_> {
             MPoint::new(tip.x - ux * back - uy * side, tip.y - uy * back + ux * side)
         };
         let c = self.c;
+        // Astah's arrow heads: 12 px sides at 30° to the line.
+        let (back, side) = (12.0 * 0.866_025_4, 6.0);
         match marker {
             EndMarker::None => {}
             EndMarker::OpenArrow => {
-                self.line(&[at(10.0, 5.0), tip, at(10.0, -5.0)], 1.0, c.line, LineStyle::Solid);
+                self.line(&[at(back, side), tip, at(back, -side)], 1.0, c.line, LineStyle::Solid);
             }
             EndMarker::FilledArrow => {
-                self.polygon(&[tip, at(10.0, 5.0), at(10.0, -5.0)], Some(c.line), c.line)
+                self.polygon(&[tip, at(back, side), at(back, -side)], Some(c.line), c.line)
             }
             EndMarker::HollowTriangle => {
-                self.polygon(&[tip, at(14.0, 8.0), at(14.0, -8.0)], Some(c.background), c.line)
+                self.polygon(&[tip, at(11.0, 6.5), at(11.0, -6.5)], Some(c.fill), c.line)
+            }
+            EndMarker::Cross => {
+                // 19 px from the end, arms of 5 px at 45° to the line.
+                let arm = 5.0 * std::f32::consts::FRAC_1_SQRT_2;
+                let solid = LineStyle::Solid;
+                self.line(&[at(19.0 - arm, arm), at(19.0 + arm, -arm)], 1.0, c.line, solid);
+                self.line(&[at(19.0 - arm, -arm), at(19.0 + arm, arm)], 1.0, c.line, solid);
             }
             EndMarker::HollowDiamond | EndMarker::FilledDiamond => {
                 let fill = if marker == EndMarker::FilledDiamond { c.line } else { c.background };
@@ -1015,12 +1041,13 @@ impl Painter<'_> {
         let text = self.c.text;
         for label in &edge.labels {
             let MPoint { x, y } = label.anchor;
+            let y = y + LABEL_SHIFT;
             let area = match label.align {
-                LabelAlign::Left => Rect::new(x, y, BOX, 14.0),
-                LabelAlign::Center => Rect::new(x - BOX / 2.0, y, BOX, 14.0),
-                LabelAlign::Right => Rect::new(x - BOX, y, BOX, 14.0),
+                LabelAlign::Left => Rect::new(x, y, BOX, LABEL_HEIGHT),
+                LabelAlign::Center => Rect::new(x - BOX / 2.0, y, BOX, LABEL_HEIGHT),
+                LabelAlign::Right => Rect::new(x - BOX, y, BOX, LABEL_HEIGHT),
             };
-            self.text(&label.text, area, 11.0, false, false, text, label.align);
+            self.text(&label.text, area, FONT_SIZE, false, false, text, label.align);
         }
     }
 
@@ -1112,8 +1139,7 @@ impl Render for DiagramCanvas {
             (ws.active_diagram, ws.tool)
         };
         self.switch_viewport(active);
-        let theme = cx.theme();
-        let font_family = theme.font_family.clone();
+        let font_family: SharedString = DIAGRAM_FONT.into();
         let scene = {
             let ws = self.workspace.read(cx);
             let measure = FontMeasure { window, family: font_family.clone() };
@@ -1126,16 +1152,18 @@ impl Render for DiagramCanvas {
         self.scene = scene.clone();
         let selection = self.workspace.read(cx).selection.clone();
         let theme = cx.theme();
+        // In the light theme diagrams look like Astah's: black on white.
+        let (fill, ink) = if theme.is_dark() {
+            (theme.secondary, theme.foreground)
+        } else {
+            (gpui_kit::white(), gpui_kit::black())
+        };
         let colors = Colors {
             background: theme.background,
             grid: Hsla { a: if theme.is_dark() { 0.25 } else { 0.45 }, ..theme.border },
-            fill: if theme.is_dark() {
-                theme.secondary
-            } else {
-                hsla(48.0 / 360.0, 1.0, 0.95, 1.0)
-            },
-            line: theme.foreground,
-            text: theme.foreground,
+            fill,
+            line: ink,
+            text: ink,
             muted: theme.muted_foreground,
             selection: theme.blue,
         };

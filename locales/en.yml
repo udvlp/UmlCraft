@@ -89,6 +89,7 @@ prop:
   multiplicity: Multiplicity
   navigability: Navigability
   aggregation: Aggregation
+  constraints: Constraints
   display: Display on diagram
   hide_attributes: Hide attributes
   hide_operations: Hide operations

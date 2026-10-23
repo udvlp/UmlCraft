@@ -265,7 +265,7 @@ impl Workspace {
                 v.presentations()
                     .iter()
                     .filter_map(|p| match &p.shape {
-                        Shape::Edge { source, target, waypoints }
+                        Shape::Edge { source, target, waypoints, .. }
                             if !waypoints.is_empty()
                                 && moved.contains(source)
                                 && moved.contains(target) =>

@@ -124,7 +124,7 @@ pub fn message_text(model: &Model, message: Id) -> String {
         MessageSort::Reply => name.to_owned(),
         MessageSort::Create | MessageSort::Destroy if name.is_empty() && p.arguments.is_empty() => {
             let keyword = if p.sort == MessageSort::Create { "create" } else { "destroy" };
-            format!("«{keyword}»")
+            format!("<<{keyword}>>")
         }
         _ if !p.arguments.is_empty() || (operation.is_some() && !name.is_empty()) => {
             format!("{name}({})", p.arguments)
@@ -133,7 +133,7 @@ pub fn message_text(model: &Model, message: Id) -> String {
     };
     match e.data().stereotypes.join(", ") {
         s if s.is_empty() => text,
-        s => format!("«{s}» {text}").trim_end().to_owned(),
+        s => format!("<<{s}>> {text}").trim_end().to_owned(),
     }
 }
 

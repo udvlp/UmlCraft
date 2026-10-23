@@ -39,7 +39,14 @@ impl Presentation {
         Self {
             id: Id::generate(),
             element,
-            shape: Shape::Edge { source, target, waypoints },
+            shape: Shape::Edge {
+                source,
+                target,
+                waypoints,
+                source_anchor: None,
+                target_anchor: None,
+                labels: EdgeLabels::default(),
+            },
             style: Style::default(),
         }
     }
@@ -69,7 +76,7 @@ impl Presentation {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "shape", rename_all = "camelCase")]
+#[serde(tag = "shape", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Shape {
     Node {
         bounds: Rect,
@@ -80,7 +87,41 @@ pub enum Shape {
         target: Id,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         waypoints: Vec<Point>,
+        /// Where the line aims inside the source node, relative to its bounds ((0, 0) top left,
+        /// (1, 1) bottom right). The line starts where it leaves the node. Unset: the center.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_anchor: Option<Point>,
+        /// Like `source_anchor`, for the target node.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_anchor: Option<Point>,
+        /// Labels placed by hand instead of by the layout.
+        #[serde(default, skip_serializing_if = "EdgeLabels::is_empty")]
+        labels: EdgeLabels,
     },
+}
+
+/// Positions of edge labels placed by hand: the top left corner of each label, relative to the
+/// point it belongs to (the end of the line for role and multiplicity, the middle of the line for
+/// the name). Unset labels go where the layout puts them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeLabels {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Point>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_role: Option<Point>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_multiplicity: Option<Point>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_role: Option<Point>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_multiplicity: Option<Point>,
+}
+
+impl EdgeLabels {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

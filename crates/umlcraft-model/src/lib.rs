@@ -14,7 +14,9 @@ mod model;
 mod op;
 pub mod sample;
 
-pub use diagram::{Color, DiagramKind, ParseColorError, Presentation, Shape, Style, View};
+pub use diagram::{
+    Color, DiagramKind, EdgeLabels, ParseColorError, Presentation, Shape, Style, View,
+};
 pub use document::{Document, Tx};
 pub use element::{
     Aggregation, AssociationEnd, AssociationProps, AttributeProps, ClassifierProps,

@@ -289,7 +289,8 @@ impl MainView {
         );
     }
 
-    fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens a project, or imports an `.asta` file.
+    pub fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("asta")) {
             self.import(&path, window, cx);
             return;

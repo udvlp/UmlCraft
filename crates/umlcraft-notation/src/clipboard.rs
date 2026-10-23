@@ -6,7 +6,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use umlcraft_model::{ElementData, Id, Model, ModelError, Op, Point, Rect, Result, Shape, Tx};
+use umlcraft_model::{
+    EdgeLabels, ElementData, Id, Model, ModelError, Op, Point, Presentation, Rect, Result, Shape,
+    Tx,
+};
 
 use crate::palette::owner_for;
 
@@ -32,6 +35,8 @@ pub struct ClipEdge {
     pub source: Id,
     pub target: Id,
     pub waypoints: Vec<Point>,
+    pub anchors: [Option<Point>; 2],
+    pub labels: EdgeLabels,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,7 +99,11 @@ pub fn copy(model: &Model, diagram: Id, selection: &[Id]) -> Option<Clip> {
     let mut relationships = Vec::new();
     let mut edges = Vec::new();
     for p in view.presentations() {
-        let Shape::Edge { source, target, waypoints } = &p.shape else { continue };
+        let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, labels } =
+            &p.shape
+        else {
+            continue;
+        };
         if !node_ids.contains(source) || !node_ids.contains(target) {
             continue;
         }
@@ -120,6 +129,8 @@ pub fn copy(model: &Model, diagram: Id, selection: &[Id]) -> Option<Clip> {
             source: *source,
             target: *target,
             waypoints: waypoints.clone(),
+            anchors: [*source_anchor, *target_anchor],
+            labels: *labels,
         });
     }
     Some(Clip { roots, relationships, nodes, edges })
@@ -255,7 +266,12 @@ pub fn paste(
             None => None,
         };
         let waypoints = edge.waypoints.iter().map(|w| w.offset(offset.x, offset.y)).collect();
-        created.push(tx.add_edge(diagram, element, source, target, waypoints)?);
+        let mut presentation = Presentation::edge(element, source, target, waypoints);
+        if let Shape::Edge { source_anchor, target_anchor, labels, .. } = &mut presentation.shape {
+            [*source_anchor, *target_anchor] = edge.anchors;
+            *labels = edge.labels;
+        }
+        created.push(tx.add_presentation(diagram, presentation)?);
     }
     Ok(created)
 }
