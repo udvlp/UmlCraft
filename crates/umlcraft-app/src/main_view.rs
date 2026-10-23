@@ -1188,7 +1188,7 @@ mod tests {
     // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
     use std::path::PathBuf;
 
-    use super::{recent_label, sanitize_file_name, with_project_extension};
+    use super::{sanitize_file_name, with_project_extension};
 
     #[test]
     fn file_names_get_the_project_extension() {
@@ -1203,6 +1203,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn recent_labels_put_the_file_name_first_and_shorten_folders() {
+        use super::recent_label;
+
         let short = PathBuf::from(r"C:\Projekte\shop.ucraft");
         assert_eq!(recent_label(&short), r"shop.ucraft — C:\Projekte");
         let long =
