@@ -12,6 +12,7 @@ menu:
   open: Open …
   import_astah: Import Astah project …
   export: Export
+  export_svg: Diagram as SVG …
   export_astah: Astah project …
   recent: Open recent
   no_recent: (none)
@@ -158,6 +159,7 @@ dialog:
   export_failed: The Astah project could not be exported.
   export_partial: "%{count} details of the project could not be carried over to Astah."
   export_partial_detail: "Astah's API cannot express these:\n%{items}"
+  svg_failed: The diagram could not be saved as SVG.
 export_dropped:
   comment: Comments not shown on a diagram
   interaction: Interactions without a diagram

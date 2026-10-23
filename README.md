@@ -44,7 +44,10 @@ importing `.asta` files and exporting them through an installed Astah.
   What the API cannot express is reported. In a test with Astah Professional 12 this worked
   without a license file; see [docs/architecture.md](docs/architecture.md#astah-export).
 
-This completes milestone 1. Next: further diagram kinds (activity, state) and image export.
+- **SVG export** (File › Export › Diagram as SVG …): the open diagram as a standalone SVG image,
+  drawn like the canvas in black on white, with real text so it stays sharp and searchable.
+
+This completes milestone 1. Next: further diagram kinds (activity, state) and PNG export.
 
 ## Download
 

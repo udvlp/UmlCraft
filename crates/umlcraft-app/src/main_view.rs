@@ -21,9 +21,9 @@ use umlcraft_model::sample::order_system;
 use umlcraft_model::{DiagramKind, Document, ElementData, ElementKind, Id, Model};
 use umlcraft_notation::clipboard::Clip;
 use umlcraft_notation::palette::{self, NodeTool, Tool};
-use umlcraft_notation::scene::Alignment;
+use umlcraft_notation::scene::{self, Alignment, Preview};
 
-use crate::canvas::{DiagramCanvas, DraggedElement};
+use crate::canvas::{DiagramCanvas, DraggedElement, FontMeasure};
 use crate::labels;
 use crate::properties::PropertiesPanel;
 use crate::settings::Settings;
@@ -341,13 +341,7 @@ impl MainView {
             .and_then(Path::file_stem)
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| sanitize_file_name(&project));
-        let directory = ws
-            .path
-            .as_deref()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf)
-            .or_else(documents_dir)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let directory = start_directory(ws.path.as_deref());
         let export = umlcraft_asta_export::Export::new(model);
         let rx = cx.prompt_for_new_path(&directory, Some(&format!("{suggested}.asta")));
         cx.spawn_in(window, async move |this, cx| {
@@ -369,6 +363,30 @@ impl MainView {
                 this.report_export(result, &path, window, cx);
             })
             .ok();
+        })
+        .detach();
+    }
+
+    /// Writes the open diagram as an SVG image, drawn as on the canvas in the light theme.
+    fn export_svg(&mut self, _: &ExportSvg, window: &mut Window, cx: &mut Context<Self>) {
+        let ws = self.workspace.read(cx);
+        let Some(diagram) = ws.active_diagram else { return };
+        let model = ws.doc.model();
+        let measure = FontMeasure::new(window);
+        let scene = scene::build(model, diagram, &Preview::default(), &measure);
+        let svg = umlcraft_notation::svg::render(&scene, &measure);
+        let name = model.element(diagram).map(|e| e.name().to_owned()).unwrap_or_default();
+        let suggested = format!("{}.svg", sanitize_file_name(&name));
+        let rx = cx.prompt_for_new_path(&start_directory(ws.path.as_deref()), Some(&suggested));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = rx.await else { return };
+            let path = with_extension(path, "svg");
+            if let Err(err) = std::fs::write(&path, svg) {
+                this.update_in(cx, |this, window, cx| {
+                    this.show_error(&t!("dialog.svg_failed"), &err.to_string(), window, cx);
+                })
+                .ok();
+            }
         })
         .detach();
     }
@@ -435,13 +453,7 @@ impl MainView {
             .and_then(Path::file_name)
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| format!("{}.{FILE_EXTENSION}", sanitize_file_name(&project)));
-        let directory = current
-            .as_deref()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf)
-            .or_else(documents_dir)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let rx = cx.prompt_for_new_path(&directory, Some(&suggested));
+        let rx = cx.prompt_for_new_path(&start_directory(current.as_deref()), Some(&suggested));
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(path))) = rx.await else { return };
             let path = with_project_extension(path);
@@ -940,13 +952,12 @@ fn menus(settings: &Settings) -> Vec<Menu> {
         MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
         menu_item("menu.import_astah", ImportAstah),
     ];
-    // Exporting needs an installed Astah, whose API writes the file.
+    let mut export = vec![menu_item("menu.export_svg", ExportSvg)];
+    // Exporting to Astah needs an installed Astah, whose API writes the file.
     if astah().is_some() {
-        file.push(MenuItem::submenu(
-            Menu::new(t!("menu.export").to_string())
-                .items([menu_item("menu.export_astah", ExportAstah)]),
-        ));
+        export.push(menu_item("menu.export_astah", ExportAstah));
     }
+    file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items(export)));
     file.extend([
         MenuItem::separator(),
         menu_item("menu.save", SaveProject),
@@ -1068,6 +1079,15 @@ fn sanitize_file_name(name: &str) -> String {
     if cleaned.is_empty() { "project".to_owned() } else { cleaned.to_owned() }
 }
 
+/// Where file dialogs start: next to the project file, else in the user's documents.
+fn start_directory(project: Option<&Path>) -> PathBuf {
+    project
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .or_else(documents_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 fn documents_dir() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?);
     let documents = home.join("Documents");
@@ -1089,6 +1109,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::export_astah))
+            .on_action(cx.listener(Self::export_svg))
             .on_action(cx.listener(Self::open_recent))
             .on_action(cx.listener(Self::open_sample))
             .on_action(cx.listener(Self::save_project))

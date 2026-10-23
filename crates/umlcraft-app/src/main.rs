@@ -21,6 +21,7 @@ actions!(
         OpenProject,
         ImportAstah,
         ExportAstah,
+        ExportSvg,
         SaveProject,
         SaveProjectAs,
         Quit,

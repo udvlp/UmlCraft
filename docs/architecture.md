@@ -43,7 +43,8 @@ changes. On load, `Model::check` verifies all invariants.
 
 - `Workspace` (a GPUI entity) holds the document, file path, open diagrams (tabs), selection and
   the active tool. All edits from the UI go through its methods.
-- `canvas.rs` paints the scene with `paint_quad`/`PathBuilder`/`shape_line` and handles pan and
+- `canvas.rs` paints the scene's primitives (`umlcraft_notation::draw`) and texts with
+  `paint_quad`/`PathBuilder`/`shape_line` and handles pan and
   zoom itself, separately for each diagram. Drag operations (move, resize, rubber band, connect)
   are shown only as a `Preview` until the mouse is released and are then applied as one undo step.
 - `properties.rs` commits text fields on Enter or when the field loses focus, always to the element
@@ -70,6 +71,10 @@ changes. On load, `Model::check` verifies all invariants.
 - `palette` defines which tools a diagram type offers, which connections are allowed (e.g.
   realization only from class to interface) and where new elements land in the ownership tree.
 - `sequence` lays out sequence diagrams (see below).
+- `draw` turns a scene's figures, end markers and activation bars into a few primitives
+  (polyline, polygon, ellipse, frame) with color roles (`Paint`) and says where text baselines
+  go. The canvas paints them with its theme colors; `svg` writes them as an SVG image in Astah's
+  black on white. So the figure geometry exists once, for both.
 
 ## Sequence diagrams
 
