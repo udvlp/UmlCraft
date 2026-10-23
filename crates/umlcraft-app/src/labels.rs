@@ -3,7 +3,7 @@
 use rust_i18n::t;
 use umlcraft_model::{Element, ElementKind, Id, Model, Visibility};
 use umlcraft_notation::palette::NodeTool;
-use umlcraft_notation::sequence::{message_text, operator_keyword};
+use umlcraft_notation::sequence::{interaction_use_text, message_text, operator_keyword};
 
 /// The element's metaclass; activity nodes, pseudostates and instances say which kind they are.
 pub fn kind_label(e: &Element) -> String {
@@ -30,6 +30,7 @@ pub fn tree_name(model: &Model, e: &Element) -> String {
         _ if !e.name().is_empty() => String::new(),
         ElementKind::Message(_) => message_text(model, e.id()),
         ElementKind::CombinedFragment(p) => operator_keyword(p.operator).to_owned(),
+        ElementKind::InteractionUse(_) => interaction_use_text(model, e.id()),
         ElementKind::InteractionOperand(p) => guard(&p.guard),
         ElementKind::ActivityEdge(p) => guard(&p.guard),
         ElementKind::Transition(p) => p.label(),

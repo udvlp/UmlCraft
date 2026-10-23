@@ -13,9 +13,10 @@ use umlcraft_model::{
     AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
     DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps, GeneralizationProps, Id,
     IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
-    LifelineProps, MessageProps, MessageSort, Model, Multiplicity, Navigability, Op,
-    OperationProps, ParameterDirection, ParameterProps, Point, Presentation, PseudostateKind, Rect,
-    Shape, StateProps, Style, TaggedValue, TransitionProps, TypeRef, Visibility,
+    InteractionUseProps, LifelineProps, MessageGate, MessageProps, MessageSort, Model,
+    Multiplicity, Navigability, Op, OperationProps, ParameterDirection, ParameterProps, Point,
+    Presentation, PseudostateKind, Rect, Shape, StateProps, Style, TaggedValue, TransitionProps,
+    TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::scene::border_point_from;
@@ -277,6 +278,8 @@ struct Importer<'g> {
     relationships: Vec<(Id, ObjId)>,
     /// Instance specifications, created once their classifiers exist.
     instances: Vec<(Id, ObjId)>,
+    /// Interaction uses and the Astah interaction they refer to.
+    references: Vec<(Id, ObjId)>,
     /// Activity graphs and state machines with the element they belong to.
     behaviors: Vec<(Id, ObjId)>,
     diagrams: Vec<(Id, ObjId)>,
@@ -296,6 +299,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         replied: HashSet::new(),
         relationships: Vec::new(),
         instances: Vec::new(),
+        references: Vec::new(),
         behaviors: Vec::new(),
         diagrams: Vec::new(),
     };
@@ -322,6 +326,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     for (owner, diagram) in std::mem::take(&mut im.diagrams) {
         im.diagram(owner, diagram);
     }
+    im.resolve_references();
     Some(Imported { model: im.model, skipped: im.skipped })
 }
 
@@ -537,6 +542,25 @@ impl Importer<'_> {
                 (ElementKind::DataType(props), &["dataType", "datatype"])
             }
             _ => (ElementKind::Class(props), &[]),
+        }
+    }
+
+    /// Points interaction uses to the interactions they refer to, now that all exist.
+    fn resolve_references(&mut self) {
+        for (id, target) in std::mem::take(&mut self.references) {
+            let Some(&interaction) = self.ids.get(&target) else { continue };
+            if !matches!(
+                self.model.get(interaction).map(|e| e.kind()),
+                Some(ElementKind::Interaction)
+            ) {
+                continue;
+            }
+            let Some(e) = self.model.get(id) else { continue };
+            let mut data = e.data().clone();
+            if let ElementKind::InteractionUse(p) = &mut data.kind {
+                p.refers_to = Some(interaction);
+                let _ = self.model.apply(Op::UpdateElement { id, data });
+            }
         }
     }
 
@@ -1036,10 +1060,16 @@ impl Importer<'_> {
                 matches!(self.model.get(*id).map(|e| e.kind()), Some(ElementKind::Lifeline(_)))
             })
         };
-        let (Some(from), Some(to)) = (lifeline("sender"), lifeline("receiver")) else {
-            // Found and lost messages start or end at a gate, which UmlCraft cannot represent.
-            self.skip(object);
-            return;
+        // Found and lost messages start or end at a gate instead of a lifeline.
+        let is_gate = |field| r.obj(object, field).is_some_and(|o| r.class(o) == "UGateImp");
+        let (from, to, gate) = match (lifeline("sender"), lifeline("receiver")) {
+            (Some(from), Some(to)) => (from, to, MessageGate::None),
+            (None, Some(to)) if is_gate("sender") => (to, to, MessageGate::Found),
+            (Some(from), None) if is_gate("receiver") => (from, from, MessageGate::Lost),
+            _ => {
+                self.skip(object);
+                return;
+            }
         };
         let action = r.obj(object, "action");
         let asynchronous = action.is_some_and(|a| r.flag(a, "asynchronous"));
@@ -1076,6 +1106,7 @@ impl Importer<'_> {
             sort,
             from,
             to,
+            gate,
             operation,
             arguments,
             return_value,
@@ -1086,7 +1117,24 @@ impl Importer<'_> {
 
     fn fragment(&mut self, container: Id, object: ObjId) {
         let r = self.r;
-        // Interaction uses ("ref") and the like have no counterpart yet.
+        let covered =
+            r.list(object, "covereds").iter().filter_map(|c| self.ids.get(c).copied()).collect();
+        if r.class(object) == "UInteractionUseImp" {
+            // The interaction it refers to may not exist yet; see `resolve_references`.
+            let arguments = r.text(object, "argument");
+            let kind = ElementKind::InteractionUse(InteractionUseProps {
+                refers_to: None,
+                arguments,
+                covered,
+            });
+            let data = self.data(object, kind, &[]);
+            if let Some(id) = self.create(container, data, Some(object))
+                && let Some(target) = r.obj(object, "refersTo")
+            {
+                self.references.push((id, target));
+            }
+            return;
+        }
         if r.class(object) != "UCombinedFragmentImp" {
             self.skip(object);
             return;
@@ -1105,8 +1153,6 @@ impl Importer<'_> {
             "consider" => InteractionOperator::Consider,
             _ => InteractionOperator::Alt,
         };
-        let covered =
-            r.list(object, "covereds").iter().filter_map(|c| self.ids.get(c).copied()).collect();
         let kind = ElementKind::CombinedFragment(CombinedFragmentProps { operator, covered });
         let data = self.data(object, kind, &[]);
         let Some(fragment) = self.create(container, data, Some(object)) else { return };

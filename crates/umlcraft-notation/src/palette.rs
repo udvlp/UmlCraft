@@ -4,8 +4,9 @@
 use umlcraft_model::{
     ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
     DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps, InstanceKind,
-    InstanceProps, InteractionOperandProps, InteractionOperator, LifelineProps, MessageSort, Model,
-    ModelError, Point, PseudostateKind, Rect, Result, Size, StateProps, Tx,
+    InstanceProps, InteractionOperandProps, InteractionOperator, InteractionUseProps,
+    LifelineProps, MessageGate, MessageSort, Model, ModelError, Point, PseudostateKind, Rect,
+    Result, Size, StateProps, Tx,
 };
 
 use crate::sequence::Slot;
@@ -22,6 +23,7 @@ pub enum NodeTool {
     Lifeline,
     SystemBoundary,
     CombinedFragment,
+    InteractionUse,
     Action,
     InitialNode,
     ActivityFinal,
@@ -64,6 +66,8 @@ pub enum EdgeTool {
     Reply,
     CreateMessage,
     DestroyMessage,
+    FoundMessage,
+    LostMessage,
     Flow,
     Transition,
 }
@@ -108,13 +112,15 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
             ],
         ),
         DiagramKind::Sequence => (
-            &[N::Lifeline, N::CombinedFragment, N::Note],
+            &[N::Lifeline, N::CombinedFragment, N::InteractionUse, N::Note],
             &[
                 E::Message,
                 E::AsyncMessage,
                 E::Reply,
                 E::CreateMessage,
                 E::DestroyMessage,
+                E::FoundMessage,
+                E::LostMessage,
                 E::NoteAnchor,
             ],
         ),
@@ -186,6 +192,7 @@ impl NodeTool {
             Self::Lifeline => "lifeline",
             Self::SystemBoundary => "systemBoundary",
             Self::CombinedFragment => "combinedFragment",
+            Self::InteractionUse => "interactionUse",
             Self::Action => "action",
             Self::InitialNode => "initialNode",
             Self::ActivityFinal => "activityFinal",
@@ -293,6 +300,7 @@ impl NodeTool {
                 operator: InteractionOperator::Opt,
                 covered: Vec::new(),
             }),
+            Self::InteractionUse => ElementKind::InteractionUse(InteractionUseProps::default()),
             Self::Action => node(ActivityNodeKind::Action),
             Self::InitialNode => node(ActivityNodeKind::Initial),
             Self::ActivityFinal => node(ActivityNodeKind::ActivityFinal),
@@ -332,7 +340,7 @@ impl NodeTool {
             Self::Lifeline => Size::new(100.0, 300.0),
             Self::SystemBoundary => Size::new(300.0, 360.0),
             // The layout sizes fragments; this is only what the file keeps.
-            Self::CombinedFragment => Size::new(200.0, 80.0),
+            Self::CombinedFragment | Self::InteractionUse => Size::new(200.0, 80.0),
             Self::Action => Size::new(120.0, 36.0),
             // Astah's control nodes: 20 px circles, 5 px bars.
             Self::InitialNode | Self::ActivityFinal | Self::FlowFinal => Size::new(20.0, 20.0),
@@ -383,6 +391,8 @@ impl EdgeTool {
             Self::Reply => "reply",
             Self::CreateMessage => "createMessage",
             Self::DestroyMessage => "destroyMessage",
+            Self::FoundMessage => "foundMessage",
+            Self::LostMessage => "lostMessage",
             Self::Flow => "flow",
             Self::Transition => "transition",
         }
@@ -391,7 +401,9 @@ impl EdgeTool {
     /// The kind of message this tool draws, `None` for other tools.
     pub fn message_sort(self) -> Option<MessageSort> {
         match self {
-            Self::Message => Some(MessageSort::Synchronous),
+            Self::Message | Self::FoundMessage | Self::LostMessage => {
+                Some(MessageSort::Synchronous)
+            }
             Self::AsyncMessage => Some(MessageSort::Asynchronous),
             Self::Reply => Some(MessageSort::Reply),
             Self::CreateMessage => Some(MessageSort::Create),
@@ -407,6 +419,10 @@ impl EdgeTool {
         match self {
             Self::Message | Self::AsyncMessage | Self::Reply => {
                 matches!((source, target), (K::Lifeline(_), K::Lifeline(_)))
+            }
+            // Found and lost messages have one lifeline: they are drawn from it to itself.
+            Self::FoundMessage | Self::LostMessage => {
+                same && matches!((source, target), (K::Lifeline(_), K::Lifeline(_)))
             }
             // A lifeline can neither create nor destroy itself.
             Self::CreateMessage | Self::DestroyMessage => {
@@ -493,6 +509,17 @@ impl EdgeTool {
             | Self::DestroyMessage => {
                 Some(ElementKind::message(self.message_sort()?, source, target))
             }
+            Self::FoundMessage | Self::LostMessage => {
+                let mut kind = ElementKind::message(MessageSort::Synchronous, source, target);
+                if let ElementKind::Message(p) = &mut kind {
+                    p.gate = if self == Self::FoundMessage {
+                        MessageGate::Found
+                    } else {
+                        MessageGate::Lost
+                    };
+                }
+                Some(kind)
+            }
         }
     }
 }
@@ -523,7 +550,10 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
         ),
         DiagramKind::Sequence => matches!(
             kind,
-            ElementKind::Lifeline(_) | ElementKind::CombinedFragment(_) | ElementKind::Comment(_)
+            ElementKind::Lifeline(_)
+                | ElementKind::CombinedFragment(_)
+                | ElementKind::InteractionUse(_)
+                | ElementKind::Comment(_)
         ),
         DiagramKind::Activity => matches!(
             kind,
@@ -565,6 +595,7 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::Lifeline(_) => NodeTool::Lifeline,
         ElementKind::SystemBoundary => NodeTool::SystemBoundary,
         ElementKind::CombinedFragment(_) => NodeTool::CombinedFragment,
+        ElementKind::InteractionUse(_) => NodeTool::InteractionUse,
         ElementKind::ActivityNode(p) => NodeTool::for_activity_node(p.node),
         ElementKind::State(_) => NodeTool::State,
         ElementKind::FinalState => NodeTool::FinalState,
@@ -718,8 +749,8 @@ pub fn create_node(
     origin: Point,
     base_name: &str,
 ) -> Result<(Id, Id)> {
-    if tool == NodeTool::CombinedFragment {
-        return create_fragment(tx, diagram, None, Vec::new(), origin);
+    if matches!(tool, NodeTool::CombinedFragment | NodeTool::InteractionUse) {
+        return create_fragment(tx, diagram, tool, None, Vec::new(), origin);
     }
     let kind = tool.element_kind();
     let diagram_owner = tx.model().element(diagram)?.owner().ok_or(ModelError::Root)?;
@@ -852,23 +883,30 @@ pub fn connect_message(
     tx.add_edge(diagram, Some(message), source, target, Vec::new())
 }
 
-/// Puts a new combined fragment with one empty operand at `slot` (or after everything),
-/// covering the lifelines `covered`. Returns (fragment, node).
+/// Puts a new combined fragment with one empty operand, or an interaction use (`tool`), at
+/// `slot` (or after everything), covering the lifelines `covered`. Returns (element, node).
 pub fn create_fragment(
     tx: &mut Tx<'_>,
     diagram: Id,
+    tool: NodeTool,
     slot: Option<Slot>,
     covered: Vec<Id>,
     origin: Point,
 ) -> Result<(Id, Id)> {
     let (owner, index) = slot_or_end(tx.model(), diagram, slot)?;
-    let kind = ElementKind::CombinedFragment(CombinedFragmentProps {
-        operator: InteractionOperator::Opt,
-        covered,
-    });
+    let kind = if tool == NodeTool::InteractionUse {
+        ElementKind::InteractionUse(InteractionUseProps { covered, ..Default::default() })
+    } else {
+        ElementKind::CombinedFragment(CombinedFragmentProps {
+            operator: InteractionOperator::Opt,
+            covered,
+        })
+    };
     let fragment = tx.create_at(owner, index, ElementData::new("", kind))?;
-    add_operand(tx, fragment)?;
-    let bounds = Rect::from_origin_size(origin, NodeTool::CombinedFragment.default_size());
+    if tool != NodeTool::InteractionUse {
+        add_operand(tx, fragment)?;
+    }
+    let bounds = Rect::from_origin_size(origin, tool.default_size());
     let node = add_node_for(tx, diagram, fragment, bounds)?;
     Ok((fragment, node))
 }
@@ -902,7 +940,12 @@ pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(I
         .copied()
         .filter(|&c| {
             model.get(c).is_some_and(|e| {
-                matches!(e.kind(), ElementKind::Message(_) | ElementKind::CombinedFragment(_))
+                matches!(
+                    e.kind(),
+                    ElementKind::Message(_)
+                        | ElementKind::CombinedFragment(_)
+                        | ElementKind::InteractionUse(_)
+                )
             })
         })
         .collect();
@@ -910,7 +953,14 @@ pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(I
         return Err(invalid("only messages and fragments can go into a fragment"));
     }
     let slot = Slot { y: 0.0, owner, index: first };
-    let (fragment, node) = create_fragment(tx, diagram, Some(slot), Vec::new(), Point::default())?;
+    let (fragment, node) = create_fragment(
+        tx,
+        diagram,
+        NodeTool::CombinedFragment,
+        Some(slot),
+        Vec::new(),
+        Point::default(),
+    )?;
     let operand = tx.model().children(fragment)[0];
     for (i, item) in moved.into_iter().enumerate() {
         tx.move_element(item, operand, i)?;

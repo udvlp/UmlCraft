@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use umlcraft_model::{
-    ActivityNodeKind, DiagramKind, ElementKind, InstanceKind, Model, Point, PseudostateKind, Shape,
-    TransitionProps, TypeRef,
+    ActivityNodeKind, DiagramKind, ElementKind, InstanceKind, MessageGate, Model, Point,
+    PseudostateKind, Shape, TransitionProps, TypeRef,
 };
 
 const ASTAH: &str = r"C:\Program Files\astah-professional";
@@ -145,7 +145,8 @@ fn sample_project() {
         .into_iter()
         .filter(|&id| matches!(model.get(id).unwrap().kind(), ElementKind::Message(_)))
         .collect::<Vec<_>>();
-    assert_eq!(messages.len(), 10);
+    // Ten between lifelines, a found and a lost message.
+    assert_eq!(messages.len(), 12);
     for &message in &messages {
         assert_eq!(view.presentations_of(message).filter(|p| p.is_edge()).count(), 1);
     }
@@ -311,6 +312,42 @@ fn sample_component_and_deployment_diagrams() {
         })
         .count();
     assert_eq!(from_instances, 13);
+}
+
+#[test]
+fn sample_interaction_uses_and_gate_messages() {
+    let Some(path) = astah_file("Sample.asta") else { return };
+    let imported = umlcraft_asta::import(&path).unwrap();
+    let model = &imported.model;
+    for class in ["UInteractionUseImp", "UMessageImp"] {
+        assert!(!imported.skipped.contains_key(class), "{class}: {:?}", imported.skipped);
+    }
+
+    let uses: Vec<_> =
+        model.elements().filter(|e| matches!(e.kind(), ElementKind::InteractionUse(_))).collect();
+    assert_eq!(uses.len(), 2);
+    let establish = uses.iter().find(|e| e.name() == "EstablishAccess").unwrap();
+    let ElementKind::InteractionUse(p) = establish.kind() else { unreachable!() };
+    assert_eq!(p.arguments, "\"Illegal PIN\"");
+    assert_eq!(p.covered.len(), 2);
+    // It refers to the interaction of another sequence diagram.
+    let referred = model.get(p.refers_to.expect("refers to an interaction")).unwrap();
+    assert!(matches!(referred.kind(), ElementKind::Interaction));
+    assert_ne!(Some(referred.id()), establish.owner());
+    // "OpenDoor" sits in an operand of an opt fragment.
+    let open_door = uses.iter().find(|e| e.name() == "OpenDoor").unwrap();
+    let operand = model.get(open_door.owner().unwrap()).unwrap();
+    assert!(matches!(operand.kind(), ElementKind::InteractionOperand(_)));
+
+    let gates: Vec<MessageGate> = model
+        .elements()
+        .filter_map(|e| match e.kind() {
+            ElementKind::Message(p) if e.name() == "opti" => Some(p.gate),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gates.len(), 2);
+    assert!(gates.contains(&MessageGate::Found) && gates.contains(&MessageGate::Lost));
 }
 
 /// Ulf's reference class diagram (`.asta` files are not in Git); its layout must match Astah's.

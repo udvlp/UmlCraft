@@ -190,12 +190,20 @@ impl Workspace {
         }
     }
 
-    /// Adds a combined fragment to the active sequence diagram and selects it.
-    pub fn create_fragment(&mut self, slot: Option<Slot>, covered: Vec<Id>, origin: Point) {
+    /// Adds a combined fragment or interaction use (`tool`) to the active sequence diagram and
+    /// selects it.
+    pub fn create_fragment(
+        &mut self,
+        tool: NodeTool,
+        slot: Option<Slot>,
+        covered: Vec<Id>,
+        origin: Point,
+    ) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.create").to_string();
-        let result =
-            self.doc.edit(label, |tx| palette::create_fragment(tx, diagram, slot, covered, origin));
+        let result = self
+            .doc
+            .edit(label, |tx| palette::create_fragment(tx, diagram, tool, slot, covered, origin));
         if let Some((fragment, node)) = self.report(result) {
             self.selection = vec![node];
             self.selected_element = Some(fragment);

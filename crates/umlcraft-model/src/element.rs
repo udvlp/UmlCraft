@@ -252,6 +252,18 @@ pub enum MessageSort {
     Destroy,
 }
 
+/// Where a message comes from or goes to when it does not connect two lifelines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MessageGate {
+    #[default]
+    None,
+    /// The message comes from outside the interaction; `from` repeats `to`.
+    Found,
+    /// The message goes outside the interaction; `to` repeats `from`.
+    Lost,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageProps {
@@ -261,6 +273,8 @@ pub struct MessageProps {
     pub from: Id,
     /// Receiving lifeline.
     pub to: Id,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub gate: MessageGate,
     /// Operation invoked by this message, if it is modeled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<Id>,
@@ -294,6 +308,20 @@ pub struct CombinedFragmentProps {
     #[serde(default, skip_serializing_if = "is_default")]
     pub operator: InteractionOperator,
     /// Lifelines covered by the fragment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub covered: Vec<Id>,
+}
+
+/// A reference from one interaction to another, drawn as a "ref" frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionUseProps {
+    /// The interaction this one refers to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refers_to: Option<Id>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arguments: String,
+    /// Lifelines covered by the frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub covered: Vec<Id>,
 }
@@ -577,6 +605,7 @@ pub enum ElementKind {
     Message(MessageProps),
     CombinedFragment(CombinedFragmentProps),
     InteractionOperand(InteractionOperandProps),
+    InteractionUse(InteractionUseProps),
     /// Owns the nodes, flows and partitions of activity diagrams.
     Activity,
     ActivityNode(ActivityNodeProps),
@@ -622,6 +651,7 @@ pub enum RefRole {
     FlowEnd,
     TransitionEnd,
     Classifier,
+    RefersTo,
 }
 
 impl RefRole {
@@ -661,6 +691,7 @@ impl RefRole {
             Self::Operation => matches!(target, ElementKind::Operation(_)),
             Self::ExtensionPoint => matches!(target, ElementKind::ExtensionPoint),
             Self::FlowEnd => matches!(target, ElementKind::ActivityNode(_)),
+            Self::RefersTo => matches!(target, ElementKind::Interaction),
             Self::TransitionEnd => target.is_vertex(),
             Self::Client | Self::Supplier | Self::Annotated => {
                 !matches!(target, ElementKind::Model | ElementKind::Diagram(_))
@@ -709,6 +740,7 @@ impl ElementKind {
             sort,
             from,
             to,
+            gate: MessageGate::None,
             operation: None,
             arguments: String::new(),
             return_value: String::new(),
@@ -767,6 +799,7 @@ impl ElementKind {
             Self::Message(_) => "message",
             Self::CombinedFragment(_) => "combinedFragment",
             Self::InteractionOperand(_) => "interactionOperand",
+            Self::InteractionUse(_) => "interactionUse",
             Self::Activity => "activity",
             Self::ActivityNode(_) => "activityNode",
             Self::ActivityEdge(_) => "activityEdge",
@@ -849,7 +882,7 @@ impl ElementKind {
             K::ExtensionPoint => matches!(self, K::UseCase(_)),
             K::Interaction => self.is_namespace() || matches!(self, K::Class(_) | K::UseCase(_)),
             K::Lifeline(_) => matches!(self, K::Interaction),
-            K::Message(_) | K::CombinedFragment(_) => {
+            K::Message(_) | K::CombinedFragment(_) | K::InteractionUse(_) => {
                 matches!(self, K::Interaction | K::InteractionOperand(_))
             }
             K::InteractionOperand(_) => matches!(self, K::CombinedFragment(_)),
@@ -899,6 +932,12 @@ impl ElementKind {
             }
             Self::CombinedFragment(p) => {
                 p.covered.iter().map(|&id| (id, RefRole::Covered)).collect()
+            }
+            Self::InteractionUse(p) => {
+                let mut refs: Vec<(Id, RefRole)> =
+                    p.refers_to.map(|id| (id, RefRole::RefersTo)).into_iter().collect();
+                refs.extend(p.covered.iter().map(|&id| (id, RefRole::Covered)));
+                refs
             }
             Self::ActivityNode(p) => type_ref(&p.type_ref),
             Self::ActivityEdge(p) => {
@@ -950,6 +989,10 @@ impl ElementKind {
                 p.operation.iter_mut().for_each(f);
             }
             Self::CombinedFragment(p) => p.covered.iter_mut().for_each(f),
+            Self::InteractionUse(p) => {
+                p.refers_to.iter_mut().for_each(&mut f);
+                p.covered.iter_mut().for_each(f);
+            }
             Self::ActivityNode(p) => type_ref(&mut p.type_ref, &mut f),
             Self::ActivityEdge(p) => {
                 f(&mut p.source);
@@ -1029,6 +1072,10 @@ impl ElementKind {
             Self::Instance(p) => unlink_opt(&mut p.classifier),
             Self::Message(p) => unlink_opt(&mut p.operation),
             Self::CombinedFragment(p) => unlink_vec(&mut p.covered),
+            Self::InteractionUse(p) => {
+                let refers = unlink_opt(&mut p.refers_to);
+                unlink_vec(&mut p.covered) || refers
+            }
             Self::ActivityNode(p) => unlink_type(&mut p.type_ref),
             Self::Extend(p) => unlink_vec(&mut p.extension_points),
             Self::Comment(p) => unlink_vec(&mut p.annotated),

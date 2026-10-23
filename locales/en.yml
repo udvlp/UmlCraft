@@ -96,6 +96,9 @@ tool:
   componentInstance: Component instance
   nodeInstance: Node instance
   object: Object
+  interactionUse: Interaction use
+  foundMessage: Found
+  lostMessage: Lost
 diagram:
   class: Class diagram
   useCase: Use case diagram
@@ -152,6 +155,7 @@ prop:
   covered: Covered lifelines
   covered_automatic: None ticked – the fragment covers the lifelines of its messages.
   classifier: Instance of
+  refers_to: Refers to
 message_sort:
   synchronous: synchronous
   asynchronous: asynchronous
@@ -312,3 +316,4 @@ kind:
   componentInstance: Component instance
   nodeInstance: Node instance
   object: Object
+  interactionUse: Interaction use

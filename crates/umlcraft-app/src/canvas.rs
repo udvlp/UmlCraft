@@ -333,11 +333,15 @@ impl DiagramCanvas {
                     .scene
                     .sequence
                     .as_ref()
-                    .filter(|_| node_tool == NodeTool::CombinedFragment)
+                    .filter(|_| {
+                        matches!(node_tool, NodeTool::CombinedFragment | NodeTool::InteractionUse)
+                    })
                     .map(|l| (l.slot_at(p.y), l.lanes_around(p.x)));
                 self.workspace.update(cx, |ws, cx| {
                     match place {
-                        Some((slot, covered)) => ws.create_fragment(slot, covered, origin),
+                        Some((slot, covered)) => {
+                            ws.create_fragment(node_tool, slot, covered, origin)
+                        }
                         None => ws.create_node(node_tool, origin),
                     }
                     ws.tool = Tool::Select;

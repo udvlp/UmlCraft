@@ -184,6 +184,34 @@ fn operations_for(model: &Model, message: Id) -> Vec<Option<Id>> {
         .collect()
 }
 
+/// The lifelines a combined fragment or interaction use covers.
+fn covered_of(kind: &ElementKind) -> Option<&[Id]> {
+    match kind {
+        ElementKind::CombinedFragment(p) => Some(&p.covered),
+        ElementKind::InteractionUse(p) => Some(&p.covered),
+        _ => None,
+    }
+}
+
+fn covered_of_mut(kind: &mut ElementKind) -> Option<&mut Vec<Id>> {
+    match kind {
+        ElementKind::CombinedFragment(p) => Some(&mut p.covered),
+        ElementKind::InteractionUse(p) => Some(&mut p.covered),
+        _ => None,
+    }
+}
+
+/// The interactions an interaction use can refer to, by name.
+fn interactions(model: &Model) -> Vec<Option<Id>> {
+    let mut all: Vec<(&str, Id)> = model
+        .elements()
+        .filter(|e| matches!(e.kind(), ElementKind::Interaction))
+        .map(|e| (e.name(), e.id()))
+        .collect();
+    all.sort_by(|a, b| a.0.cmp(b.0));
+    std::iter::once(None).chain(all.into_iter().map(|(_, id)| Some(id))).collect()
+}
+
 /// The classifiers a lifeline can represent, by name.
 fn classifiers(model: &Model) -> Vec<Option<Id>> {
     let mut all: Vec<(&str, Id)> =
@@ -322,6 +350,7 @@ impl PropertiesPanel {
                 this.apply_shown(cx, move |data| match &mut data.kind {
                     ElementKind::Lifeline(p) => p.represents = target,
                     ElementKind::Instance(p) => p.classifier = target,
+                    ElementKind::InteractionUse(p) => p.refers_to = target,
                     _ => {}
                 });
             },
@@ -464,10 +493,10 @@ impl PropertiesPanel {
             }
             Field::Arguments => {
                 let value = Self::value(&self.arguments, cx);
-                self.apply(id, cx, move |data| {
-                    if let ElementKind::Message(p) = &mut data.kind {
-                        p.arguments = value;
-                    }
+                self.apply(id, cx, move |data| match &mut data.kind {
+                    ElementKind::Message(p) => p.arguments = value,
+                    ElementKind::InteractionUse(p) => p.arguments = value,
+                    _ => {}
                 });
             }
             Field::ReturnValue => {
@@ -613,6 +642,7 @@ impl PropertiesPanel {
         let references = match &data.kind {
             ElementKind::Message(_) => operations_for(model, id),
             ElementKind::Lifeline(_) | ElementKind::Instance(_) => classifiers(model),
+            ElementKind::InteractionUse(_) => interactions(model),
             _ => Vec::new(),
         };
         let reference_labels = reference_items(model, &references);
@@ -660,6 +690,12 @@ impl PropertiesPanel {
                 let ix = references.iter().position(|&o| o == p.operation);
                 choose(&self.operation, ix, Some(reference_labels), window, cx);
                 self.operation_ids = references;
+            }
+            ElementKind::InteractionUse(p) => {
+                set(&self.arguments, p.arguments.clone(), window, cx);
+                let ix = references.iter().position(|r| *r == p.refers_to);
+                choose(&self.represents, ix, Some(reference_labels), window, cx);
+                self.represents_ids = references;
             }
             ElementKind::Lifeline(LifelineProps { represents: classifier })
             | ElementKind::Instance(InstanceProps { classifier, .. }) => {
@@ -1013,7 +1049,18 @@ impl Render for PropertiesPanel {
                     Select::new(&self.represents).small().into_any_element(),
                 ));
             }
-            ElementKind::CombinedFragment(p) => {
+            ElementKind::InteractionUse(_) => {
+                body = body
+                    .child(field(
+                        t!("prop.refers_to").into(),
+                        Select::new(&self.represents).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.arguments").into(),
+                        Input::new(&self.arguments).small().into_any_element(),
+                    ));
+            }
+            ElementKind::CombinedFragment(_) => {
                 body = body
                     .child(field(
                         t!("prop.operator").into(),
@@ -1053,45 +1100,6 @@ impl Render for PropertiesPanel {
                         },
                     ),
                 );
-                // The lifelines of the interaction; none ticked means "as the messages need".
-                let interaction = model.ancestors(id).into_iter().find(|&a| {
-                    model.get(a).is_some_and(|e| matches!(e.kind(), ElementKind::Interaction))
-                });
-                let lifelines: Vec<(Id, String)> = interaction
-                    .into_iter()
-                    .flat_map(|i| model.children(i).iter().copied())
-                    .filter_map(|c| model.get(c))
-                    .filter(|c| matches!(c.kind(), ElementKind::Lifeline(_)))
-                    .map(|c| (c.id(), labels::display_name(c)))
-                    .collect();
-                body = body.child(heading(t!("prop.covered").to_string()));
-                if p.covered.is_empty() {
-                    body = body.child(
-                        div().text_xs().text_color(muted).child(t!("prop.covered_automatic")),
-                    );
-                }
-                for (ix, (lifeline, name)) in lifelines.into_iter().enumerate() {
-                    let workspace = workspace.clone();
-                    body = body.child(
-                        Checkbox::new(("covered", ix))
-                            .label(name)
-                            .checked(p.covered.contains(&lifeline))
-                            .on_click(move |checked: &bool, _, cx| {
-                                let checked = *checked;
-                                workspace.update(cx, |ws, cx| {
-                                    ws.update_element(id, |d| {
-                                        if let ElementKind::CombinedFragment(p) = &mut d.kind {
-                                            p.covered.retain(|&l| l != lifeline);
-                                            if checked {
-                                                p.covered.push(lifeline);
-                                            }
-                                        }
-                                    });
-                                    cx.notify();
-                                });
-                            }),
-                    );
-                }
             }
             ElementKind::InteractionOperand(_) => {
                 let delete = workspace.clone();
@@ -1143,6 +1151,47 @@ impl Render for PropertiesPanel {
                 }
             }
             _ => {}
+        }
+
+        // The lifelines a frame covers; none ticked means "as its messages need".
+        if let Some(covered) = covered_of(&kind) {
+            let interaction = model.ancestors(id).into_iter().find(|&a| {
+                model.get(a).is_some_and(|e| matches!(e.kind(), ElementKind::Interaction))
+            });
+            let lifelines: Vec<(Id, String)> = interaction
+                .into_iter()
+                .flat_map(|i| model.children(i).iter().copied())
+                .filter_map(|c| model.get(c))
+                .filter(|c| matches!(c.kind(), ElementKind::Lifeline(_)))
+                .map(|c| (c.id(), labels::display_name(c)))
+                .collect();
+            body = body.child(heading(t!("prop.covered").to_string()));
+            if covered.is_empty() {
+                body = body
+                    .child(div().text_xs().text_color(muted).child(t!("prop.covered_automatic")));
+            }
+            for (ix, (lifeline, name)) in lifelines.into_iter().enumerate() {
+                let workspace = workspace.clone();
+                body = body.child(
+                    Checkbox::new(("covered", ix))
+                        .label(name)
+                        .checked(covered.contains(&lifeline))
+                        .on_click(move |checked: &bool, _, cx| {
+                            let checked = *checked;
+                            workspace.update(cx, |ws, cx| {
+                                ws.update_element(id, |d| {
+                                    if let Some(covered) = covered_of_mut(&mut d.kind) {
+                                        covered.retain(|&l| l != lifeline);
+                                        if checked {
+                                            covered.push(lifeline);
+                                        }
+                                    }
+                                });
+                                cx.notify();
+                            });
+                        }),
+                );
+            }
         }
 
         let text_label = if matches!(kind, ElementKind::Comment(_)) {

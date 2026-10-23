@@ -6,14 +6,15 @@
 //!   one top line, except lifelines created by a message, whose head sits at that message.
 //! - A message is an edge presentation from the sender's lifeline node to the receiver's.
 //! - A combined fragment is a node presentation; its frame follows from the lifelines it covers
-//!   and from what its operands contain.
+//!   and from what its operands contain. An interaction use ("ref") is a frame of one row.
+//! - Found and lost messages start or end at a dot beside their one lifeline.
 //!
 //! Only messages and fragments shown on the diagram take up space.
 
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    ElementKind, Id, InteractionOperator, MessageSort, Model, Point, Rect, Shape, View,
+    ElementKind, Id, InteractionOperator, MessageGate, MessageSort, Model, Point, Rect, Shape, View,
 };
 
 use crate::scene::{
@@ -43,6 +44,12 @@ const OPERAND_HEADER: f32 = 20.0;
 const EMPTY_OPERAND: f32 = 18.0;
 /// How far a frame reaches beyond the heads of the lifelines it covers.
 const FRAME_MARGIN: f32 = 10.0;
+/// Height of an interaction use's frame.
+const REF_HEIGHT: f32 = 44.0;
+/// Length of a found or lost message, from its lifeline to the dot.
+const GATE_LENGTH: f32 = 90.0;
+/// Radius of the dot at the open end of a found or lost message.
+pub const GATE_DOT: f32 = 4.0;
 
 /// What the sequence layout adds to a scene besides nodes and edges.
 #[derive(Clone, Debug, Default)]
@@ -52,6 +59,8 @@ pub struct SequenceLayout {
     pub activations: Vec<Rect>,
     /// Where lifelines end in a cross, after a destroy message.
     pub destructions: Vec<Point>,
+    /// The dots at the open ends of found and lost messages.
+    pub gates: Vec<Point>,
     /// Gaps where a message or fragment can go, in no particular order.
     pub slots: Vec<Slot>,
     /// Horizontal extent of the lifelines, e.g. for drawing an insertion line.
@@ -111,6 +120,16 @@ pub fn operator_keyword(operator: InteractionOperator) -> &'static str {
         O::Ignore => "ignore",
         O::Consider => "consider",
     }
+}
+
+/// The label of an interaction use: its name, or else the name of the interaction it refers
+/// to, with the arguments in parentheses.
+pub fn interaction_use_text(model: &Model, id: Id) -> String {
+    let Some(e) = model.get(id) else { return String::new() };
+    let ElementKind::InteractionUse(p) = e.kind() else { return e.name().to_owned() };
+    let referred = p.refers_to.and_then(|r| model.get(r)).map(|r| r.name());
+    let name = if e.name().is_empty() { referred.unwrap_or_default() } else { e.name() };
+    if p.arguments.trim().is_empty() { name.to_owned() } else { format!("{name}({})", p.arguments) }
 }
 
 /// The label of a message: `name(arguments)` for calls, the return value for replies.
@@ -241,10 +260,9 @@ pub(crate) fn arrange(
             });
             return true;
         }
-        let is_fragment = n
-            .element
-            .and_then(|e| model.get(e))
-            .is_some_and(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)));
+        let is_fragment = n.element.and_then(|e| model.get(e)).is_some_and(|e| {
+            matches!(e.kind(), ElementKind::CombinedFragment(_) | ElementKind::InteractionUse(_))
+        });
         match fragments.remove(&n.id) {
             Some(frame) => {
                 *n = frame;
@@ -273,11 +291,21 @@ impl Builder<'_> {
             let Some(e) = model.get(child) else { continue };
             match e.kind() {
                 ElementKind::Message(p) => {
-                    let sort = p.sort;
+                    let (sort, gate) = (p.sort, p.gate);
                     let Some((edge, from, to)) = self.message_edge(child) else { continue };
                     self.slot(container, index);
-                    self.message(child, edge, from, to, sort);
+                    if gate == MessageGate::None {
+                        self.message(child, edge, from, to, sort);
+                    } else {
+                        self.gate_message(child, edge, to, sort, gate);
+                    }
                     walked.lanes.extend([from, to]);
+                }
+                ElementKind::InteractionUse(_) => {
+                    self.slot(container, index);
+                    let inner = self.interaction_use(child);
+                    walked.lanes.extend(inner.lanes);
+                    walked.frames.extend(inner.frames);
                 }
                 ElementKind::CombinedFragment(_) => {
                     self.slot(container, index);
@@ -438,6 +466,158 @@ impl Builder<'_> {
         self.c += if own { 14.0 + SELF_LOOP + 18.0 } else { ROW };
     }
 
+    /// A found message comes from a dot left of `lane`, a lost one goes to a dot right of it.
+    fn gate_message(
+        &mut self,
+        message: Id,
+        edge: Id,
+        lane: Id,
+        sort: MessageSort,
+        gate: MessageGate,
+    ) {
+        let y = self.c + ROW / 2.0;
+        let (start, end, dot) = if gate == MessageGate::Found {
+            if sort == MessageSort::Synchronous {
+                self.push(lane, y);
+            }
+            let end = self.edge_x(lane, false);
+            (end - GATE_LENGTH, end, Point::new(end - GATE_LENGTH, y))
+        } else {
+            if sort == MessageSort::Synchronous {
+                self.return_to(lane, y);
+            }
+            let start = self.edge_x(lane, true);
+            // The arrow ends where the dot begins.
+            (start, start + GATE_LENGTH, Point::new(start + GATE_LENGTH + GATE_DOT, y))
+        };
+        self.touch(lane, y);
+        self.layout.gates.push(dot);
+        let points = vec![Point::new(start, y), Point::new(end, y)];
+        let (line, target_marker) = match sort {
+            MessageSort::Asynchronous => (LineStyle::Solid, EndMarker::OpenArrow),
+            MessageSort::Reply | MessageSort::Create => (LineStyle::Dashed, EndMarker::OpenArrow),
+            MessageSort::Synchronous | MessageSort::Destroy => {
+                (LineStyle::Solid, EndMarker::FilledArrow)
+            }
+        };
+        let text = message_text(self.model, message);
+        let labels = if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![middle_label(text, points[0], points[1])]
+        };
+        self.messages.push(EdgeShape {
+            id: edge,
+            points,
+            line,
+            source_marker: EndMarker::None,
+            target_marker,
+            labels,
+            fixed: true,
+        });
+        self.c += ROW;
+    }
+
+    /// The lifeline presentations a frame covers: those of `covered`, else `touched`, else all.
+    fn covered_lanes(&self, covered: &[Id], touched: &HashSet<Id>) -> Vec<Id> {
+        let mut lanes: Vec<Id> = self
+            .lanes
+            .iter()
+            .filter(|(_, l)| covered.contains(&l.lifeline))
+            .map(|(&p, _)| p)
+            .collect();
+        if lanes.is_empty() {
+            lanes = touched.iter().copied().collect();
+        }
+        if lanes.is_empty() {
+            lanes = self.lanes.keys().copied().collect();
+        }
+        lanes
+    }
+
+    /// Left and right edge of a frame around `lanes` and the frames inside it.
+    fn frame_sides(&self, lanes: &[Id], inner: &[Rect]) -> (f32, f32) {
+        let heads = lanes.iter().map(|l| self.lanes[l].head);
+        let mut left = heads.clone().map(|h| h.x - FRAME_MARGIN).fold(f32::MAX, f32::min);
+        let mut right = heads.map(|h| h.right() + FRAME_MARGIN).fold(f32::MIN, f32::max);
+        for frame in inner {
+            left = left.min(frame.x - 8.0);
+            right = right.max(frame.right() + 8.0);
+        }
+        if left > right {
+            // No lifelines on the diagram at all.
+            (left, right) = (40.0, 200.0);
+        }
+        (left, right)
+    }
+
+    /// The tab at the top left of a frame, with its keyword.
+    fn frame_tab(&self, keyword: &str, left: f32, top: f32, element: Id) -> (Rect, Row) {
+        let tab = Rect::new(left, top, self.measure.width(keyword, 11.0, true) + 18.0, 18.0);
+        let row = Row {
+            text: keyword.to_owned(),
+            rect: Rect::new(tab.x + 6.0, tab.y + 2.0, tab.width - 12.0, 14.0),
+            size: 11.0,
+            bold: true,
+            italic: false,
+            underline: false,
+            align: LabelAlign::Left,
+            role: RowRole::Stereotype,
+            element: Some(element),
+        };
+        (tab, row)
+    }
+
+    /// A "ref" frame across the lifelines it covers, one row high. Not shown, it takes no
+    /// space.
+    fn interaction_use(&mut self, id: Id) -> Walked {
+        let Some(presentation) =
+            self.view.presentations_of(id).find(|p| !p.is_edge()).map(|p| p.id)
+        else {
+            return Walked::default();
+        };
+        let covered = match self.model.get(id).map(|e| e.kind()) {
+            Some(ElementKind::InteractionUse(p)) => p.covered.clone(),
+            _ => Vec::new(),
+        };
+        let lanes = self.covered_lanes(&covered, &HashSet::new());
+        let (left, right) = self.frame_sides(&lanes, &[]);
+        let top = self.c + 6.0;
+        let text = interaction_use_text(self.model, id);
+        let (tab, keyword) = self.frame_tab("ref", left, top, id);
+        let right = right.max(left + tab.width + self.measure.width(&text, 12.0, false) + 30.0);
+        let frame = Rect::new(left, top, right - left, REF_HEIGHT);
+        self.c = frame.bottom() + 10.0;
+        let h = crate::scene::line_height(12.0);
+        let name = Row {
+            text,
+            rect: Rect::new(
+                left,
+                top + tab.height + (REF_HEIGHT - tab.height - h) / 2.0,
+                frame.width,
+                h,
+            ),
+            size: 12.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            align: LabelAlign::Center,
+            role: RowRole::Name,
+            element: Some(id),
+        };
+        self.fragments.insert(
+            presentation,
+            NodeShape {
+                id: presentation,
+                element: Some(id),
+                rect: frame,
+                figure: Figure::Fragment { tab, separators: Vec::new() },
+                rows: vec![keyword, name],
+            },
+        );
+        Walked { lanes: lanes.into_iter().collect(), frames: vec![frame] }
+    }
+
     fn fragment(&mut self, fragment: Id) -> Walked {
         let model = self.model;
         let operands: Vec<(Id, String)> = model
@@ -497,46 +677,12 @@ impl Builder<'_> {
         self.c = bottom + 10.0;
 
         // Covered lifelines as stored, else those its messages touch, else all of them.
-        let mut lanes: Vec<Id> = self
-            .lanes
-            .iter()
-            .filter(|(_, l)| covered.contains(&l.lifeline))
-            .map(|(&p, _)| p)
-            .collect();
-        if lanes.is_empty() {
-            lanes = inside.lanes.iter().copied().collect();
-        }
-        if lanes.is_empty() {
-            lanes = self.lanes.keys().copied().collect();
-        }
-        let heads = lanes.iter().map(|l| self.lanes[l].head);
-        let mut left = heads.clone().map(|h| h.x - FRAME_MARGIN).fold(f32::MAX, f32::min);
-        let mut right = heads.map(|h| h.right() + FRAME_MARGIN).fold(f32::MIN, f32::max);
-        for frame in &inside.frames {
-            left = left.min(frame.x - 8.0);
-            right = right.max(frame.right() + 8.0);
-        }
-        if left > right {
-            // No lifelines on the diagram at all.
-            (left, right) = (40.0, 200.0);
-        }
-
-        let keyword = operator_keyword(operator);
-        let tab_w = self.measure.width(keyword, 11.0, true) + 18.0;
-        let right = right.max(left + tab_w + 40.0);
+        let lanes = self.covered_lanes(&covered, &inside.lanes);
+        let (left, right) = self.frame_sides(&lanes, &inside.frames);
+        let (tab, keyword) = self.frame_tab(operator_keyword(operator), left, top, fragment);
+        let right = right.max(left + tab.width + 40.0);
         let frame = Rect::new(left, top, right - left, bottom - top);
-        let tab = Rect::new(left, top, tab_w, 18.0);
-        let mut rows = vec![Row {
-            text: keyword.to_owned(),
-            rect: Rect::new(tab.x + 6.0, tab.y + 2.0, tab.width - 12.0, 14.0),
-            size: 11.0,
-            bold: true,
-            italic: false,
-            underline: false,
-            align: LabelAlign::Left,
-            role: RowRole::Stereotype,
-            element: Some(fragment),
-        }];
+        let mut rows = vec![keyword];
         for (operand, guard, y) in guards {
             let text = if guard.trim().is_empty() { String::new() } else { format!("[{guard}]") };
             let width = (self.measure.width(&text, 11.0, false) + 4.0).max(40.0);
@@ -569,9 +715,9 @@ impl Builder<'_> {
 #[cfg(test)]
 mod tests {
     use umlcraft_model::sample::order_system;
-    use umlcraft_model::{Document, ElementKind, Id, MessageSort};
+    use umlcraft_model::{Document, ElementKind, Id, MessageSort, Point};
 
-    use crate::palette::{self, EdgeTool};
+    use crate::palette::{self, EdgeTool, NodeTool};
     use crate::scene::{self, ApproxMeasure, EndMarker, Figure, LineStyle, Preview, Scene};
 
     fn scene_of(doc: &Document, diagram: Id) -> Scene {
@@ -706,5 +852,57 @@ mod tests {
         let between = (layout.lanes[0].center + layout.lanes[1].center) / 2.0;
         assert_eq!(layout.lanes_around(between).len(), 2);
         assert_eq!(layout.lanes_around(-100.0).len(), 2);
+    }
+
+    #[test]
+    fn interaction_uses_and_gate_messages() {
+        let (mut doc, ids) = order_system();
+        let d = ids.sequence_diagram;
+        let interaction = doc.model().get(d).unwrap().owner().unwrap();
+        let scene = scene_of(&doc, d);
+        let lanes: Vec<Id> =
+            scene.sequence.as_ref().unwrap().lanes.iter().map(|l| l.presentation).collect();
+        let (found_lane, lost_lane) = (lanes[1], lanes[0]);
+        doc.edit("add", |tx| {
+            let (use_id, _) = palette::create_fragment(
+                tx,
+                d,
+                NodeTool::InteractionUse,
+                None,
+                Vec::new(),
+                Point::default(),
+            )?;
+            tx.update(use_id, |data| {
+                if let ElementKind::InteractionUse(p) = &mut data.kind {
+                    p.refers_to = Some(interaction);
+                    p.arguments = "2".into();
+                }
+            })?;
+            palette::connect_message(tx, d, EdgeTool::FoundMessage, found_lane, found_lane, None)?;
+            palette::connect_message(tx, d, EdgeTool::LostMessage, lost_lane, lost_lane, None)
+        })
+        .unwrap();
+        doc.model().check().unwrap();
+        let scene = scene_of(&doc, d);
+
+        // The interaction use is a "ref" frame below the last message, named after the
+        // interaction it refers to.
+        let frame = scene
+            .nodes
+            .iter()
+            .find(|n| n.rows.first().is_some_and(|r| r.text == "ref"))
+            .expect("ref frame");
+        assert_eq!(frame.rows[1].text, "Place order(2)");
+        let replies = scene.edges.iter().filter(|e| e.line == LineStyle::Dashed);
+        assert!(replies.map(|e| e.points[0].y).all(|y| y < frame.rect.y));
+
+        // Gate messages end at a dot beside their lifeline: left for found, right for lost.
+        let layout = scene.sequence.as_ref().unwrap();
+        assert_eq!(layout.gates.len(), 2);
+        let center = |p: Id| layout.lanes.iter().find(|l| l.presentation == p).unwrap().center;
+        let found = scene.edges.iter().find(|e| e.points[0].y > frame.rect.bottom()).unwrap();
+        assert!(found.points[0].x < center(found_lane) && found.points[1].x <= center(found_lane));
+        assert_eq!(found.target_marker, EndMarker::FilledArrow);
+        assert!(layout.gates.iter().any(|g| g.x > center(lost_lane) && g.y > found.points[0].y));
     }
 }

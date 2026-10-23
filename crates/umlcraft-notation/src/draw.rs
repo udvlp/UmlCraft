@@ -395,6 +395,13 @@ pub fn sequence(layout: &SequenceLayout) -> Vec<Primitive> {
     let mut result: Vec<Primitive> =
         layout.activations.iter().map(|&bar| frame(bar, Paint::Fill)).collect();
     let d = 8.0;
+    let r = crate::sequence::GATE_DOT;
+    result.extend(layout.gates.iter().map(|&center| Primitive::Ellipse {
+        center,
+        rx: r,
+        ry: r,
+        fill: Paint::Line,
+    }));
     for &p in &layout.destructions {
         for points in
             [vec![p.offset(-d, -d), p.offset(d, d)], vec![p.offset(-d, d), p.offset(d, -d)]]

@@ -96,6 +96,9 @@ tool:
   componentInstance: Komponenteninstanz
   nodeInstance: Knoteninstanz
   object: Objekt
+  interactionUse: Interaktionsverweis
+  foundMessage: Gefunden
+  lostMessage: Verloren
 diagram:
   class: Klassendiagramm
   useCase: Anwendungsfalldiagramm
@@ -152,6 +155,7 @@ prop:
   covered: Umfasste Lebenslinien
   covered_automatic: Keine angekreuzt – das Fragment umfasst die Lebenslinien seiner Nachrichten.
   classifier: Instanz von
+  refers_to: Verweist auf
 message_sort:
   synchronous: synchron
   asynchronous: asynchron
@@ -312,3 +316,4 @@ kind:
   componentInstance: Komponenteninstanz
   nodeInstance: Knoteninstanz
   object: Objekt
+  interactionUse: Interaktionsverweis
