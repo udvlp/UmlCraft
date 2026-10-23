@@ -58,8 +58,14 @@ This completes milestone 1.
   substates, final states, initial, choice, junction, fork, join and history pseudostates, and
   transitions labeled `trigger [guard] / effect`. Imported from and exported to Astah;
   orthogonal regions and internal transitions are not supported yet.
+- **M9** Component and deployment diagrams: components, artifacts and nodes with their icons
+  (nodes as cubes), objects, component and node instances (`name : Type`), dependencies,
+  realizations and associations; nodes take what is deployed on them along. Imported from
+  Astah; Astah's API has no editors for these diagrams, so the export writes them as class
+  diagrams and every instance as an object.
 
-Next: orthogonal regions, moving states into other states.
+Next: composite structure diagrams (ports, parts, connectors), orthogonal regions, moving
+states into other states.
 
 ## Download
 

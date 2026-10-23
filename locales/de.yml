@@ -231,6 +231,11 @@ export_dropped:
   renamed: Wegen leerer oder doppelter Namen umbenannte Elemente
   details: Stereotypen, Eigenschaftswerte oder Dokumentation
   presentation: Diagrammelemente
+  componentDiagram: Komponentendiagramme (als Klassendiagramme exportiert)
+  deploymentDiagram: Verteilungsdiagramme (als Klassendiagramme exportiert)
+  nestedComponent: Komponenten, Artefakte und Knoten in anderen (ins Paket verschoben)
+  instanceKind: Komponenten- und Knoteninstanzen (als Objekte exportiert)
+  instance: Instanzen, die auf keinem Komponenten-, Verteilungs- oder Klassendiagramm stehen
 project:
   untitled: Neues Projekt
 edit:

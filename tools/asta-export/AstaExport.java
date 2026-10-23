@@ -47,6 +47,7 @@ import com.change_vision.jude.api.inf.model.IDiagram;
 import com.change_vision.jude.api.inf.model.IElement;
 import com.change_vision.jude.api.inf.model.IEnumeration;
 import com.change_vision.jude.api.inf.model.IFlow;
+import com.change_vision.jude.api.inf.model.IInstanceSpecification;
 import com.change_vision.jude.api.inf.model.IInteractionOperand;
 import com.change_vision.jude.api.inf.model.ILifeline;
 import com.change_vision.jude.api.inf.model.IMessage;
@@ -61,6 +62,7 @@ import com.change_vision.jude.api.inf.model.ISequenceDiagram;
 import com.change_vision.jude.api.inf.model.IState;
 import com.change_vision.jude.api.inf.model.IStateMachineDiagram;
 import com.change_vision.jude.api.inf.model.ITransition;
+import com.change_vision.jude.api.inf.model.IUsage;
 import com.change_vision.jude.api.inf.model.IUseCase;
 import com.change_vision.jude.api.inf.presentation.ILinkPresentation;
 import com.change_vision.jude.api.inf.presentation.INodePresentation;
@@ -207,6 +209,10 @@ public final class AstaExport {
                 // Astah keeps comments as notes on diagrams only.
                 drop("comment");
             }
+            if ("instance".equals(type(e)) && !created.containsKey(e.get("id"))) {
+                // The API creates instance specifications on class diagrams only.
+                drop("instance");
+            }
         }
     }
 
@@ -221,7 +227,7 @@ public final class AstaExport {
             String type = type(e);
             switch (type) {
                 case "package", "class", "interface", "enumeration", "dataType", "actor", "useCase",
-                        "extensionPoint", "enumerationLiteral" -> {
+                        "extensionPoint", "enumerationLiteral", "component", "artifact", "node" -> {
                     Object made = attempt(child, () -> element(child, type, owner));
                     if (made != null) {
                         created.put(child, made);
@@ -259,7 +265,8 @@ public final class AstaExport {
                     }
                     diagrams.addAll(own.subList(0, Math.min(1, own.size())));
                 }
-                case "comment" -> {
+                // Comments and instances are created with their presentations on diagrams.
+                case "comment", "instance" -> {
                 }
                 default -> drop(type);
             }
@@ -275,6 +282,9 @@ public final class AstaExport {
             case "interface" -> named(id, n -> owner instanceof IPackage p
                 ? basic.createInterface(p, n) : basic.createInterface((IClass) owner, n));
             case "enumeration" -> named(id, n -> basic.createEnumeration(nearestPackage(id), n));
+            case "component" -> named(id, n -> basic.createComponent(nearestPackage(id), n));
+            case "artifact" -> named(id, n -> basic.createArtifact(nearestPackage(id), n));
+            case "node" -> named(id, n -> basic.createNode(nearestPackage(id), n));
             case "actor" -> named(id, n -> useCases.createActor((IPackage) owner, n));
             case "useCase" -> named(id, n -> useCases.createUseCase((IPackage) owner, n));
             case "extensionPoint" -> named(id, n -> useCases.createExtensionPoint((IUseCase) owner, n));
@@ -291,6 +301,10 @@ public final class AstaExport {
         }
         if ("enumeration".equals(type) && !(owner instanceof IPackage)) {
             drop("nestedEnumeration");
+        }
+        if (Set.of("component", "artifact", "node").contains(type) && !(owner instanceof IPackage)) {
+            // The API creates these in packages only.
+            drop("nestedComponent");
         }
         common(id, (IElement) made, Set.of());
         return made;
@@ -439,14 +453,19 @@ public final class AstaExport {
             case "dependency" -> {
                 INamedElement client = named(e.get("client"));
                 INamedElement supplier = named(e.get("supplier"));
+                INamedElement madeClient;
                 if (list(e.get("stereotypes")).contains("use")
                         && client instanceof IClass c && supplier instanceof IClass s) {
-                    made = basic.createUsage(c, s, name);
+                    IUsage usage = basic.createUsage(c, s, name);
+                    madeClient = usage.getClient();
+                    made = usage;
                     implied = Set.of("use");
                 } else {
-                    made = basic.createDependency(supplier, client, name);
+                    IDependency dependency = basic.createDependency(supplier, client, name);
+                    madeClient = dependency.getClient();
+                    made = dependency;
                 }
-                if (((IDependency) made).getClient() != client) {
+                if (madeClient != client) {
                     throw new IllegalStateException("dependency created the wrong way round");
                 }
             }
@@ -521,9 +540,14 @@ public final class AstaExport {
         Object owner = created.get(owners.get(id));
         IDiagram diagram;
         switch (kind) {
-            case "class", "useCase" -> {
+            case "class", "useCase", "component", "deployment" -> {
                 StructureDiagramEditor editor;
-                if ("class".equals(kind)) {
+                if (!"useCase".equals(kind)) {
+                    // The API has no editors for component and deployment diagrams; a class
+                    // diagram shows the same elements.
+                    if (!"class".equals(kind)) {
+                        drop(kind + "Diagram");
+                    }
                     ClassDiagramEditor cd = accessor.getDiagramEditorFactory().getClassDiagramEditor();
                     diagram = (IDiagram) named(id, n -> cd.createClassDiagram((INamedElement) owner, n));
                     editor = cd;
@@ -599,6 +623,8 @@ public final class AstaExport {
             INodePresentation node;
             if ("comment".equals(type)) {
                 node = note(editor, element, at);
+            } else if ("instance".equals(type) && editor instanceof ClassDiagramEditor cd) {
+                node = (INodePresentation) attempt(element, () -> instance(cd, element, at));
             } else if (created.get(element) instanceof IElement model
                     && !(model instanceof IAttribute) && !(model instanceof IOperation)) {
                 node = (INodePresentation) attempt(element, () -> editor.createNodePresentation(model, at));
@@ -610,7 +636,10 @@ public final class AstaExport {
             }
             // Switching the notation resets the size, so the style goes first.
             style(node, p, type);
-            node.setLocation(at);
+            // Instances get their place when they are created and cannot be moved afterwards.
+            if (!"instance".equals(type)) {
+                node.setLocation(at);
+            }
             resize(node, num(r, "width"), num(r, "height"));
             shown.put((String) p.get("id"), node);
         }
@@ -940,6 +969,23 @@ public final class AstaExport {
         if (style != null && style.get("fill") instanceof String f && f.length() >= 7) {
             node.setProperty("fill.color", f.substring(0, 7).toUpperCase());
         }
+    }
+
+    /// An instance specification of its classifier. The API draws every instance as an object, so
+    /// component and node instances lose their kind.
+    private INodePresentation instance(ClassDiagramEditor editor, String id, Point2D at) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        INodePresentation node = editor.createInstanceSpecification(name(e), at);
+        IInstanceSpecification instance = (IInstanceSpecification) node.getModel();
+        if (e.get("classifier") instanceof String classifier && created.get(classifier) instanceof IClass c) {
+            instance.setClassifier(c);
+        }
+        if (!text(e, "instance").isEmpty() && !"object".equals(text(e, "instance"))) {
+            drop("instanceKind");
+        }
+        created.put(id, instance);
+        common(id, instance, Set.of());
+        return node;
     }
 
     private INodePresentation note(BasicDiagramEditor editor, String comment, Point2D at) throws Exception {

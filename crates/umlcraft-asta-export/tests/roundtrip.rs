@@ -153,6 +153,13 @@ fn tree(model: &Model) -> BTreeSet<String> {
                 format!(" entry {:?} do {:?} exit {:?}", p.entry, p.do_activity, p.exit)
             }
             ElementKind::Pseudostate(p) => format!(" {:?}", p.pseudostate),
+            // Astah's API creates every instance as an object; the classifier comes back.
+            ElementKind::Instance(p) => {
+                format!(" : {}", p.classifier.map(|c| name(model, c)).unwrap_or_default())
+            }
+            ElementKind::Component(_) | ElementKind::Artifact(_) | ElementKind::Node(_) => {
+                String::new()
+            }
             ElementKind::StateMachine
             | ElementKind::FinalState
             | ElementKind::Activity
@@ -256,6 +263,9 @@ fn diagram_contents(model: &Model) -> Contents {
         Some(DiagramKind::UseCase),
         Some(DiagramKind::Activity),
         Some(DiagramKind::StateMachine),
+        // These come back as class diagrams, which the lines do not tell apart.
+        Some(DiagramKind::Component),
+        Some(DiagramKind::Deployment),
     ];
     for d in model.elements().filter(|e| kinds.contains(&e.kind().as_diagram())) {
         let scene = scene::build(model, d.id(), &Preview::default(), &ApproxMeasure);
@@ -393,8 +403,11 @@ fn round_trip_through_astah() {
     let expected_shown = diagram_contents(original);
     pretty_assertions::assert_eq!(shown.lines, expected_shown.lines);
     // Astah keeps UmlCraft's sizes, but may grow a node to fit its content (a use case with
-    // extension points, for example).
+    // extension points, for example). Instances it sizes by itself.
     for (node, (width, height)) in expected_shown.sizes {
+        if node.contains(": instance ") {
+            continue;
+        }
         let (w, h) = shown.sizes[&node];
         assert!(
             (w - width).abs() < 0.5 && h > height - 0.5,

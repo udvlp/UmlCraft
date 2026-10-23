@@ -231,6 +231,11 @@ export_dropped:
   renamed: Elements renamed because of empty or duplicate names
   details: Stereotypes, tagged values or documentation
   presentation: Diagram shapes
+  componentDiagram: Component diagrams (exported as class diagrams)
+  deploymentDiagram: Deployment diagrams (exported as class diagrams)
+  nestedComponent: Components, artifacts and nodes inside others (moved to the package)
+  instanceKind: Component and node instances (exported as objects)
+  instance: Instances not shown on a component, deployment or class diagram
 project:
   untitled: New project
 edit:

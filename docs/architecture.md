@@ -159,6 +159,13 @@ through its official API (`astah-api.jar`):
   tells them apart by their flows. Unnamed control nodes get Astah-like default names
   (`InitialNode0`), which the import drops again, together with Astah's own (`ForkNode1`) and the
   default dimension (`Dimension0`).
+- Component and deployment diagrams: the API creates components, artifacts and nodes
+  (`createComponent`, `createArtifact`, `createNode`, in packages only) but has no editors for
+  these diagrams. They are exported as class diagrams, which show the same elements; instance
+  specifications exist only there (`createInstanceSpecification`), always as objects, placed
+  when created (they cannot be moved) and sized by Astah. UmlCraft's class diagrams accept
+  components, nodes and instances, so such a file comes back intact apart from the diagram
+  kind. A usage (`createUsage`) is an `IUsage`, not an `IDependency`.
 - State machine diagrams: `createStatemachineDiagram` brings its own state machine. States are
   created from the outside in, each composite state at its size before its substates go into it
   (`createState(name, parent, …)`). The API gives a transition leaving a state an event called

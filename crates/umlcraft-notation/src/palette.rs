@@ -500,8 +500,19 @@ impl EdgeTool {
 /// Whether an existing element of `kind` may be shown on a diagram of kind `diagram`.
 pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
     match diagram {
+        // Class diagrams may show components, nodes and instances too (object diagrams); Astah's
+        // API exports component and deployment diagrams as class diagrams.
         DiagramKind::Class => {
-            is_class_like(kind) || matches!(kind, ElementKind::Package | ElementKind::Comment(_))
+            is_class_like(kind)
+                || matches!(
+                    kind,
+                    ElementKind::Package
+                        | ElementKind::Comment(_)
+                        | ElementKind::Component(_)
+                        | ElementKind::Artifact(_)
+                        | ElementKind::Node(_)
+                        | ElementKind::Instance(_)
+                )
         }
         DiagramKind::UseCase => matches!(
             kind,
