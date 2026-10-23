@@ -10,13 +10,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use umlcraft_model::{
     Aggregation, AssociationEnd, AssociationProps, AttributeProps, ClassifierProps,
-    CombinedFragmentProps, CommentProps, DiagramKind, DirectedProps, ElementData, ElementKind,
-    ExtendProps, GeneralizationProps, Id, IncludeProps, InteractionOperandProps,
+    CombinedFragmentProps, CommentProps, DiagramKind, DirectedProps, EdgeLabels, ElementData,
+    ElementKind, ExtendProps, GeneralizationProps, Id, IncludeProps, InteractionOperandProps,
     InteractionOperator, LifelineProps, MessageProps, MessageSort, Model, Multiplicity,
     Navigability, Op, OperationProps, ParameterDirection, ParameterProps, Point, Presentation,
     Rect, Shape, Style, TaggedValue, TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
+use umlcraft_notation::scene::border_point_from;
 
 use crate::jser::{Graph, ObjId, Value};
 
@@ -76,6 +77,30 @@ impl<'g> Reader<'g> {
 
     fn name(&self, id: ObjId) -> String {
         self.text(id, "name")
+    }
+
+    /// The name of a type as Astah shows it. A bound template such as `List<Projekt>` is an
+    /// anonymous classifier whose template binding names the template and the arguments.
+    fn type_name(&self, ty: ObjId, depth: usize) -> String {
+        let name = self.name(ty);
+        let Some(&binding) = self.list(ty, "templateBinding").first() else { return name };
+        if !name.is_empty() || depth > 8 {
+            return name;
+        }
+        let Some(signature) = self.obj(binding, "signature") else { return name };
+        let template = self.obj(signature, "template").map(|t| self.name(t)).unwrap_or_default();
+        let formals = self.list(signature, "ownedParameter");
+        let mut substitutions = self.list(binding, "parameterSubstition");
+        let position = |s: &ObjId| {
+            let formal = self.obj(*s, "formal");
+            formals.iter().position(|f| Some(*f) == formal).unwrap_or(usize::MAX)
+        };
+        substitutions.sort_by_key(position);
+        let arguments: Vec<String> = substitutions
+            .iter()
+            .filter_map(|s| self.list(*s, "actual").first().map(|a| self.type_name(*a, depth + 1)))
+            .collect();
+        format!("{template}<{}>", arguments.join(", "))
     }
 
     fn num(&self, id: ObjId, field: &str) -> Option<f64> {
@@ -155,9 +180,29 @@ impl<'g> Reader<'g> {
     }
 }
 
+/// `actionType` of the action behind a message.
+const CREATE: i64 = 0;
+const REPLY: i64 = 2;
+const DESTROY: i64 = 4;
+
+fn action_type(r: Reader<'_>, message: ObjId) -> Option<i64> {
+    r.g.field(r.obj(message, "action")?, "actionType").and_then(Value::as_i64)
+}
+
 /// Tagged values Astah uses for itself.
 fn is_internal_tag(key: &str) -> bool {
     key.starts_with("jude.") || matches!(key, "hiddenDependency" | "matrix_access_type")
+}
+
+/// Stereotypes such as "Java Class" or "C# Method" mark the target language of code generation;
+/// Astah does not display them.
+fn is_language_marker(stereotype: &str) -> bool {
+    stereotype.split_once(' ').is_some_and(|(language, what)| {
+        matches!(language, "Java" | "C#" | "C++")
+            && !what.is_empty()
+            && !what.contains(' ')
+            && what.starts_with(char::is_uppercase)
+    })
 }
 
 /// Astah marks elements of its ER, data flow and requirement notations with tagged values on
@@ -177,6 +222,10 @@ struct Importer<'g> {
     ids: HashMap<ObjId, Id>,
     skipped: BTreeMap<String, usize>,
     features: Vec<(Id, ObjId)>,
+    /// Features already in `features`.
+    queued: HashSet<ObjId>,
+    /// Calls that have a reply message.
+    replied: HashSet<ObjId>,
     relationships: Vec<(Id, ObjId)>,
     diagrams: Vec<(Id, ObjId)>,
 }
@@ -191,6 +240,8 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         model,
         skipped: BTreeMap::new(),
         features: Vec::new(),
+        queued: HashSet::new(),
+        replied: HashSet::new(),
         relationships: Vec::new(),
         diagrams: Vec::new(),
     };
@@ -202,6 +253,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     for (owner, relationship) in std::mem::take(&mut im.relationships) {
         im.relationship(owner, relationship);
     }
+    im.unowned_diagrams();
     for (owner, diagram) in std::mem::take(&mut im.diagrams) {
         im.diagram(owner, diagram);
     }
@@ -235,7 +287,9 @@ impl Importer<'_> {
             .r
             .stereotypes(object)
             .into_iter()
-            .filter(|s| !s.is_empty() && !hide_stereotypes.contains(&s.as_str()))
+            .filter(|s| {
+                !s.is_empty() && !hide_stereotypes.contains(&s.as_str()) && !is_language_marker(s)
+            })
             .collect();
         data.tagged_values = self
             .r
@@ -300,22 +354,34 @@ impl Importer<'_> {
                     }
                 }
                 "UClassifierImp" | "UInterfaceImp" | "UActorImp" | "UUseCaseImp" => {
-                    // Template parameters are classifiers owned by a template parameter;
-                    // anonymous classifiers bind a template to arguments.
-                    let bound = !self.r.list(child, "templateBinding").is_empty()
-                        && self.r.name(child).is_empty();
-                    // Some classes declare `templateParameter` as a (usually empty) list.
+                    // Anonymous classifiers bind a template to arguments; they live on as type
+                    // names such as `List<Projekt>` (see `Reader::type_name`).
+                    if !self.r.list(child, "templateBinding").is_empty()
+                        && self.r.name(child).is_empty()
+                    {
+                        continue;
+                    }
+                    // Template parameters are classifiers owned by a template parameter. Some
+                    // classes declare `templateParameter` as a (usually empty) list. Astah
+                    // creates them for library types like `List<E>`; UmlCraft has no templates
+                    // and shows their uses as type names, so they are left out silently.
                     let is_parameter = |field| {
                         self.r.obj(child, field).is_some_and(|p| self.r.class(p) != "ArrayList")
                     };
-                    if bound || is_parameter("owningParameter") || is_parameter("templateParameter")
-                    {
-                        self.skip(child);
+                    if is_parameter("owningParameter") || is_parameter("templateParameter") {
                         continue;
                     }
                     let (kind, hide) = self.classifier_kind(child);
                     let data = self.data(child, kind, hide);
                     if let Some(classifier) = self.create(id, data, Some(child)) {
+                        // The feature lists hold the order Astah displays; ownership does not.
+                        for list in ["structuralFeature", "behavioralFeature"] {
+                            for feature in self.r.list(child, list) {
+                                if self.queued.insert(feature) {
+                                    self.features.push((classifier, feature));
+                                }
+                            }
+                        }
                         self.walk(child, classifier);
                     }
                 }
@@ -323,7 +389,12 @@ impl Importer<'_> {
                     let data = self.data(child, ElementKind::ExtensionPoint, &[]);
                     self.create(id, data, Some(child));
                 }
-                "UAttributeImp" | "UOperationImp" => self.features.push((id, child)),
+                // Features listed by their classifier are queued above already.
+                "UAttributeImp" | "UOperationImp" => {
+                    if self.queued.insert(child) {
+                        self.features.push((id, child));
+                    }
+                }
                 // Parameters come with their operation, association ends with their association.
                 "JUParameterImp" | "UParameterImp" | "UAssociationEndImp" => {}
                 "UAssociationImp" | "UGeneralizationImp" | "UDependencyImp" | "UUsageImp"
@@ -331,8 +402,40 @@ impl Importer<'_> {
                     self.relationships.push((id, child));
                 }
                 "UDiagramImp" | "USequenceDiagramImp" => self.diagrams.push((id, child)),
+                // Bindings live on in the bound types' names, see `Reader::type_name`.
+                "UTemplateBindingImp" => {}
+                // Constraints on association ends come with their association.
+                "UConstraintImp"
+                    if self
+                        .r
+                        .list(child, "constrainedElement")
+                        .iter()
+                        .all(|&e| self.r.class(e) == "UAssociationEndImp") => {}
                 _ => self.skip(child),
             }
+        }
+    }
+
+    /// Diagrams outside the ownership tree. A sequence diagram that belongs to a classifier, use
+    /// case or operation is reachable only through its collaboration, which names that element
+    /// as `representedClassifier` or `representedOperation`; an operation's interaction goes to
+    /// its class (see `create`). Others go to the model root.
+    fn unowned_diagrams(&mut self) {
+        let queued: HashSet<ObjId> = self.diagrams.iter().map(|&(_, d)| d).collect();
+        let r = self.r;
+        for diagram in (0..r.g.objects.len()).map(ObjId) {
+            if !matches!(r.class(diagram), "UDiagramImp" | "USequenceDiagramImp")
+                || queued.contains(&diagram)
+            {
+                continue;
+            }
+            let collaboration = r.obj(diagram, "collaboration");
+            let owner = ["representedClassifier", "representedOperation"]
+                .iter()
+                .find_map(|field| collaboration.and_then(|c| r.obj(c, field)))
+                .and_then(|c| self.ids.get(&c).copied())
+                .unwrap_or_else(|| self.model.root());
+            self.diagrams.push((owner, diagram));
         }
     }
 
@@ -364,7 +467,7 @@ impl Importer<'_> {
         if let Some(id) = self.classifier(ty) {
             return Some(TypeRef::Element(id));
         }
-        let name = self.r.name(ty);
+        let name = self.r.type_name(ty, 0);
         (!name.is_empty()).then_some(TypeRef::Text(name))
     }
 
@@ -509,6 +612,12 @@ impl Importer<'_> {
         result.role = r.name(end);
         result.multiplicity = r.multiplicity(end);
         result.visibility = r.visibility(end);
+        result.constraints = r
+            .list(end, "constraint")
+            .into_iter()
+            .map(|c| Some(r.text(c, "body")).filter(|b| !b.is_empty()).unwrap_or_else(|| r.name(c)))
+            .filter(|c| !c.is_empty())
+            .collect();
         result.navigability = match r.text(end, "navigableType").as_str() {
             "navigable" => Navigability::Navigable,
             "non navigable" | "unnavigable" | "not navigable" => Navigability::NonNavigable,
@@ -582,6 +691,14 @@ impl Importer<'_> {
         };
         let messages = top_level(self.r.list(source, "message"));
         let fragments = top_level(self.r.list(source, "fragments"));
+        // A reply points to its call as `activator`. The interaction lists all messages.
+        for message in self.r.list(source, "message") {
+            if action_type(self.r, message) == Some(REPLY)
+                && let Some(call) = self.r.obj(message, "activator")
+            {
+                self.replied.insert(call);
+            }
+        }
         self.interaction_items(interaction, messages, fragments);
         Some(interaction)
     }
@@ -629,15 +746,30 @@ impl Importer<'_> {
             return;
         };
         let action = r.obj(object, "action");
-        let action_type = action.and_then(|a| r.g.field(a, "actionType")).and_then(Value::as_i64);
         let asynchronous = action.is_some_and(|a| r.flag(a, "asynchronous"));
-        let sort = match action_type {
-            Some(0) => MessageSort::Create,
-            Some(2) => MessageSort::Reply,
-            Some(4) => MessageSort::Destroy,
+        let sort = match action_type(r, object) {
+            Some(CREATE) => MessageSort::Create,
+            Some(REPLY) => MessageSort::Reply,
+            Some(DESTROY) => MessageSort::Destroy,
             _ if asynchronous => MessageSort::Asynchronous,
             _ => MessageSort::Synchronous,
         };
+        // Astah keeps the return value on the call; UmlCraft shows it on the reply.
+        let return_value = match sort {
+            MessageSort::Reply => Some(r.text(object, "returnValue"))
+                .filter(|v| !v.is_empty())
+                .or_else(|| r.obj(object, "activator").map(|call| r.text(call, "returnValue")))
+                .unwrap_or_default(),
+            _ if self.replied.contains(&object) => String::new(),
+            _ => r.text(object, "returnValue"),
+        };
+        let arguments = action
+            .map(|a| r.list(a, "actualArgument"))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|argument| r.text(argument, "value"))
+            .collect::<Vec<_>>()
+            .join(", ");
         let operation = action
             .and_then(|a| r.obj(a, "operation"))
             .and_then(|o| self.ids.get(&o).copied())
@@ -649,8 +781,8 @@ impl Importer<'_> {
             from,
             to,
             operation,
-            arguments: String::new(),
-            return_value: r.text(object, "returnValue"),
+            arguments,
+            return_value,
         });
         let data = self.data(object, kind, &[]);
         self.create(container, data, Some(object));
@@ -829,15 +961,25 @@ impl Importer<'_> {
         if let Some(&id) = self.ids.get(&comment) {
             return Some(id);
         }
-        let annotated = self
+        // Astah lists the package a note belongs to among its annotated elements. Packages that
+        // a note really annotates are connected by an anchor, which `edge` adds.
+        let (owners, annotated): (Vec<Id>, Vec<Id>) = self
             .r
             .list(comment, "annotatedElement")
             .iter()
             .filter_map(|a| self.ids.get(a).copied())
-            .collect();
+            .partition(|&id| {
+                matches!(
+                    self.model.get(id).map(|e| e.kind()),
+                    Some(ElementKind::Package | ElementKind::Model)
+                )
+            });
         let body = self.r.text(comment, "body");
         let data = self.data(comment, ElementKind::Comment(CommentProps { body, annotated }), &[]);
-        let owner = self.model.get(diagram)?.owner()?;
+        let owner = match owners.first() {
+            Some(&package) => package,
+            None => self.model.get(diagram)?.owner()?,
+        };
         self.create(owner, data, Some(comment))
     }
 
@@ -846,6 +988,8 @@ impl Importer<'_> {
         let ends: Vec<Id> =
             r.list(p, "servers").iter().filter_map(|s| presentation_of.get(s).copied()).collect();
         let [mut source, mut target] = ends[..] else { return };
+        // Astah's "source" end and the A labels belong to the first server.
+        let mut swapped = false;
         let element_of = |presentation: Id| {
             self.model.view(diagram).and_then(|v| v.get(presentation)).and_then(|p| p.element)
         };
@@ -858,6 +1002,7 @@ impl Importer<'_> {
             };
             if !is_note(source) && is_note(target) {
                 std::mem::swap(&mut source, &mut target);
+                swapped = true;
             }
             if let (Some(comment), Some(annotated)) = (element_of(source), element_of(target)) {
                 self.annotate(comment, annotated);
@@ -876,16 +1021,95 @@ impl Importer<'_> {
                 && element_of(target) == Some(from)
             {
                 std::mem::swap(&mut source, &mut target);
+                swapped = true;
             }
             Some(element)
         };
-        let waypoints =
+        let mut waypoints: Vec<Point> =
             self.r.points(p, "points").into_iter().map(|pt| pt.offset(shift.x, shift.y)).collect();
-        let presentation = Presentation::edge(element, source, target, waypoints);
+        // Astah lists the waypoints from its first server to the second.
+        if swapped {
+            waypoints.reverse();
+        }
+        let mut presentation = Presentation::edge(element, source, target, waypoints.clone());
+        let bounds = |id: Id| self.model.view(diagram)?.get(id)?.bounds();
+        if let (Some(source_rect), Some(target_rect)) = (bounds(source), bounds(target)) {
+            let geometry = EdgeGeometry { source_rect, target_rect, waypoints, shift, swapped };
+            if let Shape::Edge { source_anchor, target_anchor, labels, .. } =
+                &mut presentation.shape
+            {
+                (*source_anchor, *target_anchor, *labels) = self.edge_layout(p, &geometry);
+            }
+        }
         let index = self.model.view(diagram).map_or(0, |v| v.presentations().len());
         // An edge that does not fit its ends is left out, like a presentation of a skipped
         // element.
         let _ = self.model.apply(Op::InsertPresentation { diagram, index, presentation });
+    }
+
+    /// Where Astah's line aims inside its nodes, and where its labels sit. Labels are stored
+    /// relative to the point they belong to, as the scene computes it: the end of the line for
+    /// roles and multiplicities, the middle of the middle segment for the name.
+    fn edge_layout(
+        &self,
+        p: ObjId,
+        g: &EdgeGeometry,
+    ) -> (Option<Point>, Option<Point>, EdgeLabels) {
+        let r = self.r;
+        // The center is where UmlCraft aims anyway; only other anchors are worth keeping.
+        let anchor = |x, y| {
+            Some(Point::new(r.num(p, x)? as f32, r.num(p, y)? as f32))
+                .filter(|a| (a.x - 0.5).abs() > 1e-4 || (a.y - 0.5).abs() > 1e-4)
+        };
+        let (mut source_anchor, mut target_anchor) =
+            (anchor("sourceEndX", "sourceEndY"), anchor("targetEndX", "targetEndY"));
+        if g.swapped {
+            std::mem::swap(&mut source_anchor, &mut target_anchor);
+        }
+        let inside = |rect: Rect, a: Option<Point>| match a {
+            Some(a) => Point::new(rect.x + a.x * rect.width, rect.y + a.y * rect.height),
+            None => rect.center(),
+        };
+        let (from, to) =
+            (inside(g.source_rect, source_anchor), inside(g.target_rect, target_anchor));
+        let start =
+            border_point_from(g.source_rect, from, g.waypoints.first().copied().unwrap_or(to));
+        let end = border_point_from(g.target_rect, to, g.waypoints.last().copied().unwrap_or(from));
+        let mut line = vec![start];
+        line.extend(&g.waypoints);
+        line.push(end);
+        let n = line.len();
+        let (a, b) = (line[n / 2 - 1], line[n / 2]);
+        let middle = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+
+        // The top left corner of a label, relative to `origin`.
+        let label = |field: &str, origin: Point| {
+            let label = r.obj(p, field)?;
+            let at = r.obj(label, "location").and_then(|l| r.point(l))?;
+            let moved = r.obj(label, "localMovement").and_then(|l| r.point(l)).unwrap_or_default();
+            Some(Point::new(
+                at.x + moved.x + g.shift.x - origin.x,
+                at.y + moved.y + g.shift.y - origin.y,
+            ))
+        };
+        let (a_end, b_end) = if g.swapped { (end, start) } else { (start, end) };
+        let (role_a, mult_a) =
+            (label("roleAPresentation", a_end), label("multiplicityAPresentation", a_end));
+        let (role_b, mult_b) =
+            (label("roleBPresentation", b_end), label("multiplicityBPresentation", b_end));
+        let mut labels =
+            EdgeLabels { name: label("namePresentation", middle), ..Default::default() };
+        (
+            labels.source_role,
+            labels.source_multiplicity,
+            labels.target_role,
+            labels.target_multiplicity,
+        ) = if g.swapped {
+            (role_b, mult_b, role_a, mult_a)
+        } else {
+            (role_a, mult_a, role_b, mult_b)
+        };
+        (source_anchor, target_anchor, labels)
     }
 
     fn annotate(&mut self, comment: Id, annotated: Id) {
@@ -898,6 +1122,16 @@ impl Importer<'_> {
             let _ = self.model.apply(Op::UpdateElement { id: comment, data });
         }
     }
+}
+
+/// An edge's ends and waypoints in UmlCraft coordinates, and whether its ends are in the
+/// opposite order of Astah's.
+struct EdgeGeometry {
+    source_rect: Rect,
+    target_rect: Rect,
+    waypoints: Vec<Point>,
+    shift: Point,
+    swapped: bool,
 }
 
 struct NodeData {
@@ -916,5 +1150,20 @@ fn edge_ends(kind: &ElementKind) -> Option<(Id, Id)> {
         ElementKind::Extend(p) => Some((p.extension, p.extended)),
         ElementKind::Message(p) => Some((p.from, p.to)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_markers() {
+        for marker in ["Java Class", "Java Attribute", "Java Method", "C# Class", "C++ Method"] {
+            assert!(is_language_marker(marker), "{marker}");
+        }
+        for stereotype in ["abstract", "Java", "Java class", "Java Class Thing", "entity"] {
+            assert!(!is_language_marker(stereotype), "{stereotype}");
+        }
     }
 }

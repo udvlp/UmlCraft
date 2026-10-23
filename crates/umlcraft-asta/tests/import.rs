@@ -1,9 +1,9 @@
-//! Imports the sample projects that ship with Astah Professional. Skipped when Astah is not
-//! installed.
+//! Imports the sample projects that ship with Astah Professional, and a local reference project
+//! under `docs/`. Each test is skipped when its file is missing.
 
 use std::path::{Path, PathBuf};
 
-use umlcraft_model::{DiagramKind, ElementKind, Model, TypeRef};
+use umlcraft_model::{DiagramKind, ElementKind, Model, Point, Shape, TypeRef};
 
 const ASTAH: &str = r"C:\Program Files\astah-professional";
 
@@ -114,7 +114,11 @@ fn sample_project() {
 
     // Sequence diagrams: lifelines in an interaction, messages in order.
     let sequences = diagrams(model, DiagramKind::Sequence);
-    assert_eq!(sequences.len(), 3);
+    assert_eq!(sequences.len(), 4);
+    // This one belongs to the operation DigitalTimer.update, so its interaction goes to the class.
+    let timer = sequences.iter().find(|d| d.name() == "Sequence Diagram").unwrap();
+    let interaction = model.get(timer.owner().unwrap()).unwrap();
+    assert_eq!(model.get(interaction.owner().unwrap()).unwrap().name(), "DigitalTimer");
     for diagram in &sequences {
         let interaction = model.get(diagram.owner().unwrap()).unwrap();
         assert!(matches!(interaction.kind(), ElementKind::Interaction));
@@ -155,4 +159,78 @@ fn sample_project() {
     // The project survives a round trip through the UmlCraft format.
     let json = umlcraft_format::to_string(model);
     assert_eq!(umlcraft_format::from_str(&json).unwrap(), *model);
+}
+
+/// Ulf's reference class diagram (`docs/` is not in Git); its layout must match Astah's.
+#[test]
+fn reference_class_diagram() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/Klassendiagramm.asta");
+    if !path.exists() {
+        eprintln!("skipped: {} not found", path.display());
+        return;
+    }
+    let imported = umlcraft_asta::import(&path).unwrap();
+    assert!(imported.skipped.is_empty(), "{:?}", imported.skipped);
+    let model = imported.model;
+    model.check().unwrap();
+
+    // {ordered} on the end "aufgaben" of Terminplan – Aufgabe.
+    let ordered = model.elements().find_map(|e| match e.kind() {
+        ElementKind::Association(p) => p.ends.iter().find(|end| !end.constraints.is_empty()),
+        _ => None,
+    });
+    let ordered = ordered.expect("an end with a constraint");
+    assert_eq!(
+        (ordered.role.as_str(), &ordered.constraints[..]),
+        ("aufgaben", &["ordered".to_owned()][..])
+    );
+
+    // Astah's language markers are not stereotypes to show.
+    assert!(model.elements().all(|e| e.data().stereotypes.iter().all(|s| !s.starts_with("Java "))));
+
+    // Members in the order Astah displays them.
+    let projekt = find(&model, "Projekt", |k| matches!(k, ElementKind::Class(_)));
+    let names = |pred: fn(&ElementKind) -> bool| -> Vec<&str> {
+        projekt
+            .children()
+            .iter()
+            .map(|&c| model.get(c).unwrap())
+            .filter(|e| pred(e.kind()))
+            .map(|e| e.name())
+            .collect()
+    };
+    assert_eq!(
+        names(|k| matches!(k, ElementKind::Attribute(_)))[..5],
+        [
+            "projektnr",
+            "beschreibung",
+            "geplanterStundenumfang",
+            "aktuellerStundenumfang",
+            "abgeschlossen"
+        ]
+    );
+    assert_eq!(
+        names(|k| matches!(k, ElementKind::Operation(_))),
+        ["Projekt", "einfuegenAufgabe", "loescheAufgabe", "sucheAufgabe", "ersetzeAufgabe"]
+    );
+
+    // Bound templates become their textual name.
+    let aenderungen = find(&model, "aenderungen", |k| matches!(k, ElementKind::Attribute(_)));
+    let ElementKind::Attribute(a) = aenderungen.kind() else { unreachable!() };
+    assert_eq!(a.type_ref, Some(TypeRef::Text("Stack<Aufgabe>".into())));
+
+    // The edge to "- projekte" aims where Astah's line does, and the role sits where Astah put it.
+    let association = model
+        .elements()
+        .find(|e| matches!(e.kind(), ElementKind::Association(p) if p.ends[1].role == "projekte"))
+        .unwrap();
+    let [diagram] = diagrams(&model, DiagramKind::Class)[..] else { panic!("one class diagram") };
+    let edge = model.view(diagram.id()).unwrap().presentations_of(association.id()).next().unwrap();
+    let Shape::Edge { source_anchor, target_anchor, labels, .. } = &edge.shape else { panic!() };
+    let close = |p: Option<Point>, x: f32, y: f32| {
+        p.is_some_and(|p| (p.x - x).abs() < 0.01 && (p.y - y).abs() < 0.01)
+    };
+    assert!(close(*source_anchor, 0.7604, 0.2432), "{source_anchor:?}");
+    assert!(close(*target_anchor, 0.4867, 0.2453), "{target_anchor:?}");
+    assert!(close(labels.target_role, 9.79, -23.35), "{:?}", labels.target_role);
 }
