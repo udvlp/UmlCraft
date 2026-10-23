@@ -3,7 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
-use umlcraft_model::{ActivityNodeKind, DiagramKind, ElementKind, Model, Point, Shape, TypeRef};
+use umlcraft_model::{
+    ActivityNodeKind, DiagramKind, ElementKind, Model, Point, PseudostateKind, Shape,
+    TransitionProps, TypeRef,
+};
 
 const ASTAH: &str = r"C:\Program Files\astah-professional";
 
@@ -212,6 +215,61 @@ fn sample_activity_diagram() {
     let view = model.view(diagram.id()).unwrap();
     assert_eq!(view.presentations().iter().filter(|p| p.is_edge()).count(), 14);
     assert_eq!(view.presentations().iter().filter(|p| !p.is_edge()).count(), 18);
+}
+
+#[test]
+fn sample_state_machine_diagram() {
+    let Some(path) = astah_file("Sample.asta") else { return };
+    let imported = umlcraft_asta::import(&path).unwrap();
+    let model = &imported.model;
+    let [diagram] = diagrams(model, DiagramKind::StateMachine)[..] else { panic!("one diagram") };
+    let machine = model.get(diagram.owner().unwrap()).unwrap();
+    assert!(matches!(machine.kind(), ElementKind::StateMachine));
+    // The state machine describes the class "Statemachine".
+    assert!(matches!(model.get(machine.owner().unwrap()).unwrap().kind(), ElementKind::Class(_)));
+
+    let state = |name: &str| find(model, name, |k| matches!(k, ElementKind::State(_)));
+    // "Black" and "White" are substates of "OnCourse", with its own initial pseudostate.
+    let on_course = state("OnCourse");
+    for name in ["Black", "White"] {
+        assert_eq!(state(name).owner(), Some(on_course.id()), "{name}");
+    }
+    let initial = on_course
+        .children()
+        .iter()
+        .map(|&c| model.get(c).unwrap())
+        .find(|e| matches!(e.kind(), ElementKind::Pseudostate(p) if p.pseudostate == PseudostateKind::Initial))
+        .expect("initial pseudostate in OnCourse");
+    assert_eq!(initial.name(), "", "Astah's default name is dropped");
+    let ElementKind::State(white) = state("White").kind() else { unreachable!() };
+    assert_eq!(
+        (white.entry.as_str(), white.do_activity.as_str(), white.exit.as_str()),
+        ("start timer", "turn left", "clear timer")
+    );
+
+    let transitions: Vec<&TransitionProps> = model
+        .subtree(machine.id())
+        .iter()
+        .filter_map(|&id| match model.get(id).unwrap().kind() {
+            ElementKind::Transition(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(transitions.len(), 9);
+    assert!(
+        transitions.iter().any(|t| t.label() == "changed lightness [lightness < 40]"),
+        "{:?}",
+        transitions.iter().map(|t| t.label()).collect::<Vec<_>>()
+    );
+    // Names that only repeat the label are dropped.
+    for id in model.subtree(machine.id()) {
+        let e = model.get(id).unwrap();
+        if matches!(e.kind(), ElementKind::Transition(_)) {
+            assert_eq!(e.name(), "");
+        }
+    }
+    let view = model.view(diagram.id()).unwrap();
+    assert_eq!(view.presentations().iter().filter(|p| p.is_edge()).count(), 10, "and an anchor");
 }
 
 /// Ulf's reference class diagram (`.asta` files are not in Git); its layout must match Astah's.

@@ -14,7 +14,8 @@ use umlcraft_model::{
     DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps, GeneralizationProps, Id,
     IncludeProps, InteractionOperandProps, InteractionOperator, LifelineProps, MessageProps,
     MessageSort, Model, Multiplicity, Navigability, Op, OperationProps, ParameterDirection,
-    ParameterProps, Point, Presentation, Rect, Shape, Style, TaggedValue, TypeRef, Visibility,
+    ParameterProps, Point, Presentation, PseudostateKind, Rect, Shape, StateProps, Style,
+    TaggedValue, TransitionProps, TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::scene::border_point_from;
@@ -229,8 +230,9 @@ fn foreign_notation(tags: &[(String, String)]) -> Option<&'static str> {
     })
 }
 
-/// Names Astah gives control nodes by itself, such as `ActivityNode0` or `ForkNode1`, and the
-/// ones UmlCraft's export hands out.
+/// Names Astah gives control nodes, final states and pseudostates by itself, such as
+/// `ActivityNode0`, `ForkNode1` or `InitialPseudostate0`, and the ones UmlCraft's export hands
+/// out.
 fn is_default_node_name(name: &str) -> bool {
     let stem = name.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
     matches!(
@@ -246,6 +248,14 @@ fn is_default_node_name(name: &str) -> bool {
             | "DecisionNode"
             | "MergeNode"
             | "Decision Node & Merge Node"
+            | "InitialPseudostate"
+            | "FinalState"
+            | "ChoicePseudostate"
+            | "JunctionPseudostate"
+            | "ForkPseudostate"
+            | "JoinPseudostate"
+            | "ShallowHistoryPseudostate"
+            | "DeepHistoryPseudostate"
     )
 }
 
@@ -265,8 +275,8 @@ struct Importer<'g> {
     /// Calls that have a reply message.
     replied: HashSet<ObjId>,
     relationships: Vec<(Id, ObjId)>,
-    /// Activity graphs with the element they belong to.
-    activities: Vec<(Id, ObjId)>,
+    /// Activity graphs and state machines with the element they belong to.
+    behaviors: Vec<(Id, ObjId)>,
     diagrams: Vec<(Id, ObjId)>,
 }
 
@@ -283,7 +293,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         queued: HashSet::new(),
         replied: HashSet::new(),
         relationships: Vec::new(),
-        activities: Vec::new(),
+        behaviors: Vec::new(),
         diagrams: Vec::new(),
     };
     let root_id = im.model.root();
@@ -294,8 +304,12 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     for (owner, relationship) in std::mem::take(&mut im.relationships) {
         im.relationship(owner, relationship);
     }
-    for (owner, graph) in std::mem::take(&mut im.activities) {
-        im.activity(owner, graph);
+    for (owner, behavior) in std::mem::take(&mut im.behaviors) {
+        if im.r.class(behavior) == "UStateMachineImp" {
+            im.state_machine(owner, behavior);
+        } else {
+            im.activity(owner, behavior);
+        }
     }
     im.unowned_diagrams();
     for (owner, diagram) in std::mem::take(&mut im.diagrams) {
@@ -387,7 +401,7 @@ impl Importer<'_> {
         // Behaviors are not owned elements; the element they describe lists them.
         for behavior in self.r.list(object, "behavior") {
             match self.r.class(behavior) {
-                "UActivityGraphImp" => self.activities.push((id, behavior)),
+                "UActivityGraphImp" | "UStateMachineImp" => self.behaviors.push((id, behavior)),
                 _ => self.skip(behavior),
             }
         }
@@ -742,6 +756,97 @@ impl Importer<'_> {
         }
     }
 
+    /// Creates a state machine with its states and transitions, and queues its diagram. All
+    /// of Astah's states are composite states; one with substates becomes a composite state in
+    /// UmlCraft as well.
+    fn state_machine(&mut self, owner: Id, machine: ObjId) {
+        let r = self.r;
+        let data = self.data(machine, ElementKind::StateMachine, &[]);
+        let Some(id) = self.create(owner, data, Some(machine)) else { return };
+        if let Some(top) = r.obj(machine, "top") {
+            self.vertices(id, top);
+        }
+        for transition in r.list(machine, "transition") {
+            let end = |field| r.obj(transition, field).and_then(|v| self.ids.get(&v).copied());
+            let (Some(source), Some(target)) = (end("source"), end("target")) else {
+                self.skip(transition);
+                continue;
+            };
+            let named = |field| r.obj(transition, field).map(|o| r.name(o)).unwrap_or_default();
+            let props = TransitionProps {
+                source,
+                target,
+                trigger: named("trigger"),
+                guard: named("guard"),
+                effect: named("effect"),
+            };
+            let mut data = self.data(transition, ElementKind::Transition(props.clone()), &[]);
+            // Astah names a transition after its whole label.
+            let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+            if words(&data.name) == words(&props.label()) {
+                data.name.clear();
+            }
+            self.create(id, data, Some(transition));
+        }
+        if let Some(diagram) = r.obj(machine, "diagram") {
+            self.diagrams.push((id, diagram));
+        }
+    }
+
+    /// The substates of `composite`, owned by `owner`, each with its own substates.
+    fn vertices(&mut self, owner: Id, composite: ObjId) {
+        let r = self.r;
+        for vertex in r.list(composite, "subvertex") {
+            // Orthogonal regions are anonymous composite states; UmlCraft has no regions, so
+            // their states go to the state that holds the regions.
+            if r.flag(composite, "isOrthogonal") && r.name(vertex).is_empty() {
+                *self.skipped.entry("OrthogonalRegion".to_owned()).or_default() += 1;
+                self.vertices(owner, vertex);
+                continue;
+            }
+            let action = |field| r.obj(vertex, field).map(|a| r.name(a)).unwrap_or_default();
+            let kind = match r.class(vertex) {
+                "UCompositeStateImp" | "UStateImp" | "USimpleStateImp" => {
+                    ElementKind::State(StateProps {
+                        entry: action("entry"),
+                        do_activity: action("doActivity"),
+                        exit: action("exit"),
+                    })
+                }
+                "UFinalStateImp" => ElementKind::FinalState,
+                "UPseudostateImp" => {
+                    let pseudostate = match r.text(vertex, "kind").as_str() {
+                        "initial" => PseudostateKind::Initial,
+                        "choice" => PseudostateKind::Choice,
+                        "junction" => PseudostateKind::Junction,
+                        "fork" => PseudostateKind::Fork,
+                        "join" => PseudostateKind::Join,
+                        "shallowHistory" => PseudostateKind::ShallowHistory,
+                        "deepHistory" => PseudostateKind::DeepHistory,
+                        _ => {
+                            self.skip(vertex);
+                            continue;
+                        }
+                    };
+                    ElementKind::pseudostate(pseudostate)
+                }
+                _ => {
+                    self.skip(vertex);
+                    continue;
+                }
+            };
+            let mut data = self.data(vertex, kind, &[]);
+            if !matches!(data.kind, ElementKind::State(_)) && is_default_node_name(&data.name) {
+                data.name.clear();
+            }
+            if !r.list(vertex, "internalTransition").is_empty() {
+                *self.skipped.entry("InternalTransition".to_owned()).or_default() += 1;
+            }
+            let Some(id) = self.create(owner, data, Some(vertex)) else { continue };
+            self.vertices(id, vertex);
+        }
+    }
+
     fn partition(&mut self, owner: Id, partition: ObjId) {
         // Astah puts every set of lanes into a "dimension" of its own, drawn as a header above
         // them. Unless the user named it, it is left out and its lanes take its place.
@@ -791,6 +896,7 @@ impl Importer<'_> {
         let kind = match (self.r.class(object), self.r.text(object, "type").as_str()) {
             ("USequenceDiagramImp", _) => DiagramKind::Sequence,
             ("UActivityDiagramImp", _) => DiagramKind::Activity,
+            ("UStateChartDiagramImp", _) => DiagramKind::StateMachine,
             (_, "Class Diagram") => DiagramKind::Class,
             (_, "UseCase Diagram") => DiagramKind::UseCase,
             _ => {
