@@ -13,10 +13,16 @@ von `.asta`-Dateien (nur lesen).
 - **M2** Editor-Shell: Menüleiste, Diagramm-Tabs, Werkzeugpalette je Diagrammart mit
   Verbindungsregeln, Rahmen- und Mehrfachauswahl, Größe ändern, Ausrichten, Einpassen,
   bearbeitbares Eigenschaftenpanel, Kontextmenü im Modellbaum, Neu/Öffnen/Speichern/Zuletzt
-  geöffnet mit Rückfrage bei ungespeicherten Änderungen.
+  geöffnet mit Rückfrage bei ungespeicherten Änderungen; Kopieren/Ausschneiden/Einfügen (als Kopie
+  oder als dieselben Elemente), Knickpunkte an Kanten, Drag & Drop im Modellbaum und vom Baum auf
+  die Zeichenfläche.
+- **M3** Klassendiagramm: Klassen wachsen mit ihrem Inhalt; Inline-Bearbeitung per Doppelklick
+  mit Parser für `+ name : Typ [0..*] = init` und `+ op(p : T) : R`; Attribute, Operationen und
+  Aufzählungswerte mit Statisch/Abstrakt/Abfrage/Schreibgeschützt; Assoziationsenden mit Rolle,
+  Multiplizität, Navigierbarkeit und Aggregation/Komposition; Selbstassoziationen; Abschnitte
+  ausblenden; Schnittstelle als Kreis („Lollipop“).
 
-Nächste Schritte: Klassen-, Use-Case- und Sequenzdiagramm im Detail (M3–M5) und der `.asta`-Import
-(M6).
+Nächste Schritte: Use-Case- und Sequenzdiagramm im Detail (M4–M5) und der `.asta`-Import (M6).
 
 ## Bauen und starten
 

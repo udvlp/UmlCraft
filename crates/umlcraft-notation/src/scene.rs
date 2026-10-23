@@ -1,48 +1,104 @@
-//! Turns a diagram view into simple drawable shapes in logical coordinates.
+//! Turns a diagram view into drawable shapes in logical coordinates. The scene also carries the
+//! layout of every text row, so painting, hit testing and inline editing agree on positions.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
     Aggregation, ElementKind, Id, MessageSort, Model, Navigability, Point, Presentation, Rect,
-    Shape, TypeRef, Visibility,
+    Shape, Style,
 };
+
+use crate::member::member_text;
+
+/// Measures text, so nodes can grow with their content. The app measures with the real font;
+/// [`ApproxMeasure`] is good enough for tests and headless use.
+pub trait TextMeasure {
+    fn width(&self, text: &str, font_size: f32, bold: bool) -> f32;
+}
+
+pub struct ApproxMeasure;
+
+impl TextMeasure for ApproxMeasure {
+    fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        text.chars().count() as f32 * font_size * if bold { 0.62 } else { 0.55 }
+    }
+}
 
 pub struct Scene {
     pub nodes: Vec<NodeShape>,
     pub edges: Vec<EdgeShape>,
 }
 
-pub struct NodeShape {
-    pub id: Id,
-    pub rect: Rect,
-    pub figure: Figure,
+impl Scene {
+    pub fn empty() -> Self {
+        Self { nodes: Vec::new(), edges: Vec::new() }
+    }
+
+    pub fn node(&self, id: Id) -> Option<&NodeShape> {
+        self.nodes.iter().find(|n| n.id == id)
+    }
+
+    pub fn edge(&self, id: Id) -> Option<&EdgeShape> {
+        self.edges.iter().find(|e| e.id == id)
+    }
+
+    /// Bounding box of all nodes as drawn.
+    pub fn bounds(&self) -> Option<Rect> {
+        self.nodes.iter().map(|n| n.rect).reduce(|a, b| a.union(&b))
+    }
 }
 
+pub struct NodeShape {
+    pub id: Id,
+    pub element: Option<Id>,
+    /// Bounds as drawn: the stored bounds, grown to fit the content.
+    pub rect: Rect,
+    pub figure: Figure,
+    pub rows: Vec<Row>,
+}
+
+/// The outline of a node; its texts are in [`NodeShape::rows`].
 pub enum Figure {
+    /// Box with compartment separators at the given y positions.
     Classifier {
-        stereotype: Option<String>,
-        name: String,
-        is_abstract: bool,
-        compartments: Vec<Vec<String>>,
+        separators: Vec<f32>,
     },
+    /// Interface drawn as a small circle.
+    Lollipop,
     Package {
-        name: String,
+        tab: Rect,
     },
-    Actor {
-        name: String,
-    },
-    UseCase {
-        name: String,
-    },
+    Actor,
+    UseCase,
     Lifeline {
-        header: String,
+        head: Rect,
     },
-    Note {
-        text: String,
-    },
-    Other {
-        name: String,
-    },
+    Note,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowRole {
+    Stereotype,
+    /// The node element's name (or a note's text).
+    Name,
+    /// A member element (attribute, operation, literal).
+    Member,
+}
+
+/// One line of text inside or below a node.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    pub text: String,
+    pub rect: Rect,
+    pub size: f32,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub align: LabelAlign,
+    pub role: RowRole,
+    /// Element this row edits: the node's element for names, the member for members.
+    pub element: Option<Id>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -63,12 +119,63 @@ pub enum EndMarker {
 
 pub struct EdgeShape {
     pub id: Id,
-    /// Polyline from the source border to the target border.
+    /// Polyline from the source border through the waypoints to the target border.
     pub points: Vec<Point>,
     pub line: LineStyle,
     pub source_marker: EndMarker,
     pub target_marker: EndMarker,
     pub labels: Vec<EdgeLabel>,
+}
+
+/// A grip on a selected edge: an existing waypoint, or the middle of a segment where dragging
+/// inserts a new waypoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgeHandle {
+    Waypoint(usize),
+    Insert(usize),
+}
+
+impl EdgeShape {
+    pub fn waypoints(&self) -> &[Point] {
+        &self.points[1..self.points.len() - 1]
+    }
+
+    /// Grips in drawing order: waypoints first, then segment middles.
+    pub fn handles(&self) -> Vec<(EdgeHandle, Point)> {
+        let waypoints =
+            self.waypoints().iter().enumerate().map(|(i, &p)| (EdgeHandle::Waypoint(i), p));
+        let inserts = self.points.windows(2).enumerate().map(|(i, w)| {
+            (EdgeHandle::Insert(i), Point::new((w[0].x + w[1].x) / 2.0, (w[0].y + w[1].y) / 2.0))
+        });
+        waypoints.chain(inserts).collect()
+    }
+
+    pub fn handle_at(&self, p: Point, tolerance: f32) -> Option<EdgeHandle> {
+        self.handles()
+            .into_iter()
+            .find(|(_, hp)| (hp.x - p.x).abs() <= tolerance && (hp.y - p.y).abs() <= tolerance)
+            .map(|(h, _)| h)
+    }
+}
+
+/// Waypoints after dragging `handle` to `to`.
+pub fn drag_waypoint(waypoints: &[Point], handle: EdgeHandle, to: Point) -> Vec<Point> {
+    let mut result = waypoints.to_vec();
+    match handle {
+        EdgeHandle::Waypoint(i) if i < result.len() => result[i] = to,
+        EdgeHandle::Insert(i) => result.insert(i.min(result.len()), to),
+        EdgeHandle::Waypoint(_) => {}
+    }
+    result
+}
+
+/// Waypoints of a loop at the top right corner, for edges from a node to itself.
+pub fn self_loop(r: Rect) -> Vec<Point> {
+    vec![
+        Point::new(r.right() + 30.0, r.y + 20.0),
+        Point::new(r.right() + 30.0, r.y - 30.0),
+        Point::new(r.right() - 20.0, r.y - 30.0),
+    ]
 }
 
 /// Height of an edge label line (11 pt text) in logical units.
@@ -90,13 +197,14 @@ pub struct EdgeLabel {
     pub align: LabelAlign,
 }
 
-/// An uncommitted change shown while the user drags: moved nodes and a resized node.
+/// An uncommitted change shown while the user drags.
 #[derive(Clone, Debug, Default)]
 pub struct Preview {
     pub moved: HashSet<Id>,
     pub dx: f32,
     pub dy: f32,
     pub resized: Option<(Id, Rect)>,
+    pub waypoints: Option<(Id, Vec<Point>)>,
 }
 
 impl Preview {
@@ -109,130 +217,385 @@ impl Preview {
     }
 }
 
+fn line_height(size: f32) -> f32 {
+    (size * 1.3).ceil()
+}
+
+/// A row before it is positioned.
+struct Line {
+    text: String,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    role: RowRole,
+    element: Option<Id>,
+}
+
+impl Line {
+    fn new(text: impl Into<String>, size: f32, role: RowRole, element: Option<Id>) -> Self {
+        Self {
+            text: text.into(),
+            size,
+            bold: false,
+            italic: false,
+            underline: false,
+            role,
+            element,
+        }
+    }
+
+    fn width(&self, measure: &dyn TextMeasure) -> f32 {
+        measure.width(&self.text, self.size, self.bold)
+    }
+
+    fn place(self, rect: Rect, align: LabelAlign) -> Row {
+        Row {
+            text: self.text,
+            rect,
+            size: self.size,
+            bold: self.bold,
+            italic: self.italic,
+            underline: self.underline,
+            align,
+            role: self.role,
+            element: self.element,
+        }
+    }
+}
+
 /// Builds the scene of `diagram`, with `preview` applied.
-pub fn build(model: &Model, diagram: Id, preview: &Preview) -> Scene {
-    let Some(view) = model.view(diagram) else {
-        return Scene { nodes: Vec::new(), edges: Vec::new() };
-    };
-    let rect_of = |p: &Presentation| p.bounds().map(|r| preview.rect(p.id, r));
-    let nodes = view
+pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMeasure) -> Scene {
+    let Some(view) = model.view(diagram) else { return Scene::empty() };
+    let mut rects: HashMap<Id, Rect> = HashMap::new();
+    let nodes: Vec<NodeShape> = view
         .presentations()
         .iter()
         .filter_map(|p| {
-            let rect = rect_of(p)?;
-            let element = p.element.and_then(|e| model.get(e));
-            let figure = match element {
-                Some(e) => figure_for(model, e.id()),
-                None => Figure::Other { name: String::new() },
-            };
-            Some(NodeShape { id: p.id, rect, figure })
+            let bounds = preview.rect(p.id, p.bounds()?);
+            let node = layout_node(model, p, bounds, measure);
+            rects.insert(p.id, node.rect);
+            Some(node)
         })
+        .collect();
+
+    let iconic_interfaces: HashSet<Id> = view
+        .presentations()
+        .iter()
+        .filter(|p| p.style.iconic && is_interface(model, p.element))
+        .map(|p| p.id)
         .collect();
     let edges = view
         .presentations()
         .iter()
         .filter_map(|p| {
-            let Shape::Edge { source, target, waypoints } = &p.shape else {
-                return None;
+            let Shape::Edge { source, target, waypoints } = &p.shape else { return None };
+            let (source_rect, target_rect) = (*rects.get(source)?, *rects.get(target)?);
+            let mut points = match &preview.waypoints {
+                Some((id, w)) if *id == p.id => w.clone(),
+                _ => waypoints.clone(),
             };
-            let source_rect = view.get(*source).and_then(rect_of)?;
-            let target_rect = view.get(*target).and_then(rect_of)?;
-            let kind = p.element.and_then(|e| model.get(e)).map(|e| e.kind());
-            Some(edge_for(p.id, kind, source_rect, target_rect, waypoints))
+            if preview.moved.contains(source) && preview.moved.contains(target) {
+                points.iter_mut().for_each(|w| *w = w.offset(preview.dx, preview.dy));
+            }
+            if source == target && points.is_empty() {
+                points = self_loop(source_rect);
+            }
+            let element = p.element.and_then(|e| model.get(e));
+            let label = element.and_then(|e| {
+                let stereotypes = e.data().stereotypes.join(", ");
+                let parts: Vec<String> = [
+                    (!stereotypes.is_empty()).then(|| format!("«{stereotypes}»")),
+                    (!e.name().is_empty()).then(|| e.name().to_owned()),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                (!parts.is_empty()).then(|| parts.join(" "))
+            });
+            let to_lollipop = iconic_interfaces.contains(target);
+            Some(edge_for(
+                p.id,
+                element.map(|e| e.kind()),
+                source_rect,
+                target_rect,
+                &points,
+                label,
+                to_lollipop,
+            ))
         })
         .collect();
     Scene { nodes, edges }
 }
 
-fn figure_for(model: &Model, element: Id) -> Figure {
-    let e = model.get(element).expect("caller checked");
-    let name = e.name().to_owned();
-    let stereotype = e.data().stereotypes.first().map(|s| format!("«{s}»"));
-    let members = |pick: fn(&ElementKind) -> bool| -> Vec<String> {
+fn is_interface(model: &Model, element: Option<Id>) -> bool {
+    element
+        .and_then(|e| model.get(e))
+        .is_some_and(|e| matches!(e.kind(), ElementKind::Interface(_)))
+}
+
+fn layout_node(
+    model: &Model,
+    p: &Presentation,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> NodeShape {
+    let element = p.element.and_then(|e| model.get(e));
+    let (rect, figure, rows) = match element {
+        Some(e) => layout_element(model, e.id(), &p.style, bounds, measure),
+        None => (bounds, Figure::Other, Vec::new()),
+    };
+    NodeShape { id: p.id, element: p.element, rect, figure, rows }
+}
+
+fn layout_element(
+    model: &Model,
+    id: Id,
+    style: &Style,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    let e = model.get(id).expect("caller checked");
+    let name_line = |size: f32, bold: bool| {
+        let mut line = Line::new(e.name(), size, RowRole::Name, Some(id));
+        line.bold = bold;
+        line
+    };
+    match e.kind() {
+        ElementKind::Interface(_) if style.iconic => {
+            let r = Rect::new(bounds.x, bounds.y, 24.0, 24.0);
+            let line = name_line(12.0, false);
+            let w = line.width(measure) + 8.0;
+            let row = line.place(
+                Rect::new(r.center().x - w / 2.0, r.bottom() + 2.0, w, line_height(12.0)),
+                LabelAlign::Center,
+            );
+            (r, Figure::Lollipop, vec![row])
+        }
+        kind if is_boxed_classifier(kind) => layout_classifier(model, id, style, bounds, measure),
+        ElementKind::Package | ElementKind::Model => {
+            let line = name_line(13.0, true);
+            let w = bounds.width.max(line.width(measure) + 20.0);
+            let r = Rect::new(bounds.x, bounds.y, w, bounds.height.max(40.0));
+            let tab = Rect::new(r.x, r.y, (r.width * 0.4).min(80.0), 14.0);
+            let row = line
+                .place(Rect::new(r.x, r.y + 20.0, r.width, line_height(13.0)), LabelAlign::Center);
+            (r, Figure::Package { tab }, vec![row])
+        }
+        ElementKind::Actor(_) => {
+            let r = Rect::new(bounds.x, bounds.y, bounds.width.max(30.0), bounds.height.max(60.0));
+            let line = name_line(12.0, false);
+            let w = line.width(measure).max(r.width) + 8.0;
+            let row = line.place(
+                Rect::new(r.center().x - w / 2.0, r.bottom() + 4.0, w, line_height(12.0)),
+                LabelAlign::Center,
+            );
+            (r, Figure::Actor, vec![row])
+        }
+        ElementKind::UseCase(_) => {
+            let line = name_line(12.0, false);
+            let r = Rect::new(
+                bounds.x,
+                bounds.y,
+                bounds.width.max(line.width(measure) + 30.0),
+                bounds.height.max(40.0),
+            );
+            let h = line_height(12.0);
+            let row =
+                line.place(Rect::new(r.x, r.center().y - h / 2.0, r.width, h), LabelAlign::Center);
+            (r, Figure::UseCase, vec![row])
+        }
+        ElementKind::Lifeline(p) => {
+            let type_name = p.represents.and_then(|t| model.get(t)).map(|t| t.name());
+            let header = match type_name {
+                Some(t) => format!("{} : {t}", e.name()),
+                None => e.name().to_owned(),
+            };
+            let line = Line::new(header, 12.0, RowRole::Name, Some(id));
+            let w = bounds.width.max(line.width(measure) + 16.0);
+            let r = Rect::new(bounds.x, bounds.y, w, bounds.height.max(60.0));
+            let head = Rect::new(r.x, r.y, r.width, 32.0);
+            let h = line_height(12.0);
+            let row = line
+                .place(Rect::new(r.x, head.center().y - h / 2.0, r.width, h), LabelAlign::Center);
+            (r, Figure::Lifeline { head }, vec![row])
+        }
+        ElementKind::Comment(p) => {
+            let lines: Vec<Line> = p
+                .body
+                .split('\n')
+                .map(|l| Line::new(l.trim_end_matches('\r'), 12.0, RowRole::Name, Some(id)))
+                .collect();
+            let h = line_height(12.0);
+            let text_w = lines.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+            let r = Rect::new(
+                bounds.x,
+                bounds.y,
+                bounds.width.max(text_w + 22.0),
+                bounds.height.max(12.0 + h * lines.len() as f32),
+            );
+            let rows = lines
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    l.place(
+                        Rect::new(r.x + 6.0, r.y + 6.0 + h * i as f32, r.width - 22.0, h),
+                        LabelAlign::Left,
+                    )
+                })
+                .collect();
+            (r, Figure::Note, rows)
+        }
+        _ => {
+            let line = name_line(12.0, false);
+            let row = line.place(
+                Rect::new(bounds.x, bounds.y + 6.0, bounds.width, line_height(12.0)),
+                LabelAlign::Center,
+            );
+            (bounds, Figure::Other, vec![row])
+        }
+    }
+}
+
+fn is_boxed_classifier(kind: &ElementKind) -> bool {
+    matches!(
+        kind,
+        ElementKind::Class(_)
+            | ElementKind::Interface(_)
+            | ElementKind::Enumeration(_)
+            | ElementKind::DataType(_)
+    )
+}
+
+fn layout_classifier(
+    model: &Model,
+    id: Id,
+    style: &Style,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    const PAD: f32 = 6.0;
+    let e = model.get(id).expect("caller checked");
+    let kind = e.kind();
+
+    let mut stereotypes: Vec<String> = match kind {
+        ElementKind::Interface(_) => vec!["interface".into()],
+        ElementKind::Enumeration(_) => vec!["enumeration".into()],
+        ElementKind::DataType(_) => vec!["dataType".into()],
+        _ => Vec::new(),
+    };
+    stereotypes.extend(e.data().stereotypes.iter().cloned());
+    let mut header = Vec::new();
+    if !stereotypes.is_empty() {
+        header.push(Line::new(
+            format!("«{}»", stereotypes.join(", ")),
+            11.0,
+            RowRole::Stereotype,
+            Some(id),
+        ));
+    }
+    let mut name = Line::new(e.name(), 13.0, RowRole::Name, Some(id));
+    name.bold = true;
+    name.italic = matches!(kind, ElementKind::Class(p) if p.is_abstract);
+    header.push(name);
+
+    let members = |pick: fn(&ElementKind) -> bool| -> Vec<Line> {
         e.children()
             .iter()
             .filter_map(|&c| model.get(c))
             .filter(|c| pick(c.kind()))
-            .map(|c| member_label(model, c.data().visibility, c.name(), c.kind()))
+            .map(|c| {
+                let mut line =
+                    Line::new(member_text(model, c.id()), 12.0, RowRole::Member, Some(c.id()));
+                match c.kind() {
+                    ElementKind::Attribute(p) => line.underline = p.is_static,
+                    ElementKind::Operation(p) => {
+                        line.underline = p.is_static;
+                        line.italic = p.is_abstract;
+                    }
+                    _ => {}
+                }
+                line
+            })
             .collect()
     };
-    match e.kind() {
-        ElementKind::Class(p) | ElementKind::DataType(p) => Figure::Classifier {
-            stereotype,
-            name,
-            is_abstract: p.is_abstract,
-            compartments: vec![
-                members(|k| matches!(k, ElementKind::Attribute(_))),
-                members(|k| matches!(k, ElementKind::Operation(_))),
-            ],
-        },
-        ElementKind::Interface(_) => Figure::Classifier {
-            stereotype: Some("«interface»".into()),
-            name,
-            is_abstract: false,
-            compartments: vec![members(|k| matches!(k, ElementKind::Operation(_)))],
-        },
-        ElementKind::Enumeration(_) => Figure::Classifier {
-            stereotype: Some("«enumeration»".into()),
-            name,
-            is_abstract: false,
-            compartments: vec![members(|k| matches!(k, ElementKind::EnumerationLiteral))],
-        },
-        ElementKind::Package | ElementKind::Model => Figure::Package { name },
-        ElementKind::Actor(_) => Figure::Actor { name },
-        ElementKind::UseCase(_) => Figure::UseCase { name },
-        ElementKind::Lifeline(p) => {
-            let type_name = p.represents.and_then(|t| model.get(t)).map(|t| t.name());
-            let header = match type_name {
-                Some(t) => format!("{name} : {t}"),
-                None => name,
-            };
-            Figure::Lifeline { header }
-        }
-        ElementKind::Comment(p) => Figure::Note { text: p.body.clone() },
-        _ => Figure::Other { name },
-    }
-}
-
-fn type_label(model: &Model, type_ref: &Option<TypeRef>) -> Option<String> {
-    match type_ref {
-        Some(TypeRef::Element(id)) => model.get(*id).map(|t| t.name().to_owned()),
-        Some(TypeRef::Text(text)) => Some(text.clone()),
-        None => None,
-    }
-}
-
-/// `- name : Type [1..*] = init` resp. `+ op(p : T) : R`.
-pub fn member_label(
-    model: &Model,
-    visibility: Visibility,
-    name: &str,
-    kind: &ElementKind,
-) -> String {
-    let vis = visibility.symbol();
+    let attributes = members(|k| matches!(k, ElementKind::Attribute(_)));
+    let operations = members(|k| matches!(k, ElementKind::Operation(_)));
+    let mut compartments: Vec<Vec<Line>> = Vec::new();
     match kind {
-        ElementKind::Attribute(p) => {
-            let mut s = format!("{vis} {name}");
-            if let Some(t) = type_label(model, &p.type_ref) {
-                s.push_str(&format!(" : {t}"));
+        ElementKind::Enumeration(_) => {
+            compartments.push(members(|k| matches!(k, ElementKind::EnumerationLiteral)));
+            if !attributes.is_empty() && !style.hide_attributes {
+                compartments.push(attributes);
             }
-            if let Some(m) = p.multiplicity {
-                s.push_str(&format!(" [{m}]"));
+            if !operations.is_empty() && !style.hide_operations {
+                compartments.push(operations);
             }
-            if !p.default_value.is_empty() {
-                s.push_str(&format!(" = {}", p.default_value));
-            }
-            s
         }
-        ElementKind::Operation(p) => {
-            let mut s = format!("{vis} {name}()");
-            if let Some(t) = type_label(model, &p.return_type) {
-                s.push_str(&format!(" : {t}"));
+        ElementKind::Interface(_) => {
+            if !attributes.is_empty() && !style.hide_attributes {
+                compartments.push(attributes);
             }
-            s
+            if !style.hide_operations {
+                compartments.push(operations);
+            }
         }
-        _ => name.to_owned(),
+        _ => {
+            if !style.hide_attributes {
+                compartments.push(attributes);
+            }
+            if !style.hide_operations {
+                compartments.push(operations);
+            }
+        }
     }
+
+    let all_widths =
+        header.iter().chain(compartments.iter().flatten()).map(|l| l.width(measure) + 2.0 * PAD);
+    let width = all_widths.fold(60.0, f32::max);
+    let header_h: f32 = 4.0 + header.iter().map(|l| line_height(l.size)).sum::<f32>() + 4.0;
+    let compartments_h: f32 = compartments
+        .iter()
+        .map(|c| (6.0 + c.iter().map(|l| line_height(l.size)).sum::<f32>()).max(8.0))
+        .sum();
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width.max(width),
+        bounds.height.max(header_h + compartments_h),
+    );
+
+    let mut rows = Vec::new();
+    let mut y = r.y + 4.0;
+    for line in header {
+        let h = line_height(line.size);
+        rows.push(line.place(Rect::new(r.x, y, r.width, h), LabelAlign::Center));
+        y += h;
+    }
+    y += 4.0;
+    let mut separators = Vec::new();
+    for compartment in compartments {
+        let top = y;
+        separators.push(top);
+        y += 3.0;
+        for line in compartment {
+            let h = line_height(line.size);
+            rows.push(
+                line.place(Rect::new(r.x + PAD, y, r.width - 2.0 * PAD, h), LabelAlign::Left),
+            );
+            y += h;
+        }
+        y = (y + 3.0).max(top + 8.0);
+    }
+    (r, Figure::Classifier { separators }, rows)
+}
+
+/// The text row under `p` on the topmost node there, e.g. for inline editing.
+pub fn row_at(scene: &Scene, p: Point) -> Option<(&NodeShape, &Row)> {
+    scene.nodes.iter().rev().find_map(|n| {
+        let row = n.rows.iter().find(|r| r.role != RowRole::Stereotype && r.rect.contains(p))?;
+        Some((n, row))
+    })
 }
 
 fn edge_for(
@@ -241,6 +604,8 @@ fn edge_for(
     source: Rect,
     target: Rect,
     waypoints: &[Point],
+    name_label: Option<String>,
+    to_lollipop: bool,
 ) -> EdgeShape {
     let mut points = Vec::with_capacity(waypoints.len() + 2);
     let first_toward = waypoints.first().copied().unwrap_or(target.center());
@@ -257,7 +622,8 @@ fn edge_for(
         target_marker: EndMarker::None,
         labels: Vec::new(),
     };
-    let (mut label, mut source_label, mut target_label) = (None, None, None);
+    let (mut source_label, mut target_label) = (None, None);
+    let mut label = name_label;
     let diamond = |a: Aggregation| match a {
         Aggregation::None => EndMarker::None,
         Aggregation::Shared => EndMarker::HollowDiamond,
@@ -286,6 +652,8 @@ fn edge_for(
             target_label = end_label(&b.role, b.multiplicity);
         }
         Some(ElementKind::Generalization(_)) => edge.target_marker = EndMarker::HollowTriangle,
+        // Realizing an interface drawn as a circle is a plain line ("lollipop").
+        Some(ElementKind::Realization(_)) if to_lollipop => {}
         Some(ElementKind::Realization(_)) => {
             edge.line = LineStyle::Dashed;
             edge.target_marker = EndMarker::HollowTriangle;
@@ -527,7 +895,7 @@ mod tests {
     #[test]
     fn sample_class_diagram_scene() {
         let (doc, ids) = order_system();
-        let scene = build(doc.model(), ids.class_diagram, &Preview::default());
+        let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
         assert_eq!(scene.nodes.len(), 3);
         assert_eq!(scene.edges.len(), 2);
         let generalization = scene
@@ -537,19 +905,115 @@ mod tests {
             .expect("generalization edge");
         // Premium (80,260 160x60) → Customer (80,80 160x90): straight up between the boxes.
         assert_eq!(generalization.points, vec![Point::new(160.0, 260.0), Point::new(160.0, 170.0)]);
-        let customer = scene
-            .nodes
-            .iter()
-            .find(|n| matches!(&n.figure, Figure::Classifier { name, .. } if name == "Customer"))
+        let customer = scene.nodes.iter().find(|n| n.element == Some(ids.customer)).unwrap();
+        let Figure::Classifier { separators } = &customer.figure else { panic!() };
+        assert_eq!(separators.len(), 2, "attributes and operations");
+        let texts: Vec<(&str, RowRole)> =
+            customer.rows.iter().map(|r| (r.text.as_str(), r.role)).collect();
+        assert_eq!(texts, vec![("Customer", RowRole::Name), ("- name : String", RowRole::Member)]);
+        // The stored bounds are big enough, so the box keeps them.
+        assert_eq!(customer.rect, Rect::new(80.0, 80.0, 160.0, 90.0));
+    }
+
+    #[test]
+    fn boxes_grow_with_their_content_and_rows_are_editable() {
+        let (mut doc, ids) = order_system();
+        let customer = ids.customer;
+        doc.edit("grow", |tx| {
+            for i in 0..6 {
+                let name = format!("aVeryLongAttributeName{i}");
+                tx.create(
+                    customer,
+                    umlcraft_model::ElementData::new(name, ElementKind::attribute(None)),
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
+        let node = scene.nodes.iter().find(|n| n.element == Some(customer)).unwrap();
+        assert!(node.rect.width > 160.0 && node.rect.height > 90.0, "{:?}", node.rect);
+        let last = node.rows.last().unwrap();
+        assert!(node.rect.contains_rect(&last.rect));
+        let (hit, row) = row_at(&scene, last.rect.center()).unwrap();
+        assert_eq!(hit.id, node.id);
+        assert_eq!(row.role, RowRole::Member);
+        assert_eq!(row.text, "+ aVeryLongAttributeName5");
+    }
+
+    #[test]
+    fn hidden_compartments_and_lollipops() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let node = doc.model().shown_on(ids.order)[0].1;
+        doc.edit("style", |tx| {
+            tx.update_presentation(d, node, |p| {
+                p.style.hide_attributes = true;
+                p.style.hide_operations = true;
+            })
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let order = scene.node(node).unwrap();
+        assert!(
+            matches!(&order.figure, Figure::Classifier { separators } if separators.is_empty())
+        );
+        assert_eq!(order.rows.len(), 1);
+
+        // An interface drawn as a circle, realized by Order: plain line, no triangle.
+        let (interface, realization) = doc
+            .edit("lollipop", |tx| {
+                let (i, ni) = crate::palette::create_node(
+                    tx,
+                    d,
+                    crate::palette::NodeTool::Interface,
+                    Point::new(600.0, 100.0),
+                    "I",
+                )?;
+                tx.update_presentation(d, ni, |p| p.style.iconic = true)?;
+                let r = crate::palette::connect(
+                    tx,
+                    d,
+                    crate::palette::EdgeTool::Realization,
+                    node,
+                    ni,
+                )?;
+                Ok((i, r))
+            })
             .unwrap();
-        let Figure::Classifier { compartments, .. } = &customer.figure else { unreachable!() };
-        assert_eq!(compartments[0], vec!["- name : String".to_owned()]);
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let circle = scene.nodes.iter().find(|n| n.element == Some(interface)).unwrap();
+        assert!(matches!(circle.figure, Figure::Lollipop));
+        assert_eq!(circle.rect.size(), umlcraft_model::Size::new(24.0, 24.0));
+        let edge = scene.edge(realization).unwrap();
+        assert!(edge.line == LineStyle::Solid && edge.target_marker == EndMarker::None);
+    }
+
+    #[test]
+    fn waypoints_handles_and_previews() {
+        let (doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let edge = scene.edges.iter().find(|e| e.labels.len() == 2).unwrap();
+        assert!(edge.waypoints().is_empty());
+        let handles = edge.handles();
+        assert_eq!(handles.len(), 1, "one segment, one insert grip");
+        let (handle, at) = handles[0];
+        assert_eq!(edge.handle_at(at, 3.0), Some(handle));
+        let waypoints = drag_waypoint(edge.waypoints(), handle, Point::new(300.0, 30.0));
+        assert_eq!(waypoints, vec![Point::new(300.0, 30.0)]);
+        let moved = drag_waypoint(&waypoints, EdgeHandle::Waypoint(0), Point::new(310.0, 20.0));
+        assert_eq!(moved, vec![Point::new(310.0, 20.0)]);
+
+        let preview = Preview { waypoints: Some((edge.id, waypoints)), ..Preview::default() };
+        let scene = build(doc.model(), d, &preview, &ApproxMeasure);
+        assert_eq!(scene.edge(edge.id).unwrap().points.len(), 3);
     }
 
     #[test]
     fn association_end_labels_sit_above_a_horizontal_line() {
         let (doc, ids) = order_system();
-        let scene = build(doc.model(), ids.class_diagram, &Preview::default());
+        let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
         let association = scene.edges.iter().find(|e| e.labels.len() == 2).unwrap();
         // Order (source, right) → Customer (target, left): the line slopes from y ≈ 128.7 to 126.3.
         let pts = &association.points;
@@ -592,8 +1056,8 @@ mod tests {
     fn dragging_moves_node_and_attached_edges() {
         let (doc, ids) = order_system();
         let node = doc.model().shown_on(ids.premium)[0].1;
-        let preview = Preview { moved: HashSet::from([node]), dx: 0.0, dy: 40.0, resized: None };
-        let scene = build(doc.model(), ids.class_diagram, &preview);
+        let preview = Preview { moved: HashSet::from([node]), dy: 40.0, ..Preview::default() };
+        let scene = build(doc.model(), ids.class_diagram, &preview, &ApproxMeasure);
         let moved = scene.nodes.iter().find(|n| n.id == node).unwrap();
         assert_eq!(moved.rect.y, 300.0);
         assert!(hit_test(&scene, Point::new(100.0, 310.0), 4.0) == Some(node));
@@ -617,7 +1081,7 @@ mod tests {
     #[test]
     fn rubber_band_and_alignment() {
         let (doc, ids) = order_system();
-        let scene = build(doc.model(), ids.class_diagram, &Preview::default());
+        let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
         assert_eq!(nodes_in(&scene, Rect::new(0.0, 0.0, 300.0, 400.0)).len(), 2);
         let rects = [Rect::new(0.0, 0.0, 100.0, 50.0), Rect::new(200.0, 80.0, 60.0, 30.0)];
         assert_eq!(align(&rects, Alignment::Right)[1], Rect::new(40.0, 80.0, 60.0, 30.0));

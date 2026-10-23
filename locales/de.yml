@@ -19,6 +19,10 @@ menu:
   delete: Aus dem Modell löschen
   remove_from_diagram: Aus dem Diagramm entfernen
   select_all: Alles auswählen
+  copy: Kopieren
+  cut: Ausschneiden
+  paste: Einfügen (als Kopie)
+  paste_reference: Einfügen (dieselben Elemente)
   align: Ausrichten
   align_left: Links ausrichten
   align_center: Horizontal zentrieren
@@ -65,11 +69,32 @@ prop:
   visibility: Sichtbarkeit
   stereotypes: Stereotypen
   abstract: Abstrakt
+  declaration: Deklaration
+  static: Statisch
+  read_only: Schreibgeschützt
+  query: Abfrage (ändert nichts)
+  end: Ende
+  role: Rolle
+  multiplicity: Multiplizität
+  navigability: Navigierbarkeit
+  aggregation: Aggregation
+  display: Darstellung im Diagramm
+  hide_attributes: Attribute ausblenden
+  hide_operations: Operationen ausblenden
+  iconic: Als Kreis darstellen
   owner: Besitzer
   documentation: Dokumentation
   text: Text
   bounds: Position und Größe
   nothing_selected: Nichts ausgewählt
+navigability:
+  unspecified: nicht festgelegt
+  navigable: navigierbar
+  non_navigable: nicht navigierbar
+aggregation:
+  none: keine
+  shared: Aggregation (◇)
+  composite: Komposition (◆)
 visibility:
   public: öffentlich
   protected: geschützt
@@ -104,6 +129,10 @@ edit:
   delete: Löschen
   remove_from_diagram: Aus Diagramm entfernen
   properties: Eigenschaften ändern
+  waypoints: Linienverlauf ändern
+  show: Im Diagramm zeigen
+  move_element: Im Modell verschieben
+  paste: Einfügen
 kind:
   model: Projekt
   package: Paket

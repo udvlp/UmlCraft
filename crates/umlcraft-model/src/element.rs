@@ -695,6 +695,57 @@ impl ElementKind {
         }
     }
 
+    /// Calls `f` for every reference, allowing it to be changed. Visits the same references,
+    /// in the same order, as [`ElementKind::references`].
+    pub fn for_each_reference_mut(&mut self, mut f: impl FnMut(&mut Id)) {
+        let type_ref = |t: &mut Option<TypeRef>, f: &mut dyn FnMut(&mut Id)| {
+            if let Some(TypeRef::Element(id)) = t {
+                f(id);
+            }
+        };
+        match self {
+            Self::Attribute(p) => type_ref(&mut p.type_ref, &mut f),
+            Self::Operation(p) => type_ref(&mut p.return_type, &mut f),
+            Self::Parameter(p) => type_ref(&mut p.type_ref, &mut f),
+            Self::Lifeline(p) => p.represents.iter_mut().for_each(f),
+            Self::Message(p) => {
+                f(&mut p.from);
+                f(&mut p.to);
+                p.operation.iter_mut().for_each(f);
+            }
+            Self::CombinedFragment(p) => p.covered.iter_mut().for_each(f),
+            Self::Association(p) => p.ends.iter_mut().for_each(|end| f(&mut end.participant)),
+            Self::Generalization(p) => {
+                f(&mut p.specific);
+                f(&mut p.general);
+            }
+            Self::Realization(p) | Self::Dependency(p) => {
+                f(&mut p.client);
+                f(&mut p.supplier);
+            }
+            Self::Include(p) => {
+                f(&mut p.including);
+                f(&mut p.addition);
+            }
+            Self::Extend(p) => {
+                f(&mut p.extension);
+                f(&mut p.extended);
+                p.extension_points.iter_mut().for_each(f);
+            }
+            Self::Comment(p) => p.annotated.iter_mut().for_each(f),
+            _ => {}
+        }
+    }
+
+    /// Replaces every referenced id that `map` knows with its new value.
+    pub fn remap(&mut self, map: &std::collections::HashMap<Id, Id>) {
+        self.for_each_reference_mut(|id| {
+            if let Some(&new) = map.get(id) {
+                *id = new;
+            }
+        });
+    }
+
     /// Whether this element holds a strong reference to `target`.
     pub fn refers_strongly_to(&self, target: Id) -> bool {
         self.references().iter().any(|&(id, role)| id == target && role.is_strong())
@@ -783,6 +834,28 @@ mod tests {
         assert!(kind.unlink(target, "Customer"));
         assert_eq!(kind, ElementKind::attribute(Some(TypeRef::Text("Customer".into()))));
         assert!(!kind.unlink(target, "Customer"));
+    }
+
+    #[test]
+    fn remap_visits_the_same_references() {
+        let (a, b, c) = (Id::from_u128(1), Id::from_u128(2), Id::from_u128(3));
+        let mut kinds = vec![
+            ElementKind::association(a, b),
+            ElementKind::generalization(a, b),
+            ElementKind::attribute(Some(TypeRef::Element(a))),
+            ElementKind::message(MessageSort::Reply, a, b),
+            ElementKind::Comment(CommentProps { body: String::new(), annotated: vec![a, b] }),
+        ];
+        let map = std::collections::HashMap::from([(a, c)]);
+        for kind in &mut kinds {
+            let mut seen = Vec::new();
+            kind.for_each_reference_mut(|id| seen.push(*id));
+            let expected: Vec<Id> = kind.references().into_iter().map(|(id, _)| id).collect();
+            assert_eq!(seen, expected, "{kind:?}");
+            kind.remap(&map);
+            assert!(kind.references().iter().all(|(id, _)| *id != a), "{kind:?}");
+            assert!(kind.references().iter().any(|(id, _)| *id == c), "{kind:?}");
+        }
     }
 
     #[test]

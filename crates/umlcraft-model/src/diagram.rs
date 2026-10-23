@@ -92,6 +92,15 @@ pub struct Style {
     pub stroke: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f32>,
+    /// Classifier boxes: hide the attribute compartment.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_attributes: bool,
+    /// Classifier boxes: hide the operation compartment.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_operations: bool,
+    /// Interfaces: draw as a small circle ("lollipop") instead of a box.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub iconic: bool,
 }
 
 impl Style {

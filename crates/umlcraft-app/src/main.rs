@@ -41,6 +41,10 @@ actions!(
         ToggleTheme,
         ToggleLanguage,
         OpenSample,
+        Copy,
+        Cut,
+        Paste,
+        PasteAsReference,
     ]
 );
 
@@ -88,6 +92,10 @@ fn main() {
             KeyBinding::new("delete", DeleteSelection, Some("Canvas")),
             KeyBinding::new("ctrl-delete", RemoveFromDiagram, Some("Canvas")),
             KeyBinding::new("ctrl-a", SelectAll, Some("Canvas")),
+            KeyBinding::new("ctrl-c", Copy, Some("Canvas")),
+            KeyBinding::new("ctrl-x", Cut, Some("Canvas")),
+            KeyBinding::new("ctrl-v", Paste, Some("Canvas")),
+            KeyBinding::new("ctrl-shift-v", PasteAsReference, Some("Canvas")),
             KeyBinding::new("escape", Cancel, Some("Canvas")),
             KeyBinding::new("ctrl-0", ResetZoom, None),
             KeyBinding::new("ctrl-=", ZoomIn, None),

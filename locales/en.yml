@@ -19,6 +19,10 @@ menu:
   delete: Delete from model
   remove_from_diagram: Remove from diagram
   select_all: Select all
+  copy: Copy
+  cut: Cut
+  paste: Paste (as copy)
+  paste_reference: Paste (same elements)
   align: Align
   align_left: Align left
   align_center: Center horizontally
@@ -65,11 +69,32 @@ prop:
   visibility: Visibility
   stereotypes: Stereotypes
   abstract: Abstract
+  declaration: Declaration
+  static: Static
+  read_only: Read-only
+  query: Query (changes nothing)
+  end: End
+  role: Role
+  multiplicity: Multiplicity
+  navigability: Navigability
+  aggregation: Aggregation
+  display: Display on diagram
+  hide_attributes: Hide attributes
+  hide_operations: Hide operations
+  iconic: Show as circle
   owner: Owner
   documentation: Documentation
   text: Text
   bounds: Position and size
   nothing_selected: Nothing selected
+navigability:
+  unspecified: unspecified
+  navigable: navigable
+  non_navigable: non-navigable
+aggregation:
+  none: none
+  shared: aggregation (◇)
+  composite: composition (◆)
 visibility:
   public: public
   protected: protected
@@ -104,6 +129,10 @@ edit:
   delete: Delete
   remove_from_diagram: Remove from diagram
   properties: Change properties
+  waypoints: Change line route
+  show: Show on diagram
+  move_element: Move in model
+  paste: Paste
 kind:
   model: Project
   package: Package

@@ -19,10 +19,11 @@ use rust_i18n::t;
 use umlcraft_format::FILE_EXTENSION;
 use umlcraft_model::sample::order_system;
 use umlcraft_model::{DiagramKind, Document, ElementData, ElementKind, Id, Model};
+use umlcraft_notation::clipboard::Clip;
 use umlcraft_notation::palette::{self, NodeTool, Tool};
 use umlcraft_notation::scene::Alignment;
 
-use crate::canvas::DiagramCanvas;
+use crate::canvas::{DiagramCanvas, DraggedElement};
 use crate::labels;
 use crate::properties::PropertiesPanel;
 use crate::settings::Settings;
@@ -46,6 +47,9 @@ pub struct MainView {
     tree: Entity<TreeState>,
     menu_bar: Entity<AppMenuBar>,
     settings: Settings,
+    /// Copied content and the diagram it came from.
+    clipboard: Option<(Id, Clip)>,
+    paste_count: u32,
     tree_meta: Rc<HashMap<SharedString, TreeMeta>>,
     collapsed: HashSet<SharedString>,
     tree_revision: Option<(u64, String)>,
@@ -101,6 +105,8 @@ impl MainView {
             tree_revision: None,
             tree_selection: None,
             close_confirmed: false,
+            clipboard: None,
+            paste_count: 0,
             _subscriptions: subscriptions,
         };
         view.sync_from_workspace(window, cx);
@@ -398,6 +404,50 @@ impl MainView {
         self.with_workspace(cx, |ws| ws.align_selection(alignment));
     }
 
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(copied) = self.workspace.read(cx).copy_selection() {
+            self.clipboard = Some(copied);
+            self.paste_count = 0;
+        }
+    }
+
+    fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        self.copy(&Copy, window, cx);
+        self.with_workspace(cx, Workspace::delete_selection);
+    }
+
+    /// Pastes duplicates. In the diagram copied from, each paste lands a bit further down and
+    /// right; elsewhere at the pointer.
+    fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        self.paste_clip(false, window, cx);
+    }
+
+    fn paste_as_reference(
+        &mut self,
+        _: &PasteAsReference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.paste_clip(true, window, cx);
+    }
+
+    fn paste_clip(&mut self, as_reference: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((source, clip)) = self.clipboard.clone() else { return };
+        let Some(origin) = clip.nodes.iter().map(|n| n.bounds).reduce(|a, b| a.union(&b)) else {
+            return;
+        };
+        let same_diagram = self.workspace.read(cx).active_diagram == Some(source);
+        let offset = if same_diagram && !as_reference {
+            self.paste_count += 1;
+            let step = 20.0 * self.paste_count as f32;
+            umlcraft_model::Point::new(step, step)
+        } else {
+            let at = self.canvas.read(cx).paste_position(window);
+            umlcraft_model::Point::new(at.x - origin.x, at.y - origin.y)
+        };
+        self.with_workspace(cx, |ws| ws.paste(&clip, offset, as_reference));
+    }
+
     fn toggle_theme(&mut self, _: &ToggleTheme, window: &mut Window, cx: &mut Context<Self>) {
         let dark = !cx.theme().is_dark();
         Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, Some(window), cx);
@@ -485,26 +535,50 @@ impl MainView {
         let meta = self.tree_meta.clone();
         let menu_meta = self.tree_meta.clone();
         let muted = cx.theme().muted_foreground;
+        let drop_highlight = cx.theme().list_active;
+        let workspace = self.workspace.clone();
         v_flex().size_full().child(panel_header(t!("panel.model"), cx)).child(
             div().flex_1().min_h_0().child(
                 tree(&self.tree, move |ix, entry, selected, _, _| {
                     let item = entry.item();
-                    let kind = meta.get(&item.id).map(|m| m.kind.type_name()).unwrap_or_default();
+                    let meta = meta.get(&item.id);
+                    let kind = meta.map(|m| m.kind.type_name()).unwrap_or_default();
+                    let mut row = div().id(("tree-row", ix)).w_full().child(
+                        h_flex()
+                            .gap_2()
+                            .overflow_hidden()
+                            .child(div().text_sm().child(item.label.clone()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(t!(format!("kind.{kind}")).to_string()),
+                            ),
+                    );
+                    // Every element but the root can be dragged: into another tree item (to
+                    // change its owner) or onto the canvas (to show it there).
+                    if let Some(meta) = meta.filter(|m| !m.is_root) {
+                        let dragged = DraggedElement { id: meta.id, label: item.label.clone() };
+                        row = row.on_drag(dragged, |d, _, _, cx| cx.new(|_| d.clone()));
+                    }
+                    if let Some(target) = meta.map(|m| m.id) {
+                        let workspace = workspace.clone();
+                        row = row
+                            .drag_over::<DraggedElement>(move |style, _, _, _| {
+                                style.bg(drop_highlight)
+                            })
+                            .on_drop(move |d: &DraggedElement, _, cx| {
+                                let id = d.id;
+                                workspace.update(cx, |ws, cx| {
+                                    ws.move_into(id, target);
+                                    cx.notify();
+                                });
+                            });
+                    }
                     ListItem::new(ix)
                         .selected(selected)
                         .pl(px(8.0 + 14.0 * entry.depth() as f32))
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .overflow_hidden()
-                                .child(div().text_sm().child(item.label.clone()))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child(t!(format!("kind.{kind}")).to_string()),
-                                ),
-                        )
+                        .child(row)
                 })
                 .context_menu(move |_, entry, menu, _, _| {
                     match menu_meta.get(&entry.item().id) {
@@ -647,6 +721,7 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::Element(NodeTool::UseCase),
         NewItem::Attribute,
         NewItem::Operation,
+        NewItem::Literal,
     ];
     let mut any = false;
     for item in items.into_iter().filter(|i| i.applies_to(&meta.kind)) {
@@ -738,6 +813,11 @@ fn menus(settings: &Settings) -> Vec<Menu> {
             menu_item("menu.delete", DeleteSelection),
             menu_item("menu.remove_from_diagram", RemoveFromDiagram),
             menu_item("menu.select_all", SelectAll),
+            MenuItem::separator(),
+            menu_item("menu.copy", Copy),
+            menu_item("menu.cut", Cut),
+            menu_item("menu.paste", Paste),
+            menu_item("menu.paste_reference", PasteAsReference),
             MenuItem::separator(),
             MenuItem::submenu(Menu::new(t!("menu.align").to_string()).items([
                 menu_item("menu.align_left", AlignLeft),
@@ -837,6 +917,10 @@ impl Render for MainView {
             .on_action(cx.listener(Self::save_project_as))
             .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::tree_command))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::paste_as_reference))
             .on_action(cx.listener(Self::toggle_theme))
             .on_action(cx.listener(Self::toggle_language))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
@@ -902,7 +986,14 @@ impl Render for MainView {
                                     v_flex()
                                         .size_full()
                                         .child(panel_header(t!("panel.properties"), cx))
-                                        .child(self.properties.clone()),
+                                        .child(
+                                            div()
+                                                .id("properties-scroll")
+                                                .flex_1()
+                                                .min_h_0()
+                                                .overflow_y_scroll()
+                                                .child(self.properties.clone()),
+                                        ),
                                 ),
                         ),
                 ),

@@ -194,6 +194,102 @@ impl EdgeTool {
     }
 }
 
+/// Whether an existing element of `kind` may be shown on a diagram of kind `diagram`.
+pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
+    match diagram {
+        DiagramKind::Class => {
+            is_class_like(kind) || matches!(kind, ElementKind::Package | ElementKind::Comment(_))
+        }
+        DiagramKind::UseCase => matches!(
+            kind,
+            ElementKind::Actor(_) | ElementKind::UseCase(_) | ElementKind::Comment(_)
+        ),
+        DiagramKind::Sequence => {
+            matches!(kind, ElementKind::Lifeline(_) | ElementKind::Comment(_))
+        }
+    }
+}
+
+/// Default node size for showing an existing element.
+pub fn default_size_for(kind: &ElementKind) -> Size {
+    let tool = match kind {
+        ElementKind::Interface(_) => NodeTool::Interface,
+        ElementKind::Enumeration(_) => NodeTool::Enumeration,
+        ElementKind::Package => NodeTool::Package,
+        ElementKind::Comment(_) => NodeTool::Note,
+        ElementKind::Actor(_) => NodeTool::Actor,
+        ElementKind::UseCase(_) => NodeTool::UseCase,
+        ElementKind::Lifeline(_) => NodeTool::Lifeline,
+        _ => NodeTool::Class,
+    };
+    tool.default_size()
+}
+
+/// Shows an existing element on `diagram` at `origin`, together with edges for its binary
+/// relationships to elements already on the diagram. Returns the new node.
+pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) -> Result<Id> {
+    let model = tx.model();
+    let diagram_kind =
+        model.element(diagram)?.kind().as_diagram().ok_or(ModelError::NotADiagram(diagram))?;
+    let kind = model.element(element)?.kind().clone();
+    if !can_show(diagram_kind, &kind) {
+        return Err(ModelError::Invalid(format!(
+            "a {} cannot be shown on this diagram",
+            kind.type_name()
+        )));
+    }
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    if view.presentations_of(element).next().is_some() {
+        return Err(ModelError::Invalid("the element is already on this diagram".into()));
+    }
+    // Relationships connecting the element to something shown, as (relationship, source, target)
+    // with `None` standing for the new node.
+    let mut edges = Vec::new();
+    for e in model.elements().filter(|e| e.kind().is_relationship()) {
+        let ends: Vec<Id> = e
+            .kind()
+            .references()
+            .iter()
+            .filter(|(_, r)| r.is_strong())
+            .map(|(id, _)| *id)
+            .collect();
+        let [a, b] = ends[..] else { continue };
+        if view.presentations_of(e.id()).next().is_some() || (a != element && b != element) {
+            continue;
+        }
+        let end = |id: Id| -> Option<Option<Id>> {
+            if id == element {
+                Some(None)
+            } else {
+                view.presentations_of(id).next().map(|p| Some(p.id))
+            }
+        };
+        if let (Some(source), Some(target)) = (end(a), end(b)) {
+            edges.push((e.id(), source, target));
+        }
+    }
+    let node = tx.add_node(
+        diagram,
+        Some(element),
+        Rect::from_origin_size(origin, default_size_for(&kind)),
+    )?;
+    for (relationship, source, target) in edges {
+        let waypoints = if source == target {
+            crate::scene::self_loop(Rect::from_origin_size(origin, default_size_for(&kind)))
+        } else {
+            Vec::new()
+        };
+        tx.add_edge(
+            diagram,
+            Some(relationship),
+            source.unwrap_or(node),
+            target.unwrap_or(node),
+            waypoints,
+        )?;
+    }
+    Ok(node)
+}
+
 /// The closest element, starting at `start` and walking up the owners, that may own `kind`.
 pub fn owner_for(model: &Model, start: Id, kind: &ElementKind) -> Option<Id> {
     let mut current = Some(start);
@@ -249,7 +345,9 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
     };
     let (s, t) = (element_of(source)?, element_of(target)?);
     let (sk, tk) = (model.element(s)?.kind(), model.element(t)?.kind());
-    if source == target || !tool.accepts(sk, tk, s == t) {
+    // Only associations may loop back to the same node; they get a loop of waypoints.
+    let self_loop = source == target;
+    if (self_loop && tool != EdgeTool::Association) || !tool.accepts(sk, tk, s == t) {
         return Err(ModelError::Invalid(format!(
             "{} cannot connect {} to {}",
             tool.key(),
@@ -263,8 +361,12 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
             let start = model.element(s)?.owner().unwrap_or(model.root());
             let owner = owner_for(model, start, &kind)
                 .ok_or_else(|| ModelError::Invalid(format!("no owner for {}", kind.type_name())))?;
+            let waypoints = match view.get(source).and_then(|p| p.bounds()) {
+                Some(bounds) if self_loop => crate::scene::self_loop(bounds),
+                _ => Vec::new(),
+            };
             let element = tx.create(owner, ElementData::new("", kind))?;
-            tx.add_edge(diagram, Some(element), source, target, Vec::new())
+            tx.add_edge(diagram, Some(element), source, target, waypoints)
         }
         None => {
             // Note anchor: the comment annotates the other element.
@@ -366,6 +468,55 @@ mod tests {
         assert_eq!(model.get(lifeline).unwrap().owner(), Some(interaction));
         let ElementKind::Comment(p) = model.get(note).unwrap().kind() else { panic!() };
         assert_eq!(p.annotated, vec![lifeline]);
+    }
+
+    #[test]
+    fn showing_an_element_brings_its_relationships() {
+        let (mut doc, ids) = order_system();
+        let other = doc
+            .edit("diagram", |tx| {
+                tx.create(
+                    ids.domain,
+                    ElementData::new("Other", ElementKind::diagram(DiagramKind::Class)),
+                )
+            })
+            .unwrap();
+        doc.edit("show", |tx| {
+            show_element(tx, other, ids.customer, Point::new(0.0, 0.0))?;
+            show_element(tx, other, ids.order, Point::new(300.0, 0.0))?;
+            show_element(tx, other, ids.premium, Point::new(0.0, 200.0))
+        })
+        .unwrap();
+        let view = doc.model().view(other).unwrap();
+        assert_eq!(view.presentations().iter().filter(|p| p.is_edge()).count(), 2);
+        // Twice is refused, and so is the wrong diagram kind.
+        assert!(
+            doc.edit("again", |tx| show_element(tx, other, ids.order, Point::default())).is_err()
+        );
+        assert!(
+            doc.edit("wrong", |tx| show_element(
+                tx,
+                ids.use_case_diagram,
+                ids.order,
+                Point::default()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn self_associations_loop() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let node = doc.model().shown_on(ids.customer)[0].1;
+        let edge =
+            doc.edit("loop", |tx| connect(tx, d, EdgeTool::Association, node, node)).unwrap();
+        let p = doc.model().view(d).unwrap().get(edge).unwrap().clone();
+        let umlcraft_model::Shape::Edge { waypoints, .. } = p.shape else { panic!() };
+        assert_eq!(waypoints.len(), 3);
+        assert!(
+            doc.edit("bad", |tx| connect(tx, d, EdgeTool::Generalization, node, node)).is_err()
+        );
     }
 
     #[test]

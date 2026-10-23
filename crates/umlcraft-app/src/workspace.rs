@@ -1,9 +1,13 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use rust_i18n::t;
 use umlcraft_model::{
-    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Point, Rect, Visibility,
+    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Point, Rect, Shape,
+    Style, Visibility,
 };
+use umlcraft_notation::clipboard::{self, Clip};
+use umlcraft_notation::member;
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Alignment};
 
@@ -180,11 +184,117 @@ impl Workspace {
         if nodes.is_empty() || (dx == 0.0 && dy == 0.0) {
             return;
         }
+        // Edges between two moved nodes keep their shape: their waypoints move along.
+        let moved: HashSet<Id> = nodes.iter().map(|&(p, _)| p).collect();
+        let edges: Vec<(Id, Vec<Point>)> = self
+            .doc
+            .model()
+            .view(diagram)
+            .map(|v| {
+                v.presentations()
+                    .iter()
+                    .filter_map(|p| match &p.shape {
+                        Shape::Edge { source, target, waypoints }
+                            if !waypoints.is_empty()
+                                && moved.contains(source)
+                                && moved.contains(target) =>
+                        {
+                            Some((p.id, waypoints.iter().map(|w| w.offset(dx, dy)).collect()))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let label = t!("edit.move").to_string();
         let result = self.doc.edit(label, |tx| {
-            nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b.translate(dx, dy)))
+            nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b.translate(dx, dy)))?;
+            edges.into_iter().try_for_each(|(e, w)| tx.set_waypoints(diagram, e, w))
         });
         self.report(result);
+    }
+
+    /// Changes the display options of one presentation on the active diagram.
+    pub fn update_style(&mut self, presentation: Id, f: impl FnOnce(&mut Style)) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.properties").to_string();
+        let result = self
+            .doc
+            .edit(label, |tx| tx.update_presentation(diagram, presentation, |p| f(&mut p.style)));
+        self.report(result);
+    }
+
+    /// Reports a problem in the status bar.
+    pub fn complain(&mut self, message: impl Into<String>) {
+        self.message = Some(message.into());
+    }
+
+    pub fn set_waypoints(&mut self, edge: Id, waypoints: Vec<Point>) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.waypoints").to_string();
+        let result = self.doc.edit(label, |tx| tx.set_waypoints(diagram, edge, waypoints));
+        self.report(result);
+    }
+
+    /// Applies text typed in place: member declarations are parsed, note texts and names set.
+    pub fn apply_text(&mut self, element: Id, text: &str) {
+        let label = t!("edit.properties").to_string();
+        let is_note = self
+            .doc
+            .model()
+            .get(element)
+            .is_some_and(|e| matches!(e.kind(), ElementKind::Comment(_)));
+        let result = self.doc.edit(label, |tx| {
+            if is_note {
+                tx.update(element, |d| {
+                    if let ElementKind::Comment(p) = &mut d.kind {
+                        p.body = text.to_owned();
+                    }
+                })
+            } else {
+                member::apply_member_text(tx, element, text)
+            }
+        });
+        self.report(result);
+    }
+
+    /// Shows an existing element on the active diagram at `at` and selects it.
+    pub fn show_element(&mut self, element: Id, at: Point) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.show").to_string();
+        let result = self.doc.edit(label, |tx| palette::show_element(tx, diagram, element, at));
+        if let Some(node) = self.report(result) {
+            self.select(vec![node]);
+        }
+    }
+
+    /// Moves an element into another owner (model tree drag and drop).
+    pub fn move_into(&mut self, element: Id, owner: Id) {
+        let model = self.doc.model();
+        if element == owner || model.get(element).and_then(|e| e.owner()) == Some(owner) {
+            return;
+        }
+        let index = model.children(owner).len();
+        let label = t!("edit.move_element").to_string();
+        let result = self.doc.edit(label, |tx| tx.move_element(element, owner, index));
+        self.report(result);
+    }
+
+    /// Copies the selection of the active diagram.
+    pub fn copy_selection(&self) -> Option<(Id, Clip)> {
+        let diagram = self.active_diagram?;
+        clipboard::copy(self.doc.model(), diagram, &self.selection).map(|clip| (diagram, clip))
+    }
+
+    /// Pastes `clip` into the active diagram and selects the result.
+    pub fn paste(&mut self, clip: &Clip, offset: Point, as_reference: bool) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.paste").to_string();
+        let result =
+            self.doc.edit(label, |tx| clipboard::paste(tx, diagram, clip, offset, as_reference));
+        if let Some(created) = self.report(result) {
+            self.select(created);
+        }
     }
 
     pub fn set_bounds(&mut self, presentation: Id, bounds: Rect) {
@@ -271,6 +381,7 @@ pub enum NewItem {
     Element(NodeTool),
     Attribute,
     Operation,
+    Literal,
     Diagram(DiagramKind),
 }
 
@@ -281,6 +392,7 @@ impl NewItem {
             Self::Element(tool) => kind.can_own(&tool.element_kind()),
             Self::Attribute => kind.can_own(&ElementKind::attribute(None)),
             Self::Operation => kind.can_own(&ElementKind::operation(None)),
+            Self::Literal => kind.can_own(&ElementKind::EnumerationLiteral),
             // Sequence diagrams bring their own interaction, which namespaces can own.
             Self::Diagram(DiagramKind::Sequence) => kind.can_own(&ElementKind::Interaction),
             Self::Diagram(d) => kind.can_own(&ElementKind::diagram(d)),
@@ -293,6 +405,7 @@ impl NewItem {
             Self::Element(tool) => format!("kind.{}", tool.key()),
             Self::Attribute => "kind.attribute".into(),
             Self::Operation => "kind.operation".into(),
+            Self::Literal => "kind.enumerationLiteral".into(),
             Self::Diagram(DiagramKind::Class) => "diagram.class".into(),
             Self::Diagram(DiagramKind::UseCase) => "diagram.useCase".into(),
             Self::Diagram(DiagramKind::Sequence) => "diagram.sequence".into(),
@@ -318,6 +431,10 @@ impl Workspace {
                     owner,
                     ElementData::new(name, ElementKind::attribute(None))
                         .with_visibility(Visibility::Private),
+                ),
+                NewItem::Literal => tx.create(
+                    owner,
+                    ElementData::new(name.to_uppercase(), ElementKind::EnumerationLiteral),
                 ),
                 NewItem::Operation => {
                     tx.create(owner, ElementData::new(name, ElementKind::operation(None)))
