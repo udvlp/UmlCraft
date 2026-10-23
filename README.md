@@ -33,9 +33,9 @@ importing `.asta` files (read only).
   file): packages, classes, interfaces, enumerations, actors and use cases with attributes,
   operations, parameters and extension points; associations, generalizations, dependencies,
   realizations, include and extend; class and use case diagrams with positions, sizes, waypoints,
-  notes and colors; sequence diagrams as interactions with lifelines, messages and combined
-  fragments (the diagrams show the lifelines). Anything UmlCraft cannot represent yet is skipped
-  and reported.
+  notes and colors; sequence diagrams with lifelines, messages in their order and combined
+  fragments with operands and guards. Anything UmlCraft cannot represent yet is skipped and
+  reported.
 
 This completes milestone 1. Next: further diagram kinds (activity, state) and image export.
 

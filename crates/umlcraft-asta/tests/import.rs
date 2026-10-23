@@ -132,6 +132,16 @@ fn sample_project() {
     }
     let example = sequences.iter().find(|d| d.name() == "example").unwrap();
     let interaction = model.get(example.owner().unwrap()).unwrap();
+    let view = model.view(example.id()).unwrap();
+    let messages = model
+        .subtree(interaction.id())
+        .into_iter()
+        .filter(|&id| matches!(model.get(id).unwrap().kind(), ElementKind::Message(_)))
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 10);
+    for &message in &messages {
+        assert_eq!(view.presentations_of(message).filter(|p| p.is_edge()).count(), 1);
+    }
     let fragment = interaction
         .children()
         .iter()
@@ -139,6 +149,8 @@ fn sample_project() {
         .find(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)))
         .unwrap();
     assert_eq!(fragment.children().len(), 2, "two operands");
+    // Fragments lie behind the lifelines.
+    assert_eq!(view.presentations()[0].element, Some(fragment.id()));
 
     // The project survives a round trip through the UmlCraft format.
     let json = umlcraft_format::to_string(model);

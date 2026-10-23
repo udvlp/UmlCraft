@@ -720,10 +720,11 @@ impl Importer<'_> {
         for (source, mut node) in placed {
             node.bounds.x += shift.x;
             node.bounds.y += shift.y;
-            let container = node
-                .element
-                .and_then(|e| self.model.get(e))
-                .is_some_and(|e| palette::is_container(e.kind()));
+            // Containers and fragments go to the back, as when they are drawn in UmlCraft.
+            let container = node.element.and_then(|e| self.model.get(e)).is_some_and(|e| {
+                palette::is_container(e.kind())
+                    || matches!(e.kind(), ElementKind::CombinedFragment(_))
+            });
             let presentation = Presentation {
                 id: Id::generate(),
                 element: node.element,
@@ -742,6 +743,32 @@ impl Importer<'_> {
         }
         for p in edges {
             self.edge(diagram, p, &presentation_of, shift);
+        }
+        if kind == DiagramKind::Sequence {
+            self.message_edges(diagram);
+        }
+    }
+
+    /// One edge per message between the nodes of its lifelines. Astah attaches messages to
+    /// activation bars instead, and UmlCraft derives their rows from the interaction's order,
+    /// so the messages are taken from the model rather than from Astah's presentations.
+    fn message_edges(&mut self, diagram: Id) {
+        let Some(interaction) = self.model.get(diagram).and_then(|d| d.owner()) else { return };
+        let node_of = |model: &Model, lifeline: Id| {
+            model.view(diagram)?.presentations_of(lifeline).find(|p| !p.is_edge()).map(|p| p.id)
+        };
+        let mut edges = Vec::new();
+        for id in self.model.subtree(interaction) {
+            if let Some(ElementKind::Message(p)) = self.model.get(id).map(|e| e.kind())
+                && let (Some(source), Some(target)) =
+                    (node_of(&self.model, p.from), node_of(&self.model, p.to))
+            {
+                edges.push(Presentation::edge(Some(id), source, target, Vec::new()));
+            }
+        }
+        for presentation in edges {
+            let index = self.model.view(diagram).map_or(0, |v| v.presentations().len());
+            let _ = self.model.apply(Op::InsertPresentation { diagram, index, presentation });
         }
     }
 
@@ -840,7 +867,7 @@ impl Importer<'_> {
             let Some(&element) = r.obj(p, "model").and_then(|m| self.ids.get(&m)) else {
                 return;
             };
-            // Messages are part of the interaction; sequence diagrams draw them from it.
+            // Message edges are added from the model, see `message_edges`.
             if matches!(self.model.get(element).map(|e| e.kind()), Some(ElementKind::Message(_))) {
                 return;
             }
