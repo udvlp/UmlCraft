@@ -49,6 +49,7 @@ import com.change_vision.jude.api.inf.model.IEnumeration;
 import com.change_vision.jude.api.inf.model.IFlow;
 import com.change_vision.jude.api.inf.model.IInstanceSpecification;
 import com.change_vision.jude.api.inf.model.IInteractionOperand;
+import com.change_vision.jude.api.inf.model.IInteractionUse;
 import com.change_vision.jude.api.inf.model.ILifeline;
 import com.change_vision.jude.api.inf.model.IMessage;
 import com.change_vision.jude.api.inf.model.IModel;
@@ -136,6 +137,10 @@ public final class AstaExport {
     private final Set<String> swappedEnds = new HashSet<>();
     /// Default names handed out to unnamed control nodes, by stem.
     private final Map<String, Integer> controlNames = new HashMap<>();
+    /// UmlCraft interaction → the Astah sequence diagram that brought it along.
+    private final Map<String, ISequenceDiagram> sequenceDiagrams = new HashMap<>();
+    /// Interaction uses and the UmlCraft interaction they refer to, set once all diagrams exist.
+    private final Map<IInteractionUse, String> references = new LinkedHashMap<>();
     private final TreeMap<String, Integer> dropped = new TreeMap<>();
     private final List<String> problems = new ArrayList<>();
 
@@ -203,6 +208,15 @@ public final class AstaExport {
         }
         for (String id : diagrams) {
             attempt(id, () -> diagram(id));
+        }
+        // Astah's interaction uses refer to sequence diagrams.
+        for (Map.Entry<IInteractionUse, String> r : references.entrySet()) {
+            ISequenceDiagram target = sequenceDiagrams.get(r.getValue());
+            if (target != null) {
+                r.getKey().setSequenceDiagram(target);
+            } else {
+                drop("interactionUseReference");
+            }
         }
         for (Map<String, Object> e : elements.values()) {
             if ("comment".equals(type(e)) && !shownComments.contains(e.get("id"))) {
@@ -570,6 +584,7 @@ public final class AstaExport {
                     d.getInteraction().setName(interactionName);
                 }
                 common(interaction, d.getInteraction(), Set.of());
+                sequenceDiagrams.put(interaction, d);
                 new Sequence(id, sd).build();
                 diagram = d;
             }
@@ -1262,6 +1277,11 @@ public final class AstaExport {
                     if (link instanceof IPresentation p) {
                         made.add(p);
                     }
+                } else if ("interactionUse".equals(type)) {
+                    Object use = attempt(child, () -> interactionUse(child));
+                    if (use instanceof IPresentation p) {
+                        made.add(p);
+                    }
                 } else if ("combinedFragment".equals(type)) {
                     Map<String, Object> node = nodeOf.get(child);
                     List<Operand> operands = new ArrayList<>();
@@ -1317,6 +1337,10 @@ public final class AstaExport {
             String sort = e.get("sort") == null ? "synchronous" : (String) e.get("sort");
             double y = y(edgeY(edge));
             String name = name(e);
+            String gate = text(e, "gate");
+            if ("found".equals(gate) || "lost".equals(gate)) {
+                return gateMessage(id, gate, sort, to, y);
+            }
             if (!"reply".equals(sort) && !"asynchronous".equals(sort)) {
                 returnTo(from);
             }
@@ -1381,6 +1405,66 @@ public final class AstaExport {
                 } else {
                     drop("messageOperation");
                 }
+            }
+            common(id, message, Set.of());
+            return link;
+        }
+
+        /// A "ref" frame across the lifelines it covers (all of them when none are given) at its
+        /// place in the order. Its diagram is set once all diagrams exist.
+        private INodePresentation interactionUse(String id) throws Exception {
+            Map<String, Object> e = elements.get(id);
+            Map<String, Object> node = nodeOf.get(id);
+            if (node == null) {
+                drop("interactionUse");
+                return null;
+            }
+            List<ILifeline> covered = new ArrayList<>();
+            for (Object lifeline : list(e.get("covered"))) {
+                if (created.get(lifeline) instanceof ILifeline l) {
+                    covered.add(l);
+                }
+            }
+            if (covered.isEmpty()) {
+                for (INodePresentation lane : lanes.values()) {
+                    covered.add((ILifeline) lane.getModel());
+                }
+            }
+            double y = y(num(rect(diagram, node), "y"));
+            INodePresentation frame = editor.createInteractionUse(
+                name(e), text(e, "arguments"), null, covered.toArray(new ILifeline[0]), y);
+            IInteractionUse use = (IInteractionUse) frame.getModel();
+            if (e.get("refersTo") instanceof String target) {
+                references.put(use, target);
+            }
+            common(id, use, Set.of());
+            return frame;
+        }
+
+        /// A message from a gate left of `lane` or to a gate right of it.
+        private ILinkPresentation gateMessage(String id, String gate, String sort, String lane, double y)
+                throws Exception {
+            Map<String, Object> e = elements.get(id);
+            INodePresentation lifeline = lanes.get(lane);
+            double x = lifeline.getLocation().getX() + lifeline.getWidth() / 2;
+            ILinkPresentation link;
+            if ("found".equals(gate)) {
+                link = editor.createFoundMessage(name(e), new Point2D.Double(x - 120, y), lifeline);
+                if ("synchronous".equals(sort) && link.getTarget() != null
+                        && "Activation".equals(link.getTarget().getType())) {
+                    stack.add(new Open(lane, link.getTarget(), link));
+                }
+            } else {
+                returnTo(lane);
+                INodePresentation source = activation(lane) != null ? activation(lane) : lifeline;
+                link = editor.createLostMessage(name(e), source, new Point2D.Double(x + 120, y));
+            }
+            IMessage message = (IMessage) link.getModel();
+            if ("asynchronous".equals(sort)) {
+                message.setAsynchronous(true);
+            }
+            if (!text(e, "arguments").isEmpty()) {
+                message.setArgument(text(e, "arguments"));
             }
             common(id, message, Set.of());
             return link;

@@ -442,6 +442,10 @@ impl MainView {
                 let detail = t!("dialog.export_partial_detail", items = lines.join("\n"));
                 self.inform(PromptLevel::Info, &message, &detail, window, cx);
             }
+            Err(umlcraft_asta_export::ExportError::License) => {
+                let detail = t!("dialog.astah_unlicensed");
+                self.show_error(&t!("dialog.export_failed"), &detail, window, cx);
+            }
             Err(err) => self.show_error(&t!("dialog.export_failed"), &err.to_string(), window, cx),
         }
     }

@@ -172,6 +172,10 @@ through its official API (`astah-api.jar`):
   "Trigger"; `setEvent(null)` removes it again. Astah keeps room for entry, do and exit, which
   makes a state at least 81 high, so states without them have that compartment hidden
   (`action_visibility`). Astah routes the first and last segment of a self-transition itself.
+- Interaction uses are created in the order of the interaction (`createInteractionUse` with the
+  covered lifelines, all of them when none are given); since Astah refers to sequence diagrams,
+  the reference is set once every diagram exists. Found and lost messages use
+  `createFoundMessage` and `createLostMessage` with a point 120 px beside the lifeline.
 - Combined fragments are built around their messages: `createCombinedFragment(operator,
   messages)` for the first operand, `addInteractionOperand` for the others, outer fragments
   before inner ones. Astah sizes the frames itself and they cannot be moved afterwards, so a

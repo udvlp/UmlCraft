@@ -204,6 +204,7 @@ dialog:
   image_failed: The diagram could not be saved as an image.
   astah_missing: Exporting to Astah needs an installed Astah.
   astah_missing_detail: "UmlCraft writes Astah projects through the API of Astah Professional, UML or SysML. One of them must be installed, or the environment variable ASTAH_HOME must point to its install folder; then restart UmlCraft."
+  astah_unlicensed: "Astah refused to save the project because its license check failed. Start Astah once and check its license, then export again."
 export_dropped:
   comment: Comments not shown on a diagram
   interaction: Interactions without a diagram
@@ -240,6 +241,8 @@ export_dropped:
   nestedComponent: Components, artifacts and nodes inside others (moved to the package)
   instanceKind: Component and node instances (exported as objects)
   instance: Instances not shown on a component, deployment or class diagram
+  interactionUse: Interaction uses not shown on their diagram
+  interactionUseReference: References of interaction uses to interactions without a sequence diagram
 project:
   untitled: New project
 edit:

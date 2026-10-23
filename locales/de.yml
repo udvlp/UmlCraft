@@ -204,6 +204,7 @@ dialog:
   image_failed: Das Diagramm konnte nicht als Bild gespeichert werden.
   astah_missing: Für den Export nach Astah muss Astah installiert sein.
   astah_missing_detail: "UmlCraft schreibt Astah-Projekte über die API von Astah Professional, UML oder SysML. Dazu muss eines davon installiert sein oder die Umgebungsvariable ASTAH_HOME auf seinen Installationsordner zeigen; danach UmlCraft neu starten."
+  astah_unlicensed: "Astah hat das Speichern abgelehnt, weil seine Lizenzprüfung fehlgeschlagen ist. Bitte Astah einmal starten und die Lizenz prüfen, dann erneut exportieren."
 export_dropped:
   comment: Kommentare, die auf keinem Diagramm stehen
   interaction: Interaktionen ohne Diagramm
@@ -240,6 +241,8 @@ export_dropped:
   nestedComponent: Komponenten, Artefakte und Knoten in anderen (ins Paket verschoben)
   instanceKind: Komponenten- und Knoteninstanzen (als Objekte exportiert)
   instance: Instanzen, die auf keinem Komponenten-, Verteilungs- oder Klassendiagramm stehen
+  interactionUse: Interaktionsverweise, die nicht auf ihrem Diagramm stehen
+  interactionUseReference: Verweise auf Interaktionen ohne Sequenzdiagramm
 project:
   untitled: Neues Projekt
 edit:

@@ -7,7 +7,8 @@ use umlcraft_asta_export::Astah;
 use umlcraft_model::sample::order_system;
 use umlcraft_model::{
     CommentProps, DiagramKind, DirectedProps, Document, ElementData, ElementKind, ExtendProps, Id,
-    IncludeProps, Model, Point, Rect, Shape, TypeRef,
+    IncludeProps, InteractionUseProps, LifelineProps, MessageGate, MessageSort, Model, Point, Rect,
+    Shape, TypeRef,
 };
 use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
 
@@ -114,6 +115,58 @@ fn sample() -> Document {
         let n_rush = tx.add_node(use_cases, Some(rush), Rect::new(460.0, 200.0, 140.0, 60.0))?;
         tx.add_edge(use_cases, Some(include), n_place, n_check, vec![])?;
         tx.add_edge(use_cases, Some(extend), n_rush, n_place, vec![])?;
+
+        // A second interaction that "Place order" refers to, and messages from and to gates.
+        let interaction = tx.model().get(ids.sequence_diagram).unwrap().owner().unwrap();
+        let pay = tx.create(place_order, ElementData::new("Pay", ElementKind::Interaction))?;
+        let pay_diagram =
+            tx.create(pay, ElementData::new("Pay", ElementKind::diagram(DiagramKind::Sequence)))?;
+        let cashier = tx.create(
+            pay,
+            ElementData::new("cashier", ElementKind::Lifeline(LifelineProps::default())),
+        )?;
+        let n_cashier =
+            tx.add_node(pay_diagram, Some(cashier), Rect::new(160.0, 40.0, 100.0, 200.0))?;
+        let gate_message = |name: &str, lifeline: Id, gate: MessageGate| {
+            let mut kind = ElementKind::message(MessageSort::Synchronous, lifeline, lifeline);
+            if let ElementKind::Message(p) = &mut kind {
+                p.gate = gate;
+            }
+            ElementData::new(name, kind)
+        };
+        let found = tx.create(pay, gate_message("pay", cashier, MessageGate::Found))?;
+        tx.add_edge(pay_diagram, Some(found), n_cashier, n_cashier, vec![])?;
+        let reference = tx.create(
+            interaction,
+            ElementData::new(
+                "",
+                ElementKind::InteractionUse(InteractionUseProps {
+                    refers_to: Some(pay),
+                    arguments: "total".into(),
+                    covered: Vec::new(),
+                }),
+            ),
+        )?;
+        tx.add_node(ids.sequence_diagram, Some(reference), Rect::new(40.0, 0.0, 200.0, 80.0))?;
+        let n_customer_in_sequence = tx
+            .model()
+            .view(ids.sequence_diagram)
+            .unwrap()
+            .presentations_of(ids.customer_lifeline)
+            .next()
+            .unwrap()
+            .id;
+        let lost = tx.create(
+            interaction,
+            gate_message("notify", ids.customer_lifeline, MessageGate::Lost),
+        )?;
+        tx.add_edge(
+            ids.sequence_diagram,
+            Some(lost),
+            n_customer_in_sequence,
+            n_customer_in_sequence,
+            vec![],
+        )?;
         Ok(())
     })
     .unwrap();
@@ -327,13 +380,21 @@ fn interactions(model: &Model) -> Vec<String> {
             match e.kind() {
                 ElementKind::Message(p) => {
                     out.push(format!(
-                        "{indent}{:?} {} → {} {:?} returns {:?}",
+                        "{indent}{:?} {} → {} {:?} returns {:?} {:?}",
                         p.sort,
                         name(model, p.from),
                         name(model, p.to),
                         e.name(),
-                        p.return_value
+                        p.return_value,
+                        p.gate
                     ));
+                }
+                // Astah names the frame after the interaction when it has no name of its own.
+                ElementKind::InteractionUse(p) => {
+                    let referred = p.refers_to.map(|r| name(model, r)).unwrap_or_default();
+                    let shown =
+                        if e.name().is_empty() { referred.clone() } else { e.name().into() };
+                    out.push(format!("{indent}ref {shown} → {referred} ({})", p.arguments));
                 }
                 ElementKind::CombinedFragment(p) => {
                     out.push(format!("{indent}{:?}", p.operator));
@@ -347,12 +408,17 @@ fn interactions(model: &Model) -> Vec<String> {
             }
         }
     }
-    let mut out = Vec::new();
-    for e in model.elements().filter(|e| matches!(e.kind(), ElementKind::Interaction)) {
-        out.push(format!("{} in {}", e.name(), path(model, e.id())));
-        walk(model, e.id(), 1, &mut out);
-    }
-    out
+    let mut blocks: Vec<Vec<String>> = model
+        .elements()
+        .filter(|e| matches!(e.kind(), ElementKind::Interaction))
+        .map(|e| {
+            let mut out = vec![format!("{} in {}", e.name(), path(model, e.id()))];
+            walk(model, e.id(), 1, &mut out);
+            out
+        })
+        .collect();
+    blocks.sort();
+    blocks.concat()
 }
 
 /// Exports `model` and imports the result again.
@@ -364,7 +430,14 @@ fn through_astah(model: &Model, name: &str) -> Option<Model> {
     let dir = std::env::temp_dir().join(format!("umlcraft-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join(format!("{name}.asta"));
-    let report = umlcraft_asta_export::export(&astah, model, &file).unwrap();
+    let report = match umlcraft_asta_export::export(&astah, model, &file) {
+        Err(umlcraft_asta_export::ExportError::License) => {
+            eprintln!("skipped: Astah's license check refused saving");
+            std::fs::remove_dir_all(&dir).ok();
+            return None;
+        }
+        result => result.unwrap(),
+    };
     let imported = umlcraft_asta::import(&file).unwrap();
     // To look at the file in Astah: UMLCRAFT_KEEP_ASTA=<folder> cargo test …
     if let Some(keep) = std::env::var_os("UMLCRAFT_KEEP_ASTA") {

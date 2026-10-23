@@ -39,6 +39,9 @@ pub enum ExportError {
     Astah(String),
     #[error("the export tool failed ({status}): {output}")]
     Tool { status: String, output: String },
+    /// Astah's license check refused saving; Astah then tries to open its license page.
+    #[error("Astah refused to save the project: its license check failed")]
+    License,
 }
 
 /// What could not be carried over. `dropped` counts by kind, with the keys the tool reports
@@ -163,6 +166,12 @@ impl Export {
         if report.is_none() || !output.status.success() {
             let mut text = String::from_utf8_lossy(&output.stderr).into_owned();
             text.push_str(&String::from_utf8_lossy(&output.stdout));
+            // Saving checks the license and ends the program without a report when it fails.
+            if report.is_none()
+                && text.lines().any(|l| l.contains(".license.") && l.ends_with(" - NO"))
+            {
+                return Err(ExportError::License);
+            }
             return Err(ExportError::Tool {
                 status: output.status.to_string(),
                 output: tail(&text),

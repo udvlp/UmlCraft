@@ -28,7 +28,9 @@ importing `.asta` files and exporting them through an installed Astah.
   destroy messages, self messages, activation bars derived from calls and replies; combined
   fragments (alt, opt, loop, par, …) with operands, guards and covered lifelines, placed with the
   palette or around selected messages (Ctrl+G); messages and fragments are dragged up and down
-  (also into and out of fragments); labels and guards are edited in place.
+  (also into and out of fragments); labels and guards are edited in place. Interaction uses
+  ("ref" frames referring to another interaction, with arguments) and found and lost messages
+  were added later.
 - **M6** `.asta` import (`umlcraft-asta`, File › Import Astah project, or simply open an `.asta`
   file): packages, classes, interfaces, enumerations, actors and use cases with attributes,
   operations, parameters and extension points; associations, generalizations, dependencies,
