@@ -87,9 +87,9 @@ prop:
   end: End
   role: Role
   multiplicity: Multiplicity
+  constraints: Constraints
   navigability: Navigability
   aggregation: Aggregation
-  constraints: Constraints
   display: Display on diagram
   hide_attributes: Hide attributes
   hide_operations: Hide operations
