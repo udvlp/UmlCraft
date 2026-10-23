@@ -252,6 +252,68 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             result
         }
         Figure::Circle => vec![ellipse(r.center(), r.width / 2.0, r.height / 2.0)],
+        Figure::Component { icon } => {
+            // UML's component icon: a box with two small tabs sticking out on its left.
+            let body = Rect::new(icon.x + 3.0, icon.y, icon.width - 3.0, icon.height);
+            let tab = |y: f32| Rect::new(icon.x, y, 6.0, 3.0);
+            vec![
+                frame(r, Paint::Fill),
+                frame(body, Paint::Fill),
+                frame(tab(icon.y + icon.height * 0.25 - 1.5), Paint::Fill),
+                frame(tab(icon.y + icon.height * 0.75 - 1.5), Paint::Fill),
+            ]
+        }
+        Figure::Artifact { icon } => {
+            // A sheet of paper with a folded corner.
+            let fold = 4.0;
+            let (x, y, right, bottom) = (icon.x, icon.y, icon.right(), icon.bottom());
+            vec![
+                frame(r, Paint::Fill),
+                Primitive::Polygon {
+                    points: vec![
+                        Point::new(x, y),
+                        Point::new(right - fold, y),
+                        Point::new(right, y + fold),
+                        Point::new(right, bottom),
+                        Point::new(x, bottom),
+                    ],
+                    fill: Paint::Fill,
+                },
+                line(
+                    vec![
+                        Point::new(right - fold, y),
+                        Point::new(right - fold, y + fold),
+                        Point::new(right, y + fold),
+                    ],
+                    solid,
+                ),
+            ]
+        }
+        Figure::Cube { depth } => {
+            let d = *depth;
+            let front = Rect::new(r.x, r.y + d, r.width - d, r.height - d);
+            vec![
+                Primitive::Polygon {
+                    points: vec![
+                        Point::new(r.x, r.y + d),
+                        Point::new(r.x + d, r.y),
+                        Point::new(r.right(), r.y),
+                        Point::new(front.right(), front.y),
+                    ],
+                    fill: Paint::Fill,
+                },
+                Primitive::Polygon {
+                    points: vec![
+                        Point::new(front.right(), front.y),
+                        Point::new(r.right(), r.y),
+                        Point::new(r.right(), r.bottom() - d),
+                        Point::new(front.right(), front.bottom()),
+                    ],
+                    fill: Paint::Fill,
+                },
+                frame(front, Paint::Fill),
+            ]
+        }
         Figure::Partition { header } => vec![
             frame(r, Paint::Translucent),
             line(vec![Point::new(r.x, *header), Point::new(r.right(), *header)], solid),

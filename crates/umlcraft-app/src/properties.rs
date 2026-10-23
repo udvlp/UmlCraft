@@ -11,8 +11,8 @@ use gpui_kit::component::{ActiveTheme, IndexPath, Sizable, StyledExt, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    Aggregation, ElementData, ElementKind, Id, InteractionOperator, MessageSort, Model,
-    Multiplicity, Navigability, Style,
+    Aggregation, ElementData, ElementKind, Id, InstanceProps, InteractionOperator, LifelineProps,
+    MessageSort, Model, Multiplicity, Navigability, Style,
 };
 use umlcraft_notation::member::member_text;
 use umlcraft_notation::sequence::operator_keyword;
@@ -319,10 +319,10 @@ impl PropertiesPanel {
                 else {
                     return;
                 };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::Lifeline(p) = &mut data.kind {
-                        p.represents = target;
-                    }
+                this.apply_shown(cx, move |data| match &mut data.kind {
+                    ElementKind::Lifeline(p) => p.represents = target,
+                    ElementKind::Instance(p) => p.classifier = target,
+                    _ => {}
                 });
             },
         ));
@@ -609,10 +609,10 @@ impl PropertiesPanel {
         let model = ws.doc.model();
         let data = model.get(id).expect("checked above").data().clone();
         let declaration = member_text(model, id);
-        // What a message or lifeline may refer to.
+        // What a message, lifeline or instance may refer to.
         let references = match &data.kind {
             ElementKind::Message(_) => operations_for(model, id),
-            ElementKind::Lifeline(_) => classifiers(model),
+            ElementKind::Lifeline(_) | ElementKind::Instance(_) => classifiers(model),
             _ => Vec::new(),
         };
         let reference_labels = reference_items(model, &references);
@@ -661,8 +661,9 @@ impl PropertiesPanel {
                 choose(&self.operation, ix, Some(reference_labels), window, cx);
                 self.operation_ids = references;
             }
-            ElementKind::Lifeline(p) => {
-                let ix = references.iter().position(|&c| c == p.represents);
+            ElementKind::Lifeline(LifelineProps { represents: classifier })
+            | ElementKind::Instance(InstanceProps { classifier, .. }) => {
+                let ix = references.iter().position(|c| c == classifier);
                 choose(&self.represents, ix, Some(reference_labels), window, cx);
                 self.represents_ids = references;
             }
@@ -1003,6 +1004,12 @@ impl Render for PropertiesPanel {
             ElementKind::Lifeline(_) => {
                 body = body.child(field(
                     t!("prop.represents").into(),
+                    Select::new(&self.represents).small().into_any_element(),
+                ));
+            }
+            ElementKind::Instance(_) => {
+                body = body.child(field(
+                    t!("prop.classifier").into(),
                     Select::new(&self.represents).small().into_any_element(),
                 ));
             }

@@ -4,9 +4,10 @@
 use crate::diagram::DiagramKind;
 use crate::document::Document;
 use crate::element::{
-    ActivityNodeKind, Aggregation, CombinedFragmentProps, ElementData, ElementKind,
-    InteractionOperandProps, InteractionOperator, LifelineProps, MessageSort, Multiplicity,
-    PseudostateKind, StateProps, TransitionProps, TypeRef, Visibility,
+    ActivityNodeKind, Aggregation, ClassifierProps, CombinedFragmentProps, DirectedProps,
+    ElementData, ElementKind, InstanceKind, InstanceProps, InteractionOperandProps,
+    InteractionOperator, LifelineProps, MessageSort, Multiplicity, PseudostateKind, StateProps,
+    TransitionProps, TypeRef, Visibility,
 };
 use crate::geometry::{Point, Rect};
 use crate::id::Id;
@@ -27,6 +28,8 @@ pub struct OrderSystem {
     pub customer_lifeline: Id,
     pub activity_diagram: Id,
     pub state_diagram: Id,
+    pub component_diagram: Id,
+    pub deployment_diagram: Id,
 }
 
 pub fn order_system() -> (Document, OrderSystem) {
@@ -242,6 +245,97 @@ pub fn order_system() -> (Document, OrderSystem) {
                 tx.add_edge(activity_diagram, Some(flow), from.1, to.1, waypoints)?;
             }
 
+            // Components: the shop uses payment, which billing provides; shop.jar holds the shop.
+            let classifier = ClassifierProps::default();
+            let shop =
+                tx.create(domain, ElementData::new("Shop", ElementKind::Component(classifier)))?;
+            let billing =
+                tx.create(domain, ElementData::new("Billing", ElementKind::Component(classifier)))?;
+            let payment =
+                tx.create(domain, ElementData::new("Payment", ElementKind::interface()))?;
+            let jar =
+                tx.create(domain, ElementData::new("shop.jar", ElementKind::Artifact(classifier)))?;
+            let provides = tx.create(
+                domain,
+                ElementData::new(
+                    "",
+                    ElementKind::Realization(DirectedProps { client: billing, supplier: payment }),
+                ),
+            )?;
+            let uses = tx.create(
+                domain,
+                ElementData::new(
+                    "",
+                    ElementKind::Dependency(DirectedProps { client: shop, supplier: payment }),
+                )
+                .with_stereotype("use"),
+            )?;
+            let manifests = tx.create(
+                domain,
+                ElementData::new(
+                    "",
+                    ElementKind::Dependency(DirectedProps { client: jar, supplier: shop }),
+                )
+                .with_stereotype("manifest"),
+            )?;
+            let component_diagram = tx.create(
+                domain,
+                ElementData::new("Components", ElementKind::diagram(DiagramKind::Component)),
+            )?;
+            let node = |tx: &mut crate::Tx<'_>, element, (x, y, w, h)| {
+                tx.add_node(component_diagram, Some(element), Rect::new(x, y, w, h))
+            };
+            let n_shop = node(tx, shop, (60.0, 60.0, 140.0, 60.0))?;
+            let n_payment = node(tx, payment, (300.0, 60.0, 140.0, 60.0))?;
+            let n_billing = node(tx, billing, (540.0, 60.0, 140.0, 60.0))?;
+            let n_jar = node(tx, jar, (60.0, 220.0, 140.0, 60.0))?;
+            tx.add_edge(component_diagram, Some(uses), n_shop, n_payment, vec![])?;
+            tx.add_edge(component_diagram, Some(provides), n_billing, n_payment, vec![])?;
+            tx.add_edge(component_diagram, Some(manifests), n_jar, n_shop, vec![])?;
+
+            // Deployment: the shop runs on web1, an application server, next to the database.
+            let app_server =
+                tx.create(domain, ElementData::new("AppServer", ElementKind::Node(classifier)))?;
+            let db_server =
+                tx.create(domain, ElementData::new("DBServer", ElementKind::Node(classifier)))?;
+            let network = tx.create(
+                domain,
+                ElementData::new("", ElementKind::association(app_server, db_server)),
+            )?;
+            let web1 = tx.create(
+                domain,
+                ElementData::new(
+                    "web1",
+                    ElementKind::Instance(InstanceProps {
+                        instance: InstanceKind::Node,
+                        classifier: Some(app_server),
+                    }),
+                ),
+            )?;
+            let running = tx.create(
+                domain,
+                ElementData::new(
+                    "",
+                    ElementKind::Instance(InstanceProps {
+                        instance: InstanceKind::Component,
+                        classifier: Some(shop),
+                    }),
+                ),
+            )?;
+            let deployment_diagram = tx.create(
+                domain,
+                ElementData::new("Deployment", ElementKind::diagram(DiagramKind::Deployment)),
+            )?;
+            let place = |tx: &mut crate::Tx<'_>, element, (x, y, w, h)| {
+                tx.add_node(deployment_diagram, Some(element), Rect::new(x, y, w, h))
+            };
+            let n_web1 = place(tx, web1, (60.0, 60.0, 220.0, 140.0))?;
+            place(tx, running, (90.0, 110.0, 140.0, 60.0))?;
+            let n_app = place(tx, app_server, (60.0, 260.0, 160.0, 100.0))?;
+            let n_db = place(tx, db_server, (360.0, 260.0, 160.0, 100.0))?;
+            tx.add_edge(deployment_diagram, Some(network), n_app, n_db, vec![])?;
+            let _ = n_web1;
+
             // The order's life: filled while open, then shipped or cancelled.
             let machine =
                 tx.create(order, ElementData::new("Order lifecycle", ElementKind::StateMachine))?;
@@ -325,6 +419,8 @@ pub fn order_system() -> (Document, OrderSystem) {
                 customer_lifeline,
                 activity_diagram,
                 state_diagram,
+                component_diagram,
+                deployment_diagram,
             })
         })
         .expect("sample model is valid");

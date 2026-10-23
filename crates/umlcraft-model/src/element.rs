@@ -520,6 +520,26 @@ impl TransitionProps {
     }
 }
 
+/// What an instance specification shows: an object, a component instance or a node instance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InstanceKind {
+    #[default]
+    Object,
+    Component,
+    Node,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceProps {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub instance: InstanceKind,
+    /// The classifier this is an instance of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classifier: Option<Id>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagramProps {
@@ -543,6 +563,12 @@ pub enum ElementKind {
     Parameter(ParameterProps),
     Actor(ClassifierProps),
     UseCase(ClassifierProps),
+    Component(ClassifierProps),
+    Artifact(ClassifierProps),
+    /// A deployment target such as a server or a device.
+    Node(ClassifierProps),
+    /// An instance specification: an object, a component instance or a node instance.
+    Instance(InstanceProps),
     ExtensionPoint,
     /// The system (subject) whose use cases are drawn inside its boundary.
     SystemBoundary,
@@ -595,6 +621,7 @@ pub enum RefRole {
     Annotated,
     FlowEnd,
     TransitionEnd,
+    Classifier,
 }
 
 impl RefRole {
@@ -625,7 +652,8 @@ impl RefRole {
             | Self::Specific
             | Self::General
             | Self::Type
-            | Self::Represents => target.is_classifier(),
+            | Self::Represents
+            | Self::Classifier => target.is_classifier(),
             Self::Including | Self::Addition | Self::Extension | Self::Extended => {
                 matches!(target, ElementKind::UseCase(_))
             }
@@ -728,6 +756,10 @@ impl ElementKind {
             Self::Parameter(_) => "parameter",
             Self::Actor(_) => "actor",
             Self::UseCase(_) => "useCase",
+            Self::Component(_) => "component",
+            Self::Artifact(_) => "artifact",
+            Self::Node(_) => "node",
+            Self::Instance(_) => "instance",
             Self::ExtensionPoint => "extensionPoint",
             Self::SystemBoundary => "systemBoundary",
             Self::Interaction => "interaction",
@@ -764,6 +796,9 @@ impl ElementKind {
                 | Self::DataType(_)
                 | Self::Actor(_)
                 | Self::UseCase(_)
+                | Self::Component(_)
+                | Self::Artifact(_)
+                | Self::Node(_)
         )
     }
 
@@ -799,18 +834,16 @@ impl ElementKind {
             K::Model => false,
             K::Package => self.is_namespace(),
             K::Class(_) | K::Interface(_) | K::Enumeration(_) | K::DataType(_) => {
-                self.is_namespace() || matches!(self, K::Class(_) | K::Interface(_))
+                self.is_namespace()
+                    || matches!(self, K::Class(_) | K::Interface(_) | K::Component(_))
             }
+            // Components nest, and nodes hold nested nodes such as execution environments.
+            K::Component(_) | K::Artifact(_) | K::Node(_) => {
+                self.is_namespace() || matches!(self, K::Component(_) | K::Node(_))
+            }
+            K::Instance(_) => self.is_namespace(),
             K::Actor(_) | K::UseCase(_) | K::SystemBoundary => self.is_namespace(),
-            K::Attribute(_) | K::Operation(_) => matches!(
-                self,
-                K::Class(_)
-                    | K::Interface(_)
-                    | K::Enumeration(_)
-                    | K::DataType(_)
-                    | K::Actor(_)
-                    | K::UseCase(_)
-            ),
+            K::Attribute(_) | K::Operation(_) => self.is_classifier(),
             K::EnumerationLiteral => matches!(self, K::Enumeration(_)),
             K::Parameter(_) => matches!(self, K::Operation(_)),
             K::ExtensionPoint => matches!(self, K::UseCase(_)),
@@ -855,6 +888,9 @@ impl ElementKind {
             Self::Parameter(p) => type_ref(&p.type_ref),
             Self::Lifeline(p) => {
                 p.represents.map(|id| (id, RefRole::Represents)).into_iter().collect()
+            }
+            Self::Instance(p) => {
+                p.classifier.map(|id| (id, RefRole::Classifier)).into_iter().collect()
             }
             Self::Message(p) => {
                 let mut refs = vec![(p.from, RefRole::MessageEnd), (p.to, RefRole::MessageEnd)];
@@ -907,6 +943,7 @@ impl ElementKind {
             Self::Operation(p) => type_ref(&mut p.return_type, &mut f),
             Self::Parameter(p) => type_ref(&mut p.type_ref, &mut f),
             Self::Lifeline(p) => p.represents.iter_mut().for_each(f),
+            Self::Instance(p) => p.classifier.iter_mut().for_each(f),
             Self::Message(p) => {
                 f(&mut p.from);
                 f(&mut p.to);
@@ -989,6 +1026,7 @@ impl ElementKind {
             Self::Operation(p) => unlink_type(&mut p.return_type),
             Self::Parameter(p) => unlink_type(&mut p.type_ref),
             Self::Lifeline(p) => unlink_opt(&mut p.represents),
+            Self::Instance(p) => unlink_opt(&mut p.classifier),
             Self::Message(p) => unlink_opt(&mut p.operation),
             Self::CombinedFragment(p) => unlink_vec(&mut p.covered),
             Self::ActivityNode(p) => unlink_type(&mut p.type_ref),
@@ -1056,6 +1094,10 @@ mod tests {
             ElementKind::Comment(CommentProps { body: String::new(), annotated: vec![a, b] }),
             ElementKind::flow(a, b),
             ElementKind::transition(a, b),
+            ElementKind::Instance(InstanceProps {
+                instance: InstanceKind::Node,
+                classifier: Some(a),
+            }),
             ElementKind::ActivityNode(ActivityNodeProps {
                 node: ActivityNodeKind::Object,
                 type_ref: Some(TypeRef::Element(a)),
@@ -1090,6 +1132,16 @@ mod tests {
         assert!(ElementKind::StateMachine.can_own(&state));
         assert!(state.can_own(&ElementKind::FinalState), "composite states");
         assert!(!state.can_own(&ElementKind::transition(Id::from_u128(1), Id::from_u128(2))));
+        let node = ElementKind::Node(ClassifierProps::default());
+        let component = ElementKind::Component(ClassifierProps::default());
+        assert!(node.can_own(&node), "nested nodes");
+        assert!(component.can_own(&ElementKind::class()));
+        assert!(component.can_own(&ElementKind::operation(None)));
+        assert!(!node.can_own(&ElementKind::Instance(InstanceProps::default())));
+        assert!(
+            component.is_classifier()
+                && !ElementKind::Instance(InstanceProps::default()).is_classifier()
+        );
     }
 
     #[test]

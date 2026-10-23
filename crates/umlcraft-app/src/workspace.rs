@@ -498,6 +498,8 @@ impl NewItem {
             Self::Diagram(DiagramKind::Sequence) => "diagram.sequence".into(),
             Self::Diagram(DiagramKind::Activity) => "diagram.activity".into(),
             Self::Diagram(DiagramKind::StateMachine) => "diagram.stateMachine".into(),
+            Self::Diagram(DiagramKind::Component) => "diagram.component".into(),
+            Self::Diagram(DiagramKind::Deployment) => "diagram.deployment".into(),
         }
     }
 }
@@ -509,7 +511,10 @@ fn behavior_of(kind: DiagramKind) -> Option<ElementKind> {
         DiagramKind::Sequence => Some(ElementKind::Interaction),
         DiagramKind::Activity => Some(ElementKind::Activity),
         DiagramKind::StateMachine => Some(ElementKind::StateMachine),
-        DiagramKind::Class | DiagramKind::UseCase => None,
+        DiagramKind::Class
+        | DiagramKind::UseCase
+        | DiagramKind::Component
+        | DiagramKind::Deployment => None,
     }
 }
 

@@ -90,12 +90,20 @@ tool:
   shallowHistory: Historie
   deepHistory: Tiefe Historie
   transition: Transition
+  component: Komponente
+  artifact: Artefakt
+  node: Knoten
+  componentInstance: Komponenteninstanz
+  nodeInstance: Knoteninstanz
+  object: Objekt
 diagram:
   class: Klassendiagramm
   useCase: Anwendungsfalldiagramm
   sequence: Sequenzdiagramm
   activity: Aktivitätsdiagramm
   stateMachine: Zustandsdiagramm
+  component: Komponentendiagramm
+  deployment: Verteilungsdiagramm
 panel:
   model: Modell
   properties: Eigenschaften
@@ -143,6 +151,7 @@ prop:
   exit: Austritt
   covered: Umfasste Lebenslinien
   covered_automatic: Keine angekreuzt – das Fragment umfasst die Lebenslinien seiner Nachrichten.
+  classifier: Instanz von
 message_sort:
   synchronous: synchron
   asynchronous: asynchron
@@ -291,3 +300,10 @@ kind:
   joinPseudostate: Vereinigung
   shallowHistory: Flache Historie
   deepHistory: Tiefe Historie
+  component: Komponente
+  artifact: Artefakt
+  node: Knoten
+  instance: Instanz
+  componentInstance: Komponenteninstanz
+  nodeInstance: Knoteninstanz
+  object: Objekt

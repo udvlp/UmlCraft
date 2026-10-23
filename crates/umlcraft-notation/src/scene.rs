@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, DiagramKind, EdgeLabels,
-    ElementKind, Id, MessageSort, Model, Navigability, Point, Presentation, PseudostateKind, Rect,
-    Shape, StateProps, Style, TypeRef,
+    ElementKind, Id, InstanceKind, MessageSort, Model, Navigability, Point, Presentation,
+    PseudostateKind, Rect, Shape, Size, StateProps, Style, TypeRef,
 };
 
 use crate::member::member_text;
@@ -140,6 +140,18 @@ pub enum Figure {
     },
     /// History pseudostate: a circle around its letter.
     Circle,
+    /// Component: a box with the component icon in `icon`.
+    Component {
+        icon: Rect,
+    },
+    /// Artifact: a box with a document icon in `icon`.
+    Artifact {
+        icon: Rect,
+    },
+    /// Deployment node: a box seen from the front right, `depth` deep.
+    Cube {
+        depth: f32,
+    },
     Other,
 }
 
@@ -622,6 +634,17 @@ fn layout_element(
         }
         ElementKind::ActivityNode(p) => layout_activity_node(model, id, p, bounds, measure),
         ElementKind::State(p) => layout_state(model, id, p, bounds, measure),
+        ElementKind::Component(_) | ElementKind::Artifact(_) | ElementKind::Node(_) => {
+            layout_box(model, id, e.kind(), None, bounds, measure)
+        }
+        ElementKind::Instance(p) => {
+            let figure = match p.instance {
+                InstanceKind::Object => ElementKind::Class(Default::default()),
+                InstanceKind::Component => ElementKind::Component(Default::default()),
+                InstanceKind::Node => ElementKind::Node(Default::default()),
+            };
+            layout_box(model, id, &figure, Some(p.classifier), bounds, measure)
+        }
         ElementKind::FinalState => (bounds, Figure::ActivityFinal, Vec::new()),
         ElementKind::Pseudostate(p) => {
             let figure = match p.pseudostate {
@@ -760,6 +783,86 @@ fn layout_activity_node(
 
 /// States: the name, centered; below a line the internal activities (`entry / …`), or room for
 /// the substates of a composite state.
+/// Depth of a deployment node's cube.
+const CUBE_DEPTH: f32 = 12.0;
+
+/// Components, artifacts, nodes and instances: a box (or cube) with stereotypes and the name at
+/// the top. `instance_of` is set for instances, which show `name : Type` underlined; `figure`
+/// then is the kind of element they are an instance of.
+fn layout_box(
+    model: &Model,
+    id: Id,
+    figure: &ElementKind,
+    instance_of: Option<Option<Id>>,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    const PAD: f32 = 6.0;
+    const ICON: Size = Size { width: 12.0, height: 16.0 };
+    let e = model.get(id).expect("caller checked");
+    let mut lines = Vec::new();
+    let stereotypes = &e.data().stereotypes;
+    if !stereotypes.is_empty() {
+        lines.push(Line::new(
+            stereotype_text(stereotypes),
+            FONT_SIZE,
+            RowRole::Stereotype,
+            Some(id),
+        ));
+    }
+    let mut name = match instance_of {
+        Some(classifier) => {
+            let type_name = classifier.and_then(|c| model.get(c)).map(|c| c.name());
+            let text = match type_name {
+                Some(t) if e.name().is_empty() => format!(": {t}"),
+                Some(t) => format!("{} : {t}", e.name()),
+                None => e.name().to_owned(),
+            };
+            let mut line = Line::new(text, FONT_SIZE, RowRole::Name, Some(id));
+            line.underline = true;
+            line
+        }
+        None => {
+            let mut line = Line::new(e.name(), FONT_SIZE, RowRole::Name, Some(id));
+            line.bold = true;
+            line
+        }
+    };
+    name.italic = matches!(figure, ElementKind::Component(p) if p.is_abstract);
+    lines.push(name);
+
+    let depth = if matches!(figure, ElementKind::Node(_)) { CUBE_DEPTH } else { 0.0 };
+    let has_icon = matches!(figure, ElementKind::Component(_) | ElementKind::Artifact(_));
+    let icon_room = if has_icon { ICON.width + PAD } else { 0.0 };
+    let widest = lines.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+    let h = line_height(FONT_SIZE);
+    let text_h = h * lines.len() as f32;
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width.max(widest + 2.0 * (PAD + icon_room) + depth).max(40.0),
+        bounds.height.max(text_h + 2.0 * PAD + depth).max(30.0),
+    );
+    // The front face of a cube lies below its top and left of its side.
+    let front = Rect::new(r.x, r.y + depth, r.width - depth, r.height - depth);
+    let rows = lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let y = front.y + PAD + h * i as f32;
+            line.place(Rect::new(front.x, y, front.width, h), LabelAlign::Center)
+        })
+        .collect();
+    let icon = Rect::new(front.right() - PAD - ICON.width, front.y + PAD, ICON.width, ICON.height);
+    let figure = match figure {
+        ElementKind::Component(_) => Figure::Component { icon },
+        ElementKind::Artifact(_) => Figure::Artifact { icon },
+        ElementKind::Node(_) => Figure::Cube { depth },
+        _ => Figure::Rectangle,
+    };
+    (r, figure, rows)
+}
+
 fn layout_state(
     model: &Model,
     id: Id,
@@ -900,6 +1003,8 @@ pub fn with_contents(scene: &Scene, ids: &[Id]) -> Vec<Id> {
                     | Figure::Package { .. }
                     | Figure::Partition { .. }
                     | Figure::State { .. }
+                    | Figure::Cube { .. }
+                    | Figure::Component { .. }
             )
         {
             for n in &scene.nodes {
@@ -1873,6 +1978,34 @@ mod tests {
         // Moving the composite state moves its substates.
         let moved = with_contents(&scene, &[open.id]);
         assert_eq!(moved.len(), 4, "the state, its initial pseudostate and two substates");
+    }
+
+    #[test]
+    fn components_nodes_and_instances() {
+        let (doc, ids) = order_system();
+        let model = doc.model();
+        let scene = build(model, ids.component_diagram, &Preview::default(), &ApproxMeasure);
+        fn node<'s>(scene: &'s Scene, name: &str) -> &'s NodeShape {
+            scene.nodes.iter().find(|n| n.rows.iter().any(|r| r.text == name)).unwrap()
+        }
+        fn figure<'s>(scene: &'s Scene, name: &str) -> &'s Figure {
+            &node(scene, name).figure
+        }
+        assert!(matches!(figure(&scene, "Shop"), Figure::Component { .. }));
+        assert!(matches!(figure(&scene, "shop.jar"), Figure::Artifact { .. }));
+        let labels: Vec<&str> =
+            scene.edges.iter().flat_map(|e| &e.labels).map(|l| l.text.as_str()).collect();
+        assert!(labels.contains(&"<<use>>") && labels.contains(&"<<manifest>>"), "{labels:?}");
+
+        let scene = build(model, ids.deployment_diagram, &Preview::default(), &ApproxMeasure);
+        assert!(matches!(figure(&scene, "AppServer"), Figure::Cube { .. }));
+        // Instances show their classifier, underlined, in the figure of their kind.
+        let web1 = node(&scene, "web1 : AppServer");
+        assert!(matches!(web1.figure, Figure::Cube { .. }));
+        assert!(web1.rows[0].underline);
+        assert!(matches!(figure(&scene, ": Shop"), Figure::Component { .. }));
+        // A node takes what is deployed on it along.
+        assert_eq!(with_contents(&scene, &[web1.id]).len(), 2);
     }
 
     #[test]

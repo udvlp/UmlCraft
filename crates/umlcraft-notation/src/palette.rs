@@ -3,9 +3,9 @@
 
 use umlcraft_model::{
     ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
-    DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps,
-    InteractionOperandProps, InteractionOperator, LifelineProps, MessageSort, Model, ModelError,
-    Point, PseudostateKind, Rect, Result, Size, StateProps, Tx,
+    DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps, InstanceKind,
+    InstanceProps, InteractionOperandProps, InteractionOperator, LifelineProps, MessageSort, Model,
+    ModelError, Point, PseudostateKind, Rect, Result, Size, StateProps, Tx,
 };
 
 use crate::sequence::Slot;
@@ -41,6 +41,13 @@ pub enum NodeTool {
     JoinPseudostate,
     ShallowHistory,
     DeepHistory,
+    Component,
+    Artifact,
+    /// A deployment node; `Node` would be ambiguous among diagram tools.
+    DeploymentNode,
+    ComponentInstance,
+    NodeInstance,
+    Object,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -142,6 +149,23 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
             ],
             &[E::Transition, E::NoteAnchor],
         ),
+        DiagramKind::Component => (
+            &[N::Component, N::Interface, N::Artifact, N::Class, N::Package, N::Note],
+            &[E::Dependency, E::Realization, E::Association, E::Generalization, E::NoteAnchor],
+        ),
+        DiagramKind::Deployment => (
+            &[
+                N::DeploymentNode,
+                N::NodeInstance,
+                N::Component,
+                N::ComponentInstance,
+                N::Artifact,
+                N::Object,
+                N::Interface,
+                N::Note,
+            ],
+            &[E::Association, E::Dependency, E::Realization, E::NoteAnchor],
+        ),
     };
     std::iter::once(Tool::Select)
         .chain(nodes.iter().map(|&n| Tool::Node(n)))
@@ -181,6 +205,21 @@ impl NodeTool {
             Self::JoinPseudostate => "joinPseudostate",
             Self::ShallowHistory => "shallowHistory",
             Self::DeepHistory => "deepHistory",
+            Self::Component => "component",
+            Self::Artifact => "artifact",
+            Self::DeploymentNode => "node",
+            Self::ComponentInstance => "componentInstance",
+            Self::NodeInstance => "nodeInstance",
+            Self::Object => "object",
+        }
+    }
+
+    /// The tool that creates instances of `kind`.
+    pub fn for_instance(kind: InstanceKind) -> Self {
+        match kind {
+            InstanceKind::Object => Self::Object,
+            InstanceKind::Component => Self::ComponentInstance,
+            InstanceKind::Node => Self::NodeInstance,
         }
     }
 
@@ -238,6 +277,8 @@ impl NodeTool {
         let classifier = ClassifierProps::default();
         let node = ElementKind::activity_node;
         let pseudostate = ElementKind::pseudostate;
+        let instance =
+            |instance| ElementKind::Instance(InstanceProps { instance, classifier: None });
         match self {
             Self::Class => ElementKind::Class(classifier),
             Self::Interface => ElementKind::Interface(classifier),
@@ -271,6 +312,12 @@ impl NodeTool {
             Self::JoinPseudostate => pseudostate(PseudostateKind::Join),
             Self::ShallowHistory => pseudostate(PseudostateKind::ShallowHistory),
             Self::DeepHistory => pseudostate(PseudostateKind::DeepHistory),
+            Self::Component => ElementKind::Component(classifier),
+            Self::Artifact => ElementKind::Artifact(classifier),
+            Self::DeploymentNode => ElementKind::Node(classifier),
+            Self::ComponentInstance => instance(InstanceKind::Component),
+            Self::NodeInstance => instance(InstanceKind::Node),
+            Self::Object => instance(InstanceKind::Object),
         }
     }
 
@@ -299,6 +346,10 @@ impl NodeTool {
             Self::Junction => Size::new(14.0, 14.0),
             Self::ForkPseudostate | Self::JoinPseudostate => Size::new(60.0, 5.0),
             Self::ShallowHistory | Self::DeepHistory => Size::new(24.0, 24.0),
+            Self::Component | Self::ComponentInstance => Size::new(140.0, 60.0),
+            Self::Artifact => Size::new(120.0, 60.0),
+            Self::DeploymentNode | Self::NodeInstance => Size::new(200.0, 140.0),
+            Self::Object => Size::new(120.0, 40.0),
         }
     }
 }
@@ -314,7 +365,7 @@ fn is_class_like(kind: &ElementKind) -> bool {
 }
 
 fn is_dependable(kind: &ElementKind) -> bool {
-    kind.is_classifier() || matches!(kind, ElementKind::Package)
+    kind.is_classifier() || matches!(kind, ElementKind::Package | ElementKind::Instance(_))
 }
 
 impl EdgeTool {
@@ -365,11 +416,22 @@ impl EdgeTool {
             Self::Generalization => {
                 !same
                     && std::mem::discriminant(source) == std::mem::discriminant(target)
-                    && (is_class_like(source) || matches!(source, K::Actor(_) | K::UseCase(_)))
+                    && (is_class_like(source)
+                        || matches!(
+                            source,
+                            K::Actor(_)
+                                | K::UseCase(_)
+                                | K::Component(_)
+                                | K::Artifact(_)
+                                | K::Node(_)
+                        ))
             }
             Self::Realization => {
                 !same
-                    && matches!(source, K::Class(_) | K::Enumeration(_) | K::DataType(_))
+                    && matches!(
+                        source,
+                        K::Class(_) | K::Enumeration(_) | K::DataType(_) | K::Component(_)
+                    )
                     && matches!(target, K::Interface(_))
             }
             Self::Dependency => !same && is_dependable(source) && is_dependable(target),
@@ -457,6 +519,26 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
             ElementKind::ActivityNode(_) | ElementKind::Partition | ElementKind::Comment(_)
         ),
         DiagramKind::StateMachine => kind.is_vertex() || matches!(kind, ElementKind::Comment(_)),
+        DiagramKind::Component => {
+            is_class_like(kind)
+                || matches!(
+                    kind,
+                    ElementKind::Component(_)
+                        | ElementKind::Artifact(_)
+                        | ElementKind::Package
+                        | ElementKind::Comment(_)
+                )
+        }
+        DiagramKind::Deployment => matches!(
+            kind,
+            ElementKind::Node(_)
+                | ElementKind::Component(_)
+                | ElementKind::Artifact(_)
+                | ElementKind::Instance(_)
+                | ElementKind::Interface(_)
+                | ElementKind::Class(_)
+                | ElementKind::Comment(_)
+        ),
     }
 }
 
@@ -476,6 +558,10 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::State(_) => NodeTool::State,
         ElementKind::FinalState => NodeTool::FinalState,
         ElementKind::Pseudostate(p) => NodeTool::for_pseudostate(p.pseudostate),
+        ElementKind::Component(_) => NodeTool::Component,
+        ElementKind::Artifact(_) => NodeTool::Artifact,
+        ElementKind::Node(_) => NodeTool::DeploymentNode,
+        ElementKind::Instance(p) => NodeTool::for_instance(p.instance),
         ElementKind::Partition => NodeTool::Partition,
         _ => NodeTool::Class,
     };
@@ -551,7 +637,13 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
 
 /// Whether nodes of this kind contain other nodes drawn inside them.
 pub fn is_container(kind: &ElementKind) -> bool {
-    matches!(kind, ElementKind::SystemBoundary | ElementKind::Package | ElementKind::Partition)
+    matches!(
+        kind,
+        ElementKind::SystemBoundary
+            | ElementKind::Package
+            | ElementKind::Partition
+            | ElementKind::Node(_)
+    ) || matches!(kind, ElementKind::Instance(p) if p.instance == InstanceKind::Node)
 }
 
 /// Adds a node for `element`. System boundaries, fragments and partitions go to the back, so
@@ -576,10 +668,7 @@ fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Resu
         bounds.y = top;
     }
     let presentation = umlcraft_model::Presentation::node(Some(element), bounds);
-    if matches!(
-        kind,
-        ElementKind::SystemBoundary | ElementKind::CombinedFragment(_) | ElementKind::Partition
-    ) {
+    if is_container(kind) || matches!(kind, ElementKind::CombinedFragment(_)) {
         let id = presentation.id;
         tx.apply(umlcraft_model::Op::InsertPresentation { diagram, index: 0, presentation })?;
         Ok(id)

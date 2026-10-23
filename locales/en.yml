@@ -90,12 +90,20 @@ tool:
   shallowHistory: History
   deepHistory: Deep history
   transition: Transition
+  component: Component
+  artifact: Artifact
+  node: Node
+  componentInstance: Component instance
+  nodeInstance: Node instance
+  object: Object
 diagram:
   class: Class diagram
   useCase: Use case diagram
   sequence: Sequence diagram
   activity: Activity diagram
   stateMachine: State machine diagram
+  component: Component diagram
+  deployment: Deployment diagram
 panel:
   model: Model
   properties: Properties
@@ -143,6 +151,7 @@ prop:
   exit: Exit
   covered: Covered lifelines
   covered_automatic: None ticked – the fragment covers the lifelines of its messages.
+  classifier: Instance of
 message_sort:
   synchronous: synchronous
   asynchronous: asynchronous
@@ -291,3 +300,10 @@ kind:
   joinPseudostate: Join
   shallowHistory: Shallow history
   deepHistory: Deep history
+  component: Component
+  artifact: Artifact
+  node: Node
+  instance: Instance
+  componentInstance: Component instance
+  nodeInstance: Node instance
+  object: Object

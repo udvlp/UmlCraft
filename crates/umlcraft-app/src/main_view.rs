@@ -892,6 +892,9 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::Element(NodeTool::SystemBoundary),
         NewItem::Element(NodeTool::Partition),
         NewItem::Element(NodeTool::State),
+        NewItem::Element(NodeTool::Component),
+        NewItem::Element(NodeTool::Artifact),
+        NewItem::Element(NodeTool::DeploymentNode),
         NewItem::Attribute,
         NewItem::Operation,
         NewItem::Literal,
@@ -914,6 +917,8 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         DiagramKind::Sequence,
         DiagramKind::Activity,
         DiagramKind::StateMachine,
+        DiagramKind::Component,
+        DiagramKind::Deployment,
     ] {
         let item = NewItem::Diagram(kind);
         if item.applies_to(&meta.kind) {

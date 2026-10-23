@@ -22,10 +22,10 @@ pub use element::{
     ActivityEdgeProps, ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd,
     AssociationProps, AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps,
     DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, GeneralizationProps,
-    IncludeProps, InteractionOperandProps, InteractionOperator, LifelineProps, MessageProps,
-    MessageSort, Multiplicity, Navigability, OperationProps, ParameterDirection, ParameterProps,
-    ParseMultiplicityError, PseudostateKind, PseudostateProps, RefRole, StateProps, TaggedValue,
-    TransitionProps, TypeRef, Visibility,
+    IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
+    LifelineProps, MessageProps, MessageSort, Multiplicity, Navigability, OperationProps,
+    ParameterDirection, ParameterProps, ParseMultiplicityError, PseudostateKind, PseudostateProps,
+    RefRole, StateProps, TaggedValue, TransitionProps, TypeRef, Visibility,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

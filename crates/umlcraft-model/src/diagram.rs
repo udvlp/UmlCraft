@@ -16,6 +16,8 @@ pub enum DiagramKind {
     Sequence,
     Activity,
     StateMachine,
+    Component,
+    Deployment,
 }
 
 /// One visible item on a diagram. Presentations of a diagram are kept in z-order (back to front).
