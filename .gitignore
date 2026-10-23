@@ -13,9 +13,6 @@
 # UmlCraft temporary files (atomic save)
 *.ucraft.tmp
 
-# Documentation stays local for now
-docs/
-
 # Claude Code
 CLAUDE.md
 CLAUDE.local.md
