@@ -11,6 +11,8 @@ menu:
   new: New project
   open: Open …
   import_astah: Import Astah project …
+  export: Export
+  export_astah: Astah project …
   recent: Open recent
   no_recent: (none)
   save: Save
@@ -134,6 +136,7 @@ status:
   saved: Unchanged
   selected: selected
   unsaved_file: Not saved
+  exporting: Exporting to Astah …
   hint: "Wheel: scroll · Ctrl+wheel: zoom · middle button: pan"
   hint_node: "Click to place the element · Esc: cancel"
   hint_edge: "Drag from source to target or click both · Esc: cancel"
@@ -150,6 +153,28 @@ dialog:
   import_failed: The Astah project could not be imported.
   import_partial: "%{count} elements of the Astah project were not carried over."
   import_partial_detail: "UmlCraft does not know these kinds of elements yet: %{kinds}"
+  export_done: The Astah project was exported.
+  export_failed: The Astah project could not be exported.
+  export_partial: "%{count} details of the project could not be carried over to Astah."
+  export_partial_detail: "Astah's API cannot express these:\n%{items}"
+export_dropped:
+  comment: Comments not shown on a diagram
+  interaction: Interactions without a diagram
+  message: Messages not shown on their diagram
+  systemBoundary: System boundaries
+  query: Query flag of operations
+  extendCondition: Conditions of extends
+  extendExtensionPoints: Extension points of extends
+  returnParameter: Return parameters
+  parameterDetails: Multiplicity and default value of parameters
+  unmatchedReply: Replies without a call (exported as calls)
+  replyArguments: Arguments of replies
+  messageOperation: Operations called by messages
+  emptyOperand: Empty operands of combined fragments
+  nestedEnumeration: Nested enumerations (moved to the package)
+  renamed: Elements renamed because of empty or duplicate names
+  details: Stereotypes, tagged values or documentation
+  presentation: Diagram shapes
 project:
   untitled: New project
 edit:

@@ -1,0 +1,22 @@
+[package]
+name = "umlcraft-asta-export"
+description = "Export to Astah project files (.asta) through an installed Astah and its API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+umlcraft-model.workspace = true
+umlcraft-format.workspace = true
+umlcraft-notation.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+umlcraft-asta.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

@@ -11,6 +11,8 @@ menu:
   new: Neues Projekt
   open: Öffnen …
   import_astah: Astah-Projekt importieren …
+  export: Exportieren
+  export_astah: Astah-Projekt …
   recent: Zuletzt geöffnet
   no_recent: (keine)
   save: Speichern
@@ -134,6 +136,7 @@ status:
   saved: Unverändert
   selected: ausgewählt
   unsaved_file: Nicht gespeichert
+  exporting: Export nach Astah läuft …
   hint: "Mausrad: verschieben · Strg+Mausrad: zoomen · mittlere Taste: Ansicht ziehen"
   hint_node: "Klicken, um das Element zu platzieren · Esc: abbrechen"
   hint_edge: "Vom Quell- zum Zielelement ziehen oder nacheinander klicken · Esc: abbrechen"
@@ -150,6 +153,28 @@ dialog:
   import_failed: Das Astah-Projekt konnte nicht importiert werden.
   import_partial: "%{count} Elemente des Astah-Projekts wurden nicht übernommen."
   import_partial_detail: "UmlCraft kennt diese Elementarten noch nicht: %{kinds}"
+  export_done: Das Astah-Projekt wurde exportiert.
+  export_failed: Das Astah-Projekt konnte nicht exportiert werden.
+  export_partial: "%{count} Details des Projekts konnten nicht nach Astah übernommen werden."
+  export_partial_detail: "Die Astah-API kann Folgendes nicht abbilden:\n%{items}"
+export_dropped:
+  comment: Kommentare, die auf keinem Diagramm stehen
+  interaction: Interaktionen ohne Diagramm
+  message: Nachrichten, die nicht auf ihrem Diagramm stehen
+  systemBoundary: Systemgrenzen
+  query: Abfrage-Eigenschaft von Operationen
+  extendCondition: Bedingungen von Erweiterungen
+  extendExtensionPoints: Erweiterungspunkte von Erweiterungen
+  returnParameter: Rückgabeparameter
+  parameterDetails: Multiplizität und Vorgabewert von Parametern
+  unmatchedReply: Antworten ohne Aufruf (als Aufruf exportiert)
+  replyArguments: Argumente von Antworten
+  messageOperation: Von Nachrichten aufgerufene Operationen
+  emptyOperand: Leere Operanden kombinierter Fragmente
+  nestedEnumeration: Verschachtelte Aufzählungen (ins Paket verschoben)
+  renamed: Wegen leerer oder doppelter Namen umbenannte Elemente
+  details: Stereotypen, Eigenschaftswerte oder Dokumentation
+  presentation: Diagrammelemente
 project:
   untitled: Neues Projekt
 edit:

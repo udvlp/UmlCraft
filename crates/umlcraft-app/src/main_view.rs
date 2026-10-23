@@ -56,6 +56,8 @@ pub struct MainView {
     tree_selection: Option<SharedString>,
     /// Set once the user agreed to close despite unsaved changes.
     close_confirmed: bool,
+    /// An export to Astah is running in the background.
+    exporting: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -105,6 +107,7 @@ impl MainView {
             tree_revision: None,
             tree_selection: None,
             close_confirmed: false,
+            exporting: false,
             clipboard: None,
             paste_count: 0,
             _subscriptions: subscriptions,
@@ -319,6 +322,81 @@ impl MainView {
                 }
             }
             Err(err) => self.show_error(&t!("dialog.import_failed"), &err.to_string(), window, cx),
+        }
+    }
+
+    /// Asks for a file, then has the installed Astah build it in the background.
+    fn export_astah(&mut self, _: &ExportAstah, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(astah) = astah() else { return };
+        if self.exporting {
+            return;
+        }
+        let ws = self.workspace.read(cx);
+        let model = ws.doc.model();
+        let project = model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default();
+        let suggested = ws
+            .path
+            .as_deref()
+            .and_then(Path::file_stem)
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| sanitize_file_name(&project));
+        let directory = ws
+            .path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .or_else(documents_dir)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let export = umlcraft_asta_export::Export::new(model);
+        let rx = cx.prompt_for_new_path(&directory, Some(&format!("{suggested}.asta")));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = rx.await else { return };
+            let path = with_extension(path, "asta");
+            let started = this.update(cx, |this, cx| {
+                this.exporting = true;
+                cx.notify();
+            });
+            if started.is_err() {
+                return;
+            }
+            let target = path.clone();
+            let result =
+                cx.background_executor().spawn(async move { export.run(astah, &target) }).await;
+            this.update_in(cx, |this, window, cx| {
+                this.exporting = false;
+                cx.notify();
+                this.report_export(result, &path, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn report_export(
+        &mut self,
+        result: Result<umlcraft_asta_export::Report, umlcraft_asta_export::ExportError>,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(report) if report.is_complete() => {
+                let detail = path.display().to_string();
+                self.inform(PromptLevel::Info, &t!("dialog.export_done"), &detail, window, cx);
+            }
+            Ok(report) => {
+                let count: usize = report.dropped.values().sum();
+                let mut lines: Vec<String> = report
+                    .dropped
+                    .iter()
+                    .map(|(key, n)| format!("{} ({n})", export_dropped_label(key)))
+                    .collect();
+                lines.extend(report.problems);
+                let message = t!("dialog.export_partial", count = count);
+                let detail = t!("dialog.export_partial_detail", items = lines.join("\n"));
+                self.inform(PromptLevel::Info, &message, &detail, window, cx);
+            }
+            Err(err) => self.show_error(&t!("dialog.export_failed"), &err.to_string(), window, cx),
         }
     }
 
@@ -732,6 +810,7 @@ impl MainView {
             n => format!("{n} {}", t!("status.selected")),
         };
         let right = match &ws.message {
+            _ if self.exporting => div().child(t!("status.exporting").to_string()),
             Some(message) => div().text_color(cx.theme().danger).child(message.clone()),
             None => div().child(match ws.tool {
                 Tool::Select => t!("status.hint").to_string(),
@@ -854,18 +933,28 @@ fn menus(settings: &Settings) -> Vec<Menu> {
     if recent.is_empty() {
         recent.push(MenuItem::action(t!("menu.no_recent").to_string(), Cancel).disabled(true));
     }
+    let mut file = vec![
+        menu_item("menu.new", NewProject),
+        menu_item("menu.open", OpenProject),
+        MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
+        menu_item("menu.import_astah", ImportAstah),
+    ];
+    // Exporting needs an installed Astah, whose API writes the file.
+    if astah().is_some() {
+        file.push(MenuItem::submenu(
+            Menu::new(t!("menu.export").to_string())
+                .items([menu_item("menu.export_astah", ExportAstah)]),
+        ));
+    }
+    file.extend([
+        MenuItem::separator(),
+        menu_item("menu.save", SaveProject),
+        menu_item("menu.save_as", SaveProjectAs),
+        MenuItem::separator(),
+        menu_item("menu.quit", Quit),
+    ]);
     vec![
-        Menu::new(t!("menu.file").to_string()).items([
-            menu_item("menu.new", NewProject),
-            menu_item("menu.open", OpenProject),
-            MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
-            menu_item("menu.import_astah", ImportAstah),
-            MenuItem::separator(),
-            menu_item("menu.save", SaveProject),
-            menu_item("menu.save_as", SaveProjectAs),
-            MenuItem::separator(),
-            menu_item("menu.quit", Quit),
-        ]),
+        Menu::new(t!("menu.file").to_string()).items(file),
         Menu::new(t!("menu.edit").to_string()).items([
             menu_item("toolbar.undo", Undo),
             menu_item("toolbar.redo", Redo),
@@ -922,12 +1011,35 @@ fn blank_document() -> Document {
 }
 
 fn with_project_extension(path: PathBuf) -> PathBuf {
-    if path.extension().is_some_and(|e| e == FILE_EXTENSION) {
+    with_extension(path, FILE_EXTENSION)
+}
+
+fn with_extension(path: PathBuf, extension: &str) -> PathBuf {
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case(extension)) {
         return path;
     }
     let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    name.push(format!(".{FILE_EXTENSION}"));
+    name.push(format!(".{extension}"));
     path.with_file_name(name)
+}
+
+/// The installed Astah used for exporting, looked up once.
+fn astah() -> Option<&'static umlcraft_asta_export::Astah> {
+    static ASTAH: std::sync::OnceLock<Option<umlcraft_asta_export::Astah>> =
+        std::sync::OnceLock::new();
+    ASTAH.get_or_init(umlcraft_asta_export::Astah::find).as_ref()
+}
+
+/// What the export reports as left out: an element kind, or something Astah cannot express.
+fn export_dropped_label(key: &str) -> String {
+    for prefix in ["export_dropped", "kind"] {
+        let path = format!("{prefix}.{key}");
+        let label = t!(path.as_str()).to_string();
+        if label != path {
+            return label;
+        }
+    }
+    key.to_owned()
 }
 
 /// "name.ucraft — C:\Users\…\folder": file name first, the folder shortened in the middle.
@@ -973,6 +1085,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::new_project))
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::import_astah))
+            .on_action(cx.listener(Self::export_astah))
             .on_action(cx.listener(Self::open_recent))
             .on_action(cx.listener(Self::open_sample))
             .on_action(cx.listener(Self::save_project))

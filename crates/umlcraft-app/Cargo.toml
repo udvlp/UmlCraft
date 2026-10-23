@@ -15,6 +15,7 @@ umlcraft-model.workspace = true
 umlcraft-format.workspace = true
 umlcraft-notation.workspace = true
 umlcraft-asta.workspace = true
+umlcraft-asta-export.workspace = true
 gpui-kit.workspace = true
 anyhow.workspace = true
 rust-i18n.workspace = true

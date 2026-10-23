@@ -13,6 +13,7 @@ umlcraft-model = { path = "crates/umlcraft-model" }
 umlcraft-format = { path = "crates/umlcraft-format" }
 umlcraft-notation = { path = "crates/umlcraft-notation" }
 umlcraft-asta = { path = "crates/umlcraft-asta" }
+umlcraft-asta-export = { path = "crates/umlcraft-asta-export" }
 
 # gpui-kit pins the matching GPUI release (gpui-pre) together with gpui-component.
 gpui-kit = "=0.8.0"

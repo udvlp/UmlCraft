@@ -2,7 +2,7 @@
 
 A UML modeling tool written in Rust with [GPUI](https://gpui.rs), built from scratch after the
 model of Astah Professional. Milestone 1 covers class, use case and sequence diagrams, plus
-importing `.asta` files (read only).
+importing `.asta` files and exporting them through an installed Astah.
 
 ## Status
 
@@ -36,6 +36,13 @@ importing `.asta` files (read only).
   notes and colors; sequence diagrams with lifelines, messages in their order and combined
   fragments with operands and guards. Anything UmlCraft cannot represent yet is skipped and
   reported.
+- **Astah export** (`umlcraft-asta-export`, File › Export › Astah project …, shown when Astah is
+  installed): writes `.asta` files through Astah's official API instead of its fragile file
+  format. A small Java tool (`tools/asta-export`) runs on the JRE that comes with Astah and
+  rebuilds packages, classifiers, features, relationships, notes and the class, use case and
+  sequence diagrams with positions, sizes, waypoints, message order and combined fragments.
+  What the API cannot express is reported. In a test with Astah Professional 12 this worked
+  without a license file; see [docs/architecture.md](docs/architecture.md#astah-export).
 
 This completes milestone 1. Next: further diagram kinds (activity, state) and image export.
 
@@ -57,6 +64,8 @@ cargo test --workspace
 | `crates/umlcraft-format` | `.ucraft` files: JSON, stably sorted, versioned |
 | `crates/umlcraft-notation` | UML notation without UI: scene, hit testing, palettes, connection rules |
 | `crates/umlcraft-asta` | Read-only import of Astah `.asta` files |
+| `crates/umlcraft-asta-export` | Export to `.asta` through an installed Astah and its API |
+| `tools/asta-export` | The Java tool that drives the Astah API |
 | `crates/umlcraft-app` | GPUI application (`gpui-kit` 0.8) |
 
 Details: [docs/architecture.md](docs/architecture.md).

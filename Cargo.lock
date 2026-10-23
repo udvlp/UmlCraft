@@ -6612,6 +6612,7 @@ dependencies = [
  "serde_json",
  "sys-locale",
  "umlcraft-asta",
+ "umlcraft-asta-export",
  "umlcraft-format",
  "umlcraft-model",
  "umlcraft-notation",
@@ -6626,6 +6627,20 @@ dependencies = [
  "umlcraft-model",
  "umlcraft-notation",
  "zip",
+]
+
+[[package]]
+name = "umlcraft-asta-export"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "umlcraft-asta",
+ "umlcraft-format",
+ "umlcraft-model",
+ "umlcraft-notation",
 ]
 
 [[package]]

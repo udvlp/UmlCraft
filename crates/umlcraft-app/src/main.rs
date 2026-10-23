@@ -20,6 +20,7 @@ actions!(
         NewProject,
         OpenProject,
         ImportAstah,
+        ExportAstah,
         SaveProject,
         SaveProjectAs,
         Quit,
