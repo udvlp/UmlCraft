@@ -478,11 +478,10 @@ impl NewItem {
             Self::Operation => kind.can_own(&ElementKind::operation(None)),
             Self::Literal => kind.can_own(&ElementKind::EnumerationLiteral),
             Self::ExtensionPoint => kind.can_own(&ElementKind::ExtensionPoint),
-            // Sequence and activity diagrams bring their own interaction or activity, which
-            // namespaces can own.
-            Self::Diagram(DiagramKind::Sequence) => kind.can_own(&ElementKind::Interaction),
-            Self::Diagram(DiagramKind::Activity) => kind.can_own(&ElementKind::Activity),
-            Self::Diagram(d) => kind.can_own(&ElementKind::diagram(d)),
+            Self::Diagram(d) => match behavior_of(d) {
+                Some(behavior) => kind.can_own(&behavior),
+                None => kind.can_own(&ElementKind::diagram(d)),
+            },
         }
     }
 
@@ -498,7 +497,19 @@ impl NewItem {
             Self::Diagram(DiagramKind::UseCase) => "diagram.useCase".into(),
             Self::Diagram(DiagramKind::Sequence) => "diagram.sequence".into(),
             Self::Diagram(DiagramKind::Activity) => "diagram.activity".into(),
+            Self::Diagram(DiagramKind::StateMachine) => "diagram.stateMachine".into(),
         }
+    }
+}
+
+/// The behavior a new diagram of `kind` brings along and lives in: sequence diagrams an
+/// interaction, activity diagrams an activity, state machine diagrams a state machine.
+fn behavior_of(kind: DiagramKind) -> Option<ElementKind> {
+    match kind {
+        DiagramKind::Sequence => Some(ElementKind::Interaction),
+        DiagramKind::Activity => Some(ElementKind::Activity),
+        DiagramKind::StateMachine => Some(ElementKind::StateMachine),
+        DiagramKind::Class | DiagramKind::UseCase => None,
     }
 }
 
@@ -535,17 +546,15 @@ impl Workspace {
                 NewItem::Operation => {
                     tx.create(owner, ElementData::new(name, ElementKind::operation(None)))
                 }
-                NewItem::Diagram(kind @ (DiagramKind::Sequence | DiagramKind::Activity)) => {
-                    let behavior = if kind == DiagramKind::Sequence {
-                        ElementKind::Interaction
-                    } else {
-                        ElementKind::Activity
-                    };
-                    let behavior = tx.create(owner, ElementData::new(name.clone(), behavior))?;
-                    tx.create(behavior, ElementData::new(name, ElementKind::diagram(kind)))
-                }
                 NewItem::Diagram(kind) => {
-                    tx.create(owner, ElementData::new(name, ElementKind::diagram(kind)))
+                    let diagram = ElementData::new(name.clone(), ElementKind::diagram(kind));
+                    match behavior_of(kind) {
+                        Some(behavior) => {
+                            let behavior = tx.create(owner, ElementData::new(name, behavior))?;
+                            tx.create(behavior, diagram)
+                        }
+                        None => tx.create(owner, diagram),
+                    }
                 }
             }
         });
@@ -586,6 +595,7 @@ fn keeps_words(tool: NodeTool) -> bool {
             | NodeTool::Action
             | NodeTool::ObjectNode
             | NodeTool::Partition
+            | NodeTool::State
     )
 }
 

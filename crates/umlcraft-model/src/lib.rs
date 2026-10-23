@@ -24,7 +24,8 @@ pub use element::{
     DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, GeneralizationProps,
     IncludeProps, InteractionOperandProps, InteractionOperator, LifelineProps, MessageProps,
     MessageSort, Multiplicity, Navigability, OperationProps, ParameterDirection, ParameterProps,
-    ParseMultiplicityError, RefRole, TaggedValue, TypeRef, Visibility,
+    ParseMultiplicityError, PseudostateKind, PseudostateProps, RefRole, StateProps, TaggedValue,
+    TransitionProps, TypeRef, Visibility,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

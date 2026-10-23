@@ -48,7 +48,7 @@ const OPERATORS: [InteractionOperator; 12] = [
     InteractionOperator::Consider,
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Field {
     Name,
     Declaration,
@@ -61,9 +61,14 @@ enum Field {
     Arguments,
     ReturnValue,
     Guard,
+    Trigger,
+    Effect,
+    Entry,
+    DoActivity,
+    Exit,
 }
 
-const TEXT_FIELDS: [Field; 8] = [
+const TEXT_FIELDS: [Field; 13] = [
     Field::Name,
     Field::Declaration,
     Field::Stereotypes,
@@ -72,6 +77,11 @@ const TEXT_FIELDS: [Field; 8] = [
     Field::Arguments,
     Field::ReturnValue,
     Field::Guard,
+    Field::Trigger,
+    Field::Effect,
+    Field::Entry,
+    Field::DoActivity,
+    Field::Exit,
 ];
 
 /// Inputs for one association end.
@@ -95,6 +105,11 @@ pub struct PropertiesPanel {
     arguments: Entity<InputState>,
     return_value: Entity<InputState>,
     guard: Entity<InputState>,
+    trigger: Entity<InputState>,
+    effect: Entity<InputState>,
+    entry: Entity<InputState>,
+    do_activity: Entity<InputState>,
+    exit: Entity<InputState>,
     sort: Entity<Choice>,
     operator: Entity<Choice>,
     /// Operations a message can invoke, with their ids (`None` for "no operation").
@@ -198,6 +213,11 @@ impl PropertiesPanel {
         let arguments = input(window, cx);
         let return_value = input(window, cx);
         let guard = input(window, cx);
+        let trigger = input(window, cx);
+        let effect = input(window, cx);
+        let entry = input(window, cx);
+        let do_activity = input(window, cx);
+        let exit = input(window, cx);
         let sort = cx.new(|cx| SelectState::new(sort_items(), None, window, cx));
         let operator = cx.new(|cx| SelectState::new(operator_items(), None, window, cx));
         let operation = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
@@ -221,6 +241,11 @@ impl PropertiesPanel {
         watch(&arguments, Field::Arguments, cx);
         watch(&return_value, Field::ReturnValue, cx);
         watch(&guard, Field::Guard, cx);
+        watch(&trigger, Field::Trigger, cx);
+        watch(&effect, Field::Effect, cx);
+        watch(&entry, Field::Entry, cx);
+        watch(&do_activity, Field::DoActivity, cx);
+        watch(&exit, Field::Exit, cx);
         for (i, end) in ends.iter().enumerate() {
             watch(&end.role, Field::Role(i), cx);
             watch(&end.multiplicity, Field::Multiplicity(i), cx);
@@ -347,6 +372,11 @@ impl PropertiesPanel {
             arguments,
             return_value,
             guard,
+            trigger,
+            effect,
+            entry,
+            do_activity,
+            exit,
             sort,
             operator,
             operation,
@@ -453,7 +483,37 @@ impl PropertiesPanel {
                 self.apply(id, cx, move |data| match &mut data.kind {
                     ElementKind::InteractionOperand(p) => p.guard = value,
                     ElementKind::ActivityEdge(p) => p.guard = value,
+                    ElementKind::Transition(p) => p.guard = value,
                     _ => {}
+                });
+            }
+            Field::Trigger | Field::Effect => {
+                let state = if field == Field::Trigger { &self.trigger } else { &self.effect };
+                let value = Self::value(state, cx);
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::Transition(p) = &mut data.kind {
+                        let target =
+                            if field == Field::Trigger { &mut p.trigger } else { &mut p.effect };
+                        *target = value;
+                    }
+                });
+            }
+            Field::Entry | Field::DoActivity | Field::Exit => {
+                let state = match field {
+                    Field::Entry => &self.entry,
+                    Field::DoActivity => &self.do_activity,
+                    _ => &self.exit,
+                };
+                let value = Self::value(state, cx);
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::State(p) = &mut data.kind {
+                        let target = match field {
+                            Field::Entry => &mut p.entry,
+                            Field::DoActivity => &mut p.do_activity,
+                            _ => &mut p.exit,
+                        };
+                        *target = value;
+                    }
                 });
             }
             Field::Role(i) => {
@@ -612,6 +672,16 @@ impl PropertiesPanel {
             }
             ElementKind::InteractionOperand(p) => set(&self.guard, p.guard.clone(), window, cx),
             ElementKind::ActivityEdge(p) => set(&self.guard, p.guard.clone(), window, cx),
+            ElementKind::Transition(p) => {
+                set(&self.trigger, p.trigger.clone(), window, cx);
+                set(&self.guard, p.guard.clone(), window, cx);
+                set(&self.effect, p.effect.clone(), window, cx);
+            }
+            ElementKind::State(p) => {
+                set(&self.entry, p.entry.clone(), window, cx);
+                set(&self.do_activity, p.do_activity.clone(), window, cx);
+                set(&self.exit, p.exit.clone(), window, cx);
+            }
             _ => {}
         }
         if let ElementKind::Association(p) = &data.kind {
@@ -1040,6 +1110,30 @@ impl Render for PropertiesPanel {
                     t!("prop.guard").into(),
                     Input::new(&self.guard).small().into_any_element(),
                 ));
+            }
+            ElementKind::Transition(_) => {
+                for (label, state) in [
+                    ("prop.trigger", &self.trigger),
+                    ("prop.guard", &self.guard),
+                    ("prop.effect", &self.effect),
+                ] {
+                    body = body.child(field(
+                        t!(label).into(),
+                        Input::new(state).small().into_any_element(),
+                    ));
+                }
+            }
+            ElementKind::State(_) => {
+                for (label, state) in [
+                    ("prop.entry", &self.entry),
+                    ("prop.do_activity", &self.do_activity),
+                    ("prop.exit", &self.exit),
+                ] {
+                    body = body.child(field(
+                        t!(label).into(),
+                        Input::new(state).small().into_any_element(),
+                    ));
+                }
             }
             _ => {}
         }

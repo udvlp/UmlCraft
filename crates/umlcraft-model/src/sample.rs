@@ -6,7 +6,7 @@ use crate::document::Document;
 use crate::element::{
     ActivityNodeKind, Aggregation, CombinedFragmentProps, ElementData, ElementKind,
     InteractionOperandProps, InteractionOperator, LifelineProps, MessageSort, Multiplicity,
-    TypeRef, Visibility,
+    PseudostateKind, StateProps, TransitionProps, TypeRef, Visibility,
 };
 use crate::geometry::{Point, Rect};
 use crate::id::Id;
@@ -26,6 +26,7 @@ pub struct OrderSystem {
     pub sequence_diagram: Id,
     pub customer_lifeline: Id,
     pub activity_diagram: Id,
+    pub state_diagram: Id,
 }
 
 pub fn order_system() -> (Document, OrderSystem) {
@@ -241,6 +242,76 @@ pub fn order_system() -> (Document, OrderSystem) {
                 tx.add_edge(activity_diagram, Some(flow), from.1, to.1, waypoints)?;
             }
 
+            // The order's life: filled while open, then shipped or cancelled.
+            let machine =
+                tx.create(order, ElementData::new("Order lifecycle", ElementKind::StateMachine))?;
+            let state_diagram = tx.create(
+                machine,
+                ElementData::new(
+                    "Order lifecycle",
+                    ElementKind::diagram(DiagramKind::StateMachine),
+                ),
+            )?;
+            let state = |entry: &str| {
+                ElementKind::State(StateProps { entry: entry.into(), ..Default::default() })
+            };
+            let initial = || ElementKind::pseudostate(PseudostateKind::Initial);
+            let mut vertices: Vec<(Id, Id)> = Vec::new();
+            // (owner index in `vertices`, name, kind, bounds); composite states come first.
+            for (owner, name, kind, (x, y, w, h)) in [
+                (None, "", initial(), (40.0, 135.0, 20.0, 20.0)),
+                (None, "Open", state(""), (100.0, 60.0, 300.0, 170.0)),
+                (Some(1), "", initial(), (115.0, 130.0, 20.0, 20.0)),
+                (Some(1), "Empty", state(""), (160.0, 120.0, 80.0, 40.0)),
+                (Some(1), "Filled", state(""), (290.0, 120.0, 80.0, 40.0)),
+                (None, "Submitted", state("check stock"), (480.0, 115.0, 120.0, 60.0)),
+                (None, "Shipped", state(""), (680.0, 60.0, 100.0, 40.0)),
+                (None, "Cancelled", state(""), (680.0, 180.0, 100.0, 40.0)),
+                (None, "", ElementKind::FinalState, (850.0, 135.0, 20.0, 20.0)),
+            ] {
+                let owner = owner.map_or(machine, |i: usize| vertices[i].0);
+                let element = tx.create(owner, ElementData::new(name, kind))?;
+                let presentation =
+                    tx.add_node(state_diagram, Some(element), Rect::new(x, y, w, h))?;
+                vertices.push((element, presentation));
+            }
+            let [start, open, inner, empty, filled, submitted, shipped, cancelled, done] =
+                vertices[..]
+            else {
+                unreachable!()
+            };
+            for (from, to, (trigger, guard, effect), waypoints) in [
+                (start, open, ("", "", ""), vec![]),
+                (inner, empty, ("", "", ""), vec![]),
+                (empty, filled, ("add item", "", ""), vec![]),
+                // A self-transition loops at the top right corner.
+                (
+                    filled,
+                    filled,
+                    ("add item", "", ""),
+                    vec![
+                        Point::new(388.0, 140.0),
+                        Point::new(388.0, 102.0),
+                        Point::new(345.0, 102.0),
+                    ],
+                ),
+                (open, submitted, ("submit", "", ""), vec![]),
+                (submitted, shipped, ("", "in stock", "ship"), vec![]),
+                (submitted, cancelled, ("cancel", "", ""), vec![]),
+                (shipped, done, ("", "", ""), vec![]),
+                (cancelled, done, ("", "", ""), vec![]),
+            ] {
+                let kind = ElementKind::Transition(TransitionProps {
+                    source: from.0,
+                    target: to.0,
+                    trigger: trigger.into(),
+                    guard: guard.into(),
+                    effect: effect.into(),
+                });
+                let transition = tx.create(machine, ElementData::new("", kind))?;
+                tx.add_edge(state_diagram, Some(transition), from.1, to.1, waypoints)?;
+            }
+
             Ok(OrderSystem {
                 domain,
                 customer,
@@ -253,6 +324,7 @@ pub fn order_system() -> (Document, OrderSystem) {
                 sequence_diagram,
                 customer_lifeline,
                 activity_diagram,
+                state_diagram,
             })
         })
         .expect("sample model is valid");

@@ -79,11 +79,22 @@ tool:
   objectNode: Object node
   partition: Partition
   flow: Flow
+  state: State
+  finalState: Final state
+  initialPseudostate: Initial
+  choice: Choice
+  junction: Junction
+  forkPseudostate: Fork
+  joinPseudostate: Join
+  shallowHistory: History
+  deepHistory: Deep history
+  transition: Transition
 diagram:
   class: Class diagram
   useCase: Use case diagram
   sequence: Sequence diagram
   activity: Activity diagram
+  stateMachine: State machine diagram
 panel:
   model: Model
   properties: Properties
@@ -124,6 +135,11 @@ prop:
   add_operand: Add operand
   delete_operand: Delete operand
   guard: Guard
+  trigger: Trigger
+  effect: Effect
+  entry: Entry
+  do_activity: Do
+  exit: Exit
   covered: Covered lifelines
   covered_automatic: None ticked – the fragment covers the lifelines of its messages.
 message_sort:
@@ -256,3 +272,15 @@ kind:
   join: Join node
   objectNode: Object node
   partition: Partition
+  stateMachine: State machine
+  state: State
+  finalState: Final state
+  pseudostate: Pseudostate
+  transition: Transition
+  initialPseudostate: Initial pseudostate
+  choice: Choice
+  junction: Junction
+  forkPseudostate: Fork
+  joinPseudostate: Join
+  shallowHistory: Shallow history
+  deepHistory: Deep history

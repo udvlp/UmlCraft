@@ -5,10 +5,11 @@ use umlcraft_model::{Element, ElementKind, Id, Model, Visibility};
 use umlcraft_notation::palette::NodeTool;
 use umlcraft_notation::sequence::{message_text, operator_keyword};
 
-/// The element's metaclass; activity nodes say which kind of node they are.
+/// The element's metaclass; activity nodes and pseudostates say which kind they are.
 pub fn kind_label(e: &Element) -> String {
     let key = match e.kind() {
         ElementKind::ActivityNode(p) => NodeTool::for_activity_node(p.node).key(),
+        ElementKind::Pseudostate(p) => NodeTool::for_pseudostate(p.pseudostate).key(),
         kind => kind.type_name(),
     };
     t!(format!("kind.{key}")).to_string()
@@ -30,6 +31,7 @@ pub fn tree_name(model: &Model, e: &Element) -> String {
         ElementKind::CombinedFragment(p) => operator_keyword(p.operator).to_owned(),
         ElementKind::InteractionOperand(p) => guard(&p.guard),
         ElementKind::ActivityEdge(p) => guard(&p.guard),
+        ElementKind::Transition(p) => p.label(),
         _ => String::new(),
     };
     if shown.is_empty() { display_name(e) } else { shown }

@@ -79,11 +79,22 @@ tool:
   objectNode: Objektknoten
   partition: Partition
   flow: Fluss
+  state: Zustand
+  finalState: Endzustand
+  initialPseudostate: Start
+  choice: Auswahl
+  junction: Kreuzung
+  forkPseudostate: Gabelung
+  joinPseudostate: Vereinigung
+  shallowHistory: Historie
+  deepHistory: Tiefe Historie
+  transition: Transition
 diagram:
   class: Klassendiagramm
   useCase: Anwendungsfalldiagramm
   sequence: Sequenzdiagramm
   activity: Aktivitätsdiagramm
+  stateMachine: Zustandsdiagramm
 panel:
   model: Modell
   properties: Eigenschaften
@@ -124,6 +135,11 @@ prop:
   add_operand: Operand hinzufügen
   delete_operand: Operand löschen
   guard: Bedingung
+  trigger: Auslöser
+  effect: Effekt
+  entry: Eintritt
+  do_activity: Während
+  exit: Austritt
   covered: Umfasste Lebenslinien
   covered_automatic: Keine angekreuzt – das Fragment umfasst die Lebenslinien seiner Nachrichten.
 message_sort:
@@ -256,3 +272,15 @@ kind:
   join: Vereinigung
   objectNode: Objektknoten
   partition: Partition
+  stateMachine: Zustandsautomat
+  state: Zustand
+  finalState: Endzustand
+  pseudostate: Pseudozustand
+  transition: Transition
+  initialPseudostate: Startzustand
+  choice: Auswahl
+  junction: Kreuzung
+  forkPseudostate: Gabelung
+  joinPseudostate: Vereinigung
+  shallowHistory: Flache Historie
+  deepHistory: Tiefe Historie

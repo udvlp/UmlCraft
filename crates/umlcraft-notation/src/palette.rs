@@ -5,7 +5,7 @@ use umlcraft_model::{
     ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
     DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps,
     InteractionOperandProps, InteractionOperator, LifelineProps, MessageSort, Model, ModelError,
-    Point, Rect, Result, Size, Tx,
+    Point, PseudostateKind, Rect, Result, Size, StateProps, Tx,
 };
 
 use crate::sequence::Slot;
@@ -32,6 +32,15 @@ pub enum NodeTool {
     Join,
     ObjectNode,
     Partition,
+    State,
+    FinalState,
+    InitialPseudostate,
+    Choice,
+    Junction,
+    ForkPseudostate,
+    JoinPseudostate,
+    ShallowHistory,
+    DeepHistory,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -49,6 +58,7 @@ pub enum EdgeTool {
     CreateMessage,
     DestroyMessage,
     Flow,
+    Transition,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -117,6 +127,21 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
             ],
             &[E::Flow, E::NoteAnchor],
         ),
+        DiagramKind::StateMachine => (
+            &[
+                N::State,
+                N::InitialPseudostate,
+                N::FinalState,
+                N::Choice,
+                N::Junction,
+                N::ForkPseudostate,
+                N::JoinPseudostate,
+                N::ShallowHistory,
+                N::DeepHistory,
+                N::Note,
+            ],
+            &[E::Transition, E::NoteAnchor],
+        ),
     };
     std::iter::once(Tool::Select)
         .chain(nodes.iter().map(|&n| Tool::Node(n)))
@@ -147,6 +172,15 @@ impl NodeTool {
             Self::Join => "join",
             Self::ObjectNode => "objectNode",
             Self::Partition => "partition",
+            Self::State => "state",
+            Self::FinalState => "finalState",
+            Self::InitialPseudostate => "initialPseudostate",
+            Self::Choice => "choice",
+            Self::Junction => "junction",
+            Self::ForkPseudostate => "forkPseudostate",
+            Self::JoinPseudostate => "joinPseudostate",
+            Self::ShallowHistory => "shallowHistory",
+            Self::DeepHistory => "deepHistory",
         }
     }
 
@@ -173,18 +207,37 @@ impl NodeTool {
         }
     }
 
-    /// Whether new elements of this tool get a generated name. Notes and control nodes stay
-    /// unnamed; their names are not shown.
+    /// The tool that creates pseudostates of `kind`.
+    pub fn for_pseudostate(kind: PseudostateKind) -> Self {
+        match kind {
+            PseudostateKind::Initial => Self::InitialPseudostate,
+            PseudostateKind::Choice => Self::Choice,
+            PseudostateKind::Junction => Self::Junction,
+            PseudostateKind::Fork => Self::ForkPseudostate,
+            PseudostateKind::Join => Self::JoinPseudostate,
+            PseudostateKind::ShallowHistory => Self::ShallowHistory,
+            PseudostateKind::DeepHistory => Self::DeepHistory,
+        }
+    }
+
+    /// Whether new elements of this tool get a generated name. Notes, control nodes, final
+    /// states and pseudostates stay unnamed; their names are not shown.
     pub fn is_named(self) -> bool {
-        match self.activity_node() {
-            Some(kind) => matches!(kind, ActivityNodeKind::Action | ActivityNodeKind::Object),
-            None => self != Self::Note,
+        match self.element_kind() {
+            ElementKind::ActivityNode(p) => {
+                matches!(p.node, ActivityNodeKind::Action | ActivityNodeKind::Object)
+            }
+            ElementKind::Comment(_) | ElementKind::FinalState | ElementKind::Pseudostate(_) => {
+                false
+            }
+            _ => true,
         }
     }
 
     pub fn element_kind(self) -> ElementKind {
         let classifier = ClassifierProps::default();
         let node = ElementKind::activity_node;
+        let pseudostate = ElementKind::pseudostate;
         match self {
             Self::Class => ElementKind::Class(classifier),
             Self::Interface => ElementKind::Interface(classifier),
@@ -209,6 +262,15 @@ impl NodeTool {
             Self::Join => node(ActivityNodeKind::Join),
             Self::ObjectNode => node(ActivityNodeKind::Object),
             Self::Partition => ElementKind::Partition,
+            Self::State => ElementKind::State(StateProps::default()),
+            Self::FinalState => ElementKind::FinalState,
+            Self::InitialPseudostate => pseudostate(PseudostateKind::Initial),
+            Self::Choice => pseudostate(PseudostateKind::Choice),
+            Self::Junction => pseudostate(PseudostateKind::Junction),
+            Self::ForkPseudostate => pseudostate(PseudostateKind::Fork),
+            Self::JoinPseudostate => pseudostate(PseudostateKind::Join),
+            Self::ShallowHistory => pseudostate(PseudostateKind::ShallowHistory),
+            Self::DeepHistory => pseudostate(PseudostateKind::DeepHistory),
         }
     }
 
@@ -231,6 +293,12 @@ impl NodeTool {
             Self::Fork | Self::Join => Size::new(60.0, 5.0),
             Self::ObjectNode => Size::new(80.0, 36.0),
             Self::Partition => Size::new(200.0, 400.0),
+            Self::State => Size::new(100.0, 50.0),
+            Self::FinalState | Self::InitialPseudostate => Size::new(20.0, 20.0),
+            Self::Choice => Size::new(24.0, 24.0),
+            Self::Junction => Size::new(14.0, 14.0),
+            Self::ForkPseudostate | Self::JoinPseudostate => Size::new(60.0, 5.0),
+            Self::ShallowHistory | Self::DeepHistory => Size::new(24.0, 24.0),
         }
     }
 }
@@ -265,6 +333,7 @@ impl EdgeTool {
             Self::CreateMessage => "createMessage",
             Self::DestroyMessage => "destroyMessage",
             Self::Flow => "flow",
+            Self::Transition => "transition",
         }
     }
 
@@ -314,6 +383,19 @@ impl EdgeTool {
                 }
                 _ => false,
             },
+            // Nothing leaves a final state or enters an initial pseudostate; only states loop
+            // back to themselves.
+            Self::Transition => {
+                let initial = matches!(
+                    target,
+                    K::Pseudostate(p) if p.pseudostate == PseudostateKind::Initial
+                );
+                source.is_vertex()
+                    && target.is_vertex()
+                    && !matches!(source, K::FinalState)
+                    && !initial
+                    && (!same || matches!(source, K::State(_)))
+            }
             Self::NoteAnchor => {
                 matches!(source, K::Comment(_)) != matches!(target, K::Comment(_))
                     && !matches!(source, K::Diagram(_) | K::Model)
@@ -340,6 +422,7 @@ impl EdgeTool {
                 condition: String::new(),
             })),
             Self::Flow => Some(ElementKind::flow(source, target)),
+            Self::Transition => Some(ElementKind::transition(source, target)),
             Self::NoteAnchor => None,
             Self::Message
             | Self::AsyncMessage
@@ -373,6 +456,7 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
             kind,
             ElementKind::ActivityNode(_) | ElementKind::Partition | ElementKind::Comment(_)
         ),
+        DiagramKind::StateMachine => kind.is_vertex() || matches!(kind, ElementKind::Comment(_)),
     }
 }
 
@@ -389,6 +473,9 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::SystemBoundary => NodeTool::SystemBoundary,
         ElementKind::CombinedFragment(_) => NodeTool::CombinedFragment,
         ElementKind::ActivityNode(p) => NodeTool::for_activity_node(p.node),
+        ElementKind::State(_) => NodeTool::State,
+        ElementKind::FinalState => NodeTool::FinalState,
+        ElementKind::Pseudostate(p) => NodeTool::for_pseudostate(p.pseudostate),
         ElementKind::Partition => NodeTool::Partition,
         _ => NodeTool::Class,
     };
@@ -536,14 +623,37 @@ pub fn create_node(
     }
     let kind = tool.element_kind();
     let diagram_owner = tx.model().element(diagram)?.owner().ok_or(ModelError::Root)?;
-    let owner = owner_for(tx.model(), diagram_owner, &kind)
-        .ok_or_else(|| ModelError::Invalid(format!("no owner for a new {}", kind.type_name())))?;
+    let owner = match enclosing_state(tx.model(), diagram, origin, &kind) {
+        Some(state) => state,
+        None => owner_for(tx.model(), diagram_owner, &kind).ok_or_else(|| {
+            ModelError::Invalid(format!("no owner for a new {}", kind.type_name()))
+        })?,
+    };
     let name =
         if tool.is_named() { unique_name(tx.model(), owner, base_name) } else { String::new() };
     let element = tx.create(owner, ElementData::new(name, kind))?;
     let bounds = Rect::from_origin_size(origin, tool.default_size());
     let node = add_node_for(tx, diagram, element, bounds)?;
     Ok((element, node))
+}
+
+/// The innermost state drawn around `p` on `diagram`, if a vertex of `kind` placed there is to
+/// become one of its substates.
+fn enclosing_state(model: &Model, diagram: Id, p: Point, kind: &ElementKind) -> Option<Id> {
+    if !kind.is_vertex() {
+        return None;
+    }
+    model
+        .view(diagram)?
+        .presentations()
+        .iter()
+        .filter_map(|pr| Some((pr.element?, pr.bounds()?)))
+        .filter(|(e, b)| {
+            b.contains(p)
+                && model.get(*e).is_some_and(|e| matches!(e.kind(), ElementKind::State(_)))
+        })
+        .min_by(|(_, a), (_, b)| (a.width * a.height).total_cmp(&(b.width * b.height)))
+        .map(|(e, _)| e)
 }
 
 /// Connects two presentations of `diagram` with `tool`. Creates the relationship element in the
@@ -559,9 +669,11 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
     };
     let (s, t) = (element_of(source)?, element_of(target)?);
     let (sk, tk) = (model.element(s)?.kind(), model.element(t)?.kind());
-    // Only associations may loop back to the same node; they get a loop of waypoints.
+    // Only associations and transitions may loop back to the same node; they get a loop of
+    // waypoints.
     let self_loop = source == target;
-    if (self_loop && tool != EdgeTool::Association) || !tool.accepts(sk, tk, s == t) {
+    let may_loop = matches!(tool, EdgeTool::Association | EdgeTool::Transition);
+    if (self_loop && !may_loop) || !tool.accepts(sk, tk, s == t) {
         return Err(ModelError::Invalid(format!(
             "{} cannot connect {} to {}",
             tool.key(),
@@ -727,6 +839,7 @@ pub fn move_to_slot(tx: &mut Tx<'_>, item: Id, slot: Slot) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use umlcraft_model::Shape;
     use umlcraft_model::sample::order_system;
 
     #[test]
@@ -905,6 +1018,41 @@ mod tests {
             })
             .unwrap();
         assert_eq!(doc.model().view(d).unwrap().presentations()[0].id, lane);
+    }
+
+    #[test]
+    fn transitions_and_substates() {
+        let state = ElementKind::State(StateProps::default());
+        let initial = ElementKind::pseudostate(PseudostateKind::Initial);
+        let t = EdgeTool::Transition;
+        assert!(t.accepts(&initial, &state, false));
+        assert!(t.accepts(&state, &ElementKind::FinalState, false));
+        assert!(t.accepts(&state, &state, true), "self-transition");
+        assert!(!t.accepts(&state, &initial, false));
+        assert!(!t.accepts(&ElementKind::FinalState, &state, false));
+        assert!(!t.accepts(&initial, &initial, true));
+
+        let (mut doc, ids) = order_system();
+        let d = ids.state_diagram;
+        let machine = doc.model().get(d).unwrap().owner().unwrap();
+        let (outside, inside, loop_edge) = doc
+            .edit("create", |tx| {
+                let (a, na) = create_node(tx, d, NodeTool::State, Point::new(100.0, 400.0), "S")?;
+                // (170, 140) lies in "Empty", which lies in "Open".
+                let (b, _) = create_node(tx, d, NodeTool::Choice, Point::new(170.0, 140.0), "")?;
+                let edge = connect(tx, d, EdgeTool::Transition, na, na)?;
+                Ok((a, b, edge))
+            })
+            .unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        assert_eq!(model.get(outside).unwrap().owner(), Some(machine));
+        assert_eq!(model.get(model.get(inside).unwrap().owner().unwrap()).unwrap().name(), "Empty");
+        let Shape::Edge { waypoints, .. } = &model.view(d).unwrap().get(loop_edge).unwrap().shape
+        else {
+            panic!()
+        };
+        assert_eq!(waypoints.len(), 3, "a self-transition loops");
     }
 
     #[test]

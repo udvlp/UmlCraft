@@ -237,6 +237,21 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             style: solid,
         }],
         Figure::Rectangle => vec![frame(r, Paint::Fill)],
+        Figure::State { separator } => {
+            let mut result = vec![Primitive::Frame {
+                rect: r,
+                width: 1.0,
+                radius: STATE_RADIUS.min(r.height / 2.0).min(r.width / 2.0),
+                fill: Paint::Fill,
+                border: Paint::Line,
+                style: solid,
+            }];
+            result.extend(
+                separator.map(|y| line(vec![Point::new(r.x, y), Point::new(r.right(), y)], solid)),
+            );
+            result
+        }
+        Figure::Circle => vec![ellipse(r.center(), r.width / 2.0, r.height / 2.0)],
         Figure::Partition { header } => vec![
             frame(r, Paint::Translucent),
             line(vec![Point::new(r.x, *header), Point::new(r.right(), *header)], solid),
@@ -254,6 +269,8 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
 
 /// Corner radius of actions, as far as their size allows.
 const ACTION_RADIUS: f32 = 12.0;
+/// Corner radius of states; less round than actions.
+const STATE_RADIUS: f32 = 8.0;
 
 /// The end markers of an edge; the line itself is [`EdgeShape::points`].
 pub fn markers(edge: &EdgeShape) -> Vec<Primitive> {

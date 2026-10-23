@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, DiagramKind, EdgeLabels,
-    ElementKind, Id, MessageSort, Model, Navigability, Point, Presentation, Rect, Shape, Style,
-    TypeRef,
+    ElementKind, Id, MessageSort, Model, Navigability, Point, Presentation, PseudostateKind, Rect,
+    Shape, StateProps, Style, TypeRef,
 };
 
 use crate::member::member_text;
@@ -133,6 +133,13 @@ pub enum Figure {
     Partition {
         header: f32,
     },
+    /// State machines: a state with rounded corners; a line at `separator` divides the name
+    /// from the internal activities or substates.
+    State {
+        separator: Option<f32>,
+    },
+    /// History pseudostate: a circle around its letter.
+    Circle,
     Other,
 }
 
@@ -140,7 +147,9 @@ impl Figure {
     /// The figure's outline, where edges end.
     fn outline(&self) -> Outline {
         match self {
-            Self::Initial | Self::ActivityFinal | Self::FlowFinal => Outline::Ellipse,
+            Self::Initial | Self::ActivityFinal | Self::FlowFinal | Self::Circle => {
+                Outline::Ellipse
+            }
             Self::Diamond => Outline::Diamond,
             _ => Outline::Rect,
         }
@@ -612,6 +621,27 @@ fn layout_element(
             (r, Figure::Lifeline { head }, vec![row])
         }
         ElementKind::ActivityNode(p) => layout_activity_node(model, id, p, bounds, measure),
+        ElementKind::State(p) => layout_state(model, id, p, bounds, measure),
+        ElementKind::FinalState => (bounds, Figure::ActivityFinal, Vec::new()),
+        ElementKind::Pseudostate(p) => {
+            let figure = match p.pseudostate {
+                PseudostateKind::Initial | PseudostateKind::Junction => Figure::Initial,
+                PseudostateKind::Choice => Figure::Diamond,
+                PseudostateKind::Fork | PseudostateKind::Join => Figure::Bar,
+                PseudostateKind::ShallowHistory | PseudostateKind::DeepHistory => Figure::Circle,
+            };
+            let letter = match p.pseudostate {
+                PseudostateKind::ShallowHistory => "H",
+                PseudostateKind::DeepHistory => "H*",
+                _ => return (bounds, figure, Vec::new()),
+            };
+            let h = line_height(FONT_SIZE);
+            let row = Line::new(letter, FONT_SIZE, RowRole::Stereotype, Some(id)).place(
+                Rect::new(bounds.x, bounds.center().y - h / 2.0, bounds.width, h),
+                LabelAlign::Center,
+            );
+            (bounds, figure, vec![row])
+        }
         ElementKind::Partition => {
             let line = name_line(FONT_SIZE, false);
             let h = line_height(FONT_SIZE);
@@ -728,6 +758,58 @@ fn layout_activity_node(
     (r, figure, rows)
 }
 
+/// States: the name, centered; below a line the internal activities (`entry / …`), or room for
+/// the substates of a composite state.
+fn layout_state(
+    model: &Model,
+    id: Id,
+    props: &StateProps,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    const PAD_X: f32 = 8.0;
+    const PAD_Y: f32 = 4.0;
+    let e = model.get(id).expect("caller checked");
+    let composite =
+        e.children().iter().any(|&c| model.get(c).is_some_and(|c| c.kind().is_vertex()));
+    let activities: Vec<Line> =
+        [("entry", &props.entry), ("do", &props.do_activity), ("exit", &props.exit)]
+            .into_iter()
+            .filter(|(_, text)| !text.trim().is_empty())
+            .map(|(label, text)| {
+                Line::new(
+                    format!("{label} / {}", text.trim()),
+                    FONT_SIZE,
+                    RowRole::Stereotype,
+                    Some(id),
+                )
+            })
+            .collect();
+    let name = Line::new(e.name(), FONT_SIZE, RowRole::Name, Some(id));
+    let h = line_height(FONT_SIZE);
+    let widest = activities.iter().chain([&name]).map(|l| l.width(measure)).fold(0.0, f32::max);
+    let header = h + 2.0 * PAD_Y;
+    let body = if activities.is_empty() { 0.0 } else { h * activities.len() as f32 + 2.0 * PAD_Y };
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width.max(widest + 2.0 * PAD_X).max(40.0),
+        bounds.height.max(header + body).max(30.0),
+    );
+    // A plain state shows its name in the middle; otherwise the name heads the state.
+    let divided = composite || !activities.is_empty();
+    let name_y = if divided { r.y + PAD_Y } else { r.center().y - h / 2.0 };
+    let mut rows = vec![name.place(Rect::new(r.x, name_y, r.width, h), LabelAlign::Center)];
+    let separator = divided.then_some(r.y + header);
+    for (i, line) in activities.into_iter().enumerate() {
+        let y = r.y + header + PAD_Y + h * i as f32;
+        rows.push(
+            line.place(Rect::new(r.x + PAD_X, y, r.width - 2.0 * PAD_X, h), LabelAlign::Left),
+        );
+    }
+    (r, Figure::State { separator }, rows)
+}
+
 /// Splits `text` into lines no wider than `max`; words longer than a line stay whole.
 fn wrap(text: &str, max: f32, size: f32, measure: &dyn TextMeasure) -> Vec<String> {
     let mut lines = Vec::new();
@@ -814,7 +896,10 @@ pub fn with_contents(scene: &Scene, ids: &[Id]) -> Vec<Id> {
         if let Some(container) = scene.node(result[i])
             && matches!(
                 container.figure,
-                Figure::Boundary | Figure::Package { .. } | Figure::Partition { .. }
+                Figure::Boundary
+                    | Figure::Package { .. }
+                    | Figure::Partition { .. }
+                    | Figure::State { .. }
             )
         {
             for n in &scene.nodes {
@@ -1073,11 +1158,14 @@ fn edge_for(
             edge.target_marker = EndMarker::OpenArrow;
             let guard = p.guard.trim();
             if !guard.is_empty() {
-                let guard = format!("[{guard}]");
-                label = Some(match label {
-                    Some(name) => format!("{name} {guard}"),
-                    None => guard,
-                });
+                label = join_label(label, format!("[{guard}]"));
+            }
+        }
+        Some(ElementKind::Transition(p)) => {
+            edge.target_marker = EndMarker::OpenArrow;
+            let text = p.label();
+            if !text.is_empty() {
+                label = join_label(label, text);
             }
         }
         _ => edge.line = LineStyle::Dashed,
@@ -1113,6 +1201,14 @@ fn edge_for(
     ];
     edge.labels.extend(labels.into_iter().flatten());
     edge
+}
+
+/// An edge's name followed by `text`, e.g. a flow's guard.
+fn join_label(name: Option<String>, text: String) -> Option<String> {
+    Some(match name {
+        Some(name) => format!("{name} {text}"),
+        None => text,
+    })
 }
 
 /// Places a role name (`role`) or multiplicity next to the end of the line at `tip`, which
@@ -1749,6 +1845,34 @@ mod tests {
         let first = scene.edges.iter().find(|e| e.points[0].y < 125.0).unwrap();
         assert!((first.points[0].x - 150.0).abs() < 0.01, "{:?}", first.points);
         assert!((first.points[0].y - 120.0).abs() < 0.01, "{:?}", first.points);
+    }
+
+    #[test]
+    fn state_machine_scene() {
+        let (doc, ids) = order_system();
+        let scene = build(doc.model(), ids.state_diagram, &Preview::default(), &ApproxMeasure);
+        let node = |name: &str| {
+            scene.nodes.iter().find(|n| n.rows.first().is_some_and(|r| r.text == name)).unwrap()
+        };
+        // A composite state heads its substates with its name; a state with an entry action
+        // lists it below a line; a plain state shows only its name, in the middle.
+        let open = node("Open");
+        let Figure::State { separator: Some(line) } = open.figure else { panic!() };
+        assert!(open.rows[0].rect.bottom() <= line, "name above the line");
+        let submitted = node("Submitted");
+        assert!(matches!(submitted.figure, Figure::State { separator: Some(_) }));
+        assert_eq!(submitted.rows[1].text, "entry / check stock");
+        let shipped = node("Shipped");
+        assert!(matches!(shipped.figure, Figure::State { separator: None }));
+        assert!((shipped.rows[0].rect.center().y - shipped.rect.center().y).abs() < 0.5);
+
+        let labels: Vec<&str> =
+            scene.edges.iter().flat_map(|e| &e.labels).map(|l| l.text.as_str()).collect();
+        assert!(labels.contains(&"[in stock] / ship"), "{labels:?}");
+        assert_eq!(labels.iter().filter(|&&l| l == "add item").count(), 2);
+        // Moving the composite state moves its substates.
+        let moved = with_contents(&scene, &[open.id]);
+        assert_eq!(moved.len(), 4, "the state, its initial pseudostate and two substates");
     }
 
     #[test]

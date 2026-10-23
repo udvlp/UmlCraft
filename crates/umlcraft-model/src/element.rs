@@ -457,6 +457,69 @@ pub struct ActivityEdgeProps {
     pub guard: String,
 }
 
+/// Internal activities of a state, as `entry / …`, `do / …` and `exit / …`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateProps {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub entry: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub do_activity: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub exit: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PseudostateKind {
+    #[default]
+    Initial,
+    Choice,
+    Junction,
+    Fork,
+    Join,
+    ShallowHistory,
+    DeepHistory,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PseudostateProps {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub pseudostate: PseudostateKind,
+}
+
+/// A transition between two vertices of a state machine, labeled `trigger [guard] / effect`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionProps {
+    pub source: Id,
+    pub target: Id,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trigger: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guard: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect: String,
+}
+
+impl TransitionProps {
+    /// The label as UML writes it: `trigger [guard] / effect`, leaving out what is empty.
+    pub fn label(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.trigger.trim().is_empty() {
+            parts.push(self.trigger.trim().to_owned());
+        }
+        if !self.guard.trim().is_empty() {
+            parts.push(format!("[{}]", self.guard.trim()));
+        }
+        if !self.effect.trim().is_empty() {
+            parts.push(format!("/ {}", self.effect.trim()));
+        }
+        parts.join(" ")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagramProps {
@@ -494,6 +557,13 @@ pub enum ElementKind {
     ActivityEdge(ActivityEdgeProps),
     /// A swimlane. Which nodes lie in it follows from the diagram, as for system boundaries.
     Partition,
+    /// Owns the states and transitions of a state machine diagram.
+    StateMachine,
+    /// A state; it is a composite state when it owns states of its own.
+    State(StateProps),
+    FinalState,
+    Pseudostate(PseudostateProps),
+    Transition(TransitionProps),
     Association(AssociationProps),
     Generalization(GeneralizationProps),
     Realization(DirectedProps),
@@ -524,6 +594,7 @@ pub enum RefRole {
     ExtensionPoint,
     Annotated,
     FlowEnd,
+    TransitionEnd,
 }
 
 impl RefRole {
@@ -543,6 +614,7 @@ impl RefRole {
                 | Self::Extended
                 | Self::MessageEnd
                 | Self::FlowEnd
+                | Self::TransitionEnd
         )
     }
 
@@ -561,6 +633,7 @@ impl RefRole {
             Self::Operation => matches!(target, ElementKind::Operation(_)),
             Self::ExtensionPoint => matches!(target, ElementKind::ExtensionPoint),
             Self::FlowEnd => matches!(target, ElementKind::ActivityNode(_)),
+            Self::TransitionEnd => target.is_vertex(),
             Self::Client | Self::Supplier | Self::Annotated => {
                 !matches!(target, ElementKind::Model | ElementKind::Diagram(_))
             }
@@ -622,6 +695,20 @@ impl ElementKind {
         Self::ActivityEdge(ActivityEdgeProps { source, target, guard: String::new() })
     }
 
+    pub fn pseudostate(pseudostate: PseudostateKind) -> Self {
+        Self::Pseudostate(PseudostateProps { pseudostate })
+    }
+
+    pub fn transition(source: Id, target: Id) -> Self {
+        Self::Transition(TransitionProps {
+            source,
+            target,
+            trigger: String::new(),
+            guard: String::new(),
+            effect: String::new(),
+        })
+    }
+
     pub fn diagram(diagram: DiagramKind) -> Self {
         Self::Diagram(DiagramProps { diagram })
     }
@@ -652,6 +739,11 @@ impl ElementKind {
             Self::ActivityNode(_) => "activityNode",
             Self::ActivityEdge(_) => "activityEdge",
             Self::Partition => "partition",
+            Self::StateMachine => "stateMachine",
+            Self::State(_) => "state",
+            Self::FinalState => "finalState",
+            Self::Pseudostate(_) => "pseudostate",
+            Self::Transition(_) => "transition",
             Self::Association(_) => "association",
             Self::Generalization(_) => "generalization",
             Self::Realization(_) => "realization",
@@ -687,7 +779,13 @@ impl ElementKind {
                 | Self::Include(_)
                 | Self::Extend(_)
                 | Self::ActivityEdge(_)
+                | Self::Transition(_)
         )
+    }
+
+    /// States, final states and pseudostates: what transitions connect.
+    pub fn is_vertex(&self) -> bool {
+        matches!(self, Self::State(_) | Self::FinalState | Self::Pseudostate(_))
     }
 
     fn is_namespace(&self) -> bool {
@@ -725,6 +823,11 @@ impl ElementKind {
             K::Activity => self.is_namespace() || matches!(self, K::Class(_) | K::UseCase(_)),
             K::ActivityNode(_) | K::ActivityEdge(_) => matches!(self, K::Activity),
             K::Partition => matches!(self, K::Activity | K::Partition),
+            K::StateMachine => self.is_namespace() || matches!(self, K::Class(_) | K::UseCase(_)),
+            K::State(_) | K::FinalState | K::Pseudostate(_) => {
+                matches!(self, K::StateMachine | K::State(_))
+            }
+            K::Transition(_) => matches!(self, K::StateMachine),
             K::Association(_)
             | K::Generalization(_)
             | K::Realization(_)
@@ -735,7 +838,7 @@ impl ElementKind {
             K::Diagram(_) => {
                 self.is_namespace()
                     || self.is_classifier()
-                    || matches!(self, K::Interaction | K::Activity)
+                    || matches!(self, K::Interaction | K::Activity | K::StateMachine)
             }
         }
     }
@@ -764,6 +867,9 @@ impl ElementKind {
             Self::ActivityNode(p) => type_ref(&p.type_ref),
             Self::ActivityEdge(p) => {
                 vec![(p.source, RefRole::FlowEnd), (p.target, RefRole::FlowEnd)]
+            }
+            Self::Transition(p) => {
+                vec![(p.source, RefRole::TransitionEnd), (p.target, RefRole::TransitionEnd)]
             }
             Self::Association(p) => {
                 p.ends.iter().map(|end| (end.participant, RefRole::AssociationEnd)).collect()
@@ -809,6 +915,10 @@ impl ElementKind {
             Self::CombinedFragment(p) => p.covered.iter_mut().for_each(f),
             Self::ActivityNode(p) => type_ref(&mut p.type_ref, &mut f),
             Self::ActivityEdge(p) => {
+                f(&mut p.source);
+                f(&mut p.target);
+            }
+            Self::Transition(p) => {
                 f(&mut p.source);
                 f(&mut p.target);
             }
@@ -945,6 +1055,7 @@ mod tests {
             ElementKind::message(MessageSort::Reply, a, b),
             ElementKind::Comment(CommentProps { body: String::new(), annotated: vec![a, b] }),
             ElementKind::flow(a, b),
+            ElementKind::transition(a, b),
             ElementKind::ActivityNode(ActivityNodeProps {
                 node: ActivityNodeKind::Object,
                 type_ref: Some(TypeRef::Element(a)),
@@ -975,5 +1086,24 @@ mod tests {
         assert!(ElementKind::Partition.can_own(&ElementKind::Partition));
         assert!(!ElementKind::Partition.can_own(&action));
         assert!(ElementKind::Activity.can_own(&ElementKind::diagram(DiagramKind::Activity)));
+        let state = ElementKind::State(StateProps::default());
+        assert!(ElementKind::StateMachine.can_own(&state));
+        assert!(state.can_own(&ElementKind::FinalState), "composite states");
+        assert!(!state.can_own(&ElementKind::transition(Id::from_u128(1), Id::from_u128(2))));
+    }
+
+    #[test]
+    fn transition_labels() {
+        let mut t = TransitionProps {
+            source: Id::from_u128(1),
+            target: Id::from_u128(2),
+            trigger: "submit".into(),
+            guard: "in stock".into(),
+            effect: "ship".into(),
+        };
+        assert_eq!(t.label(), "submit [in stock] / ship");
+        t.trigger.clear();
+        t.effect.clear();
+        assert_eq!(t.label(), "[in stock]");
     }
 }
