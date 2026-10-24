@@ -1,101 +1,74 @@
 # UmlCraft
 
 A UML modeling tool written in Rust with [GPUI](https://gpui.rs), built from scratch after the
-model of Astah Professional. Milestone 1 covers class, use case and sequence diagrams, plus
-importing `.asta` files and exporting them through an installed Astah.
+model of Astah Professional. It draws diagrams the way Astah does, opens and writes Astah
+projects, and imports Java source code.
 
-## Status
-
-- **M0** Workspace and GPUI spike: model tree, canvas with pan/zoom, selection, dragging with grid
-  snapping, undo/redo, light/dark theme, German/English.
-- **M1** Model core (`umlcraft-model`) with validated, invertible operations and transactions;
-  JSON project format (`umlcraft-format`).
-- **M2** Editor shell: menu bar, diagram tabs, tool palette per diagram type with connection rules,
-  rubber-band and multiple selection, resizing, alignment, zoom to fit, editable properties panel,
-  context menu in the model tree, New/Open/Save/Recent files with a prompt for unsaved changes;
-  copy/cut/paste (as a copy or as the same elements), waypoints on edges, drag and drop within the
-  model tree and from the tree onto the canvas.
-- **M3** Class diagram: classes grow with their content; inline editing by double-click with a
-  parser for `+ name : Type [0..*] = init` and `+ op(p : T) : R`; attributes, operations and
-  enumeration literals with static/abstract/query/read-only; association ends with role,
-  multiplicity, navigability and aggregation/composition; self-associations; hiding compartments;
-  interface as a circle ("lollipop").
-- **M4** Use case diagram: system boundary (clickable only on its border and title, moves the
-  contained elements along, as packages do); use cases with wrapped names and extension points;
-  extend with condition and choice of extension points.
-- **M5** Sequence diagram: messages run from top to bottom in the order of the interaction, so
-  inserting or moving one moves the rest along; synchronous, asynchronous, reply, create and
-  destroy messages, self messages, activation bars derived from calls and replies; combined
-  fragments (alt, opt, loop, par, …) with operands, guards and covered lifelines, placed with the
-  palette or around selected messages (Ctrl+G); messages and fragments are dragged up and down
-  (also into and out of fragments); labels and guards are edited in place. Interaction uses
-  ("ref" frames referring to another interaction, with arguments) and found and lost messages
-  were added later.
-- **M6** `.asta` import (`umlcraft-asta`, File › Import Astah project, or simply open an `.asta`
-  file): packages, classes, interfaces, enumerations, actors and use cases with attributes,
-  operations, parameters and extension points; associations, generalizations, dependencies,
-  realizations, include and extend; class and use case diagrams with positions, sizes, waypoints,
-  notes and colors; sequence diagrams with lifelines, messages in their order and combined
-  fragments with operands and guards. Anything UmlCraft cannot represent yet is skipped and
-  reported.
-- **Astah export** (`umlcraft-asta-export`, File › Export › Astah project …, needs an installed
-  Astah; without one the menu item explains what is missing): writes `.asta` files through
-  Astah's official API instead of its fragile file format. A small Java tool
-  (`tools/asta-export`) runs on the JRE that comes with Astah and rebuilds packages,
-  classifiers, features, relationships, notes and the class, use case, sequence and activity
-  diagrams with positions, sizes, waypoints, message order and combined fragments. What the API
-  cannot express is reported. In a test with Astah Professional 12 this worked without a license
-  file; see [docs/architecture.md](docs/architecture.md#astah-export).
-- **Image export** (File › Export › Diagram as SVG … / Diagram as PNG …): the open diagram
-  drawn the way Astah exports it, in Astah's colors and at its size. SVG keeps real text, so it
-  stays sharp and searchable; PNG is the same image rasterized at twice the canvas size.
-
-This completes milestone 1.
-
-- **M7** Activity diagrams: actions, initial, activity final and flow final nodes, decision,
-  merge, fork and join, object nodes, flows with guards and partitions (swimlanes, nested as
-  well). New activity diagrams bring their own activity. Imported from and exported to Astah,
-  whose UML 1.4 activity graphs are translated; data flow diagrams and flowcharts stay skipped.
-- **M8** State machine diagrams: states with entry, do and exit, composite states with
-  substates, final states, initial, choice, junction, fork, join and history pseudostates, and
-  transitions labeled `trigger [guard] / effect`. Imported from and exported to Astah;
-  orthogonal regions and internal transitions are not supported yet.
-- **M9** Component and deployment diagrams: components, artifacts and nodes with their icons
-  (nodes as cubes), objects, component and node instances (`name : Type`), dependencies,
-  realizations and associations; nodes take what is deployed on them along. Imported from
-  Astah; Astah's API has no editors for these diagrams, so the export writes them as class
-  diagrams and every instance as an object.
-- **Sequence diagrams as in Astah**: sequence diagrams now store their geometry the way Astah
-  does (the "sd" frame, lifeline heads and lengths, activation bars, message heights, fragment
-  frames) and are drawn with Astah's measures: robustness icons, bars nested 10 apart, message
-  numbers ("2.1", "3.1.2.1-A"), guards, return values after calls, `loop [condition]` tabs.
-  Imported Astah diagrams and their SVG exports match Astah's practically pixel for pixel.
-  Drawing follows Astah's rules: calls get bars, replies leave at the end of their bar, bars and
-  lifelines grow around their content, and the interaction's order follows the drawing. Files
-  from earlier versions are laid out once when opened.
-- **Class diagrams as in Astah**: template parameters (type and value parameters with bounds and
-  defaults) drawn in a dashed box, bound templates such as `Box<Holder, 20>`, qualifiers in a
-  box at the association end, static ends underlined, leaf classes and operations, visibility
-  symbols in a column of their own, and Astah's four line styles for edges (line or curve, each
-  also right-angled). Imported from and exported to Astah.
-- **Java import** (`umlcraft-reverse`, Tools › Java › Import Java files … / Import Java
-  folder …): reads declarations from `.java` sources into the open project as Astah's own
-  import does: packages, classes, interfaces, enumerations, records and annotation types with
-  attributes, operations, template parameters, supertypes and Javadoc; library types become
-  placeholders at their package path (`java › util › List`), and fields typed by a model type
-  become associations (`*`, `{ordered}`, `{unique}`, a qualifier for map keys). Method bodies
-  are skipped, files with syntax errors are reported, and importing again updates the model
-  instead of duplicating it. The whole import is one undo step; a project of 6,300 files takes
-  about ten seconds. Built for more languages: C# and C++ are to follow.
-
-Next: composite structure diagrams (ports, parts, connectors), orthogonal regions, moving
-states into other states.
+![UmlCraft with the sample project's state machine diagram](assets/screenshot.png)
 
 ## Download
 
 Releases for Windows (x64), macOS (universal) and Linux (x64) are on the
 [releases page](https://github.com/udvlp/UmlCraft/releases). The builds are not signed yet; the
-release notes explain how to start them anyway.
+release notes explain how to start them anyway. What changed between releases is in the
+[changelog](CHANGELOG.md).
+
+## Diagrams
+
+| Diagram | What it covers |
+| --- | --- |
+| Class | Classes, interfaces (also as a circle), enumerations and packages; attributes, operations and template parameters with bounds and defaults; associations with roles, multiplicities, navigability, aggregation, qualifiers and static ends; generalization, realization, dependency; bound templates such as `Box<Holder, 20>` |
+| Use case | Actors, use cases with extension points, system boundary, include and extend with condition |
+| Sequence | Lifelines, synchronous, asynchronous, reply, create, destroy, self, found and lost messages, activation bars, message numbers, combined fragments (alt, opt, loop, par, …) with operands and guards, interaction uses |
+| Activity | Actions, initial and final nodes, decision, merge, fork and join, object nodes, flows with guards, partitions (also nested) |
+| State machine | States with entry, do and exit, composite states, final states, initial, choice, junction, fork, join and history pseudostates, transitions labeled `trigger [guard] / effect` |
+| Component and deployment | Components, artifacts and nodes with their icons, objects and instances, deployments |
+
+Diagrams are laid out and drawn with Astah's measures, so an imported Astah diagram looks the
+same in UmlCraft; for sequence diagrams the SVG exports match Astah's practically pixel for pixel.
+
+## Working with Astah
+
+- **Open `.asta` files** (File › Import Astah project, or simply open the file): the model with
+  all diagram kinds above, positions, sizes, waypoints, line styles, notes and colors. Anything
+  UmlCraft cannot represent yet is skipped and reported.
+- **Export to Astah** (File › Export › Astah project …): writes `.asta` files through Astah's
+  official API, so Astah must be installed; without it the menu item explains what is missing.
+  What the API cannot express is reported. See
+  [docs/architecture.md](docs/architecture.md#astah-export).
+- **Images** (File › Export › Diagram as SVG … / Diagram as PNG …): the open diagram the way
+  Astah exports it, in Astah's colors and at its size. SVG keeps real text; PNG is rasterized at
+  twice the canvas size.
+
+## Importing source code
+
+Tools › Java › Import Java files … / Import Java folder … reads declarations from `.java` sources
+into the open project, as Astah's own import does: packages, classes, interfaces, enumerations,
+records and annotation types with attributes, operations, template parameters, supertypes and
+Javadoc. Library types become placeholders at their package path (`java › util › List`), and
+fields typed by a model type become associations (`*`, `{ordered}`, `{unique}`, a qualifier for
+map keys). Method bodies are skipped, files with syntax errors are reported, and importing again
+updates the model instead of duplicating it. The whole import is one undo step; a project of
+6,300 files takes about ten seconds.
+
+## Editing
+
+Inline editing by double-click with a parser for `+ name : Type [0..*] = init` and
+`+ op(p : T) : R`; a properties panel for everything else. Undo and redo for every change, copy,
+cut and paste (as a copy or as the same elements), rubber-band and multiple selection, alignment,
+waypoints, zoom to fit, drag and drop within the model tree and from the tree onto the canvas.
+Light and dark theme, German and English.
+
+## Not yet supported
+
+- Composite structure diagrams (ports, parts, connectors)
+- Orthogonal regions and internal transitions in state machines; moving states into other states
+- Astah's data flow diagrams and flowcharts (skipped on import)
+- Component and deployment diagrams are exported to Astah as class diagrams, because Astah's API
+  has no editors for them
+- Importing C# and C++ (the source import is built for them, the front-ends are still missing)
+- Code generation
+- Signed builds
 
 ## Build and run
 
@@ -112,7 +85,8 @@ On Debian/Ubuntu, GPUI needs some system libraries first:
 
 ## Releasing
 
-1. Set the version in `Cargo.toml` (`workspace.package.version`) and commit.
+1. Set the version in `Cargo.toml` (`workspace.package.version`), add the release to
+   [CHANGELOG.md](CHANGELOG.md) and commit.
 2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
 3. The [release workflow](.github/workflows/release.yml) checks that the tag matches the version,
    builds the Windows `.zip`, Linux `.tar.gz` and macOS `.dmg`, adds the third-party license
