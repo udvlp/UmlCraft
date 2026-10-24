@@ -4,13 +4,17 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 use rust_i18n::t;
-use umlcraft_model::{ElementKind, Id, LineShape, Point as MPoint, Rect};
+use umlcraft_model::{
+    Aggregation, AssociationEnd, ElementKind, Id, LineShape, Model, Multiplicity, Navigability,
+    Point as MPoint, Rect,
+};
 use umlcraft_notation::draw::{self, Paint, Primitive};
 use umlcraft_notation::member::member_text;
 use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
@@ -21,10 +25,10 @@ use umlcraft_notation::scene::{
 };
 use umlcraft_notation::sequence::SequenceLayout;
 
-use crate::workspace::Workspace;
+use crate::workspace::{EndChange, Workspace};
 use crate::{
-    Cancel, DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetZoom, SelectAll, SetLineShape,
-    ZoomToFit,
+    Cancel, DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetLabels, ResetLineEnds, ResetZoom,
+    SelectAll, SetAssociationEnd, SetLineShape, ZoomToFit,
 };
 
 const MIN_ZOOM: f32 = 0.25;
@@ -47,6 +51,106 @@ fn snap(v: f32) -> f32 {
 
 fn snap_point(p: MPoint) -> MPoint {
     MPoint::new(snap(p.x), snap(p.y))
+}
+
+/// One end of an association as the context menu shows it.
+struct EndEntry {
+    label: String,
+    end: AssociationEnd,
+}
+
+/// The association edge `presentation` shows, with a menu label for each end: the participant's
+/// name and its role, if any.
+fn association_ends(
+    model: &Model,
+    diagram: Option<Id>,
+    presentation: Id,
+) -> Option<(Id, Vec<EndEntry>)> {
+    let element = model.view(diagram?)?.get(presentation)?.element?;
+    let ElementKind::Association(p) = model.get(element)?.kind() else { return None };
+    let ends = p
+        .ends
+        .iter()
+        .map(|end| {
+            let name = model.get(end.participant).map(|e| e.name().to_owned()).unwrap_or_default();
+            let label = if end.role.is_empty() { name } else { format!("{name} ({})", end.role) };
+            EndEntry { label, end: end.clone() }
+        })
+        .collect();
+    Some((element, ends))
+}
+
+/// The choices of one submenu for an end: label, whether the end has it, the change.
+type EndChoices = fn(&AssociationEnd) -> Vec<(String, bool, EndChange)>;
+
+fn navigability_choices(end: &AssociationEnd) -> Vec<(String, bool, EndChange)> {
+    [
+        (Navigability::Unspecified, "navigability.unspecified"),
+        (Navigability::Navigable, "navigability.navigable"),
+        (Navigability::NonNavigable, "navigability.non_navigable"),
+    ]
+    .into_iter()
+    .map(|(n, key)| (t!(key).to_string(), end.navigability == n, EndChange::Navigability(n)))
+    .collect()
+}
+
+fn aggregation_choices(end: &AssociationEnd) -> Vec<(String, bool, EndChange)> {
+    [
+        (Aggregation::None, "aggregation.none"),
+        (Aggregation::Shared, "aggregation.shared"),
+        (Aggregation::Composite, "aggregation.composite"),
+    ]
+    .into_iter()
+    .map(|(a, key)| (t!(key).to_string(), end.aggregation == a, EndChange::Aggregation(a)))
+    .collect()
+}
+
+fn multiplicity_choices(end: &AssociationEnd) -> Vec<(String, bool, EndChange)> {
+    [
+        None,
+        Some(Multiplicity::OPTIONAL),
+        Some(Multiplicity::ONE),
+        Some(Multiplicity::MANY),
+        Some(Multiplicity::ONE_OR_MORE),
+    ]
+    .into_iter()
+    .map(|m| {
+        let label = m.map_or_else(|| t!("menu.unspecified").to_string(), |m| m.to_string());
+        (label, end.multiplicity == m, EndChange::Multiplicity(m))
+    })
+    .collect()
+}
+
+/// Astah's submenus for an association: navigability, aggregation and multiplicity, each with
+/// a section per end.
+fn association_menu(
+    menu: PopupMenu,
+    association: Id,
+    ends: Vec<EndEntry>,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let ends = Rc::new(ends);
+    let submenus: [(&str, EndChoices); 3] = [
+        ("menu.navigability", navigability_choices),
+        ("menu.aggregation", aggregation_choices),
+        ("menu.multiplicity", multiplicity_choices),
+    ];
+    submenus.into_iter().fold(menu, |menu, (title, choices)| {
+        let ends = ends.clone();
+        menu.submenu(t!(title), window, cx, move |menu, _, _| {
+            ends.iter().enumerate().fold(menu, |mut menu, (i, entry)| {
+                if i > 0 {
+                    menu = menu.separator();
+                }
+                menu = menu.label(entry.label.clone());
+                choices(&entry.end).into_iter().fold(menu, |menu, (label, checked, change)| {
+                    let action = SetAssociationEnd { association, end: i, change };
+                    menu.menu_with_check(label, checked, Box::new(action))
+                })
+            })
+        })
+    })
 }
 
 /// An element dragged from the model tree.
@@ -183,6 +287,32 @@ impl TextMeasure for FontMeasure<'_> {
             None,
         );
         f32::from(line.width())
+    }
+}
+
+/// Measures text with the app's font system by adding up the advances of the characters, as
+/// Java does without kerning. It needs no window, so the workspace keeps one for sizing boxes.
+pub struct AppMeasure {
+    text: Arc<TextSystem>,
+    regular: FontId,
+    bold: FontId,
+}
+
+impl AppMeasure {
+    pub fn new(cx: &App) -> Self {
+        let text = cx.text_system().clone();
+        let regular = text.resolve_font(&font(DIAGRAM_FONT));
+        let bold = text.resolve_font(&font(DIAGRAM_FONT).bold());
+        Self { text, regular, bold }
+    }
+}
+
+impl TextMeasure for AppMeasure {
+    fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        let font = if bold { self.bold } else { self.regular };
+        let advance =
+            |c| self.text.advance(font, px(font_size), c).map_or(0.0, |s| f32::from(s.width));
+        text.chars().map(advance).sum()
     }
 }
 
@@ -526,13 +656,25 @@ impl DiagramCanvas {
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
-        let (current, nothing, focus) = {
+        let (current, labeled, association, nothing, focus) = {
             let this = canvas.read(cx);
+            let ws = this.workspace.read(cx);
             let current: Vec<LineShape> = this.selected_edges(cx).iter().map(|e| e.shape).collect();
-            (current, this.workspace.read(cx).selection.is_empty(), this.focus_handle.clone())
+            let labeled = ws.selection.iter().any(|&id| this.scene.edge(id).is_some());
+            let association = match ws.selection[..] {
+                [single] if this.scene.edge(single).is_some_and(|e| !e.fixed) => {
+                    association_ends(ws.doc.model(), ws.active_diagram, single)
+                }
+                _ => None,
+            };
+            (current, labeled, association, ws.selection.is_empty(), this.focus_handle.clone())
         };
         let mut menu = menu.action_context(focus);
-        if !current.is_empty() {
+        if let Some((association, ends)) = association {
+            menu = association_menu(menu, association, ends, window, cx).separator();
+        }
+        let routed = !current.is_empty();
+        if routed {
             // Checked when all selected edges have that style.
             menu = menu.submenu(t!("menu.line_style"), window, cx, move |menu, _, _| {
                 LINE_SHAPES.iter().fold(menu, |menu, &(shape, key)| {
@@ -540,6 +682,12 @@ impl DiagramCanvas {
                     menu.menu_with_check(t!(key), checked, Box::new(SetLineShape { shape }))
                 })
             });
+            menu = menu.menu(t!("menu.reset_line_ends"), Box::new(ResetLineEnds));
+        }
+        if labeled {
+            menu = menu.menu(t!("menu.reset_labels"), Box::new(ResetLabels));
+        }
+        if labeled || routed {
             menu = menu.separator();
         }
         menu.menu_with_disabled(t!("menu.delete"), Box::new(DeleteSelection), nothing)
@@ -1213,6 +1361,21 @@ impl Render for DiagramCanvas {
             .on_action(
                 cx.listener(|this, a: &SetLineShape, _, cx| this.set_line_shape(a.shape, cx)),
             )
+            .on_action(cx.listener(|this, _: &ResetLineEnds, _, cx| {
+                let edges: Vec<Id> = this.selected_edges(cx).iter().map(|e| e.id).collect();
+                this.update_workspace(cx, |ws| ws.reset_line_ends(&edges));
+            }))
+            .on_action(cx.listener(|this, _: &ResetLabels, _, cx| {
+                let selection = this.workspace.read(cx).selection.clone();
+                let edges: Vec<Id> =
+                    selection.into_iter().filter(|&id| this.scene.edge(id).is_some()).collect();
+                this.update_workspace(cx, |ws| ws.reset_labels(&edges));
+            }))
+            .on_action(cx.listener(|this, a: &SetAssociationEnd, _, cx| {
+                this.update_workspace(cx, |ws| {
+                    ws.set_association_end(a.association, a.end, a.change)
+                });
+            }))
             .on_action(cx.listener(|this, _: &ResetZoom, _, cx| this.reset_zoom(cx)))
             .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| this.zoom_to_fit(cx)))
             .child(

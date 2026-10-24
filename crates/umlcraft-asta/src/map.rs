@@ -20,7 +20,7 @@ use umlcraft_model::{
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::route;
-use umlcraft_notation::scene::border_point_from;
+use umlcraft_notation::scene::{self, border_point_from};
 
 use crate::jser::{Graph, ObjId, Value};
 
@@ -173,12 +173,13 @@ impl<'g> Reader<'g> {
             u if u >= 1 => Some(u32::try_from(u).ok()?),
             _ => return None,
         };
-        let lower = match lower {
-            -1 => 0,
-            l if l >= 0 => u32::try_from(l).ok()?,
+        // A lone "*" has no lower bound (-1); "0..*" has 0.
+        let (lower, star) = match lower {
+            -1 => (0, true),
+            l if l >= 0 => (u32::try_from(l).ok()?, false),
             _ => return None,
         };
-        let m = Multiplicity { lower, upper };
+        let m = Multiplicity { lower, upper, star: star && upper.is_none() };
         m.to_string().parse::<Multiplicity>().ok()
     }
 }
@@ -619,11 +620,8 @@ impl Importer<'_> {
         let parameters = self.r.list(object, "parameter");
         let r = self.r;
         let is_return = move |p: &ObjId| r.text(*p, "kind") == "return";
-        let return_type = parameters
-            .iter()
-            .find(|p| is_return(p))
-            .and_then(|&p| self.type_ref(p))
-            .filter(|t| *t != TypeRef::Text("void".into()));
+        // Astah shows a return type, "void" included, exactly when there is a return parameter.
+        let return_type = parameters.iter().find(|p| is_return(p)).and_then(|&p| self.type_ref(p));
         let kind = ElementKind::Operation(OperationProps {
             return_type,
             is_static,
@@ -1478,6 +1476,13 @@ impl Importer<'_> {
         let r = self.r;
         let class = r.class(p);
         let element = match class {
+            // A class diagram's frame, when shown, is a node presentation of the diagram.
+            "FramePresentation"
+                if kind == DiagramKind::Class
+                    && r.g.field(p, "visibility").and_then(Value::as_bool) == Some(true) =>
+            {
+                diagram
+            }
             "FramePresentation" | "LabelPresentation" => return None,
             "NotePresentation" => self.note(diagram, p)?,
             _ => {
@@ -1489,7 +1494,7 @@ impl Importer<'_> {
             }
         };
         let element_kind = self.model.get(element)?.kind().clone();
-        if !palette::can_show(kind, &element_kind) {
+        if element != diagram && !palette::can_show(kind, &element_kind) {
             return None;
         }
         let r = self.r;
@@ -1505,6 +1510,8 @@ impl Importer<'_> {
                 r.g.field(p, "allOperationVisibility").and_then(Value::as_bool) == Some(false);
             style.iconic = matches!(element_kind, ElementKind::Interface(_))
                 && r.g.field(p, "notationType").and_then(Value::as_i64) == Some(1);
+            style.auto_size = scene::is_boxed_classifier(&element_kind)
+                && r.g.field(p, "doAutoResize").and_then(Value::as_bool) == Some(true);
         }
         Some((
             p,

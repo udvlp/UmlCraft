@@ -96,19 +96,27 @@ impl Visibility {
 pub struct Multiplicity {
     pub lower: u32,
     pub upper: Option<u32>,
+    /// Written as a lone `*` rather than `0..*`. Astah keeps the two apart.
+    pub star: bool,
 }
 
 impl Multiplicity {
-    pub const ONE: Self = Self { lower: 1, upper: Some(1) };
-    pub const OPTIONAL: Self = Self { lower: 0, upper: Some(1) };
-    pub const MANY: Self = Self { lower: 0, upper: None };
-    pub const ONE_OR_MORE: Self = Self { lower: 1, upper: None };
+    pub const ONE: Self = Self { lower: 1, upper: Some(1), star: false };
+    pub const OPTIONAL: Self = Self { lower: 0, upper: Some(1), star: false };
+    pub const MANY: Self = Self { lower: 0, upper: None, star: true };
+    pub const ZERO_OR_MORE: Self = Self { lower: 0, upper: None, star: false };
+    pub const ONE_OR_MORE: Self = Self { lower: 1, upper: None, star: false };
+
+    /// From bounds; `0..*` is written out.
+    pub const fn range(lower: u32, upper: Option<u32>) -> Self {
+        Self { lower, upper, star: false }
+    }
 }
 
 impl fmt::Display for Multiplicity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (self.lower, self.upper) {
-            (0, None) => f.write_str("*"),
+            (0, None) if self.star => f.write_str("*"),
             (l, Some(u)) if l == u => write!(f, "{l}"),
             (l, Some(u)) => write!(f, "{l}..{u}"),
             (l, None) => write!(f, "{l}..*"),
@@ -133,11 +141,11 @@ impl FromStr for Multiplicity {
         };
         let result = match s.trim().split_once("..") {
             Some((lower, upper)) => {
-                Self { lower: parse_bound(lower)?.ok_or_else(err)?, upper: parse_bound(upper)? }
+                Self::range(parse_bound(lower)?.ok_or_else(err)?, parse_bound(upper)?)
             }
             None => match parse_bound(s)? {
                 None => Self::MANY,
-                Some(n) => Self { lower: n, upper: Some(n) },
+                Some(n) => Self::range(n, Some(n)),
             },
         };
         match result.upper {
@@ -1282,9 +1290,10 @@ mod tests {
             ("1", Multiplicity::ONE, "1"),
             ("0..1", Multiplicity::OPTIONAL, "0..1"),
             ("*", Multiplicity::MANY, "*"),
-            ("0..*", Multiplicity::MANY, "*"),
+            // As in Astah, "0..*" stays written out.
+            ("0..*", Multiplicity::ZERO_OR_MORE, "0..*"),
             ("1..*", Multiplicity::ONE_OR_MORE, "1..*"),
-            (" 2 .. 5 ", Multiplicity { lower: 2, upper: Some(5) }, "2..5"),
+            (" 2 .. 5 ", Multiplicity::range(2, Some(5)), "2..5"),
         ] {
             let parsed: Multiplicity = text.parse().unwrap();
             assert_eq!(parsed, expected, "{text}");

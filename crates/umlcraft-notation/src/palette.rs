@@ -6,7 +6,7 @@ use umlcraft_model::{
     DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps, InstanceKind,
     InstanceProps, InteractionOperandProps, InteractionOperator, InteractionUseProps,
     LifelineProps, MessageGate, MessageSort, Model, ModelError, Point, PseudostateKind, Rect,
-    Result, Size, StateProps, Tx,
+    Result, Size, StateProps, Tx, Visibility,
 };
 
 use crate::sequence::{self, Slot};
@@ -487,7 +487,14 @@ impl EdgeTool {
     pub fn element_kind(self, source: Id, target: Id) -> Option<ElementKind> {
         let directed = DirectedProps { client: source, supplier: target };
         match self {
-            Self::Association => Some(ElementKind::association(source, target)),
+            Self::Association => {
+                // Astah makes association ends private.
+                let mut kind = ElementKind::association(source, target);
+                if let ElementKind::Association(p) = &mut kind {
+                    p.ends.iter_mut().for_each(|end| end.visibility = Visibility::Private);
+                }
+                Some(kind)
+            }
             Self::Generalization => Some(ElementKind::generalization(source, target)),
             Self::Realization => Some(ElementKind::Realization(directed)),
             Self::Dependency => Some(ElementKind::Dependency(directed)),
@@ -698,7 +705,9 @@ fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Resu
     if matches!(kind, ElementKind::Lifeline(_)) {
         return sequence_edit::add_lifeline(tx, diagram, element, bounds.x, bounds.y);
     }
-    let presentation = umlcraft_model::Presentation::node(Some(element), bounds);
+    let mut presentation = umlcraft_model::Presentation::node(Some(element), bounds);
+    // New class boxes size themselves to their content, as in Astah.
+    presentation.style.auto_size = crate::scene::is_boxed_classifier(kind);
     if is_container(kind) || matches!(kind, ElementKind::CombinedFragment(_)) {
         let id = presentation.id;
         tx.apply(umlcraft_model::Op::InsertPresentation { diagram, index: 0, presentation })?;

@@ -23,7 +23,7 @@ use umlcraft_notation::clipboard::Clip;
 use umlcraft_notation::palette::{self, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Alignment, Preview};
 
-use crate::canvas::{DiagramCanvas, DraggedElement, FontMeasure};
+use crate::canvas::{AppMeasure, DiagramCanvas, DraggedElement, FontMeasure};
 use crate::labels;
 use crate::properties::PropertiesPanel;
 use crate::settings::Settings;
@@ -66,7 +66,8 @@ impl MainView {
         if settings.dark == Some(true) {
             Theme::change(ThemeMode::Dark, Some(window), cx);
         }
-        let workspace = cx.new(|_| Workspace::new(blank_document(), None));
+        let workspace =
+            cx.new(|cx| Workspace::new(blank_document(), None).with_measure(AppMeasure::new(cx)));
         let canvas = cx.new(|cx| DiagramCanvas::new(workspace.clone(), cx));
         let properties = cx.new(|cx| PropertiesPanel::new(workspace.clone(), window, cx));
         let tree = cx.new(|cx| TreeState::new(cx));
@@ -227,7 +228,7 @@ impl MainView {
 
     fn replace_document(&mut self, doc: Document, path: Option<PathBuf>, cx: &mut Context<Self>) {
         self.workspace.update(cx, |ws, cx| {
-            *ws = Workspace::new(doc, path);
+            *ws = Workspace::new(doc, path).with_measure(AppMeasure::new(cx));
             cx.notify();
         });
         self.collapsed.clear();

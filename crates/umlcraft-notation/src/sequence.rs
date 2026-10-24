@@ -563,28 +563,39 @@ fn tab_row(keyword: &str, r: Rect, top: f32, element: Id) -> Row {
     }
 }
 
-/// The frame around the diagram: "sd" in bold and the name in its tab.
+/// The frame around the diagram: "sd" in bold and the name in its tab. "sd" is 14 wide, the
+/// name 3 apart from it.
 fn diagram_frame(
     name: &str,
     r: Rect,
     diagram: Id,
     measure: &dyn TextMeasure,
 ) -> (Figure, Vec<Row>) {
-    let sd = "sd";
-    let sd_width = measure.width(sd, 12.0, true);
-    let name_width = measure.width(name, 12.0, false);
-    // "sd" in bold (14), 3 apart from the name, and 10 on either side.
-    let tab = Rect::new(r.x, r.y, 37.0 + wide(name, measure), TAB_HEIGHT);
+    let offset = TAB_INDENT + measure.width("sd", 12.0, true) + 3.0;
+    frame_with_tab("sd", offset, name, r, diagram, measure)
+}
+
+/// A diagram frame with `keyword` in bold and the name `name_offset` from the left in its tab,
+/// which ends 10 after the name. Astah writes "pkg" frames this way with the name at 33.
+pub(crate) fn frame_with_tab(
+    keyword: &str,
+    name_offset: f32,
+    name: &str,
+    r: Rect,
+    diagram: Id,
+    measure: &dyn TextMeasure,
+) -> (Figure, Vec<Row>) {
+    let tab = Rect::new(r.x, r.y, name_offset + wide(name, measure) + TAB_INDENT, TAB_HEIGHT);
     let h = line_height(12.0);
     let kind = Row {
-        rect: Rect::new(r.x + TAB_INDENT, r.y + ROW_18, sd_width, h),
+        rect: Rect::new(r.x + TAB_INDENT, r.y + ROW_18, measure.width(keyword, 12.0, true), h),
         bold: true,
         role: RowRole::Stereotype,
         element: None,
-        ..plain_row(sd.to_owned(), diagram)
+        ..plain_row(keyword.to_owned(), diagram)
     };
     let title = Row {
-        rect: Rect::new(r.x + TAB_INDENT + sd_width + 3.0, r.y + ROW_18, name_width, h),
+        rect: Rect::new(r.x + name_offset, r.y + ROW_18, measure.width(name, 12.0, false), h),
         role: RowRole::Name,
         ..plain_row(name.to_owned(), diagram)
     };
@@ -814,6 +825,7 @@ fn message_edge(
         fixed: true,
         ends: [Rect::default(); 2],
         anchors: [None; 2],
+        name_arrow: None,
     }
 }
 

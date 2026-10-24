@@ -53,11 +53,18 @@ when the app opens them (`sequence_edit::upgrade_document`, not an undoable edit
 `gpui-component`:
 
 - `Workspace` (a GPUI entity) holds the document, file path, open diagrams (tabs), selection and
-  the active tool. All edits from the UI go through its methods.
+  the active tool. All edits from the UI go through its methods. Each of them ends by fitting
+  the classifier boxes sized to their content (`Style::auto_size`) whose texts the edit changed
+  (`scene::fitted_box`), as Astah does when content changes; for that the workspace measures
+  with the app's font system (`AppMeasure`, the advances summed like Java's). Resizing a box by
+  hand ends its automatic size.
 - `canvas.rs` paints the scene's primitives (`umlcraft_notation::draw`) and texts with
   `paint_quad`/`PathBuilder`/`shape_line` and handles pan and
   zoom itself, separately for each diagram. Drag operations (move, resize, rubber band, connect)
   are shown only as a `Preview` until the mouse is released and are then applied as one undo step.
+  A right click selects what it hits and opens the context menu: for an association Astah's
+  navigability, aggregation and multiplicity per end, for edges the line style, ends back to
+  the centers and labels back to their default places, then deleting.
 - `properties.rs` commits text fields on Enter or when the field loses focus, always to the element
   that was shown when the field got focus.
 - `main_view.rs` contains menus, tabs, palette, model tree and the file operations.

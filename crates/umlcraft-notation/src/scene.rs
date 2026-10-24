@@ -81,7 +81,10 @@ impl NodeShape {
             return false;
         }
         match &self.figure {
-            Figure::Boundary | Figure::Fragment { .. } | Figure::Partition { .. } => {
+            Figure::Boundary
+            | Figure::Fragment { .. }
+            | Figure::Partition { .. }
+            | Figure::Frame { .. } => {
                 let inner = self.rect.inflate(-2.0 * tolerance.max(3.0));
                 !inner.contains(p) || self.rows.iter().any(|r| r.rect.contains(p))
             }
@@ -192,9 +195,11 @@ impl Figure {
     /// The figure's outline, where edges end.
     fn outline(&self) -> Outline {
         match self {
-            Self::Initial | Self::ActivityFinal | Self::FlowFinal | Self::Circle => {
-                Outline::Ellipse
-            }
+            Self::Initial
+            | Self::ActivityFinal
+            | Self::FlowFinal
+            | Self::Circle
+            | Self::Lollipop => Outline::Ellipse,
             Self::Diamond => Outline::Diamond,
             _ => Outline::Rect,
         }
@@ -274,11 +279,11 @@ pub struct Row {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineStyle {
     Solid,
-    /// Astah's dashes for replies, dependencies and the like.
+    /// Astah's dashes for replies and create messages.
     Dashed,
     /// Lifelines.
     LongDashed,
-    /// Separators between operands.
+    /// Dependencies, realizations, include, extend, note anchors; separators between operands.
     ShortDashed,
 }
 
@@ -323,6 +328,8 @@ pub struct EdgeShape {
     /// Bounds of the source and target node, and where the line aims inside them as stored.
     pub ends: [Rect; 2],
     pub anchors: [Option<Point>; 2],
+    /// The filled triangle next to an association's name that shows which way it reads.
+    pub name_arrow: Option<[Point; 3]>,
 }
 
 /// A grip on a selected edge: an existing waypoint, the middle of a segment where dragging
@@ -592,6 +599,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         let (layout, messages) = sequence::arrange(model, diagram, view, &mut nodes, measure);
         (Some(layout), messages)
     } else {
+        package_frame(model, diagram, &mut nodes, measure);
         (None, Vec::new())
     };
     let rects: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
@@ -653,14 +661,39 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 anchors,
                 p.style.line_shape,
                 &points,
-                label,
+                (label, element.is_some_and(|e| !e.name().is_empty())),
                 to_lollipop,
                 labels,
+                measure,
             ))
         })
         .collect();
     edges.extend(messages);
     Scene { nodes, edges, sequence }
+}
+
+/// The frame Astah may draw around a class diagram (a node presentation of the diagram
+/// itself): "pkg" in bold and the name of the diagram's package in its tab, reaching 15 beyond
+/// the other nodes.
+fn package_frame(model: &Model, diagram: Id, nodes: &mut [NodeShape], measure: &dyn TextMeasure) {
+    const MARGIN: f32 = 15.0;
+    let Some(index) = nodes.iter().position(|n| n.element == Some(diagram)) else { return };
+    let content = nodes
+        .iter()
+        .filter(|n| n.element != Some(diagram))
+        .map(|n| n.rect)
+        .reduce(|a, b| a.union(&b));
+    let frame = &mut nodes[index];
+    let mut r = frame.rect;
+    if let Some(c) = content {
+        r.width = r.width.max(c.right() + MARGIN - r.x);
+        r.height = r.height.max(c.bottom() + MARGIN - r.y);
+    }
+    // The tab names the package the diagram belongs to.
+    let owner = model.get(diagram).and_then(|d| d.owner()).and_then(|o| model.get(o));
+    let name = owner.map(|o| o.name()).unwrap_or_default();
+    frame.rect = r;
+    (frame.figure, frame.rows) = sequence::frame_with_tab("pkg", 33.0, name, r, diagram, measure);
 }
 
 fn is_interface(model: &Model, element: Option<Id>) -> bool {
@@ -698,23 +731,30 @@ fn layout_element(
     };
     match e.kind() {
         ElementKind::Interface(_) if style.iconic => {
+            // Astah: a circle of radius 10 in a 24 × 24 box, the bold name right below it.
             let r = Rect::new(bounds.x, bounds.y, 24.0, 24.0);
-            let line = name_line(12.0, false);
+            let line = name_line(12.0, true);
             let w = line.width(measure) + 8.0;
+            let top = r.center().y + LOLLIPOP_RADIUS;
             let row = line.place(
-                Rect::new(r.center().x - w / 2.0, r.bottom() + 2.0, w, line_height(12.0)),
+                Rect::new(r.center().x - w / 2.0, top, w, line_height(12.0)),
                 LabelAlign::Center,
             );
             (r, Figure::Lollipop, vec![row])
         }
-        kind if is_boxed_classifier(kind) => layout_classifier(model, id, style, bounds, measure),
+        kind if is_boxed_classifier(kind) => {
+            layout_classifier(model, id, style, bounds, false, measure)
+        }
         ElementKind::Package | ElementKind::Model => {
-            let line = name_line(13.0, true);
+            // Astah: the bold name centered 5 below a tab 15 high.
+            let line = name_line(FONT_SIZE, true);
             let w = bounds.width.max(line.width(measure) + 20.0);
             let r = Rect::new(bounds.x, bounds.y, w, bounds.height.max(40.0));
-            let tab = Rect::new(r.x, r.y, (r.width * 0.4).min(80.0), 14.0);
-            let row = line
-                .place(Rect::new(r.x, r.y + 20.0, r.width, line_height(13.0)), LabelAlign::Center);
+            let tab = Rect::new(r.x, r.y, (r.width * 0.4).min(80.0), 15.0);
+            let row = line.place(
+                Rect::new(r.x, r.y + 20.0, r.width, line_height(FONT_SIZE)),
+                LabelAlign::Center,
+            );
             (r, Figure::Package { tab }, vec![row])
         }
         ElementKind::Actor(_) => {
@@ -1129,7 +1169,39 @@ pub fn with_contents(scene: &Scene, ids: &[Id]) -> Vec<Id> {
     result
 }
 
-fn is_boxed_classifier(kind: &ElementKind) -> bool {
+/// The size Astah gives the box of presentation `p` when it sizes it to its content, for
+/// classifier boxes that are sized automatically (`Style::auto_size`). Astah does that when the
+/// content changes, not when it draws, so the bounds are only fitted while editing.
+pub fn fitted_size(model: &Model, p: &Presentation, measure: &dyn TextMeasure) -> Option<Size> {
+    fitted_box(model, p, measure).map(|(size, _)| size)
+}
+
+/// [`fitted_size`] and the texts of the box, one per line, to tell when its content changed.
+pub fn fitted_box(
+    model: &Model,
+    p: &Presentation,
+    measure: &dyn TextMeasure,
+) -> Option<(Size, String)> {
+    let bounds = p.bounds()?;
+    let element = model.get(p.element?)?;
+    if !p.style.auto_size || p.style.iconic || !is_boxed_classifier(element.kind()) {
+        return None;
+    }
+    let (r, _, rows) = layout_classifier(model, element.id(), &p.style, bounds, true, measure);
+    let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+    Some((r.size(), texts.join("\n")))
+}
+
+/// Radius of an interface drawn as a circle.
+pub const LOLLIPOP_RADIUS: f32 = 10.0;
+
+/// Astah's narrowest classifier box.
+const MIN_CLASSIFIER_WIDTH: f32 = 40.0;
+/// Astah makes automatically sized classifier boxes this much higher than their content.
+const AUTO_SIZE_EXTRA_HEIGHT: f32 = 3.0;
+
+/// Classes, interfaces, enumerations and data types, drawn as boxes with compartments.
+pub fn is_boxed_classifier(kind: &ElementKind) -> bool {
     matches!(
         kind,
         ElementKind::Class(_)
@@ -1139,11 +1211,14 @@ fn is_boxed_classifier(kind: &ElementKind) -> bool {
     )
 }
 
+/// Lays out a classifier box in `bounds`, or with `fit` at the size Astah gives it when it
+/// sizes the box automatically.
 fn layout_classifier(
     model: &Model,
     id: Id,
     style: &Style,
     bounds: Rect,
+    fit: bool,
     measure: &dyn TextMeasure,
 ) -> (Rect, Figure, Vec<Row>) {
     // Astah's metrics: 10 px left and right of the texts, 4 px above and below the content of
@@ -1207,14 +1282,6 @@ fn layout_classifier(
                 compartments.push(operations);
             }
         }
-        ElementKind::Interface(_) => {
-            if !attributes.is_empty() && !style.hide_attributes {
-                compartments.push(attributes);
-            }
-            if !style.hide_operations {
-                compartments.push(operations);
-            }
-        }
         _ => {
             if !style.hide_attributes {
                 compartments.push(attributes);
@@ -1225,11 +1292,24 @@ fn layout_classifier(
         }
     }
 
-    // The box keeps its width; it only grows for the header and for words that cannot break.
-    // Longer members continue on further lines, as in Astah.
-    let header_w = header.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
-    let word_w = compartments.iter().flatten().map(|l| l.widest_word(measure)).fold(0.0, f32::max);
-    let width = bounds.width.max(header_w.max(word_w) + 2.0 * PAD_X).max(40.0);
+    // Fitted, the box is as wide as its widest text, taken as Astah measures it (Java's
+    // whole-pixel width or the exact one, whichever is larger), and 3 higher than its content.
+    // Otherwise it keeps its width and only grows for the header and for words that cannot
+    // break; longer members continue on further lines, as in Astah.
+    let width = if fit {
+        let widest = header
+            .iter()
+            .chain(compartments.iter().flatten())
+            .map(|l| l.width(measure).max(measure.rounded_width(&l.text, l.size, l.bold)))
+            .fold(0.0, f32::max);
+        widest + 2.0 * PAD_X
+    } else {
+        let header_w = header.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+        let word_w =
+            compartments.iter().flatten().map(|l| l.widest_word(measure)).fold(0.0, f32::max);
+        bounds.width.max(header_w.max(word_w) + 2.0 * PAD_X)
+    }
+    .max(MIN_CLASSIFIER_WIDTH);
     let compartments: Vec<Vec<Line>> = compartments
         .into_iter()
         .map(|c| c.into_iter().flat_map(|l| l.wrapped(width - 2.0 * PAD_X, measure)).collect())
@@ -1237,8 +1317,10 @@ fn layout_classifier(
     let block =
         |lines: &[Line]| 2.0 * PAD_Y + lines.iter().map(|l| line_height(l.size)).sum::<f32>();
     let header_h = block(&header);
-    let compartments_h: f32 = compartments.iter().map(|c| block(c)).sum();
-    let r = Rect::new(bounds.x, bounds.y, width, bounds.height.max(header_h + compartments_h));
+    let content_h = header_h + compartments.iter().map(|c| block(c)).sum::<f32>();
+    let height =
+        if fit { content_h + AUTO_SIZE_EXTRA_HEIGHT } else { bounds.height.max(content_h) };
+    let r = Rect::new(bounds.x, bounds.y, width, height);
 
     let mut rows = Vec::new();
     let mut y = r.y + PAD_Y;
@@ -1280,9 +1362,10 @@ fn edge_for(
     anchors: [Option<Point>; 2],
     shape: LineShape,
     waypoints: &[Point],
-    name_label: Option<String>,
+    (name_label, has_name): (Option<String>, bool),
     to_lollipop: bool,
     placed: &EdgeLabels,
+    measure: &dyn TextMeasure,
 ) -> EdgeShape {
     // The line runs from the source anchor through the waypoints to the target anchor; it is
     // drawn from where it leaves the source to where it enters the target. Right-angled lines
@@ -1313,6 +1396,7 @@ fn edge_for(
         fixed: false,
         ends: [source, target],
         anchors,
+        name_arrow: None,
     };
     let mut ends: [(Option<String>, Option<String>); 2] = [(None, None), (None, None)];
     let mut label = name_label;
@@ -1343,20 +1427,20 @@ fn edge_for(
         // Realizing an interface drawn as a circle is a plain line ("lollipop").
         Some(ElementKind::Realization(_)) if to_lollipop => {}
         Some(ElementKind::Realization(_)) => {
-            edge.line = LineStyle::Dashed;
+            edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::HollowTriangle;
         }
         Some(ElementKind::Dependency(_)) => {
-            edge.line = LineStyle::Dashed;
+            edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::OpenArrow;
         }
         Some(ElementKind::Include(_)) => {
-            edge.line = LineStyle::Dashed;
+            edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::OpenArrow;
             label = Some("<<include>>".to_owned());
         }
         Some(ElementKind::Extend(p)) => {
-            edge.line = LineStyle::Dashed;
+            edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::OpenArrow;
             label = Some(match p.condition.trim() {
                 "" => "<<extend>>".to_owned(),
@@ -1385,7 +1469,7 @@ fn edge_for(
                 label = join_label(label, text);
             }
         }
-        _ => edge.line = LineStyle::Dashed,
+        _ => edge.line = LineStyle::ShortDashed,
     }
 
     let pts = &edge.points;
@@ -1397,24 +1481,48 @@ fn edge_for(
     };
     let (a, b) = route::middle_segment(pts, shape.is_curve());
     let center = middle(a, b);
-    edge.labels.extend(label.map(|text| match placed.name {
+    let association = matches!(kind, Some(ElementKind::Association(_)));
+    // Measured for these; other edges keep UmlCraft's own place.
+    let astah_name = association
+        || matches!(
+            kind,
+            Some(
+                ElementKind::Dependency(_)
+                    | ElementKind::Realization(_)
+                    | ElementKind::Generalization(_)
+            )
+        );
+    let name = label.map(|text| match placed.name {
         Some(offset) => at(text, center, offset),
+        None if astah_name => association_name(text, center, measure),
         None => middle_label(text, a, b),
-    }));
+    });
+    // Astah shows which way an association's name reads, from its first end to its second,
+    // with a small triangle next to the name.
+    if association
+        && has_name
+        && let Some(name) = &name
+    {
+        let width = label_width(&name.text, measure);
+        edge.name_arrow = Some(name_arrow(name.anchor, width, (a, b)));
+    }
+    edge.labels.extend(name);
     let [(source_role, source_mult), (target_role, target_mult)] = ends;
     let (source_tip, source_from) = (pts[0], pts[1]);
     let (target_tip, target_from) = (pts[n - 1], pts[n - 2]);
-    let place = |text: Option<String>, offset: Option<Point>, tip: Point, from: Point, role| {
+    let place = |text: Option<String>, offset: Option<Point>, end: End, role| {
         text.map(|text| match offset {
-            Some(offset) => at(text, tip, offset),
-            None => end_label(text, tip, from, role),
+            Some(offset) => at(text, end.tip, offset),
+            None => end_label(text, end, role, measure),
         })
     };
+    let source = End { tip: source_tip, next: source_from, source: true };
+    let target = End { tip: target_tip, next: target_from, source: false };
     let labels = [
-        place(source_role, placed.source_role, source_tip, source_from, true),
-        place(source_mult, placed.source_multiplicity, source_tip, source_from, false),
-        place(target_role, placed.target_role, target_tip, target_from, true),
-        place(target_mult, placed.target_multiplicity, target_tip, target_from, false),
+        place(source_role, placed.source_role, source, true),
+        place(source_mult, placed.source_multiplicity, source, false),
+        place(target_role, placed.target_role, target, true),
+        place(target_mult, placed.target_multiplicity, target, false),
     ];
     edge.labels.extend(labels.into_iter().flatten());
     edge
@@ -1428,32 +1536,65 @@ fn join_label(name: Option<String>, text: String) -> Option<String> {
     })
 }
 
-/// Places a role name (`role`) or multiplicity next to the end of the line at `tip`, which
-/// continues toward `from`. As in Astah, roles go right of vertical lines and below horizontal
-/// ones, multiplicities to the other side.
-fn end_label(text: String, tip: Point, from: Point, role: bool) -> EdgeLabel {
-    /// Distance from the node along the line.
-    const ALONG: f32 = 9.0;
-    /// Distance from the line across it.
-    const ACROSS: f32 = 9.0;
-    let len = tip.distance(from).max(1.0);
-    let (ux, uy) = ((from.x - tip.x) / len, (from.y - tip.y) / len);
-    if ux.abs() >= uy.abs() {
-        let (x, align) = if ux >= 0.0 {
-            (tip.x + ALONG, LabelAlign::Left)
-        } else {
-            (tip.x - ALONG, LabelAlign::Right)
-        };
-        let y = if role { tip.y + 8.0 } else { tip.y - 4.0 - LABEL_HEIGHT };
-        EdgeLabel { text, anchor: Point::new(x, y), align }
+/// One end of a drawn line: where it meets the node, the next point along it, and whether it is
+/// the end the line starts at.
+#[derive(Clone, Copy)]
+struct End {
+    tip: Point,
+    next: Point,
+    source: bool,
+}
+
+/// The width of the box Astah gives a label: the text's whole-pixel width or its exact one,
+/// whichever is larger, and at least 10.
+pub fn label_width(text: &str, measure: &dyn TextMeasure) -> f32 {
+    let exact = measure.width(text, FONT_SIZE, false);
+    exact.max(measure.rounded_width(text, FONT_SIZE, false)).max(10.0)
+}
+
+/// Places a role name (`role`) or multiplicity at an end of the line as Astah does: the
+/// label's center lies 27 (roles) or 18 (multiplicities) along the line from its end and 18
+/// across it, roles to the left of the direction the line runs in (from source to target),
+/// multiplicities to the right. The text starts at the left of the label.
+fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> EdgeLabel {
+    const ROLE: (f32, f32) = (27.0, 18.0);
+    const MULTIPLICITY: (f32, f32) = (18.0, -18.0);
+    let End { tip, next, source } = end;
+    let len = tip.distance(next).max(1e-6);
+    let (ux, uy) = ((next.x - tip.x) / len, (next.y - tip.y) / len);
+    let (tx, ty) = if source { (ux, uy) } else { (-ux, -uy) };
+    let (lx, ly) = (ty, -tx);
+    let (along, left) = if role { ROLE } else { MULTIPLICITY };
+    let center = Point::new(tip.x + along * ux + left * lx, tip.y + along * uy + left * ly);
+    let width = label_width(&text, measure);
+    let anchor = center.offset(-width / 2.0, -LABEL_HEIGHT / 2.0);
+    EdgeLabel { text, anchor, align: LabelAlign::Left }
+}
+
+/// Places the name of an association, dependency, realization or generalization as Astah does:
+/// centered on the middle of the line, its center 9 below it.
+fn association_name(text: String, middle: Point, measure: &dyn TextMeasure) -> EdgeLabel {
+    let width = label_width(&text, measure);
+    let anchor = middle.offset(-width / 2.0, 9.0 - LABEL_HEIGHT / 2.0);
+    EdgeLabel { text, anchor, align: LabelAlign::Left }
+}
+
+/// Astah's triangle that shows which way a name reads, next to the name's box (top left `at`,
+/// `width` wide): it points along the line `a`–`b`, horizontally or vertically, whichever is
+/// closer, and sits 4 to the right or left of the box, or below or above it.
+fn name_arrow(at: Point, width: f32, (a, b): (Point, Point)) -> [Point; 3] {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let (left, top, right) = (at.x, at.y, at.x + width);
+    let cx = at.x + width / 2.0;
+    let p = Point::new;
+    if dx.abs() >= dy.abs() {
+        let (base, tip) =
+            if dx >= 0.0 { (right + 4.0, right + 14.0) } else { (left - 4.0, left - 14.0) };
+        [p(base, top + 2.5), p(base, top + 12.5), p(tip, top + 7.5)]
     } else {
-        let (x, align) = if role {
-            (tip.x + ACROSS, LabelAlign::Left)
-        } else {
-            (tip.x - ACROSS, LabelAlign::Right)
-        };
-        let y = if uy >= 0.0 { tip.y + ALONG } else { tip.y - ALONG - LABEL_HEIGHT };
-        EdgeLabel { text, anchor: Point::new(x, y), align }
+        let (base, tip) =
+            if dy >= 0.0 { (top + 15.5, top + 25.5) } else { (top - 3.5, top - 13.5) };
+        [p(cx - 5.0, base), p(cx + 5.0, base), p(cx, tip)]
     }
 }
 
@@ -1916,16 +2057,16 @@ mod tests {
         let texts: Vec<&str> = association.labels.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, ["*", "+ customer", "1"], "roles show their visibility");
         let [star, role, one] = [0, 1, 2].map(|i| &association.labels[i]);
+        // The line runs to the left: roles go left of that direction (below the line),
+        // multiplicities right of it (above), at both ends.
         let end = pts[pts.len() - 1];
         assert!(role.anchor.y > end.y, "the role goes below the line");
         assert!(one.anchor.y + LABEL_HEIGHT < end.y, "the multiplicity above it");
         assert!(star.anchor.y + LABEL_HEIGHT < pts[0].y);
-        // Each label extends from its node into the gap between the classes.
-        assert_eq!(
-            (role.align, one.align, star.align),
-            (LabelAlign::Left, LabelAlign::Left, LabelAlign::Right)
-        );
-        assert!((role.anchor.x - (end.x + 9.0)).abs() < 0.01);
+        // The multiplicities' centers lie 18 along the line from its ends.
+        let center = |l: &EdgeLabel| l.anchor.x + label_width(&l.text, &ApproxMeasure) / 2.0;
+        assert!((center(one) - end.x - 18.0).abs() < 0.5);
+        assert!((pts[0].x - center(star) - 18.0).abs() < 0.5);
     }
 
     #[test]
@@ -1946,17 +2087,40 @@ mod tests {
         assert_eq!(texts, ["{ordered}", "*", "+ customer {ordered} {unique}", "1"]);
     }
 
+    /// Measures every text as `0` wide, exactly and in whole pixels.
+    struct Fixed(f32);
+
+    impl TextMeasure for Fixed {
+        fn width(&self, _: &str, _: f32, _: bool) -> f32 {
+            self.0
+        }
+
+        fn rounded_width(&self, _: &str, _: f32, _: bool) -> f32 {
+            self.0
+        }
+    }
+
     #[test]
-    fn end_labels_beside_vertical_lines() {
+    fn end_labels_go_where_astah_puts_them() {
+        // A line Astah drew from (456.68, 335.15) to (720, 325.93) and where it put the labels
+        // (top left corners), with their widths.
+        let (from, to) = (Point::new(456.68, 335.15), Point::new(720.0, 325.93));
+        let source = End { tip: from, next: to, source: true };
+        let target = End { tip: to, next: from, source: false };
+        let cases = [
+            (source, true, 28.0, Point::new(469.03, 308.67)),
+            (source, false, 10.0, Point::new(470.30, 344.96)),
+            (target, true, 31.0, Point::new(676.89, 301.34)),
+            (target, false, 18.01, Point::new(693.63, 337.00)),
+        ];
+        for (end, role, width, expected) in cases {
+            let label = end_label(String::new(), end, role, &Fixed(width));
+            assert_eq!(label.align, LabelAlign::Left);
+            assert!(label.anchor.distance(expected) < 0.05, "{:?} vs {expected:?}", label.anchor);
+        }
+        // Labels are at least 10 wide.
+        assert_eq!(label_width("1", &Fixed(6.67)), 10.0);
         let text = || "1".to_owned();
-        // Line going down from the node: roles right of it, multiplicities left of it.
-        let role = end_label(text(), Point::new(50.0, 0.0), Point::new(50.0, 100.0), true);
-        assert_eq!((role.align, role.anchor), (LabelAlign::Left, Point::new(59.0, 9.0)));
-        let mult = end_label(text(), Point::new(50.0, 0.0), Point::new(50.0, 100.0), false);
-        assert_eq!((mult.align, mult.anchor), (LabelAlign::Right, Point::new(41.0, 9.0)));
-        // Line going up: the labels end 9 px above the node.
-        let role = end_label(text(), Point::new(50.0, 100.0), Point::new(50.0, 0.0), true);
-        assert_eq!(role.anchor.y + LABEL_HEIGHT, 91.0);
         // Middle labels: centered above horizontal, beside vertical segments.
         let m = middle_label(text(), Point::new(0.0, 0.0), Point::new(100.0, 0.0));
         assert_eq!(m.align, LabelAlign::Center);
@@ -1979,8 +2143,88 @@ mod tests {
         let name = &customer.rows[0];
         assert_eq!((name.size, name.bold, name.rect.y), (12.0, true, top + 4.0));
         let attribute = &customer.rows[1];
-        assert_eq!((attribute.rect.x, attribute.rect.y), (x + 10.0, separators[0] + 4.0));
+        let row_top = separators[0] + 4.0;
+        assert_eq!((attribute.rect.x, attribute.rect.y), (x + 10.0, row_top));
         assert!((attribute.rect.height - 15.09375).abs() < 1e-4);
+    }
+
+    #[test]
+    fn class_diagram_frames() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let frame = Presentation::node(Some(d), Rect::new(10.0, 10.0, 50.0, 50.0));
+        let id = frame.id;
+        doc.edit("frame", |tx| {
+            tx.apply(umlcraft_model::Op::InsertPresentation {
+                diagram: d,
+                index: 0,
+                presentation: frame,
+            })
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let node = scene.node(id).unwrap();
+        let Figure::Frame { tab } = node.figure else { panic!("a frame") };
+        // 15 beyond the other nodes.
+        let content =
+            scene.nodes.iter().filter(|n| n.id != id).map(|n| n.rect).reduce(|a, b| a.union(&b));
+        let content = content.unwrap();
+        assert_eq!(
+            (node.rect.right(), node.rect.bottom()),
+            (content.right() + 15.0, content.bottom() + 15.0)
+        );
+        // "pkg" in bold, the package name at 33, the tab ending 10 after it.
+        let texts: Vec<&str> = node.rows.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["pkg", "domain"]);
+        assert!(node.rows[0].bold);
+        assert_eq!(node.rows[1].rect.x, 43.0);
+        let name = ApproxMeasure.rounded_width("domain", 12.0, false);
+        assert_eq!(tab.width, 43.0 + name.max(ApproxMeasure.width("domain", 12.0, false)));
+        // Clicks inside reach what it surrounds.
+        let inside = scene.nodes.iter().find(|n| n.id != id).unwrap().rect.center();
+        assert_ne!(hit_test(&scene, inside, 1.0), Some(id));
+    }
+
+    #[test]
+    fn automatic_sizes_follow_astah() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let view = doc.model().view(d).unwrap();
+        let p = view.presentations_of(ids.customer).next().unwrap().clone();
+        assert_eq!(fitted_size(doc.model(), &p, &ApproxMeasure), None, "not sized automatically");
+        let fitted = |doc: &umlcraft_model::Document| {
+            let p = doc.model().view(d).unwrap().get(p.id).unwrap().clone();
+            fitted_size(doc.model(), &p, &ApproxMeasure).unwrap()
+        };
+        doc.edit("auto", |tx| tx.update_presentation(d, p.id, |p| p.style.auto_size = true))
+            .unwrap();
+        // The widest text (its whole-pixel width, if larger) plus 10 on each side; the content
+        // plus 3 high.
+        let rows = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let node = rows.node(p.id).unwrap();
+        let widest = node
+            .rows
+            .iter()
+            .map(|r| {
+                let exact = ApproxMeasure.width(&r.text, r.size, r.bold);
+                exact.max(ApproxMeasure.rounded_width(&r.text, r.size, r.bold))
+            })
+            .fold(0.0, f32::max);
+        let size = fitted(&doc);
+        assert!((size.width - (widest + 20.0)).abs() < 1e-3);
+        let content = 23.09375 + (8.0 + node.rows.len() as f32 * 15.09375 - 15.09375) + 8.0;
+        assert!((size.height - (content + 3.0)).abs() < 1e-3, "{size:?}");
+        // An empty class is Astah's smallest box, 40 × 42.09.
+        doc.edit("rename", |tx| {
+            tx.rename(ids.customer, "A")?;
+            for child in tx.model().get(ids.customer).unwrap().children().to_vec() {
+                tx.delete(child)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let size = fitted(&doc);
+        assert_eq!((size.width, size.height), (40.0, 42.09375));
     }
 
     #[test]

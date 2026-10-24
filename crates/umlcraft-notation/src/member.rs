@@ -511,7 +511,7 @@ mod tests {
         let a = parse_attribute("+ /items : Map<String, Item> [0..*] = new()").unwrap();
         assert!(a.derived);
         assert_eq!(a.type_text.as_deref(), Some("Map<String, Item>"));
-        assert_eq!(a.multiplicity, Some(Multiplicity::MANY));
+        assert_eq!(a.multiplicity, Some(Multiplicity::ZERO_OR_MORE));
         assert_eq!(a.default.as_deref(), Some("new()"));
         let a = parse_attribute("count").unwrap();
         assert_eq!((a.visibility, a.type_text), (None, None));

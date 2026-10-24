@@ -54,7 +54,6 @@ import com.change_vision.jude.api.inf.model.IInteractionUse;
 import com.change_vision.jude.api.inf.model.ILifeline;
 import com.change_vision.jude.api.inf.model.IMessage;
 import com.change_vision.jude.api.inf.model.IModel;
-import com.change_vision.jude.api.inf.model.IMultiplicityRange;
 import com.change_vision.jude.api.inf.model.INamedElement;
 import com.change_vision.jude.api.inf.model.IOperation;
 import com.change_vision.jude.api.inf.model.IPackage;
@@ -358,7 +357,8 @@ public final class AstaExport {
             created.put(id, a);
             return;
         }
-        Object r = e.get("returnType") == null ? "void" : type(e.get("returnType"));
+        // An empty type expression makes an operation without a return type ("void" is shown).
+        Object r = e.get("returnType") == null ? "" : type(e.get("returnType"));
         IOperation op = (IOperation) named(id, n -> r instanceof IClass c
             ? basic.createOperation(owner, n, c) : basic.createOperation(owner, n, (String) r));
         op.setStatic(flag(e, "isStatic"));
@@ -454,24 +454,8 @@ public final class AstaExport {
         if (text == null) {
             return;
         }
-        int lower;
-        int upper;
-        String[] bounds = text.split("\\.\\.");
-        if (bounds.length == 2) {
-            lower = Integer.parseInt(bounds[0].trim());
-            upper = bound(bounds[1]);
-        } else if ("*".equals(text.trim())) {
-            lower = 0;
-            upper = IMultiplicityRange.UNLIMITED;
-        } else {
-            lower = Integer.parseInt(text.trim());
-            upper = lower;
-        }
-        a.setMultiplicity(new int[][] { { lower, upper } });
-    }
-
-    private static int bound(String b) {
-        return "*".equals(b.trim()) ? IMultiplicityRange.UNLIMITED : Integer.parseInt(b.trim());
+        // As text, Astah keeps a lone "*" apart from "0..*".
+        a.setMultiplicityString(text.trim());
     }
 
     // ----- Relationships ----------------------------------------------------------------------
@@ -559,9 +543,8 @@ public final class AstaExport {
             default -> {
             }
         }
-        if (e.get("visibility") instanceof String v) {
-            end.setVisibility(v);
-        }
+        // Astah makes ends private unless told otherwise; UmlCraft leaves out public.
+        end.setVisibility(e.get("visibility") instanceof String v ? v : "public");
     }
 
     private IClass classifier(Object id) {
@@ -608,6 +591,14 @@ public final class AstaExport {
                     UseCaseDiagramEditor ud = accessor.getDiagramEditorFactory().getUseCaseDiagramEditor();
                     diagram = (IDiagram) named(id, n -> ud.createUseCaseDiagram((INamedElement) owner, n));
                     editor = ud;
+                }
+                // Astah frames new diagrams; UmlCraft only those that show themselves as a node.
+                boolean framed = view(id).stream()
+                    .anyMatch(p -> "node".equals(p.get("shape")) && id.equals(p.get("element")));
+                for (IPresentation p : diagram.getPresentations()) {
+                    if ("Frame".equals(p.getType())) {
+                        p.setProperty("visibility", Boolean.toString(framed));
+                    }
                 }
                 structureDiagram(id, editor);
             }
@@ -674,7 +665,8 @@ public final class AstaExport {
         Map<String, IPresentation> shown = new HashMap<>();
         List<Map<String, Object>> presentations = view(diagram);
         for (Map<String, Object> p : presentations) {
-            if (!"node".equals(p.get("shape")) || !(p.get("element") instanceof String element)) {
+            if (!"node".equals(p.get("shape")) || !(p.get("element") instanceof String element)
+                    || element.equals(diagram)) {
                 continue;
             }
             Map<String, Object> r = rect(diagram, p);
@@ -701,6 +693,11 @@ public final class AstaExport {
                 node.setLocation(at);
             }
             resize(node, num(r, "width"), num(r, "height"));
+            // Boxes sized by their content stay so in Astah, which sizes them by the same rule.
+            if (p.get("style") instanceof Map<?, ?> s && Boolean.TRUE.equals(s.get("autoSize"))
+                    && node.getProperties().containsKey("auto_resize")) {
+                node.setProperty("auto_resize", "true");
+            }
             shown.put((String) p.get("id"), node);
         }
         for (Map<String, Object> p : presentations) {

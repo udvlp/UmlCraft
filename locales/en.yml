@@ -41,6 +41,12 @@ menu:
   line_right_angle: Line (right angle)
   line_curve: Curve
   line_curve_right_angle: Curve (right angle)
+  reset_line_ends: Attach line ends to the centers
+  reset_labels: Reset label positions
+  navigability: Navigability
+  aggregation: Aggregation
+  multiplicity: Multiplicity
+  unspecified: not specified
   view: View
   zoom_in: Zoom in
   zoom_out: Zoom out
@@ -263,6 +269,8 @@ edit:
   properties: Change properties
   waypoints: Change line route
   line_style: Change line style
+  line_ends: Attach line ends to the centers
+  labels: Reset label positions
   show: Show on diagram
   move_element: Move in model
   paste: Paste

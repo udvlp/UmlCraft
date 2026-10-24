@@ -182,9 +182,16 @@ impl Svg<'_> {
         }
     }
 
-    /// A row of a node. Astah centers such texts by their rounded width.
+    /// A row of a node. Astah centers such texts by their whole-pixel width or their exact one,
+    /// whichever is larger (Java rounds many bold characters down); texts it draws with whole-
+    /// pixel advances by the former.
     fn row(&mut self, row: &Row) {
-        let width = self.measure.rounded_width(&row.text, row.size, row.bold);
+        let rounded = self.measure.rounded_width(&row.text, row.size, row.bold);
+        let width = if row.hinted {
+            rounded
+        } else {
+            rounded.max(self.measure.width(&row.text, row.size, row.bold))
+        };
         // Whole-pixel advances: every character at its own x.
         let advances: Option<Vec<f32>> = row
             .hinted

@@ -11,7 +11,7 @@ mod workspace;
 use gpui_kit::*;
 use umlcraft_model::{Id, LineShape};
 
-use crate::workspace::NewItem;
+use crate::workspace::{EndChange, NewItem};
 
 rust_i18n::i18n!("../../locales", fallback = "en");
 
@@ -51,8 +51,19 @@ actions!(
         Paste,
         PasteAsReference,
         WrapInFragment,
+        ResetLineEnds,
+        ResetLabels,
     ]
 );
+
+/// Changes one end of an association, from the canvas's context menu.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct SetAssociationEnd {
+    pub association: Id,
+    pub end: usize,
+    pub change: EndChange,
+}
 
 /// Opens an entry of the "recent files" list.
 #[derive(Clone, PartialEq, Debug, Action)]

@@ -196,11 +196,27 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             result
         }
         Figure::Lollipop => {
-            vec![ellipse(r.center(), r.width / 2.0, r.height / 2.0)]
+            let radius = crate::scene::LOLLIPOP_RADIUS;
+            vec![Primitive::Ellipse {
+                center: r.center(),
+                rx: radius,
+                ry: radius,
+                fill: Paint::Fill,
+                width: 2.0,
+            }]
         }
         Figure::Package { tab } => {
+            // Astah draws packages with 2 px lines.
             let body = Rect::new(r.x, r.y + tab.height, r.width, r.height - tab.height);
-            vec![frame(*tab, Paint::Fill), frame(body, Paint::Fill)]
+            let thick = |rect| Primitive::Frame {
+                rect,
+                width: 2.0,
+                radius: 0.0,
+                fill: Paint::Fill,
+                border: Paint::Line,
+                style: solid,
+            };
+            vec![thick(*tab), thick(body)]
         }
         Figure::Actor => {
             let cx = r.x + r.width / 2.0;
@@ -259,16 +275,27 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
         }
         Figure::Note => {
             let fold = 10.0;
-            vec![Primitive::Polygon {
-                points: vec![
-                    r.origin(),
-                    Point::new(r.right() - fold, r.y),
-                    Point::new(r.right(), r.y + fold),
-                    Point::new(r.right(), r.bottom()),
-                    Point::new(r.x, r.bottom()),
-                ],
-                fill: Paint::Fill,
-            }]
+            vec![
+                Primitive::Polygon {
+                    points: vec![
+                        r.origin(),
+                        Point::new(r.right() - fold, r.y),
+                        Point::new(r.right(), r.y + fold),
+                        Point::new(r.right(), r.bottom()),
+                        Point::new(r.x, r.bottom()),
+                    ],
+                    fill: Paint::Fill,
+                },
+                // The folded corner.
+                line(
+                    vec![
+                        Point::new(r.right(), r.y + fold),
+                        Point::new(r.right() - fold, r.y + fold),
+                        Point::new(r.right() - fold, r.y),
+                    ],
+                    solid,
+                ),
+            ]
         }
         Figure::Action => vec![Primitive::Frame {
             rect: r,
@@ -445,6 +472,10 @@ pub fn markers(edge: &EdgeShape) -> Vec<Primitive> {
     let n = pts.len();
     let mut result = marker(pts[n - 1], pts[n - 2], edge.target_marker);
     result.extend(marker(pts[0], pts[1], edge.source_marker));
+    result.extend(
+        edge.name_arrow
+            .map(|points| Primitive::Polygon { points: points.to_vec(), fill: Paint::Line }),
+    );
     result
 }
 
@@ -486,10 +517,11 @@ fn marker(tip: Point, from: Point, marker: EndMarker) -> Vec<Primitive> {
             ]
         }
         EndMarker::HollowDiamond | EndMarker::FilledDiamond => {
+            // Astah's diamonds: 14 long, 10 wide.
             let fill =
                 if marker == EndMarker::FilledDiamond { Paint::Line } else { Paint::Background };
             vec![Primitive::Polygon {
-                points: vec![tip, at(8.0, 5.0), at(16.0, 0.0), at(8.0, -5.0)],
+                points: vec![tip, at(7.0, 5.0), at(14.0, 0.0), at(7.0, -5.0)],
                 fill,
             }]
         }

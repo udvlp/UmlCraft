@@ -241,6 +241,10 @@ pub struct Style {
     /// Classifier boxes: hide the operation compartment.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_operations: bool,
+    /// Classifier boxes: sized by their content as Astah does (its "auto resize"), as wide as
+    /// the widest text and as high as the compartments, instead of keeping their bounds.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_size: bool,
     /// Interfaces: draw as a small circle ("lollipop") instead of a box. Lifelines: draw the
     /// head as the icon of the represented classifier.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

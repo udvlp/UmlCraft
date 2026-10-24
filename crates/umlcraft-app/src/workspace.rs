@@ -3,14 +3,14 @@ use std::path::{Path, PathBuf};
 
 use rust_i18n::t;
 use umlcraft_model::{
-    DiagramKind, Document, ElementData, ElementKind, Id, LineShape, Model, ModelError, Point, Rect,
-    Shape, Style, Visibility,
+    Aggregation, DiagramKind, Document, EdgeLabels, ElementData, ElementKind, Id, LineShape, Model,
+    ModelError, Multiplicity, Navigability, Point, Rect, Shape, Size, Style, Tx, Visibility,
 };
 use umlcraft_notation::clipboard::{self, Clip};
 use umlcraft_notation::member;
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::route::Route;
-use umlcraft_notation::scene::{self, Alignment};
+use umlcraft_notation::scene::{self, Alignment, ApproxMeasure, TextMeasure};
 use umlcraft_notation::sequence::Slot;
 
 /// The open project and what the user is looking at. Shared by all panels as a GPUI entity.
@@ -27,6 +27,22 @@ pub struct Workspace {
     pub tool: Tool,
     /// Last problem to show in the status bar, e.g. a refused connection.
     pub message: Option<String>,
+    /// Measures texts for boxes sized to their content.
+    pub measure: Box<dyn TextMeasure>,
+}
+
+/// The fitted sizes and the contents of all automatically sized boxes, by diagram and
+/// presentation.
+fn fitted_boxes(model: &Model, measure: &dyn TextMeasure) -> Vec<(Id, Id, Size, String)> {
+    model
+        .views()
+        .flat_map(|(diagram, view)| {
+            view.presentations().iter().filter_map(move |p| {
+                let (size, content) = scene::fitted_box(model, p, measure)?;
+                Some((diagram, p.id, size, content))
+            })
+        })
+        .collect()
 }
 
 impl Workspace {
@@ -41,7 +57,14 @@ impl Workspace {
             selection: Vec::new(),
             tool: Tool::Select,
             message: None,
+            measure: Box::new(ApproxMeasure),
         }
+    }
+
+    /// Measures texts with `measure` instead of an estimate.
+    pub fn with_measure(mut self, measure: impl TextMeasure + 'static) -> Self {
+        self.measure = Box::new(measure);
+        self
     }
 
     pub fn file_name(&self) -> Option<String> {
@@ -144,6 +167,34 @@ impl Workspace {
         self.selection.retain(|&p| view.is_some_and(|v| v.get(p).is_some()));
     }
 
+    /// One undo step. Afterwards, as in Astah, boxes sized to their content whose content the
+    /// edit changed take the size it now needs (a new box always does). Others keep their size,
+    /// even if Astah stored one that does not fit.
+    fn edit<R>(
+        &mut self,
+        label: String,
+        f: impl FnOnce(&mut Tx<'_>) -> Result<R, ModelError>,
+    ) -> Result<R, ModelError> {
+        let measure = &*self.measure;
+        let before = fitted_boxes(self.doc.model(), measure);
+        self.doc.edit(label, |tx| {
+            let result = f(tx)?;
+            let close = |a: Size, b: Size| {
+                (a.width - b.width).abs() < 0.01 && (a.height - b.height).abs() < 0.01
+            };
+            for (diagram, p, size, content) in fitted_boxes(tx.model(), measure) {
+                let unchanged = before.iter().any(|(_, q, _, old)| *q == p && *old == content);
+                let Some(bounds) = tx.model().view(diagram).and_then(|v| v.get(p)?.bounds()) else {
+                    continue;
+                };
+                if !unchanged && !close(bounds.size(), size) {
+                    tx.set_bounds(diagram, p, Rect::from_origin_size(bounds.origin(), size))?;
+                }
+            }
+            Ok(result)
+        })
+    }
+
     fn report<T>(&mut self, result: Result<T, ModelError>) -> Option<T> {
         match result {
             Ok(value) => {
@@ -162,8 +213,7 @@ impl Workspace {
         let Some(diagram) = self.active_diagram else { return };
         let base = name_base(&format!("kind.{}", tool.key()), keeps_words(tool));
         let label = t!("edit.create").to_string();
-        let result =
-            self.doc.edit(label, |tx| palette::create_node(tx, diagram, tool, origin, &base));
+        let result = self.edit(label, |tx| palette::create_node(tx, diagram, tool, origin, &base));
         if let Some((element, node)) = self.report(result) {
             self.selection = vec![node];
             self.selected_element = Some(element);
@@ -173,7 +223,7 @@ impl Workspace {
     pub fn connect(&mut self, tool: EdgeTool, source: Id, target: Id) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.connect").to_string();
-        let result = self.doc.edit(label, |tx| palette::connect(tx, diagram, tool, source, target));
+        let result = self.edit(label, |tx| palette::connect(tx, diagram, tool, source, target));
         if let Some(edge) = self.report(result) {
             self.select(vec![edge]);
         }
@@ -217,7 +267,7 @@ impl Workspace {
         let Some(view) = self.doc.model().view(diagram) else { return };
         let items: Vec<Id> = self.selection.iter().filter_map(|&p| view.get(p)?.element).collect();
         let label = t!("edit.wrap_in_fragment").to_string();
-        let result = self.doc.edit(label, |tx| palette::wrap_in_fragment(tx, diagram, &items));
+        let result = self.edit(label, |tx| palette::wrap_in_fragment(tx, diagram, &items));
         if let Some((fragment, node)) = self.report(result) {
             self.selection = vec![node];
             self.selected_element = Some(fragment);
@@ -227,14 +277,14 @@ impl Workspace {
     /// Moves a message or fragment to another place in its interaction.
     pub fn move_to_slot(&mut self, item: Id, slot: Slot) {
         let label = t!("edit.move_element").to_string();
-        let result = self.doc.edit(label, |tx| palette::move_to_slot(tx, item, slot));
+        let result = self.edit(label, |tx| palette::move_to_slot(tx, item, slot));
         self.report(result);
     }
 
     /// Adds an operand to a combined fragment and selects it.
     pub fn add_operand(&mut self, fragment: Id) {
         let label = t!("edit.create").to_string();
-        let result = self.doc.edit(label, |tx| palette::add_operand(tx, fragment));
+        let result = self.edit(label, |tx| palette::add_operand(tx, fragment));
         if let Some(operand) = self.report(result) {
             self.selected_element = Some(operand);
         }
@@ -287,7 +337,7 @@ impl Workspace {
             })
             .unwrap_or_default();
         let label = t!("edit.move").to_string();
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
             edges.into_iter().try_for_each(|(e, w)| tx.set_waypoints(diagram, e, w))?;
             if sequence {
@@ -317,9 +367,56 @@ impl Workspace {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.waypoints").to_string();
         let anchors = (route.source_anchor, route.target_anchor);
-        let result =
-            self.doc.edit(label, |tx| tx.set_route(diagram, edge, route.waypoints, anchors));
+        let result = self.edit(label, |tx| tx.set_route(diagram, edge, route.waypoints, anchors));
         self.report(result);
+    }
+
+    /// Lets the given edges aim at the centers of their nodes again.
+    pub fn reset_line_ends(&mut self, edges: &[Id]) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.line_ends").to_string();
+        let result = self.edit(label, |tx| {
+            edges.iter().try_for_each(|&edge| {
+                tx.update_presentation(diagram, edge, |p| {
+                    if let Shape::Edge { source_anchor, target_anchor, .. } = &mut p.shape {
+                        (*source_anchor, *target_anchor) = (None, None);
+                    }
+                })
+            })
+        });
+        self.report(result);
+    }
+
+    /// Puts the labels of the given edges and messages back where the layout puts them.
+    pub fn reset_labels(&mut self, edges: &[Id]) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.labels").to_string();
+        let result = self.edit(label, |tx| {
+            edges.iter().try_for_each(|&edge| {
+                tx.update_presentation(diagram, edge, |p| match &mut p.shape {
+                    Shape::Edge { labels, .. } | Shape::Message { labels, .. } => {
+                        *labels = EdgeLabels::default();
+                    }
+                    _ => {}
+                })
+            })
+        });
+        self.report(result);
+    }
+
+    /// Changes end `end` of an association.
+    pub fn set_association_end(&mut self, association: Id, end: usize, change: EndChange) {
+        self.update_element(association, |data| {
+            if let ElementKind::Association(p) = &mut data.kind
+                && let Some(end) = p.ends.get_mut(end)
+            {
+                match change {
+                    EndChange::Navigability(n) => end.navigability = n,
+                    EndChange::Aggregation(a) => end.aggregation = a,
+                    EndChange::Multiplicity(m) => end.multiplicity = m,
+                }
+            }
+        });
     }
 
     /// Gives edges of the active diagram a line style, each with its route for that style, as
@@ -330,7 +427,7 @@ impl Workspace {
             return;
         }
         let label = t!("edit.line_style").to_string();
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             edges.into_iter().try_for_each(|(edge, route)| {
                 let anchors = (route.source_anchor, route.target_anchor);
                 tx.set_route(diagram, edge, route.waypoints, anchors)?;
@@ -345,7 +442,7 @@ impl Workspace {
     pub fn apply_text(&mut self, element: Id, text: &str) {
         let label = t!("edit.properties").to_string();
         let Some(kind) = self.doc.model().get(element).map(|e| e.kind().clone()) else { return };
-        let result = self.doc.edit(label, |tx| match kind {
+        let result = self.edit(label, |tx| match kind {
             ElementKind::Comment(_) => tx.update(element, |d| {
                 if let ElementKind::Comment(p) = &mut d.kind {
                     p.body = text.to_owned();
@@ -379,7 +476,7 @@ impl Workspace {
     pub fn show_element(&mut self, element: Id, at: Point) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.show").to_string();
-        let result = self.doc.edit(label, |tx| palette::show_element(tx, diagram, element, at));
+        let result = self.edit(label, |tx| palette::show_element(tx, diagram, element, at));
         if let Some(node) = self.report(result) {
             self.select(vec![node]);
         }
@@ -393,7 +490,7 @@ impl Workspace {
         }
         let index = model.children(owner).len();
         let label = t!("edit.move_element").to_string();
-        let result = self.doc.edit(label, |tx| tx.move_element(element, owner, index));
+        let result = self.edit(label, |tx| tx.move_element(element, owner, index));
         self.report(result);
     }
 
@@ -408,7 +505,7 @@ impl Workspace {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.paste").to_string();
         let result =
-            self.doc.edit(label, |tx| clipboard::paste(tx, diagram, clip, offset, as_reference));
+            self.edit(label, |tx| clipboard::paste(tx, diagram, clip, offset, as_reference));
         if let Some(created) = self.report(result) {
             self.select(created);
         }
@@ -418,7 +515,7 @@ impl Workspace {
     pub fn place_message_label(&mut self, presentation: Id, top_left: Point) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.move").to_string();
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             umlcraft_notation::sequence_edit::place_label(tx, diagram, presentation, top_left)
         });
         self.report(result);
@@ -429,8 +526,10 @@ impl Workspace {
         let label = t!("edit.resize").to_string();
         let sequence = self.doc.model().get(diagram).and_then(|d| d.kind().as_diagram())
             == Some(umlcraft_model::DiagramKind::Sequence);
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             tx.set_bounds(diagram, presentation, bounds)?;
+            // A box sized by hand keeps that size, as in Astah.
+            tx.update_presentation(diagram, presentation, |p| p.style.auto_size = false)?;
             // A fragment grown over messages takes them in.
             if sequence {
                 umlcraft_notation::sequence_edit::tidy(tx, diagram)?;
@@ -449,7 +548,7 @@ impl Workspace {
         let rects: Vec<Rect> = nodes.iter().map(|&(_, r)| r).collect();
         let aligned = scene::align(&rects, alignment);
         let label = t!("edit.align").to_string();
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             nodes.iter().zip(aligned).try_for_each(|(&(p, _), r)| tx.set_bounds(diagram, p, r))
         });
         self.report(result);
@@ -473,7 +572,7 @@ impl Workspace {
             return;
         }
         let label = t!("edit.delete").to_string();
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             for p in graphics {
                 if tx.model().view(diagram).and_then(|v| v.get(p)).is_some() {
                     tx.remove_presentation(diagram, p)?;
@@ -498,7 +597,7 @@ impl Workspace {
         let Some(diagram) = self.active_diagram else { return };
         let selection = self.selection.clone();
         let label = t!("edit.remove_from_diagram").to_string();
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             for p in selection {
                 if tx.model().view(diagram).and_then(|v| v.get(p)).is_some() {
                     tx.remove_presentation(diagram, p)?;
@@ -510,6 +609,14 @@ impl Workspace {
             self.clear_selection();
         }
     }
+}
+
+/// A change to one end of an association, as the canvas's context menu offers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndChange {
+    Navigability(Navigability),
+    Aggregation(Aggregation),
+    Multiplicity(Option<Multiplicity>),
 }
 
 /// What the model tree's "New" menu can add to an element.
@@ -583,7 +690,7 @@ impl Workspace {
         };
         let base = name_base(&item.key(), keep_words);
         let label = t!("edit.create").to_string();
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             let name = palette::unique_name(tx.model(), owner, &base);
             match item {
                 NewItem::Element(tool) => {
@@ -628,14 +735,14 @@ impl Workspace {
     /// Changes an element's data as one undo step, e.g. from the properties panel.
     pub fn update_element(&mut self, id: Id, f: impl FnOnce(&mut ElementData)) {
         let label = t!("edit.properties").to_string();
-        let result = self.doc.edit(label, |tx| tx.update(id, f));
+        let result = self.edit(label, |tx| tx.update(id, f));
         self.report(result);
     }
 
     /// Deletes one element from the model (with everything that depends on it).
     pub fn delete_element(&mut self, id: Id) {
         let label = t!("edit.delete").to_string();
-        let result = self.doc.edit(label, |tx| {
+        let result = self.edit(label, |tx| {
             tx.delete(id)?;
             umlcraft_notation::sequence_edit::tidy_all(tx)
         });
@@ -670,4 +777,91 @@ pub fn name_base(key: &str, keep_words: bool) -> String {
 
 fn first_diagram(model: &Model) -> Option<Id> {
     model.subtree(model.root()).into_iter().find(|&id| model.view(id).is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use umlcraft_model::sample::order_system;
+
+    use super::*;
+
+    #[test]
+    fn boxes_sized_by_content_fit_when_edited() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        let d = ids.class_diagram;
+        ws.open_diagram(d);
+        let bounds = |ws: &Workspace, id: Id| ws.doc.model().view(d).unwrap().get(id)?.bounds();
+        let fitted = |ws: &Workspace, id: Id| {
+            let p = ws.doc.model().view(d).unwrap().get(id).unwrap();
+            scene::fitted_size(ws.doc.model(), p, &ApproxMeasure).unwrap()
+        };
+
+        // A new class takes its fitted size instead of the palette's.
+        ws.create_node(NodeTool::Class, Point::new(500.0, 400.0));
+        let class = ws.selection[0];
+        let element = ws.selected_element.unwrap();
+        assert_eq!(bounds(&ws, class).unwrap().size(), fitted(&ws, class));
+        // It grows to the right with a longer name.
+        ws.apply_text(element, "AVeryMuchLongerClassName");
+        let grown = bounds(&ws, class).unwrap();
+        assert_eq!((grown.x, grown.size()), (500.0, fitted(&ws, class)));
+
+        // A box sized by content whose stored size is off (as Astah may store it) stays as it
+        // is until its own content changes.
+        let customer = ws.doc.model().view(d).unwrap().presentations_of(ids.customer).next();
+        let customer = customer.unwrap().id;
+        ws.doc
+            .edit("auto", |tx| tx.update_presentation(d, customer, |p| p.style.auto_size = true))
+            .unwrap();
+        let stale = bounds(&ws, customer).unwrap();
+        ws.apply_text(element, "Short");
+        assert_eq!(bounds(&ws, customer), Some(stale));
+        ws.apply_text(ids.customer, "Client");
+        assert_eq!(bounds(&ws, customer).unwrap().size(), fitted(&ws, customer));
+
+        // Resizing by hand ends the automatic size.
+        let manual = Rect::new(500.0, 400.0, 300.0, 120.0);
+        ws.set_bounds(class, manual);
+        ws.apply_text(element, "X");
+        assert_eq!(bounds(&ws, class), Some(manual));
+    }
+
+    #[test]
+    fn context_menu_edits_of_edges() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        let d = ids.class_diagram;
+        ws.open_diagram(d);
+        let edge = |ws: &Workspace| {
+            let view = ws.doc.model().view(d).unwrap();
+            view.presentations_of(ids.order_customer).next().unwrap().clone()
+        };
+        let id = edge(&ws).id;
+        ws.doc
+            .edit("place", |tx| {
+                tx.update_presentation(d, id, |p| {
+                    if let Shape::Edge { source_anchor, labels, .. } = &mut p.shape {
+                        *source_anchor = Some(Point::new(0.2, 0.8));
+                        labels.name = Some(Point::new(5.0, 5.0));
+                    }
+                })
+            })
+            .unwrap();
+
+        ws.reset_line_ends(&[id]);
+        ws.reset_labels(&[id]);
+        let Shape::Edge { source_anchor, labels, .. } = edge(&ws).shape else { unreachable!() };
+        assert_eq!((source_anchor, labels), (None, EdgeLabels::default()));
+
+        ws.set_association_end(ids.order_customer, 1, EndChange::Aggregation(Aggregation::Shared));
+        ws.set_association_end(ids.order_customer, 1, EndChange::Multiplicity(None));
+        let association = ws.doc.model().get(ids.order_customer).unwrap();
+        let ElementKind::Association(p) = association.kind() else { unreachable!() };
+        assert_eq!((p.ends[1].aggregation, p.ends[1].multiplicity), (Aggregation::Shared, None));
+        // Two undo steps for the end, one each for labels and line ends.
+        assert!(ws.doc.undo() && ws.doc.undo() && ws.doc.undo() && ws.doc.undo());
+        let Shape::Edge { source_anchor, .. } = edge(&ws).shape else { unreachable!() };
+        assert_eq!(source_anchor, Some(Point::new(0.2, 0.8)));
+    }
 }
