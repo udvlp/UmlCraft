@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Color, DiagramKind,
     EdgeLabels, ElementKind, Id, InstanceKind, LineShape, MessageSort, Model, Navigability, Point,
-    Presentation, PseudostateKind, Rect, Shape, Size, StateProps, Style,
+    Presentation, PseudostateKind, Qualifier, Rect, Shape, Size, StateProps, Style,
 };
 
 use crate::member::member_text;
@@ -348,6 +348,11 @@ pub struct EdgeShape {
     pub anchors: [Option<Point>; 2],
     /// The filled triangle next to an association's name that shows which way it reads.
     pub name_arrow: Option<[Point; 3]>,
+    /// The boxes of qualified association ends, against their node, with one row per qualifier.
+    pub qualifiers: Vec<(Rect, Vec<Row>)>,
+    /// Where the line meets the source and target node. A qualifier box moves the end of the
+    /// line away from it; placed end labels stay relative to it, as in Astah's files.
+    pub node_tips: [Point; 2],
 }
 
 /// A grip on a selected edge: an existing waypoint, the middle of a segment where dragging
@@ -485,6 +490,8 @@ pub struct EdgeLabel {
     pub text: String,
     pub anchor: Point,
     pub align: LabelAlign,
+    /// Static association ends show their role underlined.
+    pub underline: bool,
 }
 
 /// An uncommitted change shown while the user drags.
@@ -715,9 +722,17 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             });
             let to_lollipop = iconic_interfaces.contains(target);
             let outline = |id| outlines.get(id).copied().unwrap_or(Outline::Rect);
+            let qualifiers = match element.map(|e| e.kind()) {
+                Some(ElementKind::Association(a)) => a
+                    .ends
+                    .each_ref()
+                    .map(|end| end.qualifiers.iter().map(|q| qualifier_text(model, q)).collect()),
+                _ => Default::default(),
+            };
             Some(edge_for(
                 p.id,
                 element.map(|e| e.kind()),
+                &qualifiers,
                 ((source_rect, outline(source)), (target_rect, outline(target))),
                 anchors,
                 p.style.line_shape,
@@ -1462,6 +1477,8 @@ pub fn row_at(scene: &Scene, p: Point) -> Option<(&NodeShape, &Row)> {
 fn edge_for(
     id: Id,
     kind: Option<&ElementKind>,
+    // An association's qualifiers per end, as text.
+    qualifiers: &[Vec<String>; 2],
     ((source, source_outline), (target, target_outline)): ((Rect, Outline), (Rect, Outline)),
     anchors: [Option<Point>; 2],
     shape: LineShape,
@@ -1497,9 +1514,11 @@ fn edge_for(
     points.extend_from_slice(waypoints);
     points.push(target_outline.border_point(target, end, last_from));
 
+    let node_tips = [points[0], points[points.len() - 1]];
     let mut edge = EdgeShape {
         id,
         points,
+        node_tips,
         line: LineStyle::Solid,
         shape,
         source_marker: EndMarker::None,
@@ -1509,8 +1528,10 @@ fn edge_for(
         ends: [source, target],
         anchors,
         name_arrow: None,
+        qualifiers: Vec::new(),
     };
-    let mut ends: [(Option<String>, Option<String>); 2] = [(None, None), (None, None)];
+    // Role, multiplicity and whether the role is underlined (static), per end.
+    let mut ends: [(Option<String>, Option<String>, bool); 2] = Default::default();
     let mut label = name_label;
     let end_marker = |end: &AssociationEnd| match (end.aggregation, end.navigability) {
         (Aggregation::Shared, _) => EndMarker::HollowDiamond,
@@ -1537,9 +1558,19 @@ fn edge_for(
                 });
                 let constraints = end.constraints.iter().map(|c| format!("{{{c}}}"));
                 let role = role.into_iter().chain(constraints).collect::<Vec<_>>().join(" ");
-                ((!role.is_empty()).then_some(role), end.multiplicity.map(|m| m.to_string()))
+                let multiplicity = end.multiplicity.map(|m| m.to_string());
+                ((!role.is_empty()).then_some(role), multiplicity, end.is_static)
             };
             ends = [texts(a), texts(b)];
+            // Qualifiers sit in a box against the end's node; the line then ends at the box.
+            for (i, texts) in qualifiers.iter().enumerate().filter(|(_, t)| !t.is_empty()) {
+                let n = edge.points.len();
+                let (tip, next) = if i == 0 { (0, 1) } else { (n - 1, n - 2) };
+                let rect = edge.ends[i];
+                let (b, rows) = qualifier_box(rect, edge.points[tip], texts, measure);
+                edge.points[tip] = border_point_from(b, edge.points[tip], edge.points[next]);
+                edge.qualifiers.push((b, rows));
+            }
         }
         Some(ElementKind::Generalization(_)) => edge.target_marker = EndMarker::HollowTriangle,
         // Realizing an interface drawn as a circle is a plain line ("lollipop").
@@ -1596,6 +1627,7 @@ fn edge_for(
         text,
         anchor: base.offset(offset.x, offset.y),
         align: LabelAlign::Left,
+        underline: false,
     };
     let (a, b) = route::middle_segment(pts, shape.is_curve());
     let center = middle(a, b);
@@ -1625,25 +1657,81 @@ fn edge_for(
         edge.name_arrow = Some(name_arrow(name.anchor, width, (a, b)));
     }
     edge.labels.extend(name);
-    let [(source_role, source_mult), (target_role, target_mult)] = ends;
+    let [(source_role, source_mult, source_static), (target_role, target_mult, target_static)] =
+        ends;
     let (source_tip, source_from) = (pts[0], pts[1]);
     let (target_tip, target_from) = (pts[n - 1], pts[n - 2]);
-    let place = |text: Option<String>, offset: Option<Point>, end: End, role| {
-        text.map(|text| match offset {
-            Some(offset) => at(text, end.tip, offset),
-            None => end_label(text, end, role, measure),
+    let place = |text: Option<String>, offset: Option<Point>, end: End, role, underline| {
+        text.map(|text| {
+            let node_tip = node_tips[usize::from(!end.source)];
+            let label = match offset {
+                Some(offset) => at(text, node_tip, offset),
+                None => end_label(text, end, role, measure),
+            };
+            EdgeLabel { underline, ..label }
         })
     };
     let source = End { tip: source_tip, next: source_from, source: true };
     let target = End { tip: target_tip, next: target_from, source: false };
     let labels = [
-        place(source_role, placed.source_role, source, true),
-        place(source_mult, placed.source_multiplicity, source, false),
-        place(target_role, placed.target_role, target, true),
-        place(target_mult, placed.target_multiplicity, target, false),
+        place(source_role, placed.source_role, source, true, source_static),
+        place(source_mult, placed.source_multiplicity, source, false, false),
+        place(target_role, placed.target_role, target, true, target_static),
+        place(target_mult, placed.target_multiplicity, target, false, false),
     ];
     edge.labels.extend(labels.into_iter().flatten());
     edge
+}
+
+/// A qualifier as Astah shows it: `key : Key`, or just the name if it has no type.
+fn qualifier_text(model: &Model, q: &Qualifier) -> String {
+    match crate::member::type_label(model, &q.type_ref) {
+        Some(ty) if !ty.is_empty() => format!("{} : {ty}", q.name),
+        _ => q.name.clone(),
+    }
+}
+
+/// The box of qualifiers at the end `tip` of a line on the border of `node`, as Astah draws it:
+/// outside the side `tip` lies on and centered on `tip`, 20 wider than the widest text, rows
+/// 4 apart, at least 30 high. Texts start 10 from the left, their first baseline 13 below the top.
+fn qualifier_box(
+    node: Rect,
+    tip: Point,
+    texts: &[String],
+    measure: &dyn TextMeasure,
+) -> (Rect, Vec<Row>) {
+    const PAD: f32 = 10.0;
+    const FIRST_BASELINE: f32 = 13.0;
+    const MIN_HEIGHT: f32 = 30.0;
+    let step = LABEL_HEIGHT + 4.0;
+    let widths: Vec<f32> = texts.iter().map(|t| measure.width(t, FONT_SIZE, false)).collect();
+    let width = widths.iter().copied().fold(0.0, f32::max) + 2.0 * PAD;
+    let height = (texts.len() as f32 * step - 4.0).max(MIN_HEIGHT);
+    // The side `tip` is closest to.
+    let sides = [
+        (tip.x - node.x).abs(),
+        (node.right() - tip.x).abs(),
+        (tip.y - node.y).abs(),
+        (node.bottom() - tip.y).abs(),
+    ];
+    let side = (0..4).min_by(|&a, &b| sides[a].total_cmp(&sides[b])).unwrap_or(0);
+    let rect = match side {
+        0 => Rect::new(node.x - width, tip.y - height / 2.0, width, height),
+        1 => Rect::new(node.right(), tip.y - height / 2.0, width, height),
+        2 => Rect::new(tip.x - width / 2.0, node.y - height, width, height),
+        _ => Rect::new(tip.x - width / 2.0, node.bottom(), width, height),
+    };
+    let rows = texts
+        .iter()
+        .zip(widths)
+        .enumerate()
+        .map(|(i, (text, w))| {
+            let top = rect.y + FIRST_BASELINE + i as f32 * step - FONT_SIZE * crate::draw::BASELINE;
+            let line = Line::new(text.clone(), FONT_SIZE, RowRole::Member, None);
+            line.place(Rect::new(rect.x + PAD, top, w, line_height(FONT_SIZE)), LabelAlign::Left)
+        })
+        .collect();
+    (rect, rows)
 }
 
 /// An edge's name followed by `text`, e.g. a flow's guard.
@@ -1686,7 +1774,7 @@ fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> E
     let center = Point::new(tip.x + along * ux + left * lx, tip.y + along * uy + left * ly);
     let width = label_width(&text, measure);
     let anchor = center.offset(-width / 2.0, -LABEL_HEIGHT / 2.0);
-    EdgeLabel { text, anchor, align: LabelAlign::Left }
+    EdgeLabel { text, anchor, align: LabelAlign::Left, underline: false }
 }
 
 /// Places the name of an association, dependency, realization or generalization as Astah does:
@@ -1694,7 +1782,7 @@ fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> E
 fn association_name(text: String, middle: Point, measure: &dyn TextMeasure) -> EdgeLabel {
     let width = label_width(&text, measure);
     let anchor = middle.offset(-width / 2.0, 9.0 - LABEL_HEIGHT / 2.0);
-    EdgeLabel { text, anchor, align: LabelAlign::Left }
+    EdgeLabel { text, anchor, align: LabelAlign::Left, underline: false }
 }
 
 /// Astah's triangle that shows which way a name reads, next to the name's box (top left `at`,
@@ -1724,12 +1812,14 @@ pub(crate) fn middle_label(text: String, a: Point, b: Point) -> EdgeLabel {
             text,
             anchor: Point::new(mid.x, mid.y - LABEL_HEIGHT - 3.0),
             align: LabelAlign::Center,
+            underline: false,
         }
     } else {
         EdgeLabel {
             text,
             anchor: Point::new(mid.x + 6.0, mid.y - LABEL_HEIGHT / 2.0),
             align: LabelAlign::Left,
+            underline: false,
         }
     }
 }
@@ -1772,11 +1862,10 @@ pub fn distance_to_segment(p: Point, a: Point, b: Point) -> f32 {
 
 /// Topmost node or edge under `p` (logical coordinates), with `tolerance` for thin lines.
 pub fn hit_test(scene: &Scene, p: Point, tolerance: f32) -> Option<Id> {
-    let edge = scene
-        .edges
-        .iter()
-        .rev()
-        .find(|e| e.path().windows(2).any(|w| distance_to_segment(p, w[0], w[1]) <= tolerance));
+    let edge = scene.edges.iter().rev().find(|e| {
+        e.path().windows(2).any(|w| distance_to_segment(p, w[0], w[1]) <= tolerance)
+            || e.qualifiers.iter().any(|(rect, _)| rect.contains(p))
+    });
     if let Some(edge) = edge {
         return Some(edge.id);
     }
@@ -2222,6 +2311,48 @@ mod tests {
         let association = scene.edges.iter().find(|e| e.labels.len() == 4).unwrap();
         let texts: Vec<&str> = association.labels.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, ["{ordered}", "*", "+ customer {ordered} {unique}", "1"]);
+    }
+
+    #[test]
+    fn qualifiers_sit_in_a_box_against_their_node() {
+        let (mut doc, ids) = order_system();
+        doc.edit("Qualify", |tx| {
+            tx.update(ids.order_customer, |data| {
+                if let ElementKind::Association(p) = &mut data.kind {
+                    p.ends[1].qualifiers = vec![Qualifier { name: "id".into(), type_ref: None }];
+                    p.ends[1].is_static = true;
+                }
+            })
+        })
+        .unwrap();
+        let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
+        let edge = scene.edges.iter().find(|e| !e.qualifiers.is_empty()).unwrap();
+        let (rect, rows) = &edge.qualifiers[0];
+        let node = edge.ends[1];
+        let tip = edge.node_tips[1];
+        let end = *edge.points.last().unwrap();
+        // One row: the minimal height, the text 10 in, the box centered on where the line met
+        // the node and flush with it.
+        assert_eq!(rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["id"]);
+        assert_eq!(rect.height, 30.0);
+        assert!((rows[0].rect.x - rect.x - 10.0).abs() < 1e-3);
+        let touches = (rect.right() - node.x).abs() < 1e-3
+            || (rect.x - node.right()).abs() < 1e-3
+            || (rect.bottom() - node.y).abs() < 1e-3
+            || (rect.y - node.bottom()).abs() < 1e-3;
+        assert!(touches, "{rect:?} against {node:?}");
+        let center = rect.center();
+        assert!((center.x - tip.x).abs() < 1e-3 || (center.y - tip.y).abs() < 1e-3);
+        // The line ends on the box's border.
+        let on_border = (end.x - rect.x).abs() < 1e-3
+            || (end.x - rect.right()).abs() < 1e-3
+            || (end.y - rect.y).abs() < 1e-3
+            || (end.y - rect.bottom()).abs() < 1e-3;
+        assert!(on_border, "{end:?} on {rect:?}");
+        assert!(hit_test(&scene, center, 0.0) == Some(edge.id));
+        // A static end's role is underlined.
+        let role = edge.labels.iter().find(|l| l.text.ends_with("customer")).unwrap();
+        assert!(role.underline);
     }
 
     /// Measures every text as `0` wide, exactly and in whole pixels.

@@ -12,9 +12,10 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
     Aggregation, DiagramKind, ElementData, ElementKind, Id, InstanceProps, InteractionOperator,
-    LifelineProps, MessageSort, Model, Multiplicity, Navigability, Style,
+    LifelineProps, MessageSort, Model, Multiplicity, Navigability, Style, TemplateParameterKind,
+    TypeRef,
 };
-use umlcraft_notation::member::member_text;
+use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::sequence::operator_keyword;
 
 use crate::labels::{self, VISIBILITIES};
@@ -47,6 +48,8 @@ const OPERATORS: [InteractionOperator; 12] = [
     InteractionOperator::Ignore,
     InteractionOperator::Consider,
 ];
+const PARAMETER_KINDS: [TemplateParameterKind; 2] =
+    [TemplateParameterKind::Type, TemplateParameterKind::Value];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Field {
@@ -66,9 +69,12 @@ enum Field {
     Entry,
     DoActivity,
     Exit,
+    ValueType,
+    Bounds,
+    Default,
 }
 
-const TEXT_FIELDS: [Field; 13] = [
+const TEXT_FIELDS: [Field; 16] = [
     Field::Name,
     Field::Declaration,
     Field::Stereotypes,
@@ -82,6 +88,9 @@ const TEXT_FIELDS: [Field; 13] = [
     Field::Entry,
     Field::DoActivity,
     Field::Exit,
+    Field::ValueType,
+    Field::Bounds,
+    Field::Default,
 ];
 
 /// Inputs for one association end.
@@ -110,6 +119,11 @@ pub struct PropertiesPanel {
     entry: Entity<InputState>,
     do_activity: Entity<InputState>,
     exit: Entity<InputState>,
+    /// Template parameters: the type of a value parameter, the bounds and the default.
+    value_type: Entity<InputState>,
+    bounds: Entity<InputState>,
+    default: Entity<InputState>,
+    parameter_kind: Entity<Choice>,
     sort: Entity<Choice>,
     operator: Entity<Choice>,
     /// Operations a message can invoke, with their ids (`None` for "no operation").
@@ -146,6 +160,29 @@ fn sort_items() -> Vec<SharedString> {
     ["synchronous", "asynchronous", "reply", "create", "destroy"]
         .map(|k| t!(format!("message_sort.{k}")).to_string().into())
         .to_vec()
+}
+
+fn parameter_kind_items() -> Vec<SharedString> {
+    ["template_kind.type", "template_kind.value"].map(|k| t!(k).to_string().into()).to_vec()
+}
+
+/// Splits `text` at the commas that are not inside `<…>`: "A, Map<K, V>" is two types.
+fn split_types(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0i32, 0);
+    for (i, c) in text.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&text[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts.into_iter().map(str::trim).filter(|p| !p.is_empty()).collect()
 }
 
 fn operator_items() -> Vec<SharedString> {
@@ -246,6 +283,11 @@ impl PropertiesPanel {
         let entry = input(window, cx);
         let do_activity = input(window, cx);
         let exit = input(window, cx);
+        let value_type = input(window, cx);
+        let bounds = cx.new(|cx| InputState::new(window, cx).placeholder("Number, Comparable<T>"));
+        let default = input(window, cx);
+        let parameter_kind =
+            cx.new(|cx| SelectState::new(parameter_kind_items(), None, window, cx));
         let sort = cx.new(|cx| SelectState::new(sort_items(), None, window, cx));
         let operator = cx.new(|cx| SelectState::new(operator_items(), None, window, cx));
         let operation = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
@@ -274,6 +316,9 @@ impl PropertiesPanel {
         watch(&entry, Field::Entry, cx);
         watch(&do_activity, Field::DoActivity, cx);
         watch(&exit, Field::Exit, cx);
+        watch(&value_type, Field::ValueType, cx);
+        watch(&bounds, Field::Bounds, cx);
+        watch(&default, Field::Default, cx);
         for (i, end) in ends.iter().enumerate() {
             watch(&end.role, Field::Role(i), cx);
             watch(&end.multiplicity, Field::Multiplicity(i), cx);
@@ -306,6 +351,21 @@ impl PropertiesPanel {
                 this.apply_shown(cx, move |data| {
                     if let ElementKind::Message(p) = &mut data.kind {
                         p.sort = s;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &parameter_kind,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(k) = selected(state, cx).and_then(|ix| PARAMETER_KINDS.get(ix).copied())
+                else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::TemplateParameter(p) = &mut data.kind {
+                        p.parameter = k;
                     }
                 });
             },
@@ -406,6 +466,10 @@ impl PropertiesPanel {
             entry,
             do_activity,
             exit,
+            value_type,
+            bounds,
+            default,
+            parameter_kind,
             sort,
             operator,
             operation,
@@ -546,6 +610,30 @@ impl PropertiesPanel {
                     }
                 });
             }
+            Field::ValueType | Field::Bounds | Field::Default => {
+                let state = match field {
+                    Field::ValueType => &self.value_type,
+                    Field::Bounds => &self.bounds,
+                    _ => &self.default,
+                };
+                let text = Self::value(state, cx);
+                // Names resolve as in a declaration, so `T` finds a sibling parameter.
+                let model = self.workspace.read(cx).doc.model();
+                let types: Vec<TypeRef> = split_types(&text)
+                    .into_iter()
+                    .map(|t| member::parse_type(model, id, t))
+                    .collect();
+                let single = (!text.is_empty()).then(|| member::parse_type(model, id, &text));
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::TemplateParameter(p) = &mut data.kind {
+                        match field {
+                            Field::ValueType => p.type_ref = single,
+                            Field::Bounds => p.bounds = types,
+                            _ => p.default = single,
+                        }
+                    }
+                });
+            }
             Field::Role(i) => {
                 let value = Self::value(&self.ends[i].role, cx);
                 self.apply(id, cx, move |data| {
@@ -639,6 +727,16 @@ impl PropertiesPanel {
         let model = ws.doc.model();
         let data = model.get(id).expect("checked above").data().clone();
         let declaration = member_text(model, id);
+        // A template parameter's value type, bounds and default as text.
+        let parameter_texts = match &data.kind {
+            ElementKind::TemplateParameter(p) => {
+                let text = |t: &Option<TypeRef>| member::type_label(model, t).unwrap_or_default();
+                let bounds: Vec<String> =
+                    p.bounds.iter().map(|b| member::type_text(model, b)).collect();
+                [text(&p.type_ref), bounds.join(", "), text(&p.default)]
+            }
+            _ => Default::default(),
+        };
         // What a message, lifeline or instance may refer to.
         let references = match &data.kind {
             ElementKind::Message(_) => operations_for(model, id),
@@ -720,6 +818,20 @@ impl PropertiesPanel {
                 set(&self.entry, p.entry.clone(), window, cx);
                 set(&self.do_activity, p.do_activity.clone(), window, cx);
                 set(&self.exit, p.exit.clone(), window, cx);
+            }
+            ElementKind::TemplateParameter(p) => {
+                let [value_type, bounds, default] = parameter_texts;
+                set(&self.value_type, value_type, window, cx);
+                set(&self.bounds, bounds, window, cx);
+                set(&self.default, default, window, cx);
+                let k = PARAMETER_KINDS.iter().position(|&k| k == p.parameter);
+                choose(
+                    &self.parameter_kind,
+                    k,
+                    locale_changed.then(parameter_kind_items),
+                    window,
+                    cx,
+                );
             }
             _ => {}
         }
@@ -841,7 +953,8 @@ impl Render for PropertiesPanel {
             | ElementKind::Activity
             | ElementKind::ActivityNode(_)
             | ElementKind::ActivityEdge(_)
-            | ElementKind::Partition => {
+            | ElementKind::Partition
+            | ElementKind::TemplateParameter(_) => {
                 body = body.child(field(
                     t!("prop.name").into(),
                     Input::new(&self.name).small().into_any_element(),
@@ -895,18 +1008,64 @@ impl Render for PropertiesPanel {
                     ));
             }
             ElementKind::Class(p) => {
-                body = body.child(flag(
-                    "abstract",
-                    t!("prop.abstract").into(),
-                    p.is_abstract,
-                    workspace.clone(),
-                    id,
-                    |d, v| {
-                        if let ElementKind::Class(p) = &mut d.kind {
-                            p.is_abstract = v;
-                        }
-                    },
+                body = body
+                    .child(flag(
+                        "abstract",
+                        t!("prop.abstract").into(),
+                        p.is_abstract,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::Class(p) = &mut d.kind {
+                                p.is_abstract = v;
+                            }
+                        },
+                    ))
+                    .child(flag(
+                        "leaf",
+                        t!("prop.leaf").into(),
+                        p.is_leaf,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::Class(p) = &mut d.kind {
+                                p.is_leaf = v;
+                            }
+                        },
+                    ));
+            }
+            ElementKind::TemplateParameter(p) => {
+                body = body.child(field(
+                    t!("prop.parameter_kind").into(),
+                    Select::new(&self.parameter_kind).small().into_any_element(),
                 ));
+                if p.parameter == TemplateParameterKind::Value {
+                    body = body.child(field(
+                        t!("prop.value_type").into(),
+                        Input::new(&self.value_type).small().into_any_element(),
+                    ));
+                }
+                body = body
+                    .child(field(
+                        t!("prop.type_bounds").into(),
+                        Input::new(&self.bounds).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.default").into(),
+                        Input::new(&self.default).small().into_any_element(),
+                    ))
+                    .child(flag(
+                        "variadic",
+                        t!("prop.variadic").into(),
+                        p.is_variadic,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::TemplateParameter(p) = &mut d.kind {
+                                p.is_variadic = v;
+                            }
+                        },
+                    ));
             }
             ElementKind::Attribute(p) => {
                 body = body
@@ -958,6 +1117,18 @@ impl Render for PropertiesPanel {
                         |d, v| {
                             if let ElementKind::Operation(p) = &mut d.kind {
                                 p.is_abstract = v;
+                            }
+                        },
+                    ))
+                    .child(flag(
+                        "leaf",
+                        t!("prop.leaf").into(),
+                        p.is_leaf,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::Operation(p) = &mut d.kind {
+                                p.is_leaf = v;
                             }
                         },
                     ))

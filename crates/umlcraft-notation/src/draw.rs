@@ -475,6 +475,11 @@ pub fn edge_line(edge: &EdgeShape, width: f32) -> Primitive {
     }
 }
 
+/// The box of an association end's qualifiers: filled, with a 1 px border.
+pub fn qualifier_box(rect: Rect) -> Primitive {
+    frame(rect, Paint::Fill)
+}
+
 /// The end markers of an edge. On curves they point along the curve's end, which runs toward
 /// the neighboring control point.
 pub fn markers(edge: &EdgeShape) -> Vec<Primitive> {

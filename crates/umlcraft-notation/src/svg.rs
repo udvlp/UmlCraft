@@ -64,15 +64,23 @@ pub fn render(scene: &Scene, measure: &dyn TextMeasure) -> String {
         }
         for label in &edge.labels {
             let width = measure.width(&label.text, FONT_SIZE, false);
-            svg.text(
-                &label.text,
-                draw::label_area(label),
-                FONT_SIZE,
-                false,
-                false,
-                label.align,
-                width,
-            );
+            let area = draw::label_area(label);
+            svg.text(&label.text, area, FONT_SIZE, false, false, label.align, width);
+            if label.underline {
+                let x = draw::text_left(area, width, label.align);
+                let y = area.y + FONT_SIZE * draw::UNDERLINE;
+                svg.primitive(&Primitive::Polyline {
+                    points: vec![Point::new(x, y), Point::new(x + width, y)],
+                    width: 1.0,
+                    style: LineStyle::Solid,
+                });
+            }
+        }
+        for (rect, rows) in &edge.qualifiers {
+            svg.primitive(&draw::qualifier_box(*rect));
+            for row in rows {
+                svg.row(row);
+            }
         }
     }
     svg.out += "</svg>\n";
@@ -90,9 +98,15 @@ fn bounds(scene: &Scene, measure: &dyn TextMeasure) -> Option<Rect> {
             .chain(n.rows.iter().map(|r| text(&r.text, r.rect, r.size, r.bold, r.align)))
     });
     let edges = scene.edges.iter().flat_map(|e| {
-        e.path().into_iter().map(|p| Rect::from_corners(p, p)).chain(
-            e.labels.iter().map(|l| text(&l.text, draw::label_area(l), FONT_SIZE, false, l.align)),
-        )
+        e.path()
+            .into_iter()
+            .map(|p| Rect::from_corners(p, p))
+            .chain(
+                e.labels
+                    .iter()
+                    .map(|l| text(&l.text, draw::label_area(l), FONT_SIZE, false, l.align)),
+            )
+            .chain(e.qualifiers.iter().map(|(rect, _)| *rect))
     });
     nodes.chain(edges).reduce(|a, b| a.union(&b))
 }

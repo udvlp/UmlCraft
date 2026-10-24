@@ -906,6 +906,7 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::Operation,
         NewItem::Literal,
         NewItem::ExtensionPoint,
+        NewItem::TemplateParameter,
     ];
     let mut any = false;
     for item in items.into_iter().filter(|i| i.applies_to(&meta.kind)) {

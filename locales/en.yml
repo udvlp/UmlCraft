@@ -169,6 +169,15 @@ prop:
   covered_automatic: None ticked – the fragment covers the lifelines of its messages.
   classifier: Instance of
   refers_to: Refers to
+  leaf: Leaf (cannot be specialized or overridden)
+  parameter_kind: Parameter kind
+  value_type: Type of the value
+  type_bounds: Bounds
+  default: Default
+  variadic: Variadic (any number of arguments)
+template_kind:
+  type: type
+  value: value
 message_sort:
   synchronous: synchronous
   asynchronous: asynchronous

@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use rust_i18n::t;
 use umlcraft_model::{
     Aggregation, DiagramKind, Document, EdgeLabels, ElementData, ElementKind, Id, LineShape, Model,
-    ModelError, Multiplicity, Navigability, Point, Rect, Shape, Size, Style, Tx, Visibility,
+    ModelError, Multiplicity, Navigability, Point, Rect, Shape, Size, Style,
+    TemplateParameterProps, Tx, Visibility,
 };
 use umlcraft_notation::clipboard::{self, Clip};
 use umlcraft_notation::member;
@@ -627,6 +628,7 @@ pub enum NewItem {
     Operation,
     Literal,
     ExtensionPoint,
+    TemplateParameter,
     Diagram(DiagramKind),
 }
 
@@ -639,6 +641,9 @@ impl NewItem {
             Self::Operation => kind.can_own(&ElementKind::operation(None)),
             Self::Literal => kind.can_own(&ElementKind::EnumerationLiteral),
             Self::ExtensionPoint => kind.can_own(&ElementKind::ExtensionPoint),
+            Self::TemplateParameter => {
+                kind.can_own(&ElementKind::TemplateParameter(TemplateParameterProps::default()))
+            }
             Self::Diagram(d) => match behavior_of(d) {
                 Some(behavior) => kind.can_own(&behavior),
                 None => kind.can_own(&ElementKind::diagram(d)),
@@ -654,6 +659,7 @@ impl NewItem {
             Self::Operation => "kind.operation".into(),
             Self::Literal => "kind.enumerationLiteral".into(),
             Self::ExtensionPoint => "kind.extensionPoint".into(),
+            Self::TemplateParameter => "kind.templateParameter".into(),
             Self::Diagram(DiagramKind::Class) => "diagram.class".into(),
             Self::Diagram(DiagramKind::UseCase) => "diagram.useCase".into(),
             Self::Diagram(DiagramKind::Sequence) => "diagram.sequence".into(),
@@ -711,6 +717,12 @@ impl Workspace {
                 ),
                 NewItem::Operation => {
                     tx.create(owner, ElementData::new(name, ElementKind::operation(None)))
+                }
+                // Named like type parameters usually are: T, T2, …
+                NewItem::TemplateParameter => {
+                    let name = clipboard::free_name(tx.model(), owner, "T");
+                    let kind = ElementKind::TemplateParameter(TemplateParameterProps::default());
+                    tx.create(owner, ElementData::new(name, kind))
                 }
                 NewItem::Diagram(kind) => {
                     let diagram = ElementData::new(name.clone(), ElementKind::diagram(kind));

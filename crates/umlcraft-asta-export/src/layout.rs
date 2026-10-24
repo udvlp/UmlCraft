@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use umlcraft_model::{EdgeLabels, Id, Model, Point, Rect, Shape};
 use umlcraft_notation::route;
-use umlcraft_notation::scene::{self, Preview, TextMeasure};
+use umlcraft_notation::scene::{self, EdgeShape, Preview, TextMeasure};
 
 #[derive(Serialize)]
 pub(crate) struct Layout {
@@ -47,7 +47,7 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
                 Shape::Edge { labels: placed, .. } => {
                     let Some(edge) = scene.edge(p.id) else { continue };
                     if !placed.is_empty() {
-                        labels.insert(p.id, absolute(placed, &edge.points, edge.shape.is_curve()));
+                        labels.insert(p.id, absolute(placed, edge));
                     }
                     if edge.shape.is_right_angle() {
                         corners.insert(p.id, edge.waypoints().to_vec());
@@ -85,18 +85,18 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
     Layout { diagrams }
 }
 
-/// Label offsets turned into positions: roles and multiplicities are relative to their end of
-/// the line, the name to the middle of its middle segment, as `scene` places them.
-fn absolute(placed: &EdgeLabels, points: &[Point], curve: bool) -> EdgeLabels {
-    let n = points.len();
-    let (a, b) = route::middle_segment(points, curve);
+/// Label offsets turned into positions: roles and multiplicities are relative to where the line
+/// meets their node, the name to the middle of its middle segment, as `scene` places them.
+fn absolute(placed: &EdgeLabels, edge: &EdgeShape) -> EdgeLabels {
+    let (a, b) = route::middle_segment(&edge.points, edge.shape.is_curve());
     let middle = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
     let at = |base: Point, offset: Option<Point>| offset.map(|o| base.offset(o.x, o.y));
+    let [source, target] = edge.node_tips;
     EdgeLabels {
         name: at(middle, placed.name),
-        source_role: at(points[0], placed.source_role),
-        source_multiplicity: at(points[0], placed.source_multiplicity),
-        target_role: at(points[n - 1], placed.target_role),
-        target_multiplicity: at(points[n - 1], placed.target_multiplicity),
+        source_role: at(source, placed.source_role),
+        source_multiplicity: at(source, placed.source_multiplicity),
+        target_role: at(target, placed.target_role),
+        target_multiplicity: at(target, placed.target_multiplicity),
     }
 }

@@ -169,6 +169,15 @@ prop:
   covered_automatic: Keine angekreuzt – das Fragment umfasst die Lebenslinien seiner Nachrichten.
   classifier: Instanz von
   refers_to: Verweist auf
+  leaf: Blatt (nicht spezialisier- oder überschreibbar)
+  parameter_kind: Parameterart
+  value_type: Typ des Werts
+  type_bounds: Schranken
+  default: Vorgabe
+  variadic: Variadisch (beliebig viele Argumente)
+template_kind:
+  type: Typ
+  value: Wert
 message_sort:
   synchronous: synchron
   asynchronous: asynchron

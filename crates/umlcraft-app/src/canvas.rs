@@ -1209,7 +1209,19 @@ impl Painter<'_> {
         let text = self.c.text;
         for label in &edge.labels {
             let area = draw::label_area(label);
-            self.text(&label.text, area, FONT_SIZE, false, false, text, label.align);
+            let width = self.text(&label.text, area, FONT_SIZE, false, false, text, label.align);
+            if label.underline {
+                let x = draw::text_left(area, width, label.align);
+                let y = area.y + FONT_SIZE * draw::UNDERLINE;
+                let points = [MPoint::new(x, y), MPoint::new(x + width, y)];
+                self.line(&points, 1.0, text, LineStyle::Solid);
+            }
+        }
+        for (rect, rows) in &edge.qualifiers {
+            self.primitive(&draw::qualifier_box(*rect));
+            for row in rows {
+                self.row(row);
+            }
         }
     }
 
