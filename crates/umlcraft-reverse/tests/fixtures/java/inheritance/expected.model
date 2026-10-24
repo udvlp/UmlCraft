@@ -1,0 +1,26 @@
+package inheritance
+  interface Named Public
+    operation + name() : String {abstract}
+  interface Labeled Public
+    generalization -> inheritance.Named
+    generalization -> java.lang.Comparable
+  class Base abstract Package
+    realization -> java.io.Serializable
+  class Derived Public
+    generalization -> inheritance.Base
+    realization -> inheritance.Labeled
+    realization -> java.lang.Cloneable
+    operation + name() : String
+    operation + compareTo(other : Labeled) : int
+  enumeration Kind Package
+    realization -> inheritance.Named
+    literal ONE
+    operation + name2() : String
+package java
+  package io
+    interface Serializable Public
+  package lang
+    interface Comparable Public
+      template E
+    interface Cloneable Public
+    class String Public

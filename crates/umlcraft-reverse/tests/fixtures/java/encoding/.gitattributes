@@ -1,0 +1,2 @@
+# These files test encodings and line ends: keep their bytes exactly.
+*.java -text

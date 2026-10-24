@@ -1,0 +1,12 @@
+# Astah rebuilds initial values from tokens (`1+2`, `{ 1 , 2 , 3 }`); UmlCraft keeps the
+# source text.
+
+-   attribute - count : int = 1+2 static=false final=false
++   attribute - count : int = 1 + 2 static=false final=false
+-   attribute - numbers : int[] = { 1 , 2 , 3 } static=false final=false
+-   attribute - task : Runnable = new Runnable(){ public void run ( ){ } } static=false final=false
++   attribute - numbers : int[] = {1, 2, 3} static=false final=false
++   attribute - task : Runnable = new Runnable() {
++         public void run() {
++         }
++     } static=false final=false

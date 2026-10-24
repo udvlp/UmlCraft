@@ -1,0 +1,36 @@
+package shop
+  class Shop Public
+    attribute - current : Optional<Order>
+    attribute - name : String
+    attribute - count : int
+    attribute - tags : List<String>
+    attribute - notes : Map<Customer,String>
+    association shop.Shop NonNavigable -- shop.Customer Navigable owner Private
+    association shop.Shop NonNavigable -- shop.Order Navigable orders Protected [*] {ordered}
+    association shop.Shop NonNavigable -- shop.Product Navigable catalog Public [*] {unique}
+    association shop.Shop NonNavigable -- shop.Product Navigable ranked Private [*] {ordered} {unique}
+    association shop.Shop NonNavigable qualifier key : String -- shop.Customer Navigable byName Private
+    association shop.Shop NonNavigable -- shop.Product Navigable shelf Private [*]
+    association shop.Shop NonNavigable -- shop.Customer Navigable NOBODY Private {readOnly} {static} = null
+  class Customer Package
+  class Order Package
+  class Product Package
+  class Box Package
+    template T
+    attribute - content : T
+    attribute - more : List<T>
+package java
+  package util
+    interface List Public
+      template E
+    interface Map Public
+      template K
+      template V
+    class Optional Public
+      template E
+    interface Set Public
+      template E
+    interface SortedSet Public
+      template E
+  package lang
+    class String Public

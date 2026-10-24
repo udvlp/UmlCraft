@@ -1,0 +1,18 @@
+== Documented.java
+namespace javadoc
+  public class Documented (line 11)
+    private field value : int
+      doc "The value."
+    public operation set(value : int) : void
+      doc "Sets the value.\n@param value the new value"
+    public operation get() : int
+      doc "Not Javadoc."
+    public operation reset() : void
+      doc "This one."
+  package enum Unit (line 35)
+    doc "Constants."
+    literal METRE
+      doc "Metres."
+    literal SECOND
+      doc "Seconds."
+skipped method_body × 3

@@ -1,0 +1,4 @@
+# Astah links `Labeled extends Comparable<Labeled>` to an anonymous bound class, which the
+# .asta import drops; UmlCraft links the generalization to `Comparable` itself.
+
++   extends java.lang.Comparable

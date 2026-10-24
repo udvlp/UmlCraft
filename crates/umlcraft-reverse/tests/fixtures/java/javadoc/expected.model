@@ -1,0 +1,16 @@
+package javadoc
+  class Documented Public
+    attribute - value : int
+      doc "The value."
+    operation + set(value : int) : void
+      doc "Sets the value.\n@param value the new value"
+    operation + get() : int
+      doc "Not Javadoc."
+    operation + reset() : void
+      doc "This one."
+  enumeration Unit Package
+    doc "Constants."
+    literal METRE
+      doc "Metres."
+    literal SECOND
+      doc "Seconds."

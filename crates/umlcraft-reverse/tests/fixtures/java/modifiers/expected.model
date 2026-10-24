@@ -1,0 +1,33 @@
+package modifiers
+  class Modifiers abstract Public
+    @jude.java.strictfp = "true"
+    attribute + a : int
+    attribute # b : int
+    attribute ~ c : int
+    attribute - d : int
+    attribute + MAX : int = 10 {static} {readOnly}
+    attribute - cache : Object
+      @jude.java.transient = "true"
+      @jude.java.volatile = "true"
+    operation + Modifiers()
+    operation # run() : void {abstract}
+    operation + stop() : void {leaf}
+      @jude.java.synchronized = "true"
+    operation + now() : long {static}
+      @jude.java.native = "true"
+    operation - counter() : int {static}
+  class Leaf leaf Package
+  interface Contract Public
+    class Holder Package
+    attribute + LIMIT : int = 3 {static} {readOnly}
+    operation + call() : void {abstract}
+    operation + twice() : void
+    operation + none() : Contract {static}
+    operation - helper() : void
+  enumeration Level Package
+    literal LOW
+    literal HIGH
+    operation ~ Level()
+package java
+  package lang
+    class Object Public

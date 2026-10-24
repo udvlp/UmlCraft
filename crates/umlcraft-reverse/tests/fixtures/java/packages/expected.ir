@@ -1,0 +1,8 @@
+== Root.java
+public class Root (line 2)
+== a/Outer.java
+namespace a
+  package class Outer (line 3)
+== a/b/Inner.java
+namespace a.b
+  public class Inner (line 3)

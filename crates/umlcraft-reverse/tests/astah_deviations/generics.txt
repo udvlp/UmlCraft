@@ -1,0 +1,28 @@
+# - Astah has no template parameters on operations: it creates classes `E` and `K` in the
+#   root instead. UmlCraft keeps `max<K>` and `fill<E>`.
+# - Astah keeps one bound per template parameter and drops wildcards (`? extends T`).
+# - `index` and `entry` become associations to anonymous bound classes in Astah, which the
+#   .asta import drops; UmlCraft keeps the attributes.
+# - UmlCraft knows `Map.Entry` and `Comparable` as JDK interfaces; Astah makes the nested
+#   `Map.Entry` a class.
+
+- class E Public
+- class K Public
+-   template T>Number
++   template T>Number,Comparable<T>
+-   attribute - upper : List<T> static=false final=false
+-   attribute - lower : List<Integer> static=false final=false
+-   attribute - any : List static=false final=false
+-   operation + max(values : List<K>) : K static=false abstract=false final=false
+-   operation + fill(target : List<E>, value : E) : void static=true abstract=false final=false
++   attribute - index : Map<String,List<Foo>> static=false final=false
++   attribute - upper : List<? extends T> static=false final=false
++   attribute - lower : List<? super Integer> static=false final=false
++   attribute - any : List<?> static=false final=false
++   attribute - entry : Entry<String,U> static=false final=false
++   operation + max<K>(values : List<K>) : K static=false abstract=false final=false
++   operation + fill<E>(target : List<? super E>, value : E) : void static=true abstract=false final=false
++ interface java.lang.Comparable Public
++   template E
+- class java.util.Map.Entry Public
++ interface java.util.Map.Entry Public

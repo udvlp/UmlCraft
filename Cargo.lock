@@ -5976,6 +5976,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
 
 [[package]]
+name = "streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
+
+[[package]]
 name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6553,6 +6559,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter"
+version = "0.25.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78f873475d258561b06f1c595d93308a7ed124d9977cb26b148c2084a4a3cc87"
+dependencies = [
+ "cc",
+ "regex",
+ "regex-syntax",
+ "serde_json",
+ "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-java"
+version = "0.23.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0aa6cbcdc8c679b214e616fd3300da67da0e492e066df01bcf5a5921a71e90d6"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a"
+
+[[package]]
 name = "triomphe"
 version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6617,6 +6653,7 @@ dependencies = [
  "umlcraft-format",
  "umlcraft-model",
  "umlcraft-notation",
+ "umlcraft-reverse",
 ]
 
 [[package]]
@@ -6674,6 +6711,20 @@ dependencies = [
  "indexmap",
  "pretty_assertions",
  "umlcraft-model",
+]
+
+[[package]]
+name = "umlcraft-reverse"
+version = "0.3.0"
+dependencies = [
+ "encoding_rs",
+ "pretty_assertions",
+ "thiserror 2.0.21",
+ "tree-sitter",
+ "tree-sitter-java",
+ "umlcraft-asta",
+ "umlcraft-model",
+ "umlcraft-notation",
 ]
 
 [[package]]

@@ -1,0 +1,13 @@
+== Arrays.java
+namespace arrays_varargs
+  public class Arrays (line 3)
+    package field a : int
+    package field b : int[]
+    package field grid : int[][]
+    package field names : String[][]
+    package field items : Item[]
+    package operation firsts(count : int, names : String...) : int[]
+    package operation old() : int[]
+    package operation main(args : String[]) : void
+  package class Item (line 21)
+skipped method_body × 3

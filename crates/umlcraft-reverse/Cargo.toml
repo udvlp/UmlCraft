@@ -1,0 +1,22 @@
+[package]
+name = "umlcraft-reverse"
+description = "Reverse engineering: imports declarations from source code into the model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+umlcraft-model.workspace = true
+umlcraft-notation.workspace = true
+thiserror.workspace = true
+tree-sitter.workspace = true
+tree-sitter-java.workspace = true
+encoding_rs.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+umlcraft-asta.workspace = true
+
+[lints]
+workspace = true

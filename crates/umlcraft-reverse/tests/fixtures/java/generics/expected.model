@@ -1,0 +1,30 @@
+package generics
+  class Generics Public
+    template T>Number,Comparable<T>
+    template U
+    attribute - index : Map<String,List<Foo>>
+    attribute - upper : List<? extends T>
+    attribute - lower : List<? super Integer>
+    attribute - any : List<?>
+    attribute - entry : Entry<String,U>
+    operation + max<K>(values : List<K>) : K
+      template K>Comparable<K>
+    operation + fill<E>(target : List<? super E>, value : E) : void {static}
+      template E
+  class Foo Package
+package java
+  package util
+    interface List Public
+      template E
+    interface Map Public
+      template K
+      template V
+      interface Entry Public
+        template K
+        template V
+  package lang
+    class Number Public
+    interface Comparable Public
+      template E
+    class String Public
+    class Integer Public

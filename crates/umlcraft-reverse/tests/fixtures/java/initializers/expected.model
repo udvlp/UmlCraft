@@ -1,0 +1,18 @@
+package initializers
+  class Initialized Public
+    attribute - count : int = 1 + 2
+    attribute - name : String = "none"
+    attribute - names : List<String> = new ArrayList<>()
+    attribute - numbers : int[] = {1, 2, 3}
+    attribute - task : Runnable = new Runnable() {
+        public void run() {
+        }
+    }
+    operation ~ work() : void
+package java
+  package util
+    interface List Public
+      template E
+  package lang
+    class String Public
+    interface Runnable Public

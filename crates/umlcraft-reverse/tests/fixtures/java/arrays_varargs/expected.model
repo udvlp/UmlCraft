@@ -1,0 +1,14 @@
+package arrays_varargs
+  class Arrays Public
+    attribute ~ a : int
+    attribute ~ b : int[]
+    attribute ~ grid : int[][]
+    attribute ~ names : String[][]
+    operation ~ firsts(count : int, names : String...) : int[]
+    operation ~ old() : int[]
+    operation ~ main(args : String[]) : void
+    association arrays_varargs.Arrays NonNavigable -- arrays_varargs.Item Navigable items Package [*]
+  class Item Package
+package java
+  package lang
+    class String Public

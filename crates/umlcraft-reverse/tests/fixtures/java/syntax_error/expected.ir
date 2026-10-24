@@ -1,0 +1,5 @@
+== Fine.java
+namespace syntax_error
+  public class Fine (line 3)
+    package field x : int = 1
+failed Broken.java at 4:11 near "="

@@ -1,0 +1,10 @@
+== Annotated.java
+namespace annotations
+  public class Annotated (line 3)
+    @jude.java.annotations = "@Deprecated\n@SuppressWarnings({\"unchecked\", \"rawtypes\"})"
+    private field old : int
+      @jude.java.annotations = "@Deprecated"
+    public operation toString() : String
+      @jude.java.annotations = "@Override"
+    public operation take(value : int) : void
+skipped method_body × 2

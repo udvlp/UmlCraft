@@ -1,0 +1,5 @@
+# Astah gives a record's compact constructor no parameters; UmlCraft gives it the
+# components.
+
+-   operation + Point() static=false abstract=false final=false
++   operation + Point(x : int, y : int) static=false abstract=false final=false

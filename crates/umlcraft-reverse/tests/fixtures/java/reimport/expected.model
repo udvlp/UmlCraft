@@ -1,0 +1,19 @@
+package model
+  class Account Public
+    doc "Now documented."
+    attribute - balance : long
+    attribute - note : String
+    operation + deposit(amount : int) : void
+    operation + deposit(amount : long) : void
+    association model.Account NonNavigable -- model.Owner Navigable owner Private
+    realization -> model.Missing
+  class Base Package
+  class Owner Package
+  class Placeholder Package
+    generalization -> Missing
+  interface Missing Public
+class Missing Public
+diagram d
+package java
+  package lang
+    class String Public

@@ -1,0 +1,11 @@
+== Legacy.java
+public class Legacy (line 2)
+  doc "Grüße aus München."
+  package field straße : String
+== Plain.java
+public class Plain (line 2)
+  doc "Überall UTF-8."
+== Wide.java
+public class Wide (line 2)
+  doc "Ärger mit UTF-16."
+guessed Legacy.java as windows-1252

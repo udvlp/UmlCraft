@@ -1,0 +1,14 @@
+== Inheritance.java
+import java.io.Serializable
+namespace inheritance
+  public interface Named (line 5)
+    public operation abstract name() : String
+  public interface Labeled extends Named extends Comparable<Labeled> (line 9)
+  package class abstract Base implements Serializable (line 12)
+  public class Derived extends Base implements Labeled implements Cloneable (line 15)
+    public operation name() : String
+    public operation compareTo(other : Labeled) : int
+  package enum Kind implements Named (line 25)
+    literal ONE
+    public operation name2() : String
+skipped method_body × 3

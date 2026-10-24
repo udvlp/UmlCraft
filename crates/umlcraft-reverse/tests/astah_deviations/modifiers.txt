@@ -1,0 +1,9 @@
+# Astah marks every interface method public and abstract, also `default`, `static` and
+# `private` ones. UmlCraft follows Java: those have bodies and keep their visibility.
+
+-   operation + twice() : void static=false abstract=true final=false
+-   operation + none() : Contract static=true abstract=true final=false
+-   operation + helper() : void static=false abstract=true final=false
++   operation + twice() : void static=false abstract=false final=false
++   operation + none() : Contract static=true abstract=false final=false
++   operation - helper() : void static=false abstract=false final=false

@@ -1,0 +1,50 @@
+package app
+  class App Public
+    class Inner Package
+    template T
+    generalization -> app.Base
+    attribute - value : T
+    attribute - name : String
+    attribute - entry : Entry<String,App>
+    operation + first<E>(list : List<E>) : E
+      template E
+    association app.App NonNavigable -- app.App.Inner Navigable inner Private
+    association app.App NonNavigable -- app.Base.Shared Navigable shared Private
+    association app.App NonNavigable -- lib.Helper Navigable helper Private
+    association app.App NonNavigable -- lib.missing.Gone Navigable gone Private
+    association app.App NonNavigable -- app.Base Navigable base Private
+    association app.App NonNavigable -- java.util.Date Navigable date Private
+    association app.App NonNavigable -- java.io.File Navigable file Private
+    association app.App NonNavigable -- lib.Helper Navigable qualified Private
+    association app.App NonNavigable -- com.acme.Thing Navigable thing Private
+    association app.App NonNavigable -- Unknown Navigable unknown Private
+  class Base Package
+    class Shared Package
+package lib
+  class Helper Public
+    realization -> java.lang.Runnable
+    realization -> Unseen
+    operation + run() : void
+  package missing
+    class Gone Public
+package java
+  package io
+    class File Public
+  package util
+    interface Map Public
+      template K
+      template V
+      interface Entry Public
+        template K
+        template V
+    class Date Public
+    interface List Public
+      template E
+  package lang
+    interface Runnable Public
+    class String Public
+package com
+  package acme
+    class Thing Public
+interface Unseen Public
+class Unknown Public

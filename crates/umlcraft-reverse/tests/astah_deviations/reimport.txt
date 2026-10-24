@@ -1,0 +1,4 @@
+# Astah keeps a generalization the sources no longer declare; UmlCraft's re-import follows
+# the sources (a decision for UmlCraft, see docs/plan-src-import.md).
+
+-   extends model.Base

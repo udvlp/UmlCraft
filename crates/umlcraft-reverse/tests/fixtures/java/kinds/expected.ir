@@ -1,0 +1,21 @@
+== Kinds.java
+namespace kinds
+  public class Kinds (line 3)
+    public interface Shape (line 4)
+      public operation abstract area() : double
+    public enum Color (line 8)
+      literal RED
+      literal GREEN
+      literal BLUE
+      public operation next() : Color
+    public class Point (line 16)
+      public field x : int
+      public field y : int
+      public operation constructor Point(x : int, y : int)
+    public class Marker (line 22)
+      @jude.java.atmark_interface = "true"
+      public operation abstract value() : String
+      public operation abstract priority() : int
+    package class static Nested (line 27)
+      package class Deeper (line 28)
+skipped method_body × 2

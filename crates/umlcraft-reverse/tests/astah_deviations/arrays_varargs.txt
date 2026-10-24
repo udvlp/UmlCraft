@@ -1,0 +1,7 @@
+# Astah loses `...` on a varargs parameter and the array of the old `int f()[]` return
+# type; UmlCraft keeps both.
+
+-   operation ~ firsts(count : int, names : String) : int[] static=false abstract=false final=false
+-   operation ~ old() : int static=false abstract=false final=false
++   operation ~ firsts(count : int, names : String...) : int[] static=false abstract=false final=false
++   operation ~ old() : int[] static=false abstract=false final=false

@@ -1,0 +1,14 @@
+== Generics.java
+import java.util.List
+import java.util.Map
+namespace generics
+  public class Generics<T extends Number & Comparable<T>, U> (line 6)
+    private field index : Map<String,List<Foo>>
+    private field upper : List<? extends T>
+    private field lower : List<? super Integer>
+    private field any : List<?>
+    private field entry : Map.Entry<String,U>
+    public operation max<K extends Comparable<K>>(values : List<K>) : K
+    public operation static fill<E>(target : List<? super E>, value : E) : void
+  package class Foo (line 21)
+skipped method_body × 2

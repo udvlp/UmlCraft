@@ -1,0 +1,22 @@
+package kinds
+  class Kinds Public
+    interface Shape Public
+      operation + area() : double {abstract}
+    enumeration Color Public
+      literal RED
+      literal GREEN
+      literal BLUE
+      operation + next() : Color
+    class Point Public
+      attribute + x : int
+      attribute + y : int
+      operation + Point(x : int, y : int)
+    class Marker Public
+      @jude.java.atmark_interface = "true"
+      operation + value() : String {abstract}
+      operation + priority() : int {abstract}
+    class Nested Package
+      class Deeper Package
+package java
+  package lang
+    class String Public

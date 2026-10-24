@@ -1,0 +1,4 @@
+# Astah keeps annotations of attributes and operations, but drops those of classes.
+# UmlCraft keeps them on classes too.
+
++   @jude.java.annotations = "@Deprecated\n@SuppressWarnings({\"unchecked\", \"rawtypes\"})"

@@ -1,0 +1,18 @@
+== Initialized.java
+import java.util.ArrayList
+import java.util.List
+namespace initializers
+  public class Initialized (line 6)
+    private field count : int = 1 + 2
+    private field name : String = "none"
+    private field names : List<String> = new ArrayList<>()
+    private field numbers : int[] = {1, 2, 3}
+    private field task : Runnable = new Runnable() {
+        public void run() {
+        }
+    }
+    package operation work() : void
+skipped method_body × 1
+skipped initializer × 2
+skipped local_class × 1
+skipped anonymous_class × 2

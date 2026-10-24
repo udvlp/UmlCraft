@@ -1,0 +1,5 @@
+class Root Public
+package a
+  class Outer Package
+  package b
+    class Inner Public

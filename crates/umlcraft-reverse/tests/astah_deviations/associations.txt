@@ -1,0 +1,5 @@
+# Astah turns `Optional<Order>` into an association to an anonymous bound class
+# `Optional<Order>`, which the .asta import drops. UmlCraft has no bound classes and keeps
+# the attribute.
+
++   attribute - current : Optional<Order> static=false final=false
