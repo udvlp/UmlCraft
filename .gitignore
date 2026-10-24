@@ -10,6 +10,9 @@
 # Astah's own project files are not ours to publish
 *.asta
 
+# Local reference samples (Astah projects and their exports)
+/examples/
+
 # UmlCraft temporary files (atomic save)
 *.ucraft.tmp
 
