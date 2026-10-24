@@ -22,6 +22,7 @@ use umlcraft_model::{DiagramKind, Document, ElementData, ElementKind, Id, Model}
 use umlcraft_notation::clipboard::Clip;
 use umlcraft_notation::palette::{self, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Alignment, Preview};
+use umlcraft_reverse::{Problem, SourceLanguage};
 
 use crate::canvas::{AppMeasure, DiagramCanvas, DraggedElement, FontMeasure};
 use crate::labels;
@@ -32,6 +33,16 @@ use crate::*;
 
 /// Something to do once the user has dealt with unsaved changes.
 type Continuation = Box<dyn FnOnce(&mut MainView, &mut Window, &mut Context<MainView>)>;
+
+/// Work running in the background, shown in the status bar.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Busy {
+    ExportingAstah,
+    ImportingSource,
+}
+
+/// At most this many problem files are listed after a source import.
+const LISTED_PROBLEMS: usize = 20;
 
 /// What the model tree needs to know about an item to build its context menu.
 struct TreeMeta {
@@ -56,8 +67,9 @@ pub struct MainView {
     tree_selection: Option<SharedString>,
     /// Set once the user agreed to close despite unsaved changes.
     close_confirmed: bool,
-    /// An export to Astah is running in the background.
-    exporting: bool,
+    busy: Option<Busy>,
+    /// A message for the status bar, shown while the document stays at the given revision.
+    notice: Option<(String, u64)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -108,7 +120,8 @@ impl MainView {
             tree_revision: None,
             tree_selection: None,
             close_confirmed: false,
-            exporting: false,
+            busy: None,
+            notice: None,
             clipboard: None,
             paste_count: 0,
             _subscriptions: subscriptions,
@@ -337,7 +350,7 @@ impl MainView {
             self.inform(PromptLevel::Info, &message, &detail, window, cx);
             return;
         };
-        if self.exporting {
+        if self.busy.is_some() {
             return;
         }
         let ws = self.workspace.read(cx);
@@ -356,7 +369,7 @@ impl MainView {
             let Ok(Ok(Some(path))) = rx.await else { return };
             let path = with_extension(path, "asta");
             let started = this.update(cx, |this, cx| {
-                this.exporting = true;
+                this.busy = Some(Busy::ExportingAstah);
                 cx.notify();
             });
             if started.is_err() {
@@ -366,13 +379,173 @@ impl MainView {
             let result =
                 cx.background_executor().spawn(async move { export.run(astah, &target) }).await;
             this.update_in(cx, |this, window, cx| {
-                this.exporting = false;
+                this.busy = None;
                 cx.notify();
                 this.report_export(result, &path, window, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Asks for source files or a folder, parses them in the background and merges them into
+    /// the open project as one undo step, as Astah's Tools › Java › Import Java does.
+    fn import_source(
+        &mut self,
+        action: &ImportSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy.is_some() {
+            return;
+        }
+        let language = action.language;
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: !action.folder,
+            directories: action.folder,
+            multiple: true,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else { return };
+            let started = this.update(cx, |this, cx| {
+                this.busy = Some(Busy::ImportingSource);
+                cx.notify();
+            });
+            if started.is_err() {
+                return;
+            }
+            let parsed = cx
+                .background_executor()
+                .spawn(async move {
+                    let files = umlcraft_reverse::collect_sources_for(language, &paths)?;
+                    std::io::Result::Ok(umlcraft_reverse::parse_sources(language, &files))
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.busy = None;
+                cx.notify();
+                match parsed {
+                    Ok(parsed) => this.apply_source(language, &parsed, window, cx),
+                    Err(err) => this.show_error(
+                        &t!("dialog.import_source_failed"),
+                        &err.to_string(),
+                        window,
+                        cx,
+                    ),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn apply_source(
+        &mut self,
+        language: SourceLanguage,
+        parsed: &umlcraft_reverse::Parsed,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if parsed.units.is_empty() && parsed.failed.is_empty() {
+            let extensions = language.extensions().iter().map(|e| format!(".{e}"));
+            let detail = t!(
+                "dialog.import_source_none_detail",
+                extensions = extensions.collect::<Vec<_>>().join(", ")
+            );
+            self.inform(PromptLevel::Info, &t!("dialog.import_source_none"), &detail, window, cx);
+            return;
+        }
+        let result = self.workspace.update(cx, |ws, cx| {
+            let result = ws.import_source(language, parsed);
+            cx.notify();
+            result
+        });
+        match result {
+            Ok(report) => self.report_source_import(&report, window, cx),
+            Err(err) => {
+                self.show_error(&t!("dialog.import_source_failed"), &err.to_string(), window, cx)
+            }
+        }
+    }
+
+    /// Says what a source import did: in the status bar if all went well, else in a message
+    /// listing the files that failed and those whose encoding was guessed.
+    fn report_source_import(
+        &mut self,
+        report: &umlcraft_reverse::Report,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let summary = t!(
+            "status.imported",
+            files = report.files,
+            created = report.created,
+            updated = report.updated,
+            associations = report.associations
+        )
+        .to_string();
+        if !report.has_problems() {
+            let revision = self.workspace.read(cx).doc.revision();
+            self.notice = Some((summary, revision));
+            cx.notify();
+            return;
+        }
+        let name = |path: &Path| {
+            path.file_name()
+                .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
+        };
+        let mut lines: Vec<String> = report
+            .failed
+            .iter()
+            .map(|f| {
+                let file = name(&f.path);
+                match &f.problem {
+                    Problem::Syntax(e) if e.missing => t!(
+                        "dialog.syntax_missing",
+                        file = file,
+                        line = e.line,
+                        column = e.column,
+                        token = e.token
+                    )
+                    .to_string(),
+                    Problem::Syntax(e) => t!(
+                        "dialog.syntax_error",
+                        file = file,
+                        line = e.line,
+                        column = e.column,
+                        token = e.token
+                    )
+                    .to_string(),
+                    Problem::Read(error) => {
+                        t!("dialog.read_error", file = file, error = error).to_string()
+                    }
+                }
+            })
+            .chain(report.guessed_encodings.iter().map(|(path, encoding)| {
+                t!("dialog.encoding_guessed", file = name(path), encoding = encoding).to_string()
+            }))
+            .collect();
+        if lines.len() > LISTED_PROBLEMS {
+            let more = lines.len() - LISTED_PROBLEMS;
+            lines.truncate(LISTED_PROBLEMS);
+            lines.push(t!("dialog.more_files", count = more).to_string());
+        }
+        if !report.skipped.is_empty() {
+            let skipped: Vec<String> = report
+                .skipped
+                .iter()
+                .map(|(skip, n)| format!("{} ({n})", t!(format!("skipped.{}", skip.key()))))
+                .collect();
+            lines.push(String::new());
+            lines.push(t!("dialog.import_source_skipped", items = skipped.join(", ")).to_string());
+        }
+        let message = if report.failed.is_empty() {
+            summary
+        } else {
+            t!("dialog.import_source_partial", count = report.failed.len()).to_string()
+        };
+        self.inform(PromptLevel::Info, &message, &lines.join("\n"), window, cx);
     }
 
     /// Writes the open diagram as an SVG image, drawn as on the canvas in the light theme.
@@ -856,9 +1029,18 @@ impl MainView {
             0 => String::new(),
             n => format!("{n} {}", t!("status.selected")),
         };
+        let notice = self.notice.as_ref().filter(|(_, r)| *r == ws.doc.revision());
         let right = match &ws.message {
-            _ if self.exporting => div().child(t!("status.exporting").to_string()),
+            _ if self.busy == Some(Busy::ExportingAstah) => {
+                div().child(t!("status.exporting").to_string())
+            }
+            _ if self.busy == Some(Busy::ImportingSource) => {
+                div().child(t!("status.importing").to_string())
+            }
             Some(message) => div().text_color(cx.theme().danger).child(message.clone()),
+            None if notice.is_some() => {
+                div().child(notice.map(|(n, _)| n.clone()).unwrap_or_default())
+            }
             None => div().child(match ws.tool {
                 Tool::Select => t!("status.hint").to_string(),
                 Tool::Node(_) => t!("status.hint_node").to_string(),
@@ -1050,6 +1232,18 @@ fn menus(settings: &Settings) -> Vec<Menu> {
             menu_item("toolbar.theme", ToggleTheme),
             menu_item("toolbar.language", ToggleLanguage),
         ]),
+        Menu::new(t!("menu.tools").to_string()).items([MenuItem::submenu(
+            Menu::new(t!("menu.java").to_string()).items([
+                menu_item(
+                    "menu.import_java_files",
+                    ImportSource { language: SourceLanguage::Java, folder: false },
+                ),
+                menu_item(
+                    "menu.import_java_folder",
+                    ImportSource { language: SourceLanguage::Java, folder: true },
+                ),
+            ]),
+        )]),
         Menu::new(t!("menu.help").to_string()).items([menu_item("menu.open_sample", OpenSample)]),
     ]
 }
@@ -1160,6 +1354,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::export_astah))
+            .on_action(cx.listener(Self::import_source))
             .on_action(cx.listener(Self::export_svg))
             .on_action(cx.listener(Self::export_png))
             .on_action(cx.listener(Self::open_recent))

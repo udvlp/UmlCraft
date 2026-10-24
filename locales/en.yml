@@ -51,6 +51,10 @@ menu:
   zoom_in: Zoom in
   zoom_out: Zoom out
   zoom_reset: Actual size
+  tools: Tools
+  java: Java
+  import_java_files: Import Java files …
+  import_java_folder: Import Java folder …
   help: Help
   open_sample: Open sample project
   open_diagram: Open diagram
@@ -203,6 +207,8 @@ status:
   selected: selected
   unsaved_file: Not saved
   exporting: Exporting to Astah …
+  importing: Importing source code …
+  imported: "Imported %{files} files: %{created} new types, %{updated} updated, %{associations} associations."
   hint: "Wheel: scroll · Ctrl+wheel: zoom · middle button: pan"
   hint_node: "Click to place the element · Esc: cancel"
   hint_edge: "Drag from source to target or click both · Esc: cancel"
@@ -226,6 +232,16 @@ dialog:
   image_failed: The diagram could not be saved as an image.
   astah_missing: Exporting to Astah needs an installed Astah.
   astah_missing_detail: "UmlCraft writes Astah projects through the API of Astah Professional, UML or SysML. One of them must be installed, or the environment variable ASTAH_HOME must point to its install folder; then restart UmlCraft."
+  import_source_failed: The source code could not be imported.
+  import_source_none: No source files found.
+  import_source_none_detail: "The selection contains no files ending in %{extensions}."
+  import_source_partial: "%{count} files could not be imported; the others were."
+  import_source_skipped: "Left out as in Astah: %{items}"
+  syntax_error: "%{file}: syntax error in line %{line}, column %{column}, at „%{token}“"
+  syntax_missing: "%{file}: syntax error in line %{line}, column %{column}, %{token} missing"
+  read_error: "%{file}: %{error}"
+  encoding_guessed: "%{file}: read as %{encoding}"
+  more_files: "… and %{count} more"
   astah_unlicensed: "Astah refused to save the project because its license check failed. Start Astah once and check its license, then export again."
 export_dropped:
   comment: Comments not shown on a diagram
@@ -284,6 +300,14 @@ edit:
   move_element: Move in model
   paste: Paste
   wrap_in_fragment: Surround with fragment
+  import_source: Import source code
+skipped:
+  method_body: method bodies
+  initializer: initializer blocks
+  local_class: local classes
+  anonymous_class: anonymous classes
+  enum_constant_body: arguments and bodies of enum constants
+  free_member: functions and variables outside classes
 kind:
   model: Project
   package: Package

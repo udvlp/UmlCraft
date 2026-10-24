@@ -154,6 +154,58 @@ The format details are kept in local notes (`docs/asta-format.md`) that are not 
 Two examples help when exploring files: `asta-dump` (raw objects) and `asta-import` (the
 resulting model).
 
+## Source import
+
+`umlcraft-reverse` reads declarations from source code into the open project, as Astah's
+Tools › Java › Import Java does: types, members, template parameters, supertypes and Javadoc,
+but no method bodies and no diagrams. It is built for more languages than Java (C# and C++
+are planned): a front-end per language lowers its syntax to a language-neutral IR (`ir`), and
+one mapping for all languages puts the IR into the model.
+
+- **Front-ends** (`lang::Frontend`) parse with tree-sitter. They resolve nothing; they lower
+  language sugar instead (Java's implicit `public abstract` in interfaces, records). What they
+  leave out (method bodies, local and anonymous classes …) is counted (`lang::Skip`). A file
+  with a syntax error is reported with line and column and left out; the others are imported.
+  `source` collects files (recursively, sorted) and decodes them: a byte order mark, else
+  UTF-8, else Windows-1252, which the report mentions.
+- **Rules** (`lang::Rules`) are what the mapping needs to know about a language: built-in
+  types, implicit imports, value types, how to split a qualified name, and the standard
+  library (`lang::Library`). For Java that is a table of the JDK's public types
+  (`java/jdk.txt`, written by `tools/jdk-types/JdkTypes.java`) with their kind, type parameters
+  and whether they are collections or maps.
+- **Resolution** (`resolve`) links names in Astah's order (template parameters, member types,
+  imports, own package, on-demand imports, `java.lang`). Names that stand for nothing in the
+  model become placeholder types: library types at their package path (`java › util › List`),
+  qualified names under their path, unknown simple names in the root (Astah's default
+  package).
+- **Merging** (`merge`) finds packages and types by name or creates them. Members are matched
+  with what the model has (attributes and literals by name, operations by name and parameter
+  types, template parameters and parameters by position): matched ones are updated, new ones
+  created, the rest deleted, and the members put in source order. A type whose kind changed is replaced by a new element that takes
+  over its children, references and presentations (`merge::retype`). Generalizations and
+  realizations follow the sources; dependencies drawn by hand stay.
+- **Associations** (`associations`): attributes typed by a type of the model become
+  associations, collections and maps included (`*`, `{ordered}`, `{unique}`, a qualifier for
+  the key). On a new import an association with the same role is reused, and associations
+  whose field is gone are removed.
+
+Parsing needs only the files, so the app runs it in the background (`parse_sources`); `apply`
+then runs on the UI thread inside one `Document::edit`, so one undo takes the import back. For
+large imports `Tx::delete_many` deletes in one pass what `Tx::delete` would look for one by
+one, and undo replays removals without looking through the model for references, which the
+recorded operations rule out; 6300 files (225,000 elements) import in about ten seconds.
+Qualified names and used single-type imports are resolved before any simple name, so the
+result does not depend on the order of the files and importing again changes nothing.
+`cargo run --release -p umlcraft-reverse --example java-import -- <folder>` imports a real
+project, checks the model, undoes, redoes and imports again, and reports any difference. The tests import fixtures per rule
+(`crates/umlcraft-reverse/tests/fixtures/java`) and compare the IR and the resulting model with
+snapshots (`expected.ir`, `expected.model`; `UPDATE_SNAPSHOTS=1` rewrites them).
+`tests/astah_compare.rs` imports the same fixtures and compares them with what Astah's own
+import made of them (reference `.asta` files kept outside the repository). Where UmlCraft
+deliberately differs, because Astah loses what the sources say (wildcards, varargs,
+operation templates, more than one bound …), `tests/astah_deviations/<fixture>.txt` lists and
+explains the differing lines; the test fails when they change.
+
 ## Astah export
 
 Writing `.asta` ourselves would mean producing Astah's Java object graph, which is fragile and

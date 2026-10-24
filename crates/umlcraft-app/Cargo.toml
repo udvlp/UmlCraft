@@ -16,6 +16,7 @@ umlcraft-format.workspace = true
 umlcraft-notation.workspace = true
 umlcraft-asta.workspace = true
 umlcraft-asta-export.workspace = true
+umlcraft-reverse.workspace = true
 gpui-kit.workspace = true
 anyhow.workspace = true
 resvg.workspace = true

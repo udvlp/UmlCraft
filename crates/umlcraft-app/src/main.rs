@@ -10,6 +10,7 @@ mod workspace;
 
 use gpui_kit::*;
 use umlcraft_model::{Id, LineShape};
+use umlcraft_reverse::SourceLanguage;
 
 use crate::workspace::{EndChange, NewItem};
 
@@ -77,6 +78,15 @@ pub struct OpenRecent {
 #[action(namespace = umlcraft, no_json)]
 pub struct SetLineShape {
     pub shape: LineShape,
+}
+
+/// Imports source files, or a folder of them, into the open project (Tools menu).
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct ImportSource {
+    pub language: SourceLanguage,
+    /// Ask for a folder, searched recursively, instead of files.
+    pub folder: bool,
 }
 
 /// The line styles in menu order, with their labels.

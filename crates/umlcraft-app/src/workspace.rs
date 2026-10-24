@@ -359,6 +359,20 @@ impl Workspace {
         self.report(result);
     }
 
+    /// Merges parsed source files into the model as one undo step (Tools › Java).
+    pub fn import_source(
+        &mut self,
+        language: umlcraft_reverse::SourceLanguage,
+        parsed: &umlcraft_reverse::Parsed,
+    ) -> Result<umlcraft_reverse::Report, ModelError> {
+        let label = t!("edit.import_source").to_string();
+        let result = self.edit(label, |tx| umlcraft_reverse::apply(tx, language, parsed));
+        if result.is_ok() {
+            self.message = None;
+        }
+        result
+    }
+
     /// Reports a problem in the status bar.
     pub fn complain(&mut self, message: impl Into<String>) {
         self.message = Some(message.into());
