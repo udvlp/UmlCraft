@@ -18,9 +18,12 @@
 
 # Claude Code
 CLAUDE.md
-/docs/handoff.md
 CLAUDE.local.md
 .claude/
+
+# Docs
+/docs/*
+!/docs/architecture.md
 
 # Editors and IDEs
 .vs/
