@@ -1378,12 +1378,20 @@ fn edge_for(
     } else {
         waypoints
     };
+    // Waypoints inside an end node are hidden: the line starts where it last leaves the source
+    // and ends where it first enters the target.
+    let skip = waypoints.iter().take_while(|&&p| source_outline.contains(source, p)).count();
+    let keep = skip
+        + waypoints[skip..].iter().take_while(|&&p| !target_outline.contains(target, p)).count();
+    let start = if skip > 0 { waypoints[skip - 1] } else { from };
+    let end = waypoints.get(keep).copied().unwrap_or(to);
+    let waypoints = &waypoints[skip..keep];
     let mut points = Vec::with_capacity(waypoints.len() + 2);
-    let first_toward = waypoints.first().copied().unwrap_or(to);
-    let last_from = waypoints.last().copied().unwrap_or(from);
-    points.push(source_outline.border_point(source, from, first_toward));
+    let first_toward = waypoints.first().copied().unwrap_or(end);
+    let last_from = waypoints.last().copied().unwrap_or(start);
+    points.push(source_outline.border_point(source, start, first_toward));
     points.extend_from_slice(waypoints);
-    points.push(target_outline.border_point(target, to, last_from));
+    points.push(target_outline.border_point(target, end, last_from));
 
     let mut edge = EdgeShape {
         id,
@@ -2014,6 +2022,25 @@ mod tests {
         let preview = Preview { route: Some((edge.id, route)), ..Preview::default() };
         let scene = build(doc.model(), d, &preview, &ApproxMeasure);
         assert_eq!(scene.edge(edge.id).unwrap().points.len(), 3);
+    }
+
+    #[test]
+    fn waypoints_inside_end_nodes_are_hidden() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let edge = scene.edges.iter().find(|e| e.labels.len() == 3).unwrap();
+        let (id, [a, b]) = (edge.id, edge.ends);
+        // A box grown over a waypoint: the line leaves the box beside it, not from inside.
+        let inside = Point::new(a.x + 5.0, a.center().y);
+        let outside = Point::new(a.right() + 10.0, a.y - 40.0);
+        assert!(!b.contains(outside));
+        doc.edit("route", |tx| tx.set_waypoints(d, id, vec![inside, outside])).unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let points = &scene.edge(id).unwrap().points;
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0], border_point_from(a, inside, outside));
+        assert_eq!(points[1], outside);
     }
 
     #[test]
