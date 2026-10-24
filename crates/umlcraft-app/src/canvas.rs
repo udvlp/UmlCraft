@@ -1114,8 +1114,30 @@ impl Painter<'_> {
 
     fn row(&mut self, row: &Row) {
         let color = self.c.text;
-        let width =
-            self.text(&row.text, row.rect, row.size, row.bold, row.italic, color, row.align);
+        let column = scene::visibility_column(&row.text)
+            .filter(|_| row.role == RowRole::Member && row.align == LabelAlign::Left);
+        let width = match column {
+            // The visibility symbol centered in a column as wide as a "+", the rest after it.
+            Some((symbol, rest)) => {
+                let slot = AppMeasure::new(self.cx).width("+", row.size, row.bold);
+                let r = row.rect;
+                let cell = Rect::new(r.x, r.y, slot, r.height);
+                self.text(symbol, cell, row.size, row.bold, row.italic, color, LabelAlign::Center);
+                let after = Rect::new(r.x + slot, r.y, r.width - slot, r.height);
+                slot + self.text(
+                    rest,
+                    after,
+                    row.size,
+                    row.bold,
+                    row.italic,
+                    color,
+                    LabelAlign::Left,
+                )
+            }
+            None => {
+                self.text(&row.text, row.rect, row.size, row.bold, row.italic, color, row.align)
+            }
+        };
         if row.underline {
             let x = draw::text_left(row.rect, width, row.align);
             let y = row.rect.y + row.size * draw::UNDERLINE;

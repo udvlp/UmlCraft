@@ -4,7 +4,7 @@
 use umlcraft_model::{Color, Point, Rect};
 
 use crate::draw::{self, Paint, Primitive};
-use crate::scene::{FONT_SIZE, LabelAlign, LineStyle, Row, Scene, TextMeasure};
+use crate::scene::{self, FONT_SIZE, LabelAlign, LineStyle, Row, RowRole, Scene, TextMeasure};
 
 /// Arial is the diagram font; the others are close enough where it is missing.
 const FONT_FAMILY: &str = "Arial, Helvetica, sans-serif";
@@ -186,6 +186,12 @@ impl Svg<'_> {
     /// whichever is larger (Java rounds many bold characters down); texts it draws with whole-
     /// pixel advances by the former.
     fn row(&mut self, row: &Row) {
+        if let Some((symbol, rest)) = scene::visibility_column(&row.text)
+            .filter(|_| row.role == RowRole::Member && row.align == LabelAlign::Left && !row.hinted)
+        {
+            self.member_row(row, symbol, rest);
+            return;
+        }
         let rounded = self.measure.rounded_width(&row.text, row.size, row.bold);
         let width = if row.hinted {
             rounded
@@ -231,6 +237,29 @@ impl Svg<'_> {
             let y = row.rect.y + row.size * draw::UNDERLINE;
             self.primitive(&Primitive::Polyline {
                 points: vec![Point::new(x, y), Point::new(x + width, y)],
+                width: 1.0,
+                style: LineStyle::Solid,
+            });
+        }
+    }
+
+    /// A member row, its visibility symbol centered in a column as wide as a `+`
+    /// ([`scene::visibility_column`]).
+    fn member_row(&mut self, row: &Row, symbol: &str, rest: &str) {
+        let width = |text: &str| self.measure.width(text, row.size, row.bold);
+        // SVG drops leading spaces, so the text after the symbol starts after their width.
+        let text = rest.trim_start();
+        let (slot, symbol_w, text_w) = (width("+"), width(symbol), width(text));
+        let x = row.rect.x + slot + width(&rest[..rest.len() - text.len()]);
+        let r = row.rect;
+        let cell = Rect::new(r.x, r.y, slot, r.height);
+        self.text(symbol, cell, row.size, row.bold, row.italic, LabelAlign::Center, symbol_w);
+        let after = Rect::new(x, r.y, r.right() - x, r.height);
+        self.text(text, after, row.size, row.bold, row.italic, LabelAlign::Left, text_w);
+        if row.underline {
+            let y = r.y + row.size * draw::UNDERLINE;
+            self.primitive(&Primitive::Polyline {
+                points: vec![Point::new(r.x, y), Point::new(x + text_w, y)],
                 width: 1.0,
                 style: LineStyle::Solid,
             });
@@ -330,9 +359,40 @@ mod tests {
         assert_eq!(svg.matches("stroke-width=\"2\"").count(), 3, "{svg}");
         assert!(svg.contains("<polygon"), "{svg}");
         assert!(svg.contains(">Customer</text>"), "{svg}");
-        assert!(svg.contains(">- name : String</text>"), "{svg}");
+        assert!(svg.contains(">\u{2212}</text>") && svg.contains(">name : String</text>"), "{svg}");
         // Astah's yellow.
         assert!(svg.contains("fill=\"#ffffcc\""), "{svg}");
+    }
+
+    /// Measures a hyphen and a hash narrower than the other characters, as most fonts do.
+    struct Narrow;
+
+    impl TextMeasure for Narrow {
+        fn width(&self, text: &str, _: f32, _: bool) -> f32 {
+            text.chars()
+                .map(|c| match c {
+                    '-' => 4.0,
+                    '#' => 6.5,
+                    _ => 7.0,
+                })
+                .sum()
+        }
+    }
+
+    #[test]
+    fn member_names_start_in_one_column() {
+        let (doc, ids) = order_system();
+        let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &Narrow);
+        let svg = render(&scene, &Narrow);
+        let xs = |text: &str| -> Vec<String> {
+            let lines = svg.lines().filter(|l| l.ends_with(&format!(">{text}</text>")));
+            lines
+                .map(|l| l.split("x=\"").nth(1).unwrap().split('"').next().unwrap().into())
+                .collect()
+        };
+        // Order's "- total : Money" and "+ submit()", the minus drawn as wide as the plus.
+        assert_eq!(xs("total : Money"), xs("submit()"));
+        assert!(xs("\u{2212}").contains(&xs("+")[0]), "{svg}");
     }
 
     #[test]

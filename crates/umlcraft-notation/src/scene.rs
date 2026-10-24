@@ -516,6 +516,44 @@ pub fn stereotype_text(names: &[String]) -> String {
     format!("<<{}>>", names.join(", "))
 }
 
+/// The visibility symbol a member's text starts with, as drawn, and the rest of the text from
+/// the space on. Unlike Astah, UmlCraft draws the symbol centered in the width of a `+`, so all
+/// names of a compartment start in one column, and a minus as `−`, as wide as the plus.
+pub fn visibility_column(text: &str) -> Option<(&'static str, &str)> {
+    let rest = text.get(1..).filter(|rest| rest.starts_with(' '))?;
+    let symbol = match &text[..1] {
+        "+" => "+",
+        "-" => "\u{2212}",
+        "#" => "#",
+        "~" => "~",
+        _ => return None,
+    };
+    Some((symbol, rest))
+}
+
+/// Width of a row's text as drawn: a member's visibility symbol in its column
+/// ([`visibility_column`]). `rounded` measures in whole pixels.
+pub fn row_text_width(
+    text: &str,
+    role: RowRole,
+    size: f32,
+    bold: bool,
+    measure: &dyn TextMeasure,
+    rounded: bool,
+) -> f32 {
+    let width = |text: &str| {
+        if rounded {
+            measure.rounded_width(text, size, bold)
+        } else {
+            measure.width(text, size, bold)
+        }
+    };
+    match visibility_column(text).filter(|_| role == RowRole::Member) {
+        Some((_, rest)) => width("+") + width(rest),
+        None => width(text),
+    }
+}
+
 /// A row before it is positioned.
 #[derive(Clone)]
 struct Line {
@@ -542,7 +580,12 @@ impl Line {
     }
 
     fn width(&self, measure: &dyn TextMeasure) -> f32 {
-        measure.width(&self.text, self.size, self.bold)
+        self.width_of(&self.text, measure, false)
+    }
+
+    /// Width of `text` in this line's font, a member's visibility in its column.
+    fn width_of(&self, text: &str, measure: &dyn TextMeasure, rounded: bool) -> f32 {
+        row_text_width(text, self.role, self.size, self.bold, measure, rounded)
     }
 
     /// Pieces the text may break between. A leading visibility symbol stays with the next word.
@@ -557,7 +600,7 @@ impl Line {
 
     /// Width of the longest piece that cannot break.
     fn widest_word(&self, measure: &dyn TextMeasure) -> f32 {
-        self.words().iter().map(|w| measure.width(w, self.size, self.bold)).fold(0.0, f32::max)
+        self.words().iter().map(|w| self.width_of(w, measure, false)).fold(0.0, f32::max)
     }
 
     /// This line, broken at spaces into lines no wider than `max`.
@@ -570,7 +613,7 @@ impl Line {
         for word in self.words() {
             let candidate =
                 if current.is_empty() { word.clone() } else { format!("{current} {word}") };
-            if !current.is_empty() && measure.width(&candidate, self.size, self.bold) > max {
+            if !current.is_empty() && self.width_of(&candidate, measure, false) > max {
                 texts.push(std::mem::replace(&mut current, word));
             } else {
                 current = candidate;
@@ -1318,7 +1361,7 @@ fn layout_classifier(
         let widest = header
             .iter()
             .chain(compartments.iter().flatten())
-            .map(|l| l.width(measure).max(measure.rounded_width(&l.text, l.size, l.bold)))
+            .map(|l| l.width(measure).max(l.width_of(&l.text, measure, true)))
             .fold(0.0, f32::max);
         widest + 2.0 * PAD_X
     } else {
@@ -1484,8 +1527,14 @@ fn edge_for(
             // Role names show their visibility, as Astah does: "- customer". Constraints follow
             // in the same label: "- customer {ordered}".
             let texts = |end: &AssociationEnd| {
-                let role = (!end.role.is_empty())
-                    .then(|| format!("{} {}", end.visibility.symbol(), end.role));
+                // A minus as wide as the plus, as in compartments (`visibility_column`).
+                let role = (!end.role.is_empty()).then(|| {
+                    let text = format!("{} {}", end.visibility.symbol(), end.role);
+                    match visibility_column(&text) {
+                        Some((symbol, rest)) => format!("{symbol}{rest}"),
+                        None => text,
+                    }
+                });
                 let constraints = end.constraints.iter().map(|c| format!("{{{c}}}"));
                 let role = role.into_iter().chain(constraints).collect::<Vec<_>>().join(" ");
                 ((!role.is_empty()).then_some(role), end.multiplicity.map(|m| m.to_string()))
