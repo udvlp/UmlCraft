@@ -971,7 +971,12 @@ impl Importer<'_> {
                 }
             }
         }
-        let data = self.data(object, ElementKind::diagram(kind), &[]);
+        let mut data = self.data(object, ElementKind::diagram(kind), &[]);
+        if let ElementKind::Diagram(props) = &mut data.kind {
+            let off = |field| self.r.g.field(object, field).and_then(Value::as_bool) == Some(false);
+            props.hide_message_numbers = kind == DiagramKind::Sequence && off("indexVisible");
+            props.hide_return_values = kind == DiagramKind::Sequence && off("ReturnValueVisible");
+        }
         let Some(diagram) = self.create(owner, data, Some(object)) else { return };
         self.presentations(diagram, kind, object);
     }
@@ -1103,6 +1108,7 @@ impl Importer<'_> {
             .filter(|id| {
                 matches!(self.model.get(*id).map(|e| e.kind()), Some(ElementKind::Operation(_)))
             });
+        let guard = r.obj(object, "guard").map(|g| r.name(g)).unwrap_or_default();
         let kind = ElementKind::Message(MessageProps {
             sort,
             from,
@@ -1111,6 +1117,7 @@ impl Importer<'_> {
             operation,
             arguments,
             return_value,
+            guard,
         });
         let data = self.data(object, kind, &[]);
         self.create(container, data, Some(object));
@@ -1169,12 +1176,255 @@ impl Importer<'_> {
         }
     }
 
-    /// Recreates the diagram's nodes and edges.
-    fn presentations(&mut self, diagram: Id, kind: DiagramKind, object: ObjId) {
-        // A greater depth lies further back.
+    /// The diagram's presentations from back to front; a greater depth lies further back.
+    fn presentations_back_to_front(&self, object: ObjId) -> Vec<ObjId> {
         let mut sources = self.r.list(object, "presentation");
         let depth = |p: ObjId| self.r.g.field(p, "depth").and_then(Value::as_i64).unwrap_or(0);
         sources.sort_by_key(|&p| std::cmp::Reverse(depth(p)));
+        sources
+    }
+
+    /// Location and size of a node presentation as stored.
+    fn rect(&self, p: ObjId) -> Option<Rect> {
+        let r = self.r;
+        let at = r.obj(p, "location").and_then(|l| r.point(l))?;
+        Some(Rect::new(at.x, at.y, r.num(p, "width")? as f32, r.num(p, "height")? as f32))
+    }
+
+    /// Adds a presentation, at the back or in front of everything so far.
+    fn insert(&mut self, diagram: Id, presentation: Presentation, back: bool) -> Option<Id> {
+        let index = if back { 0 } else { self.model.view(diagram)?.presentations().len() };
+        let id = presentation.id;
+        self.model.apply(Op::InsertPresentation { diagram, index, presentation }).ok()?;
+        Some(id)
+    }
+
+    fn fill(&self, p: ObjId) -> Style {
+        let mut style = Style::default();
+        if let Some(fill) =
+            self.r.style(p, "fill.color").filter(|c| !c.eq_ignore_ascii_case(DEFAULT_FILL))
+        {
+            style.fill = fill.to_ascii_lowercase().parse().ok();
+        }
+        style
+    }
+
+    /// Recreates a sequence diagram with Astah's geometry: the frame, lifelines with their
+    /// activation bars, messages, fragments and notes. Everything is moved by the same amount
+    /// as on other diagrams, so that the content starts at the margin.
+    fn sequence_presentations(&mut self, diagram: Id, object: ObjId) {
+        let r = self.r;
+        let sources = self.presentations_back_to_front(object);
+        let class = |p: ObjId| r.class(p);
+        let is_node = |p: &ObjId| {
+            !matches!(class(*p), "LabelPresentation" | "MessagePresentation")
+                && r.obj(*p, "allPoints").is_none()
+        };
+        let min = sources
+            .iter()
+            .filter(|p| is_node(p))
+            .filter_map(|&p| self.rect(p))
+            .fold((f32::MAX, f32::MAX), |(x, y), b| (x.min(b.x), y.min(b.y)));
+        let shift = Point::new((MARGIN - min.0).max(0.0), (MARGIN - min.1).max(0.0));
+        let rect = |this: &Self, p: ObjId| this.rect(p).map(|b| b.translate(shift.x, shift.y));
+        let element =
+            |this: &Self, p: ObjId| r.obj(p, "model").and_then(|m| this.ids.get(&m)).copied();
+        let mut presentation_of: HashMap<ObjId, Id> = HashMap::new();
+
+        let destroyed: HashSet<ObjId> = sources
+            .iter()
+            .filter(|&&p| class(p) == "TerminationPresentation")
+            .filter_map(|&p| r.list(p, "servers").first().copied())
+            .collect();
+        // Nodes in Astah's z-order; bars and messages lie in front of them.
+        for &p in &sources {
+            if class(p) == "NotePresentation" {
+                if let Some((_, node)) = self.node(diagram, DiagramKind::Sequence, p) {
+                    let bounds = node.bounds.translate(shift.x, shift.y);
+                    let mut presentation = Presentation::node(node.element, bounds);
+                    presentation.style = node.style;
+                    if let Some(id) = self.insert(diagram, presentation, false) {
+                        presentation_of.insert(p, id);
+                    }
+                }
+                continue;
+            }
+            let Some(bounds) = rect(self, p) else { continue };
+            let presentation = match class(p) {
+                "FramePresentation" => Presentation::node(Some(diagram), bounds),
+                "ClassifierRolePresentation" => {
+                    let Some(lifeline) = element(self, p).filter(|&e| {
+                        matches!(
+                            self.model.get(e).map(|e| e.kind()),
+                            Some(ElementKind::Lifeline(_))
+                        )
+                    }) else {
+                        continue;
+                    };
+                    let length = r.num(p, "lifelineLength").unwrap_or(0.0) as f32;
+                    let mut presentation = Presentation::lifeline(lifeline, bounds, length);
+                    if let Shape::Lifeline { destroyed: d, .. } = &mut presentation.shape {
+                        *d = destroyed.contains(&p);
+                    }
+                    presentation.style = self.fill(p);
+                    presentation.style.iconic =
+                        r.g.field(p, "notationType").and_then(Value::as_i64) == Some(1);
+                    presentation
+                }
+                "CombinedFragmentPresentation" | "InteractionUsePresentation" => {
+                    let Some(e) = element(self, p) else { continue };
+                    self.fragment_presentation(p, e, bounds)
+                }
+                _ => continue,
+            };
+            // The diagram frame is always behind everything.
+            let back = presentation.element == Some(diagram);
+            if let Some(id) = self.insert(diagram, presentation, back) {
+                presentation_of.insert(p, id);
+            }
+        }
+
+        // Activation bars hang on their lifeline; a gate is an activation of the frame.
+        let lane_of = |this: &Self, server: ObjId, presentation_of: &HashMap<ObjId, Id>| {
+            let lifeline = match class(server) {
+                "ActivationPresentation" => *r.list(server, "servers").first()?,
+                _ => server,
+            };
+            presentation_of.get(&lifeline).copied().filter(|&id| {
+                this.model
+                    .view(diagram)
+                    .and_then(|v| v.get(id))
+                    .is_some_and(|l| matches!(l.shape, Shape::Lifeline { .. }))
+            })
+        };
+        for &p in &sources {
+            if class(p) != "ActivationPresentation"
+                || r.obj(p, "model").is_some_and(|m| class(m) == "UGateImp")
+            {
+                continue;
+            }
+            let Some(bounds) = rect(self, p) else { continue };
+            let Some(&server) = r.list(p, "servers").first() else { continue };
+            let Some(lifeline) = lane_of(self, server, &presentation_of) else { continue };
+            let mut presentation = Presentation::activation(lifeline, bounds.y, bounds.height);
+            presentation.style = self.fill(p);
+            if let Some(id) = self.insert(diagram, presentation, false) {
+                presentation_of.insert(p, id);
+            }
+        }
+
+        for &p in &sources {
+            if class(p) == "MessagePresentation" {
+                self.message_presentation(diagram, p, shift, |this, s| {
+                    lane_of(this, s, &presentation_of)
+                });
+            }
+        }
+        for &p in &sources {
+            if class(p) == "NoteAnchorPresentation" {
+                self.edge(diagram, p, &presentation_of, shift);
+            }
+        }
+    }
+
+    /// A combined fragment with the offsets of its operands and its guards placed by hand, or
+    /// an interaction use.
+    fn fragment_presentation(&self, p: ObjId, element: Id, bounds: Rect) -> Presentation {
+        let r = self.r;
+        let mut presentation = Presentation::fragment(element, bounds);
+        if r.class(p) == "InteractionUsePresentation" {
+            presentation.shape = Shape::Node { bounds };
+        } else if let Shape::Fragment { separators, guards, .. } = &mut presentation.shape {
+            *separators = r
+                .list(p, "operandOffsets")
+                .iter()
+                .filter_map(|&o| r.num(o, "value"))
+                .map(|o| o as f32)
+                .collect();
+            *guards = r
+                .list(p, "guardPresentations")
+                .iter()
+                .map(|&g| {
+                    r.obj(g, "localMovement")
+                        .and_then(|l| r.point(l))
+                        .filter(|m| m.x.abs() > 1e-3 || m.y.abs() > 1e-3)
+                })
+                .collect();
+            if guards.iter().all(Option::is_none) {
+                guards.clear();
+            }
+        }
+        presentation.style = self.fill(p);
+        presentation
+    }
+
+    /// A message between the lifelines of its ends; `lane` finds the lifeline presentation
+    /// behind one of Astah's servers (a lifeline or an activation bar).
+    fn message_presentation(
+        &mut self,
+        diagram: Id,
+        p: ObjId,
+        shift: Point,
+        lane: impl Fn(&Self, ObjId) -> Option<Id>,
+    ) {
+        let r = self.r;
+        let Some(element) = r.obj(p, "model").and_then(|m| self.ids.get(&m)).copied() else {
+            return;
+        };
+        let Some(ElementKind::Message(props)) = self.model.get(element).map(|e| e.kind()) else {
+            return;
+        };
+        let gate = props.gate;
+        let points: Vec<Point> =
+            r.points(p, "allPoints").into_iter().map(|pt| pt.offset(shift.x, shift.y)).collect();
+        let (Some(&first), Some(&last)) = (points.first(), points.last()) else { return };
+        let servers = r.list(p, "servers");
+        let ends: Vec<Option<Id>> = servers.iter().map(|&s| lane(self, s)).collect();
+        let (source, target, gate_x) =
+            match (gate, ends.first().copied().flatten(), ends.get(1).copied().flatten()) {
+                (MessageGate::None, Some(s), Some(t)) => (s, t, None),
+                (MessageGate::Found, _, Some(t)) => (t, t, Some(first.x)),
+                (MessageGate::Lost, Some(s), _) => (s, s, Some(last.x)),
+                _ => return,
+            };
+        let center = self
+            .model
+            .view(diagram)
+            .and_then(|v| v.get(source))
+            .and_then(|l| l.bounds())
+            .map_or(first.x, |head| head.center().x);
+        let mut presentation = Presentation::message(element, source, target, first.y);
+        if let Shape::Message { end_y, gate_x: g, labels, .. } = &mut presentation.shape {
+            if (last.y - first.y).abs() > 1e-3 {
+                *end_y = Some(last.y);
+            }
+            *g = gate_x;
+            // A label moved by hand, relative to the sender's lifeline at the message's height.
+            labels.name = r.obj(p, "namePresentation").and_then(|label| {
+                let moved = r.obj(label, "localMovement").and_then(|l| r.point(l))?;
+                if moved.x.abs() < 1e-3 && moved.y.abs() < 1e-3 {
+                    return None;
+                }
+                let at = r.obj(label, "location").and_then(|l| r.point(l))?;
+                Some(Point::new(
+                    at.x + moved.x + shift.x - center,
+                    at.y + moved.y + shift.y - first.y,
+                ))
+            });
+        }
+        presentation.style = self.fill(p);
+        presentation.style.hide_parameters =
+            r.g.field(p, "parameterVisibility").and_then(Value::as_bool) == Some(false);
+        self.insert(diagram, presentation, false);
+    }
+
+    /// Recreates the diagram's nodes and edges.
+    fn presentations(&mut self, diagram: Id, kind: DiagramKind, object: ObjId) {
+        if kind == DiagramKind::Sequence {
+            self.sequence_presentations(diagram, object);
+            return;
+        }
+        let sources = self.presentations_back_to_front(object);
         let (edges, nodes): (Vec<ObjId>, Vec<ObjId>) = sources.into_iter().partition(|&p| {
             self.r.obj(p, "allPoints").is_some() || self.r.class(p) == "NoteAnchorPresentation"
         });
@@ -1219,32 +1469,6 @@ impl Importer<'_> {
         for p in edges {
             self.edge(diagram, p, &presentation_of, shift);
         }
-        if kind == DiagramKind::Sequence {
-            self.message_edges(diagram);
-        }
-    }
-
-    /// One edge per message between the nodes of its lifelines. Astah attaches messages to
-    /// activation bars instead, and UmlCraft derives their rows from the interaction's order,
-    /// so the messages are taken from the model rather than from Astah's presentations.
-    fn message_edges(&mut self, diagram: Id) {
-        let Some(interaction) = self.model.get(diagram).and_then(|d| d.owner()) else { return };
-        let node_of = |model: &Model, lifeline: Id| {
-            model.view(diagram)?.presentations_of(lifeline).find(|p| !p.is_edge()).map(|p| p.id)
-        };
-        let mut edges = Vec::new();
-        for id in self.model.subtree(interaction) {
-            if let Some(ElementKind::Message(p)) = self.model.get(id).map(|e| e.kind())
-                && let (Some(source), Some(target)) =
-                    (node_of(&self.model, p.from), node_of(&self.model, p.to))
-            {
-                edges.push(Presentation::edge(Some(id), source, target, Vec::new()));
-            }
-        }
-        for presentation in edges {
-            let index = self.model.view(diagram).map_or(0, |v| v.presentations().len());
-            let _ = self.model.apply(Op::InsertPresentation { diagram, index, presentation });
-        }
     }
 
     fn node(&mut self, diagram: Id, kind: DiagramKind, p: ObjId) -> Option<(ObjId, NodeData)> {
@@ -1269,17 +1493,8 @@ impl Importer<'_> {
         let origin = r.obj(p, "location").and_then(|l| r.point(l)).unwrap_or_default();
         let default = palette::default_size_for(&element_kind);
         let width = r.num(p, "width").filter(|w| *w > 0.0).map_or(default.width, |w| w as f32);
-        let mut height =
-            r.num(p, "height").filter(|h| *h > 0.0).map_or(default.height, |h| h as f32);
-        if let Some(length) = r.num(p, "lifelineLength") {
-            height += length as f32;
-        }
-        let mut style = Style::default();
-        if let Some(fill) =
-            r.style(p, "fill.color").filter(|c| !c.eq_ignore_ascii_case(DEFAULT_FILL))
-        {
-            style.fill = fill.to_ascii_lowercase().parse().ok();
-        }
+        let height = r.num(p, "height").filter(|h| *h > 0.0).map_or(default.height, |h| h as f32);
+        let mut style = self.fill(p);
         if class == "ClassifierPresentation" {
             style.hide_attributes =
                 r.g.field(p, "allAttributeVisibility").and_then(Value::as_bool) == Some(false);

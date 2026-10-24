@@ -297,7 +297,9 @@ impl MainView {
         }
         match umlcraft_format::load(&path) {
             Ok(model) => {
-                self.replace_document(Document::new(model), Some(path.clone()), cx);
+                let mut doc = Document::new(model);
+                umlcraft_notation::sequence_edit::upgrade_document(&mut doc);
+                self.replace_document(doc, Some(path.clone()), cx);
                 self.remember(&path, cx);
             }
             Err(err) => self.show_error(&t!("dialog.open_failed"), &err.to_string(), window, cx),

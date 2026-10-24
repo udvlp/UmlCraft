@@ -4,7 +4,7 @@
 //! ```json
 //! {
 //!   "format": "umlcraft",
-//!   "formatVersion": 1,
+//!   "formatVersion": 2,
 //!   "root": "<id>",
 //!   "elements": [ { "id": "…", "name": "…", "type": "class", …, "children": ["…"] } ],
 //!   "views": { "<diagram id>": [ { "id": "…", "element": "…", "shape": "node", … } ] }
@@ -23,12 +23,15 @@ use serde_json::Value;
 use umlcraft_model::{ElementRecord, Id, Model, ModelError, ModelRecords, Presentation};
 
 pub const FORMAT_ID: &str = "umlcraft";
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 pub const FILE_EXTENSION: &str = "ucraft";
 
 /// Upgrades a document from version `index + 1` to `index + 2`.
 type Migration = fn(&mut Value) -> Result<(), FormatError>;
-const MIGRATIONS: &[Migration] = &[];
+/// Version 2 stores the geometry of sequence diagrams (lifelines, bars, messages and
+/// fragments as Astah keeps them). Version 1 sequence diagrams are still valid; the app lays
+/// them out once when opening them (`umlcraft_notation::sequence_edit::upgrade_document`).
+const MIGRATIONS: &[Migration] = &[|_| Ok(())];
 
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {

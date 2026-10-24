@@ -6,11 +6,13 @@ use resvg::{tiny_skia, usvg};
 /// screens and in print.
 pub const SCALE: f32 = 2.0;
 
-/// Rasterizes an SVG document at `scale` with the system's fonts.
+/// Rasterizes an SVG export at `scale` pixels per logical unit with the system's fonts.
 pub fn from_svg(svg: &str, scale: f32) -> anyhow::Result<Vec<u8>> {
     let mut options = usvg::Options::default();
     options.fontdb_mut().load_system_fonts();
     let tree = usvg::Tree::from_str(svg, &options)?;
+    // The export's size is in pixels at 96 dpi.
+    let scale = scale / umlcraft_notation::svg::SCALE;
     let size = tree
         .size()
         .to_int_size()
@@ -39,7 +41,8 @@ mod tests {
         let dimension = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
         let view_box = svg.split("viewBox=\"").nth(1).unwrap().split('"').next().unwrap();
         let v: Vec<f32> = view_box.split(' ').map(|n| n.parse().unwrap()).collect();
-        assert_eq!(dimension(16), (v[2] * 2.0).round() as u32);
-        assert_eq!(dimension(20), (v[3] * 2.0).round() as u32);
+        // Within the pixel the export's own size was rounded up to.
+        assert!(dimension(16).abs_diff((v[2] * 2.0).round() as u32) <= 2);
+        assert!(dimension(20).abs_diff((v[3] * 2.0).round() as u32) <= 2);
     }
 }

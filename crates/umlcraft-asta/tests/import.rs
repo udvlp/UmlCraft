@@ -145,11 +145,11 @@ fn sample_project() {
         .into_iter()
         .filter(|&id| matches!(model.get(id).unwrap().kind(), ElementKind::Message(_)))
         .collect::<Vec<_>>();
-    // Ten between lifelines, a found and a lost message.
+    // Ten between lifelines, a found and a lost message, and the destroy message behind the
+    // cross on ob2, which Astah does not draw.
     assert_eq!(messages.len(), 12);
-    for &message in &messages {
-        assert_eq!(view.presentations_of(message).filter(|p| p.is_edge()).count(), 1);
-    }
+    let drawn = messages.iter().filter(|&&m| view.presentations_of(m).any(|p| p.is_edge()));
+    assert_eq!(drawn.count(), 11);
     let fragment = interaction
         .children()
         .iter()
@@ -157,8 +157,20 @@ fn sample_project() {
         .find(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)))
         .unwrap();
     assert_eq!(fragment.children().len(), 2, "two operands");
-    // Fragments lie behind the lifelines.
-    assert_eq!(view.presentations()[0].element, Some(fragment.id()));
+    // Astah's geometry: the frame at the back, the alt fragment with one separator, a lifeline
+    // ending in a cross, and bars on the lifelines.
+    assert_eq!(view.presentations()[0].element, Some(example.id()));
+    let alt = view.presentations_of(fragment.id()).next().unwrap();
+    let Shape::Fragment { separators, .. } = &alt.shape else { panic!("{alt:?}") };
+    assert_eq!(separators.len(), 1);
+    assert!(
+        view.presentations()
+            .iter()
+            .any(|p| matches!(p.shape, Shape::Lifeline { destroyed: true, .. }))
+    );
+    let bars = view.presentations().iter().filter(|p| matches!(p.shape, Shape::Activation { .. }));
+    // Astah also keeps the two gates on the frame as bars; those are not drawn.
+    assert_eq!(bars.count(), 6);
 
     // The project survives a round trip through the UmlCraft format.
     let json = umlcraft_format::to_string(model);

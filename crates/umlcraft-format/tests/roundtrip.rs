@@ -57,7 +57,8 @@ fn every_property_survives() {
 fn output_is_stable_and_readable() {
     let (doc, ids) = order_system();
     let json = to_string(doc.model());
-    assert!(json.starts_with("{\n  \"format\": \"umlcraft\",\n  \"formatVersion\": 1,\n"));
+    assert!(json.starts_with("{\n  \"format\": \"umlcraft\",\n  \"formatVersion\": 2,\n"));
+    assert!(json.contains("\"shape\": \"lifeline\""));
     assert!(json.ends_with("}\n"));
     // Defaults are omitted, enums use readable names.
     assert!(json.contains("\"type\": \"class\""));
@@ -77,6 +78,9 @@ fn rejects_foreign_newer_and_broken_files() {
         FORMAT_VERSION + 1
     );
     assert!(matches!(from_str(&newer), Err(FormatError::TooNew { .. })));
+    // Version 1 files still load.
+    let v1 = r#"{"format":"umlcraft","formatVersion":1,"root":"00000000-0000-0000-0000-000000000000","elements":[{"id":"00000000-0000-0000-0000-000000000000","name":"m","type":"model"}]}"#;
+    assert!(from_str(v1).is_ok(), "{:?}", from_str(v1).err());
 
     // Valid JSON, invalid model: the owner still lists a child whose record is gone.
     let (doc, ids) = order_system();

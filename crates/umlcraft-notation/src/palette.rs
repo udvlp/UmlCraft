@@ -9,7 +9,8 @@ use umlcraft_model::{
     Result, Size, StateProps, Tx,
 };
 
-use crate::sequence::Slot;
+use crate::sequence::{self, Slot};
+use crate::sequence_edit;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NodeTool {
@@ -630,7 +631,8 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
     // Relationships connecting the element to something shown, as (relationship, source, target)
     // with `None` standing for the new node.
     let mut edges = Vec::new();
-    let shows_edge = |k: &ElementKind| k.is_relationship() || matches!(k, ElementKind::Message(_));
+    // Messages need a place in the sequence; they are drawn, not shown.
+    let shows_edge = |k: &ElementKind| k.is_relationship();
     for e in model.elements().filter(|e| shows_edge(e.kind())) {
         let ends: Vec<Id> = e
             .kind()
@@ -688,26 +690,13 @@ pub fn is_container(kind: &ElementKind) -> bool {
     ) || matches!(kind, ElementKind::Instance(p) if p.instance == InstanceKind::Node)
 }
 
-/// Adds a node for `element`. System boundaries, fragments and partitions go to the back, so
-/// they never hide what is drawn inside them. Lifelines line up with the heads of the others.
+/// Adds a node for `element`. System boundaries and partitions go to the back, so they never
+/// hide what is drawn inside them. Lifelines line up with the heads of the others.
 fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Result<Id> {
     let model = tx.model();
     let kind = model.element(element)?.kind();
-    let mut bounds = bounds;
-    if matches!(kind, ElementKind::Lifeline(_))
-        && let Some(top) = model
-            .view(diagram)
-            .into_iter()
-            .flat_map(|v| v.presentations())
-            .filter(|p| {
-                p.element
-                    .and_then(|e| model.get(e))
-                    .is_some_and(|e| matches!(e.kind(), ElementKind::Lifeline(_)))
-            })
-            .filter_map(|p| p.bounds().map(|b| b.y))
-            .reduce(f32::min)
-    {
-        bounds.y = top;
+    if matches!(kind, ElementKind::Lifeline(_)) {
+        return sequence_edit::add_lifeline(tx, diagram, element, bounds.x, bounds.y);
     }
     let presentation = umlcraft_model::Presentation::node(Some(element), bounds);
     if is_container(kind) || matches!(kind, ElementKind::CombinedFragment(_)) {
@@ -852,8 +841,8 @@ fn slot_or_end(model: &Model, diagram: Id, slot: Option<Slot>) -> Result<(Id, us
     }
 }
 
-/// Draws a message from one lifeline node of a sequence diagram to another (or the same).
-/// It goes to `slot` in the interaction, or after everything. Returns the new edge.
+/// Draws a message from one lifeline of a sequence diagram to another (or the same) at the
+/// height of `slot`, or below everything. Returns the new message presentation.
 pub fn connect_message(
     tx: &mut Tx<'_>,
     diagram: Id,
@@ -878,13 +867,15 @@ pub fn connect_message(
                 tk.type_name()
             ))
         })?;
+    let y = slot.map_or_else(|| sequence_edit::next_y(model, diagram), |s| s.y);
     let (owner, index) = slot_or_end(model, diagram, slot)?;
     let message = tx.create_at(owner, index, ElementData::new("", kind))?;
-    tx.add_edge(diagram, Some(message), source, target, Vec::new())
+    sequence_edit::add_message(tx, diagram, message, source, target, y)
 }
 
-/// Puts a new combined fragment with one empty operand, or an interaction use (`tool`), at
-/// `slot` (or after everything), covering the lifelines `covered`. Returns (element, node).
+/// Puts a new combined fragment with one empty operand, or an interaction use (`tool`), at the
+/// height of `slot` (or below everything), covering the lifelines `covered`. Returns
+/// (element, node).
 pub fn create_fragment(
     tx: &mut Tx<'_>,
     diagram: Id,
@@ -894,27 +885,37 @@ pub fn create_fragment(
     origin: Point,
 ) -> Result<(Id, Id)> {
     let (owner, index) = slot_or_end(tx.model(), diagram, slot)?;
+    let y = match slot {
+        Some(slot) => slot.y,
+        None if origin != Point::default() => origin.y,
+        None => sequence_edit::next_y(tx.model(), diagram),
+    };
     let kind = if tool == NodeTool::InteractionUse {
-        ElementKind::InteractionUse(InteractionUseProps { covered, ..Default::default() })
+        ElementKind::InteractionUse(InteractionUseProps {
+            covered: covered.clone(),
+            ..Default::default()
+        })
     } else {
         ElementKind::CombinedFragment(CombinedFragmentProps {
             operator: InteractionOperator::Opt,
-            covered,
+            covered: covered.clone(),
         })
     };
     let fragment = tx.create_at(owner, index, ElementData::new("", kind))?;
     if tool != NodeTool::InteractionUse {
-        add_operand(tx, fragment)?;
+        let operand = ElementKind::InteractionOperand(InteractionOperandProps::default());
+        tx.create(fragment, ElementData::new("", operand))?;
     }
-    let bounds = Rect::from_origin_size(origin, tool.default_size());
-    let node = add_node_for(tx, diagram, fragment, bounds)?;
+    let node = sequence_edit::add_fragment(tx, diagram, fragment, &covered, y)?;
     Ok((fragment, node))
 }
 
-/// Adds an empty operand at the end of `fragment`.
+/// Adds an empty operand at the end of `fragment`, with room for it in its frames.
 pub fn add_operand(tx: &mut Tx<'_>, fragment: Id) -> Result<Id> {
     let operand = ElementKind::InteractionOperand(InteractionOperandProps::default());
-    tx.create(fragment, ElementData::new("", operand))
+    let id = tx.create(fragment, ElementData::new("", operand))?;
+    sequence_edit::add_operand_space(tx, fragment)?;
+    Ok(id)
 }
 
 /// Puts the messages and fragments `items` into a new combined fragment, together with
@@ -952,38 +953,39 @@ pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(I
     if moved.is_empty() {
         return Err(invalid("only messages and fragments can go into a fragment"));
     }
-    let slot = Slot { y: 0.0, owner, index: first };
+    // The frame goes around what the items span on the diagram; the order then puts them into
+    // its operand.
+    let (top, bottom, lifelines) = sequence_edit::extent(tx.model(), diagram, &moved);
+    let slot = Slot { y: top - sequence::TAB_HEIGHT - 10.0, owner, index: first };
     let (fragment, node) = create_fragment(
         tx,
         diagram,
         NodeTool::CombinedFragment,
         Some(slot),
-        Vec::new(),
+        lifelines,
         Point::default(),
     )?;
-    let operand = tx.model().children(fragment)[0];
-    for (i, item) in moved.into_iter().enumerate() {
-        tx.move_element(item, operand, i)?;
-    }
+    tx.update_presentation(diagram, node, |p| {
+        if let umlcraft_model::Shape::Fragment { bounds, .. } = &mut p.shape {
+            bounds.height = bounds.height.max(bottom + 20.0 - bounds.y);
+        }
+    })?;
+    sequence_edit::tidy(tx, diagram)?;
     Ok((fragment, node))
 }
 
-/// Moves a message or fragment to `slot`, e.g. after dragging it up or down.
+/// Moves a message or fragment to the height of `slot`, e.g. while dragging it up or down.
 pub fn move_to_slot(tx: &mut Tx<'_>, item: Id, slot: Slot) -> Result<()> {
-    let model = tx.model();
-    let owner = model.element(item)?.owner().ok_or(ModelError::Root)?;
-    let mut index = slot.index;
-    if owner == slot.owner {
-        let old = model.children(owner).iter().position(|&c| c == item).expect("owned");
-        // The index counts the item itself, which leaves its old place first.
-        if old < index {
-            index -= 1;
-        }
-        if old == index {
-            return Ok(());
-        }
+    let diagrams: Vec<Id> = tx
+        .model()
+        .views()
+        .filter(|(_, view)| view.presentations_of(item).next().is_some())
+        .map(|(diagram, _)| diagram)
+        .collect();
+    for diagram in diagrams {
+        sequence_edit::move_item(tx, diagram, item, slot.y)?;
     }
-    tx.move_element(item, slot.owner, index)
+    Ok(())
 }
 
 #[cfg(test)]

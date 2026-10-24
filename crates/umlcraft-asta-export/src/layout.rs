@@ -1,13 +1,12 @@
 //! The layout sidecar: what UmlCraft derives when drawing instead of storing it. Nodes grow with
-//! their content, and on sequence diagrams message rows and fragment frames follow from the
-//! order of the interaction.
+//! their content and edges run between their borders. Sequence diagrams store all of their
+//! geometry, so the tool reads them from the project.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 use umlcraft_model::{EdgeLabels, Id, Model, Point, Rect, Shape};
-use umlcraft_notation::scene::{self, Figure, Preview, TextMeasure};
-use umlcraft_notation::sequence::HEAD_HEIGHT;
+use umlcraft_notation::scene::{self, Preview, TextMeasure};
 
 #[derive(Serialize)]
 pub(crate) struct Layout {
@@ -24,24 +23,12 @@ struct DiagramLayout {
     /// Labels placed by hand, as the top left corner on the diagram.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     labels: BTreeMap<Id, EdgeLabels>,
-    /// Sequence diagrams: the bottom of the lifeline heads, where the rows start.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    head_bottom: Option<f32>,
 }
 
 pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
     let mut diagrams = BTreeMap::new();
     for (diagram, view) in model.views() {
         let scene = scene::build(model, diagram, &Preview::default(), measure);
-        let head_bottom = scene
-            .nodes
-            .iter()
-            .filter_map(|n| match n.figure {
-                Figure::Lifeline { head } => Some(head.y),
-                _ => None,
-            })
-            .reduce(f32::min)
-            .map(|top| top + HEAD_HEIGHT);
         let mut labels = BTreeMap::new();
         for p in view.presentations() {
             let Shape::Edge { labels: placed, .. } = &p.shape else { continue };
@@ -55,7 +42,6 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
                 nodes: scene.nodes.iter().map(|n| (n.id, n.rect)).collect(),
                 edges: scene.edges.iter().map(|e| (e.id, e.points.clone())).collect(),
                 labels,
-                head_bottom,
             },
         );
     }

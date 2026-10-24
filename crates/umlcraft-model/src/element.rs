@@ -282,6 +282,9 @@ pub struct MessageProps {
     pub arguments: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub return_value: String,
+    /// Condition under which the message is sent, shown as `[guard]` before the name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guard: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -572,6 +575,12 @@ pub struct InstanceProps {
 #[serde(rename_all = "camelCase")]
 pub struct DiagramProps {
     pub diagram: DiagramKind,
+    /// Sequence diagrams: leave out the numbers before message names ("2.1: ").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_message_numbers: bool,
+    /// Sequence diagrams: leave out the return values after calls ("submit() : ok").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_return_values: bool,
 }
 
 /// The metaclass of an element together with its metaclass-specific properties.
@@ -744,6 +753,7 @@ impl ElementKind {
             operation: None,
             arguments: String::new(),
             return_value: String::new(),
+            guard: String::new(),
         })
     }
 
@@ -770,7 +780,11 @@ impl ElementKind {
     }
 
     pub fn diagram(diagram: DiagramKind) -> Self {
-        Self::Diagram(DiagramProps { diagram })
+        Self::Diagram(DiagramProps {
+            diagram,
+            hide_message_numbers: false,
+            hide_return_values: false,
+        })
     }
 
     /// Stable, lower camel case metaclass name, as used in files.

@@ -1,6 +1,7 @@
-//! Diagrams as SVG images, drawn like the canvas in Astah's black on white.
+//! Diagrams as SVG images, drawn the way Astah exports them: black lines, Astah's fill colors,
+//! a margin of 10 and 96 dpi (4/3 pixels per logical unit).
 
-use umlcraft_model::{Point, Rect};
+use umlcraft_model::{Color, Point, Rect};
 
 use crate::draw::{self, Paint, Primitive};
 use crate::scene::{FONT_SIZE, LabelAlign, LineStyle, Row, Scene, TextMeasure};
@@ -8,20 +9,26 @@ use crate::scene::{FONT_SIZE, LabelAlign, LineStyle, Row, Scene, TextMeasure};
 /// Arial is the diagram font; the others are close enough where it is missing.
 const FONT_FAMILY: &str = "Arial, Helvetica, sans-serif";
 /// Empty space around the drawing.
-const MARGIN: f32 = 20.0;
+const MARGIN: f32 = 10.0;
+/// Pixels per logical unit: Astah exports at 96 dpi what it lays out at 72.
+pub const SCALE: f32 = 4.0 / 3.0;
+/// Astah's fill for nodes without a color of their own.
+const DEFAULT_FILL: &str = "#ffffcc";
 const WHITE: &str = "#ffffff";
 const BLACK: &str = "#000000";
 const GRAY: &str = "#808080";
 
 /// The scene as a standalone SVG document. `measure` should be the one the scene was built
-/// with; it sizes underlines and the image bounds.
+/// with; it places the texts and sizes underlines and the image bounds.
 pub fn render(scene: &Scene, measure: &dyn TextMeasure) -> String {
     let area = bounds(scene, measure).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)).inflate(MARGIN);
-    let mut svg = Svg { out: String::new(), measure };
+    let mut svg = Svg { out: String::new(), measure, fill: None };
     svg.out += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
     svg.out += &format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" \
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{pw}\" height=\"{ph}\" \
          viewBox=\"{x} {y} {w} {h}\" font-family=\"{FONT_FAMILY}\" xml:space=\"preserve\">\n",
+        pw = (area.width * SCALE).ceil(),
+        ph = (area.height * SCALE).ceil(),
         x = num(area.x),
         y = num(area.y),
         w = num(area.width),
@@ -36,9 +43,11 @@ pub fn render(scene: &Scene, measure: &dyn TextMeasure) -> String {
         style: LineStyle::Solid,
     });
     for node in &scene.nodes {
+        svg.fill = node.fill;
         for p in draw::figure(node) {
             svg.primitive(&p);
         }
+        svg.fill = None;
         for row in &node.rows {
             svg.row(row);
         }
@@ -58,7 +67,16 @@ pub fn render(scene: &Scene, measure: &dyn TextMeasure) -> String {
             svg.primitive(&p);
         }
         for label in &edge.labels {
-            svg.text(&label.text, draw::label_area(label), FONT_SIZE, false, false, label.align);
+            let width = measure.width(&label.text, FONT_SIZE, false);
+            svg.text(
+                &label.text,
+                draw::label_area(label),
+                FONT_SIZE,
+                false,
+                false,
+                label.align,
+                width,
+            );
         }
     }
     svg.out += "</svg>\n";
@@ -86,6 +104,8 @@ fn bounds(scene: &Scene, measure: &dyn TextMeasure) -> Option<Rect> {
 struct Svg<'a> {
     out: String,
     measure: &'a dyn TextMeasure,
+    /// Fill color of the node being drawn.
+    fill: Option<Color>,
 }
 
 impl Svg<'_> {
@@ -100,15 +120,17 @@ impl Svg<'_> {
             Primitive::Polygon { points, fill } => format!(
                 "<polygon points=\"{}\"{} stroke=\"{BLACK}\"/>",
                 points_attr(points),
-                fill_attr(*fill),
+                self.fill_attr(*fill),
             ),
-            Primitive::Ellipse { center, rx, ry, fill } => format!(
-                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{} stroke=\"{BLACK}\"/>",
+            Primitive::Ellipse { center, rx, ry, fill, width } => format!(
+                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{} stroke=\"{BLACK}\" \
+                 stroke-width=\"{}\"/>",
                 num(center.x),
                 num(center.y),
                 num(*rx),
                 num(*ry),
-                fill_attr(*fill),
+                self.fill_attr(*fill),
+                num(*width),
             ),
             Primitive::Frame { rect, width, radius, fill, border, style } => {
                 let corners = if *radius > 0.0 {
@@ -131,7 +153,7 @@ impl Svg<'_> {
                     num(rect.y),
                     num(rect.width),
                     num(rect.height),
-                    fill_attr(*fill),
+                    self.fill_attr(*fill),
                 )
             }
         };
@@ -139,8 +161,21 @@ impl Svg<'_> {
         self.out.push('\n');
     }
 
+    fn fill_attr(&self, paint: Paint) -> String {
+        match paint {
+            Paint::Fill => match self.fill {
+                Some(c) => format!(" fill=\"#{:02x}{:02x}{:02x}\"", c.r, c.g, c.b),
+                None => format!(" fill=\"{DEFAULT_FILL}\""),
+            },
+            Paint::Translucent => format!(" fill=\"{WHITE}\" fill-opacity=\"0.35\""),
+            paint => format!(" fill=\"{}\"", color(paint)),
+        }
+    }
+
+    /// A row of a node. Astah centers such texts by their rounded width.
     fn row(&mut self, row: &Row) {
-        self.text(&row.text, row.rect, row.size, row.bold, row.italic, row.align);
+        let width = self.measure.rounded_width(&row.text, row.size, row.bold);
+        self.text(&row.text, row.rect, row.size, row.bold, row.italic, row.align, width);
         if row.underline && !row.text.is_empty() {
             let width = self.measure.width(&row.text, row.size, row.bold);
             let x = draw::text_left(row.rect, width, row.align);
@@ -153,8 +188,9 @@ impl Svg<'_> {
         }
     }
 
-    /// One line of text in `area`, anchored by its alignment so it stays in place even where
-    /// the viewer's font is a little wider or narrower.
+    /// One line of text of `width` aligned in `area`. It starts at a fixed x, as Astah's own
+    /// export does, whatever font the viewer has.
+    #[expect(clippy::too_many_arguments)]
     fn text(
         &mut self,
         text: &str,
@@ -163,18 +199,14 @@ impl Svg<'_> {
         bold: bool,
         italic: bool,
         align: LabelAlign,
+        width: f32,
     ) {
         if text.is_empty() {
             return;
         }
-        let (x, anchor) = match align {
-            LabelAlign::Left => (area.x, ""),
-            LabelAlign::Center => (area.x + area.width / 2.0, " text-anchor=\"middle\""),
-            LabelAlign::Right => (area.right(), " text-anchor=\"end\""),
-        };
         self.out += &format!(
-            "<text x=\"{}\" y=\"{}\" font-size=\"{}\"{}{}{anchor}>{}</text>\n",
-            num(x),
+            "<text x=\"{}\" y=\"{}\" font-size=\"{}\"{}{}>{}</text>\n",
+            num(draw::text_left(area, width, align)),
             num(area.y + size * draw::BASELINE),
             num(size),
             if bold { " font-weight=\"bold\"" } else { "" },
@@ -186,25 +218,21 @@ impl Svg<'_> {
 
 fn color(paint: Paint) -> &'static str {
     match paint {
-        Paint::Fill | Paint::Background | Paint::Translucent => WHITE,
+        Paint::Fill => DEFAULT_FILL,
+        Paint::Background | Paint::Translucent => WHITE,
         Paint::Line => BLACK,
         Paint::Muted => GRAY,
         Paint::None => "none",
     }
 }
 
-fn fill_attr(paint: Paint) -> String {
-    match paint {
-        Paint::Translucent => format!(" fill=\"{WHITE}\" fill-opacity=\"0.35\""),
-        paint => format!(" fill=\"{}\"", color(paint)),
+fn dashes(style: LineStyle) -> String {
+    let dashes = style.dashes();
+    if dashes.is_empty() {
+        return String::new();
     }
-}
-
-fn dashes(style: LineStyle) -> &'static str {
-    match style {
-        LineStyle::Solid => "",
-        LineStyle::Dashed => " stroke-dasharray=\"6 4\"",
-    }
+    let list: Vec<String> = dashes.iter().map(|&d| num(d)).collect();
+    format!(" stroke-dasharray=\"{}\"", list.join(" "))
 }
 
 fn points_attr(points: &[Point]) -> String {
@@ -254,6 +282,8 @@ mod tests {
         assert!(svg.contains("<polygon"), "{svg}");
         assert!(svg.contains(">Customer</text>"), "{svg}");
         assert!(svg.contains(">- name : String</text>"), "{svg}");
+        // Astah's yellow.
+        assert!(svg.contains("fill=\"#ffffcc\""), "{svg}");
     }
 
     #[test]
@@ -267,6 +297,9 @@ mod tests {
         assert!(v[0] <= drawn.x - MARGIN && v[1] <= drawn.y - MARGIN, "{view_box}");
         assert!(v[0] + v[2] >= drawn.right() + MARGIN, "{view_box}");
         assert!(v[1] + v[3] >= drawn.bottom() + MARGIN, "{view_box}");
+        let width: f32 =
+            svg.split("width=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
+        assert_eq!(width, (v[2] * SCALE).ceil());
     }
 
     #[test]
@@ -275,12 +308,13 @@ mod tests {
         assert_eq!(num(160.0), "160");
         assert_eq!(num(12.345_67), "12.35");
         assert_eq!(num(-0.001), "0");
+        assert_eq!(dashes(LineStyle::Dashed), " stroke-dasharray=\"10 5\"");
     }
 
     #[test]
     fn an_empty_diagram_is_a_small_blank_image() {
         let svg = render(&Scene::empty(), &ApproxMeasure);
-        assert!(svg.contains("viewBox=\"-20 -20 40 40\""), "{svg}");
+        assert!(svg.contains("viewBox=\"-10 -10 20 20\""), "{svg}");
         assert!(!svg.contains("<text"), "{svg}");
     }
 }

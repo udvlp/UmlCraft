@@ -11,6 +11,7 @@ use umlcraft_model::{
     Shape, TypeRef,
 };
 use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
+use umlcraft_notation::sequence_edit;
 
 /// The sample project plus what it lacks: an interface with a realization, a dependency, an
 /// enumeration, a note, include and extend.
@@ -125,8 +126,7 @@ fn sample() -> Document {
             pay,
             ElementData::new("cashier", ElementKind::Lifeline(LifelineProps::default())),
         )?;
-        let n_cashier =
-            tx.add_node(pay_diagram, Some(cashier), Rect::new(160.0, 40.0, 100.0, 200.0))?;
+        let n_cashier = sequence_edit::add_lifeline(tx, pay_diagram, cashier, 160.0, 40.0)?;
         let gate_message = |name: &str, lifeline: Id, gate: MessageGate| {
             let mut kind = ElementKind::message(MessageSort::Synchronous, lifeline, lifeline);
             if let ElementKind::Message(p) = &mut kind {
@@ -135,7 +135,7 @@ fn sample() -> Document {
             ElementData::new(name, kind)
         };
         let found = tx.create(pay, gate_message("pay", cashier, MessageGate::Found))?;
-        tx.add_edge(pay_diagram, Some(found), n_cashier, n_cashier, vec![])?;
+        sequence_edit::add_message(tx, pay_diagram, found, n_cashier, n_cashier, 120.0)?;
         let reference = tx.create(
             interaction,
             ElementData::new(
@@ -147,7 +147,8 @@ fn sample() -> Document {
                 }),
             ),
         )?;
-        tx.add_node(ids.sequence_diagram, Some(reference), Rect::new(40.0, 0.0, 200.0, 80.0))?;
+        let below = sequence_edit::next_y(tx.model(), ids.sequence_diagram);
+        sequence_edit::add_fragment(tx, ids.sequence_diagram, reference, &[], below)?;
         let n_customer_in_sequence = tx
             .model()
             .view(ids.sequence_diagram)
@@ -160,13 +161,9 @@ fn sample() -> Document {
             interaction,
             gate_message("notify", ids.customer_lifeline, MessageGate::Lost),
         )?;
-        tx.add_edge(
-            ids.sequence_diagram,
-            Some(lost),
-            n_customer_in_sequence,
-            n_customer_in_sequence,
-            vec![],
-        )?;
+        let below = sequence_edit::next_y(tx.model(), ids.sequence_diagram);
+        let n = n_customer_in_sequence;
+        sequence_edit::add_message(tx, ids.sequence_diagram, lost, n, n, below)?;
         Ok(())
     })
     .unwrap();
@@ -364,6 +361,13 @@ fn diagram_contents(model: &Model) -> Contents {
                     contents.placements.insert(line.clone(), placed);
                     line
                 }
+                // Only on sequence diagrams.
+                Shape::Lifeline { .. }
+                | Shape::Activation { .. }
+                | Shape::Message { .. }
+                | Shape::Fragment { .. } => {
+                    continue;
+                }
             };
             contents.lines.insert(line);
         }
@@ -450,6 +454,38 @@ fn through_astah(model: &Model, name: &str) -> Option<Model> {
     Some(imported.model)
 }
 
+/// Sequence diagrams by name: each lifeline's head x and each message's height, both relative
+/// to the leftmost head and the top of the heads, as Astah moves the whole drawing.
+fn sequence_geometry(model: &Model) -> BTreeMap<String, Vec<String>> {
+    let mut result = BTreeMap::new();
+    for d in model.elements().filter(|e| e.kind().as_diagram() == Some(DiagramKind::Sequence)) {
+        let view = model.view(d.id()).unwrap();
+        let heads: Vec<(Id, Rect)> = view
+            .presentations()
+            .iter()
+            .filter_map(|p| match p.shape {
+                Shape::Lifeline { head, .. } => Some((p.element?, head)),
+                _ => None,
+            })
+            .collect();
+        let left = heads.iter().map(|h| h.1.x).fold(f32::MAX, f32::min);
+        let top = heads.iter().map(|h| h.1.y).fold(f32::MAX, f32::min);
+        let mut lines: Vec<String> = heads
+            .iter()
+            .map(|(e, h)| format!("lifeline {} at {:.0}", name(model, *e), h.x - left))
+            .collect();
+        for p in view.presentations() {
+            if let Shape::Message { y, .. } = p.shape {
+                let m = p.element.map(|e| name(model, e)).unwrap_or_default();
+                lines.push(format!("message {m:?} at {:.0}", y - top));
+            }
+        }
+        lines.sort();
+        result.insert(d.name().to_owned(), lines);
+    }
+    result
+}
+
 /// Interactions usually live in a package in Astah; the sample's belongs to a use case.
 #[test]
 fn sequence_diagram_in_a_package() {
@@ -499,4 +535,6 @@ fn round_trip_through_astah() {
     }
     pretty_assertions::assert_eq!(tree(back), expected);
     pretty_assertions::assert_eq!(interactions(back), interactions(original));
+    // Astah keeps where lifelines and messages are.
+    pretty_assertions::assert_eq!(sequence_geometry(back), sequence_geometry(original));
 }

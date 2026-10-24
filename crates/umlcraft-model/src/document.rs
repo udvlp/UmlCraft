@@ -340,11 +340,13 @@ impl Tx<'_> {
         Ok(())
     }
 
+    /// Moves or resizes a node; for a lifeline, its head.
     pub fn set_bounds(&mut self, diagram: Id, id: Id, bounds: Rect) -> Result<()> {
-        self.update_presentation(diagram, id, |p| {
-            if let Shape::Node { bounds: b } = &mut p.shape {
-                *b = bounds;
-            }
+        self.update_presentation(diagram, id, |p| match &mut p.shape {
+            Shape::Node { bounds: b }
+            | Shape::Lifeline { head: b, .. }
+            | Shape::Fragment { bounds: b, .. } => *b = bounds,
+            _ => {}
         })
     }
 

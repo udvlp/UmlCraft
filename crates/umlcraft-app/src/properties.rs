@@ -513,6 +513,7 @@ impl PropertiesPanel {
                     ElementKind::InteractionOperand(p) => p.guard = value,
                     ElementKind::ActivityEdge(p) => p.guard = value,
                     ElementKind::Transition(p) => p.guard = value,
+                    ElementKind::Message(p) => p.guard = value,
                     _ => {}
                 });
             }
@@ -685,6 +686,7 @@ impl PropertiesPanel {
             ElementKind::Message(p) => {
                 set(&self.arguments, p.arguments.clone(), window, cx);
                 set(&self.return_value, p.return_value.clone(), window, cx);
+                set(&self.guard, p.guard.clone(), window, cx);
                 let s = SORTS.iter().position(|&s| s == p.sort);
                 choose(&self.sort, s, locale_changed.then(sort_items), window, cx);
                 let ix = references.iter().position(|&o| o == p.operation);
@@ -1023,6 +1025,10 @@ impl Render for PropertiesPanel {
                     .child(field(
                         t!("prop.message_sort").into(),
                         Select::new(&self.sort).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.guard").into(),
+                        Input::new(&self.guard).small().into_any_element(),
                     ))
                     .child(field(
                         t!("prop.arguments").into(),

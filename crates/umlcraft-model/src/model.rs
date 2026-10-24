@@ -338,12 +338,17 @@ impl Model {
         {
             return Err(invalid(element));
         }
-        if let Shape::Edge { source, target, .. } = presentation.shape {
+        if let Some((source, target)) = presentation.endpoints() {
             for end in [source, target] {
                 if end == presentation.id || view.get(end).is_none() {
                     return Err(invalid(end));
                 }
             }
+        }
+        if let Shape::Activation { lifeline, .. } = presentation.shape
+            && !view.get(lifeline).is_some_and(|l| matches!(l.shape, Shape::Lifeline { .. }))
+        {
+            return Err(invalid(lifeline));
         }
         Ok(())
     }

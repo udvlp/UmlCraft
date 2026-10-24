@@ -4,7 +4,8 @@
 //   java -cp astah-api.jar;astah-pro.jar AstaExport.java project.ucraft layout.json out.asta report.txt
 //
 // `layout.json` carries what UmlCraft derives instead of storing it: node sizes grown to their
-// content, message rows and fragment frames of sequence diagrams. The report lists what Astah's
+// content and edges as drawn. Sequence diagrams are built from the geometry stored in the
+// project, which follows Astah's. The report lists what Astah's
 // API cannot express, one `dropped <key> <count>` line per kind, `problem <text>` lines for
 // single failures and an `error <text>` line if the export failed as a whole.
 //
@@ -72,10 +73,6 @@ import com.change_vision.jude.api.inf.project.ProjectAccessor;
 
 @SuppressWarnings("unchecked")
 public final class AstaExport {
-    /// Astah places messages a little further apart than UmlCraft does, and puts a reply at the
-    /// end of its call's activation. Stretching UmlCraft's rows keeps every reply above whatever
-    /// UmlCraft draws below it.
-    private static final double SEQUENCE_SCALE = 1.25;
     private static final String DEFAULT_FILL = "#FFFFCC";
 
     public static void main(String[] args) {
@@ -111,6 +108,13 @@ public final class AstaExport {
     private static String describe(Throwable t) {
         String message = t.getMessage() == null ? "" : t.getMessage();
         String where = t.getStackTrace().length > 0 ? " (" + t.getStackTrace()[0] + ")" : "";
+        // Where in this tool it happened.
+        for (StackTraceElement frame : t.getStackTrace()) {
+            if (frame.getClassName().startsWith("AstaExport")) {
+                where += " at line " + frame.getLineNumber();
+                break;
+            }
+        }
         return (t.getClass().getSimpleName() + ": " + message + where).replaceAll("\\s+", " ");
     }
 
@@ -1163,10 +1167,6 @@ public final class AstaExport {
 
     // ----- Sequence diagrams ------------------------------------------------------------------
 
-    /// An activation that has not ended yet, and the call that started it.
-    private record Open(String lane, INodePresentation activation, ILinkPresentation call) {
-    }
-
     /// A combined fragment shown on the diagram, with the messages inside each operand.
     private record Fragment(String id, Map<String, Object> frame, List<Operand> operands) {
     }
@@ -1174,66 +1174,83 @@ public final class AstaExport {
     private record Operand(String id, String guard, List<IPresentation> messages) {
     }
 
+    /// An activation bar as UmlCraft stores it, and the bar Astah made for it.
+    private static final class Bar {
+        final String lane;
+        final double top;
+        final double bottom;
+        INodePresentation astah;
+
+        Bar(String lane, double top, double bottom) {
+            this.lane = lane;
+            this.top = top;
+            this.bottom = bottom;
+        }
+    }
+
+    /// Builds a sequence diagram from the geometry UmlCraft stores, which is Astah's: heads,
+    /// lifeline lengths, the heights of messages, bars and frames. Astah puts the heads at 30,
+    /// so everything moves up or down by as much; x stays.
     private final class Sequence {
         private final String diagram;
         private final SequenceDiagramEditor editor;
-        private final Map<String, Object> layout;
         /// UmlCraft lifeline presentation → Astah lifeline.
         private final Map<String, INodePresentation> lanes = new HashMap<>();
-        private final Map<String, Map<String, Object>> edgeOf = new HashMap<>();
+        private final Map<String, Map<String, Object>> laneShapes = new HashMap<>();
+        /// Message element → its presentation in UmlCraft.
+        private final Map<String, Map<String, Object>> messageOf = new HashMap<>();
         private final Map<String, Map<String, Object>> nodeOf = new HashMap<>();
-        private final List<Open> stack = new ArrayList<>();
+        private final List<Bar> bars = new ArrayList<>();
+        /// Message element → the Astah message made for it.
+        private final Map<String, ILinkPresentation> made = new HashMap<>();
         private final List<Fragment> fragments = new ArrayList<>();
-        private double headBottom;
-        private double astahHeadBottom;
+        private double dy;
 
         Sequence(String diagram, SequenceDiagramEditor editor) {
             this.diagram = diagram;
             this.editor = editor;
-            Object l = layouts.get(diagram);
-            this.layout = l == null ? Map.of() : (Map<String, Object>) l;
         }
 
         private double y(double umlcraft) {
-            return astahHeadBottom + (umlcraft - headBottom) * SEQUENCE_SCALE;
+            return umlcraft + dy;
         }
 
         void build() throws Exception {
             List<Map<String, Object>> presentations = view(diagram);
             List<Map<String, Object>> lifelines = new ArrayList<>();
             for (Map<String, Object> p : presentations) {
-                if (!(p.get("element") instanceof String element)) {
-                    continue;
-                }
-                if ("edge".equals(p.get("shape"))) {
-                    edgeOf.putIfAbsent(element, p);
-                } else {
+                String shape = (String) p.get("shape");
+                if ("lifeline".equals(shape)) {
+                    lifelines.add(p);
+                } else if ("activation".equals(shape)) {
+                    double top = num(p, "top");
+                    bars.add(new Bar((String) p.get("lifeline"), top, top + num(p, "height")));
+                } else if ("message".equals(shape) && p.get("element") instanceof String element) {
+                    messageOf.putIfAbsent(element, p);
+                } else if (p.get("element") instanceof String element) {
                     nodeOf.putIfAbsent(element, p);
-                    if ("lifeline".equals(type(elements.get(element)))) {
-                        lifelines.add(p);
-                    }
                 }
             }
-            lifelines.sort((a, b) -> Double.compare(num(rect(diagram, a), "x"), num(rect(diagram, b), "x")));
+            lifelines.sort((a, b) -> Double.compare(num(head(a), "x"), num(head(b), "x")));
             double top = Double.MAX_VALUE;
             for (Map<String, Object> p : lifelines) {
-                top = Math.min(top, num(rect(diagram, p), "y"));
+                top = Math.min(top, num(head(p), "y"));
             }
-            headBottom = layout.get("headBottom") instanceof Number n ? n.doubleValue() : top + 32.0;
+            dy = lifelines.isEmpty() ? 0 : 30 - top;
 
             for (Map<String, Object> p : lifelines) {
                 String element = (String) p.get("element");
-                Map<String, Object> r = rect(diagram, p);
-                INodePresentation lane = editor.createLifeline(name(elements.get(element)), num(r, "x"));
+                Map<String, Object> head = head(p);
+                INodePresentation lane = editor.createLifeline(name(elements.get(element)), num(head, "x"));
                 lanes.put((String) p.get("id"), lane);
+                laneShapes.put((String) p.get("id"), p);
                 ILifeline model = (ILifeline) lane.getModel();
                 if (created.get(elements.get(element).get("represents")) instanceof IClass base) {
                     model.setBase(base);
                 }
                 common(element, model, Set.of());
                 created.putIfAbsent(element, model);
-                resize(lane, num(r, "width"), lane.getHeight());
-                astahHeadBottom = Math.max(astahHeadBottom, lane.getLocation().getY() + lane.getHeight());
+                resize(lane, num(head, "width"), num(head, "height"));
             }
 
             walk(owners.get(diagram), null);
@@ -1241,15 +1258,23 @@ public final class AstaExport {
                 attempt(f.id(), () -> fragment(f));
             }
 
-            double bottom = 0;
-            for (Map<String, Object> p : lifelines) {
-                Map<String, Object> r = rect(diagram, p);
-                bottom = Math.max(bottom, num(r, "y") + num(r, "height"));
+            // Astah grows bars itself, mostly as UmlCraft does; what it can be told is kept.
+            for (Bar bar : bars) {
+                if (bar.astah != null) {
+                    try {
+                        bar.astah.setHeight(bar.bottom - bar.top);
+                    } catch (InvalidEditingException e) {
+                        drop("barHeight");
+                    }
+                }
             }
-            for (INodePresentation lane : lanes.values()) {
-                double length = y(bottom) - lane.getLocation().getY() - lane.getHeight();
-                if (length > 0) {
-                    lane.setProperty("lifeline_length", Double.toString(length));
+            for (Map.Entry<String, INodePresentation> lane : lanes.entrySet()) {
+                double length = num(laneShapes.get(lane.getKey()), "length");
+                try {
+                    lane.getValue().setProperty("lifeline_length", Double.toString(length));
+                } catch (InvalidEditingException e) {
+                    // Astah keeps lifelines long enough for what lies on them.
+                    drop("lifelineLength");
                 }
             }
             for (Map<String, Object> p : presentations) {
@@ -1263,6 +1288,10 @@ public final class AstaExport {
                     });
                 }
             }
+        }
+
+        private Map<String, Object> head(Map<String, Object> lifeline) {
+            return (Map<String, Object>) lifeline.get("head");
         }
 
         /// Creates the messages of an interaction or operand from top to bottom and collects the
@@ -1302,84 +1331,101 @@ public final class AstaExport {
             return made;
         }
 
-        private INodePresentation activation(String lane) {
-            for (int i = stack.size() - 1; i >= 0; i--) {
-                if (stack.get(i).lane().equals(lane)) {
-                    return stack.get(i).activation();
+        /// The innermost bar on `lane` at `y`.
+        private Bar barAt(String lane, double y) {
+            Bar best = null;
+            for (Bar bar : bars) {
+                if (bar.lane.equals(lane) && bar.top - 0.5 <= y && y <= bar.bottom + 0.5
+                        && (best == null || bar.bottom - bar.top < best.bottom - best.top)) {
+                    best = bar;
+                }
+            }
+            return best;
+        }
+
+        private Bar barStarting(String lane, double y) {
+            for (Bar bar : bars) {
+                if (bar.lane.equals(lane) && Math.abs(bar.top - y) < 0.5) {
+                    return bar;
                 }
             }
             return null;
         }
 
-        /// `lane` has control again: calls it made that never got a reply end here.
-        private void returnTo(String lane) {
-            int keep = 0;
-            for (int i = stack.size() - 1; i >= 0; i--) {
-                if (stack.get(i).lane().equals(lane)) {
-                    keep = i + 1;
-                    break;
+        /// The message whose bar a reply from `lane` at `y` ends.
+        private String callEndedAt(String lane, double y) {
+            Bar bar = barAt(lane, y);
+            if (bar == null) {
+                return null;
+            }
+            for (Map.Entry<String, Map<String, Object>> m : messageOf.entrySet()) {
+                Map<String, Object> p = m.getValue();
+                double end = p.get("endY") instanceof Number n ? n.doubleValue() : num(p, "y");
+                if (lane.equals(p.get("target")) && Math.abs(end - bar.top) < 0.5
+                        && !"reply".equals(elements.get(m.getKey()).get("sort"))) {
+                    return m.getKey();
                 }
             }
-            while (stack.size() > keep) {
-                stack.remove(stack.size() - 1);
+            return null;
+        }
+
+        /// Remembers the Astah bar at an end of `link` for the UmlCraft bar starting there.
+        private void keep(IPresentation end, String lane, double y) {
+            if (end instanceof INodePresentation n && "Activation".equals(n.getType())) {
+                Bar bar = barStarting(lane, y);
+                if (bar != null && bar.astah == null) {
+                    bar.astah = n;
+                }
             }
         }
 
         private Object message(String id) throws Exception {
             Map<String, Object> e = elements.get(id);
-            Map<String, Object> edge = edgeOf.get(id);
-            String from = edge == null ? null : (String) edge.get("source");
-            String to = edge == null ? null : (String) edge.get("target");
-            if (edge == null || !lanes.containsKey(from) || !lanes.containsKey(to)) {
+            Map<String, Object> p = messageOf.get(id);
+            String from = p == null ? null : (String) p.get("source");
+            String to = p == null ? null : (String) p.get("target");
+            if (p == null || !lanes.containsKey(from) || !lanes.containsKey(to)) {
                 drop("message");
                 return null;
             }
             String sort = e.get("sort") == null ? "synchronous" : (String) e.get("sort");
-            double y = y(edgeY(edge));
+            double at = num(p, "y");
+            double end = p.get("endY") instanceof Number n ? n.doubleValue() : at;
             String name = name(e);
             String gate = text(e, "gate");
             if ("found".equals(gate) || "lost".equals(gate)) {
-                return gateMessage(id, gate, sort, to, y);
+                return gateMessage(id, p, gate, sort, to, at);
             }
-            if (!"reply".equals(sort) && !"asynchronous".equals(sort)) {
-                returnTo(from);
-            }
-            INodePresentation source = activation(from) != null ? activation(from) : lanes.get(from);
+            Bar bar = barAt(from, at);
+            INodePresentation source = bar != null && bar.astah != null ? bar.astah : lanes.get(from);
             INodePresentation target = lanes.get(to);
             ILinkPresentation link;
             // Astah keeps a reply's return value on the call it answers.
             IMessage answered = null;
             switch (sort) {
-                case "create" -> link = editor.createCreateMessage(name, source, target, y);
-                case "destroy" -> link = editor.createDestroyMessage(name, source, target, y);
+                case "create" -> link = editor.createCreateMessage(name, source, target, y(at));
+                case "destroy" -> link = editor.createDestroyMessage(name, source, target, y(at));
                 case "reply" -> {
-                    int open = -1;
-                    for (int i = stack.size() - 1; i >= 0 && open < 0; i--) {
-                        if (stack.get(i).lane().equals(from)) {
-                            open = i;
-                        }
-                    }
-                    if (open >= 0) {
-                        // Astah puts a reply at the end of the call's activation.
-                        answered = (IMessage) stack.get(open).call().getModel();
-                        link = editor.createReturnMessage(name, stack.get(open).call());
-                        while (stack.size() > open) {
-                            stack.remove(stack.size() - 1);
-                        }
+                    String call = callEndedAt(from, at);
+                    if (call != null && made.get(call) != null) {
+                        // Astah puts a reply at the end of the call's bar, as UmlCraft does.
+                        answered = (IMessage) made.get(call).getModel();
+                        link = editor.createReturnMessage(name, made.get(call));
                     } else {
                         drop("unmatchedReply");
-                        link = editor.createMessage(name, source, target, y);
+                        link = editor.createMessage(name, source, target, y(at));
                     }
                 }
                 default -> {
-                    link = editor.createMessage(name, source, target, y);
+                    link = editor.createMessage(name, source, target, y(at));
                     if ("asynchronous".equals(sort)) {
                         ((IMessage) link.getModel()).setAsynchronous(true);
-                    } else if (link.getTarget() != null && "Activation".equals(link.getTarget().getType())) {
-                        stack.add(new Open(to, link.getTarget(), link));
                     }
                 }
             }
+            keep(link.getSource(), from, at);
+            keep(link.getTarget(), to, end);
+            made.put(id, link);
             IMessage message = (IMessage) link.getModel();
             if (!text(e, "arguments").isEmpty()) {
                 if (message.isReturnMessage()) {
@@ -1387,6 +1433,9 @@ public final class AstaExport {
                 } else {
                     message.setArgument(text(e, "arguments"));
                 }
+            }
+            if (!text(e, "guard").isEmpty()) {
+                message.setGuard(text(e, "guard"));
             }
             if (!text(e, "returnValue").isEmpty()) {
                 if (answered != null) {
@@ -1410,8 +1459,8 @@ public final class AstaExport {
             return link;
         }
 
-        /// A "ref" frame across the lifelines it covers (all of them when none are given) at its
-        /// place in the order. Its diagram is set once all diagrams exist.
+        /// A "ref" frame across the lifelines it covers (all of them when none are given) where
+        /// it is drawn. Its diagram is set once all diagrams exist.
         private INodePresentation interactionUse(String id) throws Exception {
             Map<String, Object> e = elements.get(id);
             Map<String, Object> node = nodeOf.get(id);
@@ -1430,7 +1479,7 @@ public final class AstaExport {
                     covered.add((ILifeline) lane.getModel());
                 }
             }
-            double y = y(num(rect(diagram, node), "y"));
+            Map<String, Object> r = rect(diagram, node);
             // Astah wants a name; an unnamed frame shows the interaction it refers to, as in
             // UmlCraft.
             String name = name(e);
@@ -1441,7 +1490,8 @@ public final class AstaExport {
                 name = "ref";
             }
             INodePresentation frame = editor.createInteractionUse(
-                name, text(e, "arguments"), null, covered.toArray(new ILifeline[0]), y);
+                name, text(e, "arguments"), null, covered.toArray(new ILifeline[0]), y(num(r, "y")));
+            place(frame, r);
             IInteractionUse use = (IInteractionUse) frame.getModel();
             if (e.get("refersTo") instanceof String target) {
                 references.put(use, target);
@@ -1450,24 +1500,35 @@ public final class AstaExport {
             return frame;
         }
 
+        /// Moves and sizes a frame as UmlCraft has it, as far as Astah lets it.
+        private void place(INodePresentation frame, Map<String, Object> r) {
+            try {
+                frame.setLocation(new Point2D.Double(num(r, "x"), y(num(r, "y"))));
+            } catch (InvalidEditingException e) {
+                drop("framePosition");
+            }
+            resize(frame, num(r, "width"), num(r, "height"));
+        }
+
         /// A message from a gate left of `lane` or to a gate right of it.
-        private ILinkPresentation gateMessage(String id, String gate, String sort, String lane, double y)
-                throws Exception {
+        private ILinkPresentation gateMessage(String id, Map<String, Object> p, String gate, String sort, String lane,
+                double at) throws Exception {
             Map<String, Object> e = elements.get(id);
             INodePresentation lifeline = lanes.get(lane);
             double x = lifeline.getLocation().getX() + lifeline.getWidth() / 2;
             ILinkPresentation link;
             if ("found".equals(gate)) {
-                link = editor.createFoundMessage(name(e), new Point2D.Double(x - 120, y), lifeline);
-                if ("synchronous".equals(sort) && link.getTarget() != null
-                        && "Activation".equals(link.getTarget().getType())) {
-                    stack.add(new Open(lane, link.getTarget(), link));
-                }
+                double gx = p.get("gateX") instanceof Number n ? n.doubleValue() : x - 120;
+                link = editor.createFoundMessage(name(e), new Point2D.Double(gx, y(at)), lifeline);
+                keep(link.getTarget(), lane, at);
             } else {
-                returnTo(lane);
-                INodePresentation source = activation(lane) != null ? activation(lane) : lifeline;
-                link = editor.createLostMessage(name(e), source, new Point2D.Double(x + 120, y));
+                double gx = p.get("gateX") instanceof Number n ? n.doubleValue() : x + 120;
+                Bar bar = barAt(lane, at);
+                INodePresentation source = bar != null && bar.astah != null ? bar.astah : lifeline;
+                link = editor.createLostMessage(name(e), source, new Point2D.Double(gx, y(at)));
+                keep(link.getSource(), lane, at);
             }
+            made.put(id, link);
             IMessage message = (IMessage) link.getModel();
             if ("asynchronous".equals(sort)) {
                 message.setAsynchronous(true);
@@ -1479,16 +1540,8 @@ public final class AstaExport {
             return link;
         }
 
-        private double edgeY(Map<String, Object> edge) {
-            Object points = ((Map<String, Object>) layout.getOrDefault("edges", Map.of())).get(edge.get("id"));
-            if (points instanceof List<?> l && !l.isEmpty()) {
-                return num((Map<String, Object>) l.get(0), "y");
-            }
-            return headBottom + 40.0;
-        }
-
-        /// Wraps the fragment around the messages of its operands. Astah sizes frames itself;
-        /// a fragment without any message gets UmlCraft's frame.
+        /// Wraps the fragment around the messages of its operands, then gives it UmlCraft's
+        /// frame as far as Astah lets it. A fragment without any message is drawn where it is.
         private Object fragment(Fragment f) throws Exception {
             Map<String, Object> e = elements.get(f.id());
             String operator = text(e, "operator").isEmpty() ? "alt" : text(e, "operator");
@@ -1500,13 +1553,11 @@ public final class AstaExport {
                     filled.add(o);
                 }
             }
+            Map<String, Object> r = f.frame();
             INodePresentation node;
             if (filled.isEmpty()) {
-                Map<String, Object> r = f.frame();
-                double top = y(num(r, "y"));
-                double height = num(r, "height") * SEQUENCE_SCALE;
-                node = editor.createCombinedFragment(name(e), operator, new Point2D.Double(num(r, "x"), top),
-                    num(r, "width"), height);
+                node = editor.createCombinedFragment(name(e), operator, new Point2D.Double(num(r, "x"), y(num(r, "y"))),
+                    num(r, "width"), num(r, "height"));
                 if (!f.operands().isEmpty()) {
                     filled.add(f.operands().get(0));
                 }
@@ -1515,6 +1566,7 @@ public final class AstaExport {
                 for (Operand o : filled.subList(1, filled.size())) {
                     editor.addInteractionOperand(node, o.messages().toArray(new IPresentation[0]), name(elements.get(o.id())), o.guard());
                 }
+                place(node, r);
             }
             ICombinedFragment model = (ICombinedFragment) node.getModel();
             if (!name(e).isEmpty()) {

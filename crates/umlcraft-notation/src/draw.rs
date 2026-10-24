@@ -7,7 +7,8 @@ use std::f32::consts::FRAC_1_SQRT_2;
 use umlcraft_model::{Point, Rect};
 
 use crate::scene::{
-    EdgeLabel, EdgeShape, EndMarker, Figure, LABEL_HEIGHT, LabelAlign, LineStyle, NodeShape,
+    EdgeLabel, EdgeShape, EndMarker, Figure, HeadIcon, LABEL_HEIGHT, LabelAlign, LineStyle,
+    NodeShape,
 };
 use crate::sequence::SequenceLayout;
 
@@ -42,8 +43,8 @@ pub enum Primitive {
     Polyline { points: Vec<Point>, width: f32, style: LineStyle },
     /// A closed polygon with a 1 px [`Paint::Line`] border.
     Polygon { points: Vec<Point>, fill: Paint },
-    /// An ellipse with a 1 px [`Paint::Line`] border.
-    Ellipse { center: Point, rx: f32, ry: f32, fill: Paint },
+    /// An ellipse with a [`Paint::Line`] border of `width`.
+    Ellipse { center: Point, rx: f32, ry: f32, fill: Paint, width: f32 },
     /// A rectangle whose border of `width` is centered on its outline, like a Java stroke.
     /// `radius` rounds its corners.
     Frame { rect: Rect, width: f32, radius: f32, fill: Paint, border: Paint, style: LineStyle },
@@ -65,7 +66,108 @@ fn frame(rect: Rect, fill: Paint) -> Primitive {
 }
 
 fn ellipse(center: Point, rx: f32, ry: f32) -> Primitive {
-    Primitive::Ellipse { center, rx, ry, fill: Paint::Fill }
+    Primitive::Ellipse { center, rx, ry, fill: Paint::Fill, width: 1.0 }
+}
+
+/// Astah draws lifeline heads and their icons with 2 px lines.
+fn thick(points: Vec<Point>) -> Primitive {
+    Primitive::Polyline { points, width: 2.0, style: LineStyle::Solid }
+}
+
+/// The tab of a frame: down from the top at `tab.right()`, a cut corner of 10, along the
+/// bottom to the left edge. Diagram frames start the line 1 below the top.
+fn tab_line(tab: Rect, top: f32) -> Primitive {
+    line(
+        vec![
+            Point::new(tab.right(), tab.y + top),
+            Point::new(tab.right(), tab.bottom() - TAB_CUT),
+            Point::new(tab.right() - TAB_CUT, tab.bottom()),
+            Point::new(tab.x, tab.bottom()),
+        ],
+        LineStyle::Solid,
+    )
+}
+
+const TAB_CUT: f32 = 10.0;
+
+/// A lifeline's head: a box with 2 px border or one of the robustness icons.
+fn head(head: Rect, icon: HeadIcon) -> Vec<Primitive> {
+    let filled = |center: Point, rx: f32, ry: f32| Primitive::Ellipse {
+        center,
+        rx,
+        ry,
+        fill: Paint::Fill,
+        width: 2.0,
+    };
+    let (x, y, cy) = (head.x, head.y, head.center().y);
+    match icon {
+        HeadIcon::Box => vec![Primitive::Frame {
+            rect: head,
+            width: 2.0,
+            radius: 0.0,
+            fill: Paint::Fill,
+            border: Paint::Line,
+            style: LineStyle::Solid,
+        }],
+        HeadIcon::Boundary => {
+            // A T on its side left of an ellipse two thirds of the width.
+            let r = head.height / 2.0;
+            let left = x + 5.0;
+            let circle_left = x + head.width / 3.0;
+            vec![
+                thick(vec![Point::new(left, cy), Point::new(circle_left, cy)]),
+                thick(vec![Point::new(left, y + 5.0), Point::new(left, head.bottom() - 5.0)]),
+                filled(
+                    Point::new((circle_left + head.right()) / 2.0, cy),
+                    (head.right() - circle_left) / 2.0,
+                    r,
+                ),
+            ]
+        }
+        HeadIcon::Control => {
+            // A circle with an arrow head on top, pointing left.
+            let c = head.center();
+            let r = head.height / 2.0;
+            let arm = 3.12;
+            vec![
+                filled(c, r, r),
+                thick(vec![Point::new(c.x + arm, y - arm), Point::new(c.x, y)]),
+                thick(vec![Point::new(c.x, y), Point::new(c.x + arm, y + arm)]),
+            ]
+        }
+        HeadIcon::Entity => {
+            // A circle standing on a line.
+            let c = head.center();
+            let r = head.height / 2.0;
+            vec![
+                filled(c, r, r),
+                thick(vec![Point::new(c.x - r, head.bottom()), Point::new(c.x + r, head.bottom())]),
+            ]
+        }
+        HeadIcon::Actor => {
+            let cx = head.center().x;
+            let r = head.height * 0.18;
+            let neck = y + 2.0 * r;
+            let hip = y + head.height * 0.62;
+            let arms = y + head.height * 0.38;
+            vec![
+                filled(Point::new(cx, y + r), r, r),
+                line(vec![Point::new(cx, neck), Point::new(cx, hip)], LineStyle::Solid),
+                line(
+                    vec![Point::new(cx - r * 1.5, arms), Point::new(cx + r * 1.5, arms)],
+                    LineStyle::Solid,
+                ),
+                line(
+                    vec![
+                        Point::new(cx - r * 1.5, head.bottom()),
+                        Point::new(cx, hip),
+                        Point::new(cx + r * 1.5, head.bottom()),
+                    ],
+                    LineStyle::Solid,
+                ),
+            ]
+        }
+    }
 }
 
 /// The outline of a node, in drawing order.
@@ -133,34 +235,22 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             result
         }
         Figure::Boundary => vec![frame(r, Paint::Translucent)],
-        Figure::Lifeline { head } => {
-            let x = r.x + r.width / 2.0;
-            vec![
-                frame(*head, Paint::Fill),
-                line(
-                    vec![Point::new(x, head.bottom()), Point::new(x, r.bottom())],
-                    LineStyle::Dashed,
-                ),
-            ]
+        Figure::Lifeline { head: h, icon, line: (top, bottom) } => {
+            let x = h.center().x;
+            let mut result = vec![line(
+                vec![Point::new(x, *top), Point::new(x, *bottom)],
+                LineStyle::LongDashed,
+            )];
+            result.extend(head(*h, *icon));
+            result
         }
-        Figure::Fragment { tab, separators } => {
-            // The operator sits in a pentagon with a cut-off bottom right corner.
-            let cut = 6.0;
-            let mut result = vec![
-                frame(r, Paint::None),
-                Primitive::Polygon {
-                    points: vec![
-                        tab.origin(),
-                        Point::new(tab.right(), tab.y),
-                        Point::new(tab.right(), tab.bottom() - cut),
-                        Point::new(tab.right() - cut, tab.bottom()),
-                        Point::new(tab.x, tab.bottom()),
-                    ],
-                    fill: Paint::Fill,
-                },
-            ];
+        Figure::Activation => vec![frame(r, Paint::Fill)],
+        Figure::Frame { tab } => vec![frame(r, Paint::None), tab_line(*tab, 1.0)],
+        Figure::Fragment { tab, separators, filled } => {
+            let fill = if *filled { Paint::Fill } else { Paint::None };
+            let mut result = vec![frame(r, fill), tab_line(*tab, 0.0)];
             result.extend(separators.iter().map(|&y| {
-                line(vec![Point::new(r.x, y), Point::new(r.right(), y)], LineStyle::Dashed)
+                line(vec![Point::new(r.x, y), Point::new(r.right(), y)], LineStyle::ShortDashed)
             }));
             result
         }
@@ -191,6 +281,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                 rx: r.width / 2.0,
                 ry: r.height / 2.0,
                 fill: Paint::Line,
+                width: 1.0,
             }]
         }
         Figure::ActivityFinal => {
@@ -203,6 +294,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                     rx: rx * 0.6,
                     ry: ry * 0.6,
                     fill: Paint::Line,
+                    width: 1.0,
                 },
             ]
         }
@@ -360,8 +452,9 @@ fn marker(tip: Point, from: Point, marker: EndMarker) -> Vec<Primitive> {
         EndMarker::None => Vec::new(),
         EndMarker::OpenArrow => vec![line(vec![at(back, side), tip, at(back, -side)], solid)],
         EndMarker::FilledArrow => {
+            // Synchronous messages: a solid triangle 11 deep and 13 wide.
             vec![Primitive::Polygon {
-                points: vec![tip, at(back, side), at(back, -side)],
+                points: vec![tip, at(11.0, 6.5), at(11.0, -6.5)],
                 fill: Paint::Line,
             }]
         }
@@ -390,24 +483,18 @@ fn marker(tip: Point, from: Point, marker: EndMarker) -> Vec<Primitive> {
     }
 }
 
-/// Activation bars and the crosses of destroyed lifelines.
+/// The dots of found and lost messages and the crosses of destroyed lifelines, 20 px wide.
 pub fn sequence(layout: &SequenceLayout) -> Vec<Primitive> {
-    let mut result: Vec<Primitive> =
-        layout.activations.iter().map(|&bar| frame(bar, Paint::Fill)).collect();
-    let d = 8.0;
     let r = crate::sequence::GATE_DOT;
-    result.extend(layout.gates.iter().map(|&center| Primitive::Ellipse {
-        center,
-        rx: r,
-        ry: r,
-        fill: Paint::Line,
-    }));
+    let mut result: Vec<Primitive> = layout
+        .gates
+        .iter()
+        .map(|&center| Primitive::Ellipse { center, rx: r, ry: r, fill: Paint::Line, width: 1.0 })
+        .collect();
+    let d = 10.0;
     for &p in &layout.destructions {
-        for points in
-            [vec![p.offset(-d, -d), p.offset(d, d)], vec![p.offset(-d, d), p.offset(d, -d)]]
-        {
-            result.push(Primitive::Polyline { points, width: 1.5, style: LineStyle::Solid });
-        }
+        result.push(thick(vec![p.offset(d, -d), p.offset(-d, d)]));
+        result.push(thick(vec![p.offset(-d, -d), p.offset(d, d)]));
     }
     result
 }

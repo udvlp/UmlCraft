@@ -299,16 +299,11 @@ impl DiagramCanvas {
             .map(|n| n.id)
     }
 
-    /// The sequence element behind a message edge or fragment node, if `presentation` is one:
-    /// such items move up and down instead of freely.
+    /// The message behind a message edge, if `presentation` is one: messages move up and down
+    /// instead of freely.
     fn reorderable(&self, presentation: Id, cx: &App) -> Option<Id> {
         self.scene.sequence.as_ref()?;
-        let fixed_edge = self.scene.edge(presentation).is_some_and(|e| e.fixed);
-        let fragment = self
-            .scene
-            .node(presentation)
-            .is_some_and(|n| matches!(n.figure, Figure::Fragment { .. }));
-        if !fixed_edge && !fragment {
+        if !self.scene.edge(presentation).is_some_and(|e| e.fixed) {
             return None;
         }
         let ws = self.workspace.read(cx);
@@ -734,6 +729,9 @@ struct Painter<'a> {
     font_family: SharedString,
     window: &'a mut Window,
     cx: &'a mut App,
+    /// The fill color chosen for the node being painted; only on a light background, where the
+    /// texts stay readable on it.
+    node_fill: Option<Hsla>,
 }
 
 impl Painter<'_> {
@@ -742,8 +740,9 @@ impl Painter<'_> {
             return;
         }
         let mut path = PathBuilder::stroke(self.t.len(width));
-        if style == LineStyle::Dashed {
-            path = path.dash_array(&[px(6.0 * self.t.zoom), px(4.0 * self.t.zoom)]);
+        let dashes: Vec<Pixels> = style.dashes().iter().map(|&d| px(d * self.t.zoom)).collect();
+        if !dashes.is_empty() {
+            path = path.dash_array(&dashes);
         }
         path.move_to(self.t.pt(points[0]));
         for &p in &points[1..] {
@@ -768,7 +767,7 @@ impl Painter<'_> {
         }
     }
 
-    fn ellipse(&mut self, center: MPoint, rx: f32, ry: f32, fill: Hsla, stroke: Hsla) {
+    fn ellipse(&mut self, center: MPoint, rx: f32, ry: f32, fill: Hsla, stroke: Hsla, width: f32) {
         let build = |mut path: PathBuilder, t: &Transform| {
             let radii = point(t.len(rx), t.len(ry));
             path.move_to(t.pt(center.offset(rx, 0.0)));
@@ -780,7 +779,7 @@ impl Painter<'_> {
         if let Ok(path) = build(PathBuilder::fill(), &self.t) {
             self.window.paint_path(path, fill);
         }
-        if let Ok(path) = build(PathBuilder::stroke(self.t.len(1.0)), &self.t) {
+        if let Ok(path) = build(PathBuilder::stroke(self.t.len(width)), &self.t) {
             self.window.paint_path(path, stroke);
         }
     }
@@ -788,7 +787,7 @@ impl Painter<'_> {
     fn paint(&self, paint: Paint) -> Hsla {
         let c = self.c;
         match paint {
-            Paint::Fill => c.fill,
+            Paint::Fill => self.node_fill.unwrap_or(c.fill),
             Paint::Line => c.line,
             Paint::Background => c.background,
             Paint::Translucent => Hsla { a: 0.35, ..c.fill },
@@ -802,13 +801,13 @@ impl Painter<'_> {
         match primitive {
             Primitive::Polyline { points, width, style } => self.line(points, *width, line, *style),
             Primitive::Polygon { points, fill } => self.polygon(points, self.paint(*fill), line),
-            Primitive::Ellipse { center, rx, ry, fill } => {
-                self.ellipse(*center, *rx, *ry, self.paint(*fill), line)
+            Primitive::Ellipse { center, rx, ry, fill, width } => {
+                self.ellipse(*center, *rx, *ry, self.paint(*fill), line, *width)
             }
             Primitive::Frame { rect, width, radius, fill, border, style } => {
                 let style = match style {
                     LineStyle::Solid => BorderStyle::Solid,
-                    LineStyle::Dashed => BorderStyle::Dashed,
+                    _ => BorderStyle::Dashed,
                 };
                 let (fill, border) = (self.paint(*fill), self.paint(*border));
                 self.frame(*rect, *width, *radius, fill, border, style);
@@ -914,9 +913,19 @@ impl Painter<'_> {
 
     /// Paints a node's outline and its rows, except the row being edited in place.
     fn node(&mut self, node: &NodeShape, editing: Option<Id>) {
+        let light = self.c.background.l > 0.5;
+        self.node_fill = node.fill.filter(|_| light).map(|c| {
+            Hsla::from(Rgba {
+                r: f32::from(c.r) / 255.0,
+                g: f32::from(c.g) / 255.0,
+                b: f32::from(c.b) / 255.0,
+                a: f32::from(c.a) / 255.0,
+            })
+        });
         for primitive in draw::figure(node) {
             self.primitive(&primitive);
         }
+        self.node_fill = None;
         for row in &node.rows {
             if editing.is_some() && row.element == editing {
                 continue;
@@ -1127,7 +1136,8 @@ impl Render for DiagramCanvas {
                         }
                         let t = Transform { origin: bounds.origin, pan, zoom };
                         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                            let mut p = Painter { t, c: colors, font_family, window, cx };
+                            let mut p =
+                                Painter { t, c: colors, font_family, window, cx, node_fill: None };
                             p.grid(bounds);
                             for node in &scene.nodes {
                                 p.node(node, editing_element);

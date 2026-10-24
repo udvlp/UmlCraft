@@ -6624,6 +6624,7 @@ name = "umlcraft-asta"
 version = "0.2.0"
 dependencies = [
  "thiserror 2.0.21",
+ "ttf-parser",
  "umlcraft-format",
  "umlcraft-model",
  "umlcraft-notation",

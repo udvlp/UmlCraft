@@ -242,16 +242,16 @@ mod tests {
     }
 
     #[test]
-    fn the_layout_has_message_rows_and_drawn_sizes() {
+    fn the_layout_has_drawn_sizes_and_the_project_the_sequence_geometry() {
         let (doc, ids) = umlcraft_model::sample::order_system();
         let export = Export::new(doc.model());
         let layout: serde_json::Value = serde_json::from_str(&export.layout).unwrap();
-        let sequence = &layout["diagrams"][ids.sequence_diagram.to_string()];
-        assert_eq!(sequence["headBottom"], 72.0);
-        assert_eq!(sequence["edges"].as_object().unwrap().len(), 3);
         let class = &layout["diagrams"][ids.class_diagram.to_string()];
-        assert!(class.get("headBottom").is_none());
         assert_eq!(class["nodes"].as_object().unwrap().len(), 3);
+        // The tool reads lifelines, bars and messages from the project itself.
+        assert!(export.project.contains("\"shape\": \"lifeline\""), "{}", export.project);
+        assert!(export.project.contains("\"shape\": \"activation\""));
+        assert!(export.project.contains("\"shape\": \"message\""));
     }
 
     #[test]

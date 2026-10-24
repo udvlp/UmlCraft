@@ -34,7 +34,9 @@ everything is rolled back. `Tx` offers the composite edits:
 `.ucraft` is pretty-printed JSON. Elements are sorted by ID (UUIDv7, i.e. by creation time), so new
 elements end up at the end. Ownership is stored only through the ordered `children`. Default values
 are omitted. `formatVersion` and the `MIGRATIONS` list in `umlcraft-format` handle future format
-changes. On load, `Model::check` verifies all invariants.
+changes. On load, `Model::check` verifies all invariants. Version 2 added the geometry of
+sequence diagrams; version 1 files load unchanged and their sequence diagrams are laid out once
+when the app opens them (`sequence_edit::upgrade_document`, not an undoable edit).
 
 ## User interface
 
@@ -72,33 +74,48 @@ changes. On load, `Model::check` verifies all invariants.
   it as a duplicate (new IDs, free names) or as another presentation of the same elements.
 - `palette` defines which tools a diagram type offers, which connections are allowed (e.g.
   realization only from class to interface) and where new elements land in the ownership tree.
-- `sequence` lays out sequence diagrams (see below).
-- `draw` turns a scene's figures, end markers and activation bars into a few primitives
-  (polyline, polygon, ellipse, frame) with color roles (`Paint`) and says where text baselines
-  go. The canvas paints them with its theme colors; `svg` writes them as an SVG image in Astah's
-  black on white. So the figure geometry exists once, for both.
+- `sequence` draws sequence diagrams, `sequence_edit` edits them (see below).
+- `draw` turns a scene's figures and end markers into a few primitives (polyline, polygon,
+  ellipse, frame) with color roles (`Paint`) and says where text baselines go. The canvas paints
+  them with its theme colors (and a node's own fill color on a light background); `svg` writes
+  them as Astah exports SVG: black lines, Astah's yellow `#FFFFCC` where a node has no color of
+  its own, a margin of 10 and 4/3 pixels per unit. So the figure geometry exists once, for both.
+  Texts in nodes are centered by their rounded width (`TextMeasure::rounded_width`), as Astah
+  does, and written at a fixed x.
 
 ## Sequence diagrams
 
-A sequence diagram belongs to an `Interaction`. Vertical positions are never stored; they follow
-from the order of the interaction's children, recursing through `CombinedFragment` →
-`InteractionOperand` → children. Inserting or moving a message is therefore a `MoveElement` or
-`InsertElement` at the right index, and everything below moves along by itself.
+Sequence diagrams store their whole geometry, the way Astah does, so that they look like Astah's
+and export to Astah and back without change:
 
-- A lifeline is a node presentation; only x and width count. All heads share one top line (the
-  smallest stored y), except lifelines created by a create message, whose head sits at that
-  message. Moving a lifeline only moves it sideways.
-- A message is an edge presentation from the sender's lifeline node to the receiver's, without
-  waypoints (`EdgeShape::fixed`). Only messages shown on the diagram take up a row.
-- A combined fragment is a node presentation whose stored bounds are not used: its frame spans
-  the covered lifelines (or, if none are ticked, those its messages touch) and its operands'
-  content. Fragment nodes go to the back.
-- Activation bars are derived: a synchronous call opens one on the receiver, the matching reply
-  closes it, and a lifeline that sends a new call regains control, which ends what it called
-  before without a reply.
-- The layout reports `Slot`s, the gaps between items (owner and index plus a y position). The
-  canvas uses them to insert new messages and fragments where the user clicked and to move
-  dragged messages and fragments (`palette::move_to_slot`).
+- The diagram frame ("sd" and the name in a tab) is a node presentation of the diagram itself.
+- A lifeline is `Shape::Lifeline`: its head (a box, or with `Style::iconic` the icon of the
+  represented classifier's robustness stereotype) and the length of its dashed line, which can
+  end in a cross (`destroyed`).
+- An activation bar is `Shape::Activation`: a lifeline presentation, a top and a height. Its x
+  follows from the lifeline and from how many bars on it it lies within (10 further right each).
+- A message is `Shape::Message`: the two lifeline presentations, the height where it leaves the
+  sender and, for messages to self and messages that branch off another one, where it arrives.
+  Found and lost messages keep the x of their open end (`gate_x`); on the frame's border it is a
+  gate without a dot. The ends meet the bars at those heights.
+- A combined fragment is `Shape::Fragment` with its bounds, the offsets of the operand
+  separators and hand-placed guard offsets; an interaction use is a node presentation.
+- Message numbers ("2.1") are not stored: a message sent from a bar is numbered below the call
+  that started the bar; messages leaving the same point branch ("-A", "-B"). A reply's return
+  value is shown after the call it answers, as Astah does. Both can be switched off per diagram
+  (`DiagramProps::hide_message_numbers`, `hide_return_values`).
+
+The interaction's order follows the drawing: `sequence_edit::tidy`, run after every edit of a
+sequence diagram, grows bars to end 20 below what lies in them and lifelines to reach 30 below
+what is on them, grows the frame around everything, and puts every message and fragment into the
+operand of the innermost fragment drawn around it, ordered by height (`sync_order`). Edits follow
+Astah's rules, measured through its API: a call gets a bar of 25 on the receiver and, where the
+sender has none, a bar of 45 on the sender (60 for create, 30 for lost messages); a reply leaves
+at the end of the bar it returns from; a message to self comes back 20 lower into a bar of its
+own; a create message brings the new lifeline's head down to it; a destroy message ends the
+lifeline in a cross below its bar. Dragging a message moves it with the bar it starts and
+everything sent from that bar (`move_item`). The layout's `Slot`s carry the height the user
+pointed at.
 
 ## Astah import
 
@@ -119,10 +136,10 @@ through its official API (`astah-api.jar`):
 - `Astah::find` looks for an installation (`ASTAH_HOME`, else `astah-professional`, `astah-uml`
   or `astah-sysml` under "Program Files") with `astah-api.jar` and an edition jar. Without one,
   File › Export › Astah project … shows a dialog saying what is needed.
-- `Export::new` serializes the model as `.ucraft` and adds a layout sidecar: node bounds as drawn
-  (nodes grow with their content) and, for sequence diagrams, the rows of the messages and the
-  frames of the fragments, which UmlCraft derives instead of storing. The app prepares this on
-  the UI thread and runs the rest in the background.
+- `Export::new` serializes the model as `.ucraft` and adds a layout sidecar: node bounds and
+  edges as drawn (nodes grow with their content). Sequence diagrams need none; the tool reads
+  their geometry from the project. The app prepares this on the UI thread and runs the rest in
+  the background.
 - `Export::run` writes both files and the Java tool [`tools/asta-export/AstaExport.java`](../tools/asta-export/README.md)
   (embedded with `include_str!`) to a temporary folder, and runs the tool with Astah's bundled
   JRE in source-file mode, so no JDK and no build step are needed. The tool creates packages,
@@ -143,13 +160,15 @@ through its official API (`astah-api.jar`):
   to fit it, e.g. a use case with extension points. Nodes without a fill color get Astah's usual
   `#FFFFCC` instead of the API's white. Notes are created per presentation, since Astah keeps
   comments as notes on diagrams; comments that are not on any diagram are dropped.
-- Sequence diagrams: rows are mapped to Astah's coordinates relative to the bottom of the
-  lifeline heads and stretched by 1.25, because Astah spaces messages further apart. Messages are
-  created from top to bottom. A message from a lifeline with an open activation is sent from that
-  activation, which makes Astah extend it, so a reply (`createReturnMessage`, placed by Astah at
-  the end of the activation) ends up below the calls it follows. Activations are tracked the way
-  `sequence` derives them. A reply's return value is stored on the call it answers, as Astah
-  does.
+- Sequence diagrams: Astah puts lifeline heads at y = 30, so the whole drawing moves vertically
+  by as much; x stays. Messages are created from top to bottom at their stored height, from the
+  Astah bar made for the UmlCraft bar at that height (or the lifeline). Astah makes the bars
+  itself by the same rules UmlCraft follows, and refuses to resize them (`setHeight`, reported as
+  `barHeight`); a reply (`createReturnMessage`) goes to the end of the bar of the call it
+  answers, where UmlCraft has it too. Lifeline lengths are set through `lifeline_length`; Astah
+  refuses lengths shorter than what lies on a lifeline, interaction uses included. A reply's
+  return value is stored on the call it answers, as Astah does. The round-trip test checks that
+  heads and message heights come back unchanged.
 - Activity diagrams: `createActivityDiagram` brings its own activity, so an activity exports its
   first diagram only. Astah creates activity nodes only on a diagram; nodes, flows and
   partitions not shown are dropped. Partitions are created left to right with
@@ -173,14 +192,15 @@ through its official API (`astah-api.jar`):
   makes a state at least 81 high, so states without them have that compartment hidden
   (`action_visibility`). Astah routes the first and last segment of a self-transition itself.
 - Interaction uses are created in the order of the interaction (`createInteractionUse` with the
-  covered lifelines, all of them when none are given); since Astah refers to sequence diagrams,
-  the reference is set once every diagram exists. Found and lost messages use
-  `createFoundMessage` and `createLostMessage` with a point 120 px beside the lifeline.
+  covered lifelines, all of them when none are given) at their height and then sized; since
+  Astah refers to sequence diagrams, the reference is set once every diagram exists. Found and
+  lost messages use `createFoundMessage` and `createLostMessage` at the stored `gate_x`.
 - Combined fragments are built around their messages: `createCombinedFragment(operator,
   messages)` for the first operand, `addInteractionOperand` for the others, outer fragments
-  before inner ones. Astah sizes the frames itself and they cannot be moved afterwards, so a
-  nested fragment that spans the same lifelines is drawn on top of its parent's border. Empty
-  operands are dropped; a fragment without any message gets UmlCraft's frame.
+  before inner ones. Astah sizes these frames itself and refuses to move them (reported as
+  `framePosition`), so a nested fragment that spans the same lifelines is drawn on top of its
+  parent's border. Empty operands are dropped; a fragment without any message is created with
+  UmlCraft's frame.
 - Not available in the API and reported as dropped: the query flag of operations, conditions and
   extension points of extends, return parameters, parameter multiplicity and default values,
   system boundaries.

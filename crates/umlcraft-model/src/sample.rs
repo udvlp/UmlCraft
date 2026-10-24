@@ -1,7 +1,7 @@
 //! A small example project with one diagram of each supported kind.
 //! Used by tests, the format round trip and as the app's start document.
 
-use crate::diagram::DiagramKind;
+use crate::diagram::{DiagramKind, Presentation};
 use crate::document::Document;
 use crate::element::{
     ActivityNodeKind, Aggregation, ClassifierProps, CombinedFragmentProps, DirectedProps,
@@ -181,23 +181,35 @@ pub fn order_system() -> (Document, OrderSystem) {
                 interaction,
                 ElementData::new("Place order", ElementKind::diagram(DiagramKind::Sequence)),
             )?;
-            tx.add_node(sequence_diagram, Some(items), Rect::new(40.0, 100.0, 320.0, 80.0))?;
-            let n_customer = tx.add_node(
-                sequence_diagram,
-                Some(customer_lifeline),
-                Rect::new(60.0, 40.0, 100.0, 300.0),
+            // Laid out as Astah would: the frame, lifeline heads 110 × 30, the loop around the
+            // first call, bars of 25 for the calls, the reply at the end of the second one.
+            let d = sequence_diagram;
+            tx.add_node(d, Some(d), Rect::new(35.0, 5.0, 360.0, 330.0))?;
+            tx.add_presentation(
+                d,
+                Presentation::fragment(items, Rect::new(50.0, 120.0, 330.0, 70.0)),
             )?;
-            let n_order = tx.add_node(
-                sequence_diagram,
-                Some(order_lifeline),
-                Rect::new(260.0, 40.0, 100.0, 300.0),
+            let n_customer = tx.add_presentation(
+                d,
+                Presentation::lifeline(
+                    customer_lifeline,
+                    Rect::new(60.0, 50.0, 110.0, 30.0),
+                    240.0,
+                ),
             )?;
-            for (message, from, to) in [
-                (add_item, n_customer, n_order),
-                (submit, n_customer, n_order),
-                (confirmation, n_order, n_customer),
+            let n_order = tx.add_presentation(
+                d,
+                Presentation::lifeline(order_lifeline, Rect::new(260.0, 50.0, 110.0, 30.0), 240.0),
+            )?;
+            tx.add_presentation(d, Presentation::activation(n_customer, 150.0, 115.0))?;
+            tx.add_presentation(d, Presentation::activation(n_order, 150.0, 25.0))?;
+            tx.add_presentation(d, Presentation::activation(n_order, 220.0, 25.0))?;
+            for (message, from, to, y) in [
+                (add_item, n_customer, n_order, 150.0),
+                (submit, n_customer, n_order, 220.0),
+                (confirmation, n_order, n_customer, 245.0),
             ] {
-                tx.add_edge(sequence_diagram, Some(message), from, to, vec![])?;
+                tx.add_presentation(d, Presentation::message(message, from, to, y))?;
             }
 
             // The activity: the clerk checks the stock, the warehouse ships or the clerk cancels.

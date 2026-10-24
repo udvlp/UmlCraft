@@ -4,9 +4,9 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, DiagramKind, EdgeLabels,
-    ElementKind, Id, InstanceKind, MessageSort, Model, Navigability, Point, Presentation,
-    PseudostateKind, Rect, Shape, Size, StateProps, Style, TypeRef,
+    ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Color, DiagramKind,
+    EdgeLabels, ElementKind, Id, InstanceKind, MessageSort, Model, Navigability, Point,
+    Presentation, PseudostateKind, Rect, Shape, Size, StateProps, Style, TypeRef,
 };
 
 use crate::member::member_text;
@@ -16,6 +16,12 @@ use crate::sequence::{self, SequenceLayout};
 /// [`ApproxMeasure`] is good enough for tests and headless use.
 pub trait TextMeasure {
     fn width(&self, text: &str, font_size: f32, bold: bool) -> f32;
+
+    /// The width with every character's advance rounded to whole pixels. Astah centers the
+    /// names in boxes by this width, though it draws them with exact advances.
+    fn rounded_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        self.width(text, font_size, bold)
+    }
 }
 
 pub struct ApproxMeasure;
@@ -59,6 +65,8 @@ pub struct NodeShape {
     pub rect: Rect,
     pub figure: Figure,
     pub rows: Vec<Row>,
+    /// Fill color chosen for this presentation; unset, the default fill.
+    pub fill: Option<Color>,
 }
 
 impl NodeShape {
@@ -74,16 +82,17 @@ impl NodeShape {
                 let inner = self.rect.inflate(-2.0 * tolerance.max(3.0));
                 !inner.contains(p) || self.rows.iter().any(|r| r.rect.contains(p))
             }
-            Figure::Lifeline { head } => {
+            Figure::Lifeline { head, .. } => {
                 head.contains(p) || (p.x - head.center().x).abs() <= tolerance + 4.0
             }
             _ => self.rect.contains(p),
         }
     }
 
-    /// Whether the user may resize the node. Lifelines and fragments size themselves.
+    /// Whether the user may resize the node. Lifelines, activation bars and diagram frames
+    /// are sized by the sequence layout.
     pub fn resizable(&self) -> bool {
-        !matches!(self.figure, Figure::Lifeline { .. } | Figure::Fragment { .. })
+        !matches!(self.figure, Figure::Lifeline { .. } | Figure::Activation | Figure::Frame { .. })
     }
 }
 
@@ -105,14 +114,25 @@ pub enum Figure {
     },
     /// System boundary: a frame around the use cases of a system.
     Boundary,
+    /// A lifeline: its head (a box or an icon) and the dashed line from `line.0` down to
+    /// `line.1`.
     Lifeline {
         head: Rect,
+        icon: HeadIcon,
+        line: (f32, f32),
     },
-    /// Combined fragment: a frame with the operator in a tab at the top left and dashed lines
-    /// between the operands.
+    /// Activation bar on a lifeline.
+    Activation,
+    /// The frame around a diagram, with its kind and name in a tab at the top left.
+    Frame {
+        tab: Rect,
+    },
+    /// Combined fragment or interaction use: a frame with the operator in a tab at the top
+    /// left and dashed lines between the operands. Interaction uses are filled.
     Fragment {
         tab: Rect,
         separators: Vec<f32>,
+        filled: bool,
     },
     Note,
     /// Activity diagrams: an action, drawn with rounded corners.
@@ -153,6 +173,16 @@ pub enum Figure {
         depth: f32,
     },
     Other,
+}
+
+/// How a lifeline's head is drawn: a box with the name inside, or an icon with the name below.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadIcon {
+    Box,
+    Actor,
+    Boundary,
+    Control,
+    Entity,
 }
 
 impl Figure {
@@ -239,7 +269,24 @@ pub struct Row {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineStyle {
     Solid,
+    /// Astah's dashes for replies, dependencies and the like.
     Dashed,
+    /// Lifelines.
+    LongDashed,
+    /// Separators between operands.
+    ShortDashed,
+}
+
+impl LineStyle {
+    /// Lengths of dashes and gaps, in logical units; empty for a solid line.
+    pub fn dashes(self) -> &'static [f32] {
+        match self {
+            Self::Solid => &[],
+            Self::Dashed => &[10.0, 5.0],
+            Self::LongDashed => &[12.0, 6.0],
+            Self::ShortDashed => &[5.0, 5.0],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -557,7 +604,7 @@ fn layout_node(
         Some(e) => layout_element(model, e.id(), &p.style, bounds, measure),
         None => (bounds, Figure::Other, Vec::new()),
     };
-    NodeShape { id: p.id, element: p.element, rect, figure, rows }
+    NodeShape { id: p.id, element: p.element, rect, figure, rows, fill: p.style.fill }
 }
 
 fn layout_element(
@@ -617,21 +664,8 @@ fn layout_element(
                 .place(Rect::new(r.x, r.y + 6.0, r.width, line_height(13.0)), LabelAlign::Center);
             (r, Figure::Boundary, vec![row])
         }
-        ElementKind::Lifeline(p) => {
-            let type_name = p.represents.and_then(|t| model.get(t)).map(|t| t.name());
-            let header = match type_name {
-                Some(t) => format!("{} : {t}", e.name()),
-                None => e.name().to_owned(),
-            };
-            let line = Line::new(header, 12.0, RowRole::Name, Some(id));
-            let w = bounds.width.max(line.width(measure) + 16.0);
-            let r = Rect::new(bounds.x, bounds.y, w, bounds.height.max(60.0));
-            let head = Rect::new(r.x, r.y, r.width, sequence::HEAD_HEIGHT);
-            let h = line_height(12.0);
-            let row = line
-                .place(Rect::new(r.x, head.center().y - h / 2.0, r.width, h), LabelAlign::Center);
-            (r, Figure::Lifeline { head }, vec![row])
-        }
+        // The sequence layout places lifelines.
+        ElementKind::Lifeline(_) => (bounds, Figure::Other, Vec::new()),
         ElementKind::ActivityNode(p) => layout_activity_node(model, id, p, bounds, measure),
         ElementKind::State(p) => layout_state(model, id, p, bounds, measure),
         ElementKind::Component(_) | ElementKind::Artifact(_) | ElementKind::Node(_) => {
@@ -686,20 +720,21 @@ fn layout_element(
                 .split('\n')
                 .map(|l| Line::new(l.trim_end_matches('\r'), 12.0, RowRole::Name, Some(id)))
                 .collect();
+            // Astah starts the text 2 from the top left corner.
             let h = line_height(12.0);
             let text_w = lines.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
             let r = Rect::new(
                 bounds.x,
                 bounds.y,
-                bounds.width.max(text_w + 22.0),
-                bounds.height.max(12.0 + h * lines.len() as f32),
+                bounds.width.max(text_w + 4.0),
+                bounds.height.max(4.0 + h * lines.len() as f32),
             );
             let rows = lines
                 .into_iter()
                 .enumerate()
                 .map(|(i, l)| {
                     l.place(
-                        Rect::new(r.x + 6.0, r.y + 6.0 + h * i as f32, r.width - 22.0, h),
+                        Rect::new(r.x + 2.0, r.y + 2.0 + h * i as f32, r.width - 4.0, h),
                         LabelAlign::Left,
                     )
                 })

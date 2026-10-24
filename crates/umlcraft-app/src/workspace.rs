@@ -245,20 +245,21 @@ impl Workspace {
         let model = self.doc.model();
         let Some(view) = model.view(diagram) else { return };
         let kind_of = |p: &umlcraft_model::Presentation| p.element.and_then(|e| model.get(e));
-        // New bounds per node. On sequence diagrams lifelines only move sideways, and fragments
-        // follow their content.
+        // New bounds per node. On sequence diagrams lifelines only move sideways; what moves
+        // into or out of a fragment changes its place in the interaction.
         let nodes: Vec<(Id, Rect)> = presentations
             .iter()
             .filter_map(|&p| view.get(p))
             .filter_map(|p| {
                 let bounds = p.bounds()?;
                 match kind_of(p).map(|e| e.kind()) {
-                    Some(ElementKind::CombinedFragment(_)) => None,
                     Some(ElementKind::Lifeline(_)) => Some((p.id, bounds.translate(dx, 0.0))),
                     _ => Some((p.id, bounds.translate(dx, dy))),
                 }
             })
             .collect();
+        let sequence = model.get(diagram).and_then(|d| d.kind().as_diagram())
+            == Some(umlcraft_model::DiagramKind::Sequence);
         if nodes.is_empty() || (dx == 0.0 && dy == 0.0) {
             return;
         }
@@ -287,7 +288,11 @@ impl Workspace {
         let label = t!("edit.move").to_string();
         let result = self.doc.edit(label, |tx| {
             nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
-            edges.into_iter().try_for_each(|(e, w)| tx.set_waypoints(diagram, e, w))
+            edges.into_iter().try_for_each(|(e, w)| tx.set_waypoints(diagram, e, w))?;
+            if sequence {
+                umlcraft_notation::sequence_edit::tidy(tx, diagram)?;
+            }
+            Ok(())
         });
         self.report(result);
     }
@@ -391,7 +396,16 @@ impl Workspace {
     pub fn set_bounds(&mut self, presentation: Id, bounds: Rect) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.resize").to_string();
-        let result = self.doc.edit(label, |tx| tx.set_bounds(diagram, presentation, bounds));
+        let sequence = self.doc.model().get(diagram).and_then(|d| d.kind().as_diagram())
+            == Some(umlcraft_model::DiagramKind::Sequence);
+        let result = self.doc.edit(label, |tx| {
+            tx.set_bounds(diagram, presentation, bounds)?;
+            // A fragment grown over messages takes them in.
+            if sequence {
+                umlcraft_notation::sequence_edit::tidy(tx, diagram)?;
+            }
+            Ok(())
+        });
         self.report(result);
     }
 

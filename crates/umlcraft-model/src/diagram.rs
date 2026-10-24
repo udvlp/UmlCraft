@@ -55,27 +55,82 @@ impl Presentation {
         }
     }
 
+    /// A lifeline: its head at `head`, the line `length` long below it.
+    pub fn lifeline(element: Id, head: Rect, length: f32) -> Self {
+        Self {
+            id: Id::generate(),
+            element: Some(element),
+            shape: Shape::Lifeline { head, length, destroyed: false },
+            style: Style::default(),
+        }
+    }
+
+    pub fn activation(lifeline: Id, top: f32, height: f32) -> Self {
+        Self {
+            id: Id::generate(),
+            element: None,
+            shape: Shape::Activation { lifeline, top, height },
+            style: Style::default(),
+        }
+    }
+
+    pub fn message(element: Id, source: Id, target: Id, y: f32) -> Self {
+        Self {
+            id: Id::generate(),
+            element: Some(element),
+            shape: Shape::Message {
+                source,
+                target,
+                y,
+                end_y: None,
+                gate_x: None,
+                labels: EdgeLabels::default(),
+            },
+            style: Style::default(),
+        }
+    }
+
+    pub fn fragment(element: Id, bounds: Rect) -> Self {
+        Self {
+            id: Id::generate(),
+            element: Some(element),
+            shape: Shape::Fragment { bounds, separators: Vec::new(), guards: Vec::new() },
+            style: Style::default(),
+        }
+    }
+
+    /// The box of a node or fragment; the head of a lifeline.
     pub fn bounds(&self) -> Option<Rect> {
         match self.shape {
-            Shape::Node { bounds } => Some(bounds),
-            Shape::Edge { .. } => None,
+            Shape::Node { bounds } | Shape::Fragment { bounds, .. } => Some(bounds),
+            Shape::Lifeline { head, .. } => Some(head),
+            Shape::Edge { .. } | Shape::Activation { .. } | Shape::Message { .. } => None,
         }
     }
 
     pub fn is_edge(&self) -> bool {
-        matches!(self.shape, Shape::Edge { .. })
+        matches!(self.shape, Shape::Edge { .. } | Shape::Message { .. })
     }
 
-    /// Source and target presentation of an edge.
+    /// Source and target presentation of an edge or message.
     pub fn endpoints(&self) -> Option<(Id, Id)> {
         match self.shape {
-            Shape::Edge { source, target, .. } => Some((source, target)),
-            Shape::Node { .. } => None,
+            Shape::Edge { source, target, .. } | Shape::Message { source, target, .. } => {
+                Some((source, target))
+            }
+            Shape::Node { .. }
+            | Shape::Lifeline { .. }
+            | Shape::Activation { .. }
+            | Shape::Fragment { .. } => None,
         }
     }
 
+    /// Whether this edge, message or activation hangs on `presentation` and goes with it.
     pub fn is_attached_to(&self, presentation: Id) -> bool {
-        self.endpoints().is_some_and(|(s, t)| s == presentation || t == presentation)
+        match self.shape {
+            Shape::Activation { lifeline, .. } => lifeline == presentation,
+            _ => self.endpoints().is_some_and(|(s, t)| s == presentation || t == presentation),
+        }
     }
 }
 
@@ -99,6 +154,49 @@ pub enum Shape {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_anchor: Option<Point>,
         /// Labels placed by hand instead of by the layout.
+        #[serde(default, skip_serializing_if = "EdgeLabels::is_empty")]
+        labels: EdgeLabels,
+    },
+    /// Sequence diagrams: the head of a lifeline and the length of its dashed line, which
+    /// starts below the head (below the name, for heads drawn as icons).
+    Lifeline {
+        head: Rect,
+        length: f32,
+        /// The line ends in a cross.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        destroyed: bool,
+    },
+    /// Sequence diagrams: a combined fragment's frame. Operands after the first start
+    /// `separators` below the top; `guards` are hand-placed offsets of the operands' guards
+    /// from where the layout puts them.
+    Fragment {
+        bounds: Rect,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        separators: Vec<f32>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        guards: Vec<Option<Point>>,
+    },
+    /// Sequence diagrams: an activation bar on the lifeline presentation `lifeline`. Its x
+    /// follows from the lifeline and from the bars it lies within.
+    Activation {
+        lifeline: Id,
+        top: f32,
+        height: f32,
+    },
+    /// Sequence diagrams: a message from lifeline presentation `source` to `target` (the same
+    /// one for messages to self and for found and lost messages). It leaves the sender at `y`
+    /// and reaches the receiver at `end_y` if that differs (messages to self, messages that
+    /// branch off another). The ends' x follow from the lifelines and their activations.
+    Message {
+        source: Id,
+        target: Id,
+        y: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_y: Option<f32>,
+        /// Found and lost messages: x of the open end (a dot, or a gate on the frame).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gate_x: Option<f32>,
+        /// The name label, if placed by hand.
         #[serde(default, skip_serializing_if = "EdgeLabels::is_empty")]
         labels: EdgeLabels,
     },
@@ -143,9 +241,13 @@ pub struct Style {
     /// Classifier boxes: hide the operation compartment.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_operations: bool,
-    /// Interfaces: draw as a small circle ("lollipop") instead of a box.
+    /// Interfaces: draw as a small circle ("lollipop") instead of a box. Lifelines: draw the
+    /// head as the icon of the represented classifier.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub iconic: bool,
+    /// Messages: leave out the parentheses with the arguments.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_parameters: bool,
 }
 
 impl Style {
@@ -244,9 +346,15 @@ impl View {
         self.presentations.iter().filter(move |p| p.element == Some(element))
     }
 
-    /// Bounding box of all nodes, if there are any.
+    /// Bounding box of all nodes and lifelines, if there are any.
     pub fn content_bounds(&self) -> Option<Rect> {
-        self.presentations.iter().filter_map(Presentation::bounds).reduce(|a, b| a.union(&b))
+        let area = |p: &Presentation| match p.shape {
+            Shape::Lifeline { head, length, .. } => {
+                Some(Rect::new(head.x, head.y, head.width, head.height + length))
+            }
+            _ => p.bounds(),
+        };
+        self.presentations.iter().filter_map(area).reduce(|a, b| a.union(&b))
     }
 }
 

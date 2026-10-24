@@ -47,8 +47,8 @@ importing `.asta` files and exporting them through an installed Astah.
   cannot express is reported. In a test with Astah Professional 12 this worked without a license
   file; see [docs/architecture.md](docs/architecture.md#astah-export).
 - **Image export** (File › Export › Diagram as SVG … / Diagram as PNG …): the open diagram
-  drawn like the canvas in black on white. SVG keeps real text, so it stays sharp and
-  searchable; PNG is the same image rasterized at twice the canvas size.
+  drawn the way Astah exports it, in Astah's colors and at its size. SVG keeps real text, so it
+  stays sharp and searchable; PNG is the same image rasterized at twice the canvas size.
 
 This completes milestone 1.
 
@@ -65,6 +65,14 @@ This completes milestone 1.
   realizations and associations; nodes take what is deployed on them along. Imported from
   Astah; Astah's API has no editors for these diagrams, so the export writes them as class
   diagrams and every instance as an object.
+- **Sequence diagrams as in Astah**: sequence diagrams now store their geometry the way Astah
+  does (the "sd" frame, lifeline heads and lengths, activation bars, message heights, fragment
+  frames) and are drawn with Astah's measures: robustness icons, bars nested 10 apart, message
+  numbers ("2.1", "3.1.2.1-A"), guards, return values after calls, `loop [condition]` tabs.
+  Imported Astah diagrams and their SVG exports match Astah's practically pixel for pixel.
+  Drawing follows Astah's rules: calls get bars, replies leave at the end of their bar, bars and
+  lifelines grow around their content, and the interaction's order follows the drawing. Files
+  from earlier versions are laid out once when opened.
 
 Next: composite structure diagrams (ports, parts, connectors), orthogonal regions, moving
 states into other states.

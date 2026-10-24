@@ -14,6 +14,7 @@ zip.workspace = true
 
 [dev-dependencies]
 umlcraft-format.workspace = true
+ttf-parser.workspace = true
 
 [lints]
 workspace = true
