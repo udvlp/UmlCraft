@@ -178,17 +178,15 @@ impl Model {
 
     /// Elements referring to `target`, with the role of the reference.
     pub fn referrers(&self, target: Id) -> Vec<(Id, RefRole)> {
-        self.elements
-            .values()
-            .flat_map(|e| {
-                e.data
-                    .kind
-                    .references()
-                    .into_iter()
-                    .filter(move |&(to, _)| to == target)
-                    .map(move |(_, role)| (e.id, role))
-            })
-            .collect()
+        let mut found = Vec::new();
+        for e in self.elements.values() {
+            e.data.kind.visit_references(&mut |to, role| {
+                if to == target {
+                    found.push((e.id, role));
+                }
+            });
+        }
+        found
     }
 
     /// `(diagram, presentation)` pairs showing `element`.
@@ -199,6 +197,17 @@ impl Model {
                 view.presentations_of(element).map(move |p| (diagram, p.id))
             })
             .collect()
+    }
+
+    /// Applies an operation recorded as the inverse of one that was applied, when undoing or
+    /// redoing. Such an operation is valid by construction: a removal undoes an insertion, so
+    /// what referred to the element or showed it has been taken back before. That spares the
+    /// look through the whole model per removal, which made undoing a large import quadratic.
+    pub(crate) fn apply_recorded(&mut self, op: Op) -> Result<Op> {
+        match op {
+            Op::RemoveElement { id } => self.remove_unreferenced(id),
+            op => self.apply(op),
+        }
     }
 
     /// Applies a primitive operation and returns its inverse.
@@ -265,6 +274,19 @@ impl Model {
         }
         if let Some(&(diagram, _)) = self.shown_on(id).first() {
             return Err(ModelError::StillShown { target: id, diagram });
+        }
+        self.remove_unreferenced(id)
+    }
+
+    /// Removes a leaf element that nothing refers to and no diagram shows, without looking
+    /// through the whole model for that: the caller has made sure of it, as
+    /// [`Tx::delete_many`](crate::Tx::delete_many) does for all it deletes at once.
+    pub(crate) fn remove_unreferenced(&mut self, id: Id) -> Result<Op> {
+        if id == self.root {
+            return Err(ModelError::Root);
+        }
+        if !self.element(id)?.children.is_empty() {
+            return Err(ModelError::HasChildren(id));
         }
         if self.views.get(&id).is_some_and(|v| !v.presentations.is_empty()) {
             return Err(ModelError::DiagramNotEmpty(id));

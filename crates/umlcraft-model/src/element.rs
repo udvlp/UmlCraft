@@ -200,17 +200,18 @@ impl TypeRef {
     /// The referenced elements: the base first, then the arguments in order.
     pub fn ids(&self) -> Vec<Id> {
         let mut ids = Vec::new();
-        self.collect_ids(&mut ids);
+        self.for_each_id(&mut |id| ids.push(id));
         ids
     }
 
-    fn collect_ids(&self, into: &mut Vec<Id>) {
+    /// Calls `f` for every referenced element, in the order of [`TypeRef::ids`].
+    pub fn for_each_id(&self, f: &mut dyn FnMut(Id)) {
         match self {
-            Self::Element(id) => into.push(*id),
+            Self::Element(id) => f(*id),
             Self::Text(_) => {}
             Self::Expr(e) => {
-                e.base.collect_ids(into);
-                e.arguments.iter().for_each(|a| a.collect_ids(into));
+                e.base.for_each_id(f);
+                e.arguments.iter().for_each(|a| a.for_each_id(f));
             }
         }
     }
@@ -1070,68 +1071,69 @@ impl ElementKind {
 
     /// All references to other elements, with their role.
     pub fn references(&self) -> Vec<(Id, RefRole)> {
-        let types = |t: &mut dyn Iterator<Item = &TypeRef>| -> Vec<(Id, RefRole)> {
-            t.flat_map(TypeRef::ids).map(|id| (id, RefRole::Type)).collect()
+        let mut refs = Vec::new();
+        self.visit_references(&mut |id, role| refs.push((id, role)));
+        refs
+    }
+
+    /// Calls `f` for every reference to another element, with its role, in the order of
+    /// [`ElementKind::references`], without collecting them first.
+    pub fn visit_references(&self, f: &mut dyn FnMut(Id, RefRole)) {
+        let types = |t: &TypeRef, f: &mut dyn FnMut(Id, RefRole)| {
+            t.for_each_id(&mut |id| f(id, RefRole::Type));
         };
-        let type_ref = |t: &Option<TypeRef>| types(&mut t.iter());
         match self {
-            Self::Attribute(p) => type_ref(&p.type_ref),
-            Self::Operation(p) => type_ref(&p.return_type),
-            Self::Parameter(p) => type_ref(&p.type_ref),
+            Self::Attribute(p) => p.type_ref.iter().for_each(|t| types(t, f)),
+            Self::Operation(p) => p.return_type.iter().for_each(|t| types(t, f)),
+            Self::Parameter(p) => p.type_ref.iter().for_each(|t| types(t, f)),
             Self::TemplateParameter(p) => {
-                types(&mut p.type_ref.iter().chain(&p.bounds).chain(&p.default))
+                p.type_ref.iter().chain(&p.bounds).chain(&p.default).for_each(|t| types(t, f));
             }
-            Self::Lifeline(p) => {
-                p.represents.map(|id| (id, RefRole::Represents)).into_iter().collect()
-            }
-            Self::Instance(p) => {
-                p.classifier.map(|id| (id, RefRole::Classifier)).into_iter().collect()
-            }
+            Self::Lifeline(p) => p.represents.iter().for_each(|&id| f(id, RefRole::Represents)),
+            Self::Instance(p) => p.classifier.iter().for_each(|&id| f(id, RefRole::Classifier)),
             Self::Message(p) => {
-                let mut refs = vec![(p.from, RefRole::MessageEnd), (p.to, RefRole::MessageEnd)];
-                refs.extend(p.operation.map(|id| (id, RefRole::Operation)));
-                refs
+                f(p.from, RefRole::MessageEnd);
+                f(p.to, RefRole::MessageEnd);
+                p.operation.iter().for_each(|&id| f(id, RefRole::Operation));
             }
-            Self::CombinedFragment(p) => {
-                p.covered.iter().map(|&id| (id, RefRole::Covered)).collect()
-            }
+            Self::CombinedFragment(p) => p.covered.iter().for_each(|&id| f(id, RefRole::Covered)),
             Self::InteractionUse(p) => {
-                let mut refs: Vec<(Id, RefRole)> =
-                    p.refers_to.map(|id| (id, RefRole::RefersTo)).into_iter().collect();
-                refs.extend(p.covered.iter().map(|&id| (id, RefRole::Covered)));
-                refs
+                p.refers_to.iter().for_each(|&id| f(id, RefRole::RefersTo));
+                p.covered.iter().for_each(|&id| f(id, RefRole::Covered));
             }
-            Self::ActivityNode(p) => type_ref(&p.type_ref),
+            Self::ActivityNode(p) => p.type_ref.iter().for_each(|t| types(t, f)),
             Self::ActivityEdge(p) => {
-                vec![(p.source, RefRole::FlowEnd), (p.target, RefRole::FlowEnd)]
+                f(p.source, RefRole::FlowEnd);
+                f(p.target, RefRole::FlowEnd);
             }
             Self::Transition(p) => {
-                vec![(p.source, RefRole::TransitionEnd), (p.target, RefRole::TransitionEnd)]
+                f(p.source, RefRole::TransitionEnd);
+                f(p.target, RefRole::TransitionEnd);
             }
             Self::Association(p) => {
-                let mut refs: Vec<(Id, RefRole)> =
-                    p.ends.iter().map(|end| (end.participant, RefRole::AssociationEnd)).collect();
+                p.ends.iter().for_each(|end| f(end.participant, RefRole::AssociationEnd));
                 let qualifiers = p.ends.iter().flat_map(|end| &end.qualifiers);
-                refs.extend(types(&mut qualifiers.filter_map(|q| q.type_ref.as_ref())));
-                refs
+                qualifiers.filter_map(|q| q.type_ref.as_ref()).for_each(|t| types(t, f));
             }
             Self::Generalization(p) => {
-                vec![(p.specific, RefRole::Specific), (p.general, RefRole::General)]
+                f(p.specific, RefRole::Specific);
+                f(p.general, RefRole::General);
             }
             Self::Realization(p) | Self::Dependency(p) => {
-                vec![(p.client, RefRole::Client), (p.supplier, RefRole::Supplier)]
+                f(p.client, RefRole::Client);
+                f(p.supplier, RefRole::Supplier);
             }
             Self::Include(p) => {
-                vec![(p.including, RefRole::Including), (p.addition, RefRole::Addition)]
+                f(p.including, RefRole::Including);
+                f(p.addition, RefRole::Addition);
             }
             Self::Extend(p) => {
-                let mut refs =
-                    vec![(p.extension, RefRole::Extension), (p.extended, RefRole::Extended)];
-                refs.extend(p.extension_points.iter().map(|&id| (id, RefRole::ExtensionPoint)));
-                refs
+                f(p.extension, RefRole::Extension);
+                f(p.extended, RefRole::Extended);
+                p.extension_points.iter().for_each(|&id| f(id, RefRole::ExtensionPoint));
             }
-            Self::Comment(p) => p.annotated.iter().map(|&id| (id, RefRole::Annotated)).collect(),
-            _ => Vec::new(),
+            Self::Comment(p) => p.annotated.iter().for_each(|&id| f(id, RefRole::Annotated)),
+            _ => {}
         }
     }
 

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use indexmap::IndexSet;
 
 use crate::diagram::{Presentation, Shape};
@@ -137,7 +139,7 @@ fn revert(model: &mut Model, inverse: Vec<Op>) -> Vec<Op> {
     inverse
         .into_iter()
         .rev()
-        .map(|op| model.apply(op).expect("inverse operations always apply"))
+        .map(|op| model.apply_recorded(op).expect("inverse operations always apply"))
         .collect()
 }
 
@@ -197,11 +199,22 @@ impl Tx<'_> {
     /// Weak references from surviving elements are unlinked (see
     /// [`ElementKind::unlink`](crate::ElementKind::unlink)).
     pub fn delete(&mut self, id: Id) -> Result<()> {
-        if id == self.model.root() {
-            return Err(ModelError::Root);
+        self.delete_many(&[id])
+    }
+
+    /// Deletes several elements as [`Tx::delete`] does, looking through the model once for all
+    /// of them instead of once each. Ids inside the subtree of another are fine.
+    pub fn delete_many(&mut self, ids: &[Id]) -> Result<()> {
+        for &id in ids {
+            if id == self.model.root() {
+                return Err(ModelError::Root);
+            }
+            self.model.element(id)?;
         }
-        self.model.element(id)?;
-        let doomed = self.deletion_closure(id);
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let doomed = self.deletion_closure(ids);
 
         let diagrams: Vec<Id> = self.model.views().map(|(d, _)| d).collect();
         for diagram in diagrams {
@@ -230,43 +243,58 @@ impl Tx<'_> {
             self.unlink_all(survivor, &doomed)?;
         }
 
+        // Leaves first, and nothing another doomed element still refers to.
         let mut remaining = doomed;
         while !remaining.is_empty() {
-            let removable = remaining.iter().copied().find(|&candidate| {
-                self.model.children(candidate).is_empty()
-                    && !remaining.iter().any(|&other| {
-                        self.model.get(other).is_some_and(|e| {
-                            e.kind().references().iter().any(|&(t, _)| t == candidate)
-                        })
-                    })
-            });
-            match removable {
-                Some(candidate) => {
-                    self.apply(Op::RemoveElement { id: candidate })?;
-                    remaining.shift_remove(&candidate);
+            let referenced: HashSet<Id> = remaining
+                .iter()
+                .filter_map(|&other| self.model.get(other))
+                .flat_map(|e| e.kind().references())
+                .map(|(t, _)| t)
+                .collect();
+            let removable: Vec<Id> = remaining
+                .iter()
+                .copied()
+                .filter(|&candidate| {
+                    self.model.children(candidate).is_empty() && !referenced.contains(&candidate)
+                })
+                .collect();
+            if removable.is_empty() {
+                // Only weak reference cycles inside the deleted set can block; break them.
+                let mut progressed = false;
+                for other in remaining.clone() {
+                    let before = self.inverse.len();
+                    self.unlink_all(other, &remaining)?;
+                    progressed |= self.inverse.len() != before;
                 }
-                None => {
-                    // Only weak reference cycles inside the deleted set can block; break them.
-                    let mut progressed = false;
-                    for other in remaining.clone() {
-                        let before = self.inverse.len();
-                        self.unlink_all(other, &remaining)?;
-                        progressed |= self.inverse.len() != before;
-                    }
-                    if !progressed {
-                        return Err(ModelError::Invalid(format!(
-                            "cannot delete {id}: reference cycle"
-                        )));
-                    }
+                if !progressed {
+                    return Err(ModelError::Invalid(format!(
+                        "cannot delete {}: reference cycle",
+                        ids[0]
+                    )));
                 }
+                continue;
             }
+            // Nothing outside refers to the doomed elements any more, and nothing inside to
+            // these; no diagram shows them.
+            for &candidate in &removable {
+                let inverse = self.model.remove_unreferenced(candidate)?;
+                self.inverse.push(inverse);
+            }
+            let removed: HashSet<Id> = removable.into_iter().collect();
+            remaining.retain(|id| !removed.contains(id));
         }
         Ok(())
     }
 
-    /// The subtree of `id` plus, transitively, everything strongly referring into the set.
-    fn deletion_closure(&self, id: Id) -> IndexSet<Id> {
-        let mut doomed: IndexSet<Id> = self.model.subtree(id).into_iter().collect();
+    /// The subtrees of `ids` plus, transitively, everything strongly referring into the set.
+    fn deletion_closure(&self, ids: &[Id]) -> IndexSet<Id> {
+        let mut doomed: IndexSet<Id> = IndexSet::new();
+        for &id in ids {
+            if !doomed.contains(&id) {
+                doomed.extend(self.model.subtree(id));
+            }
+        }
         loop {
             let extra: Vec<Id> = self
                 .model
