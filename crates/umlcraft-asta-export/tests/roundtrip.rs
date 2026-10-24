@@ -8,7 +8,8 @@ use umlcraft_model::sample::order_system;
 use umlcraft_model::{
     CommentProps, DiagramKind, DirectedProps, Document, ElementData, ElementKind, ExtendProps, Id,
     IncludeProps, InteractionUseProps, LifelineProps, LineShape, MessageGate, MessageSort, Model,
-    Point, Rect, Shape, TypeRef,
+    OperationProps, Point, Qualifier, Rect, Shape, TemplateParameterKind, TemplateParameterProps,
+    TypeExpr, TypeRef,
 };
 use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
 use umlcraft_notation::sequence_edit;
@@ -585,6 +586,124 @@ fn sequence_diagram_in_a_package() {
     doc.edit("move", |tx| tx.move_element(interaction, ids.domain, 0)).unwrap();
     let Some(back) = through_astah(doc.model(), "sequence") else { return };
     pretty_assertions::assert_eq!(interactions(&back), interactions(doc.model()));
+}
+
+/// Template parameters, leaf operations and what association ends carry besides their role.
+fn templates_and_ends(model: &Model) -> BTreeSet<String> {
+    let label = |t: &Option<TypeRef>| type_text(model, t);
+    let path = |id: Id| format!("{}/{}", path(model, id), name(model, id));
+    model
+        .elements()
+        .filter_map(|e| {
+            Some(match e.kind() {
+                ElementKind::TemplateParameter(p) => format!(
+                    "{} {:?} type {} bounds {:?} default {}",
+                    path(e.id()),
+                    p.parameter,
+                    label(&p.type_ref),
+                    p.bounds.iter().map(|b| label(&Some(b.clone()))).collect::<Vec<_>>(),
+                    label(&p.default)
+                ),
+                ElementKind::Operation(p) => {
+                    format!("{} : {} leaf {}", path(e.id()), label(&p.return_type), p.is_leaf)
+                }
+                ElementKind::Attribute(p) => {
+                    let bound = matches!(p.type_ref, Some(TypeRef::Expr(_)));
+                    format!("{} : {} expression {bound}", path(e.id()), label(&p.type_ref))
+                }
+                ElementKind::Association(p) => {
+                    let ends: Vec<String> = p
+                        .ends
+                        .iter()
+                        .map(|end| {
+                            let qualifiers: Vec<String> = end
+                                .qualifiers
+                                .iter()
+                                .map(|q| format!("{} : {}", q.name, label(&q.type_ref)))
+                                .collect();
+                            format!(
+                                "{}:{} readOnly {} static {} default {:?} qualifiers {qualifiers:?}",
+                                end.role,
+                                name(model, end.participant),
+                                end.is_read_only,
+                                end.is_static,
+                                end.default_value
+                            )
+                        })
+                        .collect();
+                    format!("association {}", ends.join(" — "))
+                }
+                _ => return None,
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn templates_and_end_details_through_astah() {
+    let mut doc = Document::new(Model::new("Templates"));
+    let root = doc.model().root();
+    doc.edit("templates", |tx| {
+        let priced = tx.create(root, ElementData::new("Priced", ElementKind::interface()))?;
+        let boxed = tx.create(root, ElementData::new("Box", ElementKind::class()))?;
+        let t = tx.create(
+            boxed,
+            ElementData::new(
+                "T",
+                ElementKind::TemplateParameter(TemplateParameterProps {
+                    bounds: vec![TypeRef::Element(priced)],
+                    ..Default::default()
+                }),
+            ),
+        )?;
+        tx.create(
+            boxed,
+            ElementData::new(
+                "N",
+                ElementKind::TemplateParameter(TemplateParameterProps {
+                    parameter: TemplateParameterKind::Value,
+                    type_ref: Some(TypeRef::Text("int".into())),
+                    default: Some(TypeRef::Text("10".into())),
+                    ..Default::default()
+                }),
+            ),
+        )?;
+        tx.create(
+            boxed,
+            ElementData::new("value", ElementKind::attribute(Some(TypeRef::Element(t)))),
+        )?;
+        let mut get =
+            OperationProps { return_type: Some(TypeRef::Element(t)), ..Default::default() };
+        get.is_leaf = true;
+        tx.create(boxed, ElementData::new("get", ElementKind::Operation(get)))?;
+        let holder = tx.create(root, ElementData::new("Holder", ElementKind::class()))?;
+        let mut kind = ElementKind::association(holder, boxed);
+        if let ElementKind::Association(p) = &mut kind {
+            p.ends[0].role = "owner".into();
+            p.ends[0].qualifiers =
+                vec![Qualifier { name: "key".into(), type_ref: Some(TypeRef::Element(priced)) }];
+            p.ends[1].role = "boxes".into();
+            p.ends[1].is_read_only = true;
+            p.ends[1].is_static = true;
+            p.ends[1].default_value = "none".into();
+        }
+        tx.create(root, ElementData::new("", kind))?;
+        // A bound template, which the API builds from the type's text.
+        let bound = |modifier: &str| {
+            TypeRef::Expr(Box::new(TypeExpr {
+                base: TypeRef::Element(boxed),
+                arguments: vec![TypeRef::Element(holder), TypeRef::Text("20".into())],
+                prefix: String::new(),
+                modifier: modifier.into(),
+            }))
+        };
+        tx.create(holder, ElementData::new("held", ElementKind::attribute(Some(bound("")))))?;
+        tx.create(holder, ElementData::new("rows", ElementKind::attribute(Some(bound("[]")))))?;
+        Ok(())
+    })
+    .unwrap();
+    let Some(back) = through_astah(doc.model(), "templates") else { return };
+    pretty_assertions::assert_eq!(templates_and_ends(&back), templates_and_ends(doc.model()));
 }
 
 #[test]

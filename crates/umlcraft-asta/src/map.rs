@@ -692,8 +692,12 @@ impl Importer<'_> {
                     .filter_map(|g| r.obj(g, "supertype"))
                     .filter_map(|s| self.type_of(s, 0))
                     .collect();
+                // A value default is an expression whose body is the text.
                 let default = r.obj(parameter, "defaultValue").and_then(|d| match r.g.string(d) {
                     Some(text) => Some(TypeRef::Text(text.to_owned())),
+                    None if r.class(d) == "UExpression" => {
+                        Some(r.text(d, "body")).filter(|b| !b.is_empty()).map(TypeRef::Text)
+                    }
                     None => self.type_of(d, 0),
                 });
                 let props = TemplateParameterProps {

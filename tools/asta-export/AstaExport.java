@@ -42,6 +42,7 @@ import com.change_vision.jude.api.inf.model.IActivityDiagram;
 import com.change_vision.jude.api.inf.model.IAssociation;
 import com.change_vision.jude.api.inf.model.IAttribute;
 import com.change_vision.jude.api.inf.model.IClass;
+import com.change_vision.jude.api.inf.model.IClassifierTemplateParameter;
 import com.change_vision.jude.api.inf.model.ICombinedFragment;
 import com.change_vision.jude.api.inf.model.IDependency;
 import com.change_vision.jude.api.inf.model.IDiagram;
@@ -132,6 +133,7 @@ public final class AstaExport {
     private UseCaseModelEditor useCases;
     /// UmlCraft element id → Astah model element.
     private final Map<String, Object> created = new HashMap<>();
+    private final List<String> templateParameters = new ArrayList<>();
     private final List<String> features = new ArrayList<>();
     private final List<String> relationships = new ArrayList<>();
     private final List<String> diagrams = new ArrayList<>();
@@ -197,6 +199,10 @@ public final class AstaExport {
         created.put(root, project);
 
         structure(root);
+        // Before the features, whose types may name them.
+        for (String id : templateParameters) {
+            attempt(id, () -> templateParameter(id));
+        }
         for (String id : features) {
             attempt(id, () -> {
                 feature(id);
@@ -251,6 +257,7 @@ public final class AstaExport {
                         structure(child);
                     }
                 }
+                case "templateParameter" -> templateParameters.add(child);
                 case "attribute", "operation" -> features.add(child);
                 case "association", "generalization", "realization", "dependency", "include", "extend" ->
                     relationships.add(child);
@@ -363,6 +370,7 @@ public final class AstaExport {
             ? basic.createOperation(owner, n, c) : basic.createOperation(owner, n, (String) r));
         op.setStatic(flag(e, "isStatic"));
         op.setAbstract(flag(e, "isAbstract"));
+        op.setLeaf(flag(e, "isLeaf"));
         if (flag(e, "isQuery")) {
             drop("query");
         }
@@ -371,6 +379,34 @@ public final class AstaExport {
         for (String child : children(id)) {
             attempt(child, () -> parameter(op, child));
         }
+    }
+
+    /// A template parameter of a classifier. Astah keeps one type per parameter: the bound of a
+    /// type parameter or the type of a value parameter. Operations have no template parameters
+    /// in the API; theirs are dropped with the operation's other non-parameter children.
+    private Object templateParameter(String id) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        if (!(created.get(owners.get(id)) instanceof IClass owner)) {
+            drop("templateParameter");
+            return null;
+        }
+        List<Object> bounds = list(e.get("bounds"));
+        Object t = "value".equals(text(e, "parameter"))
+            ? type(e.get("typeRef"))
+            : bounds.isEmpty() ? null : type(bounds.get(0));
+        if (bounds.size() > 1) {
+            drop("templateParameterBounds");
+        }
+        if (flag(e, "isVariadic")) {
+            drop("variadicTemplateParameter");
+        }
+        Object d = e.get("default") == null ? null : type(e.get("default"));
+        IClassifierTemplateParameter p = (IClassifierTemplateParameter) named(id, n -> t instanceof IClass c
+            ? basic.createTemplateParameter(owner, n, c, d)
+            : basic.createTemplateParameter(owner, n, (String) t, d));
+        common(id, p, Set.of());
+        created.put(id, p);
+        return p;
     }
 
     private Object parameter(IOperation op, String id) throws Exception {
@@ -418,7 +454,9 @@ public final class AstaExport {
         return "void";
     }
 
-    /// A type as written: `List<Foo>`, `Foo[]`, `? extends Number`.
+    /// A type as written: `List<Foo>`, `Foo[]`, `? extends Number`. Given such a text, the API
+    /// binds a template classifier of that name to the arguments itself, through an anonymous
+    /// bound classifier, which is how Astah stores bound templates.
     private String typeText(Object ref) {
         if (!(ref instanceof Map<?, ?> m)) {
             return "";
@@ -479,8 +517,10 @@ public final class AstaExport {
                 if (swapped) {
                     swappedEnds.add(id);
                 }
-                end(swapped ? members[1] : members[0], end0);
-                end(swapped ? members[0] : members[1], end1);
+                IAttribute first = swapped ? members[1] : members[0];
+                IAttribute second = swapped ? members[0] : members[1];
+                end(first, second, end0);
+                end(second, first, end1);
                 made = association;
             }
             case "generalization" -> made =
@@ -526,7 +566,7 @@ public final class AstaExport {
         created.put(id, made);
     }
 
-    private void end(IAttribute end, Map<String, Object> e) throws InvalidEditingException {
+    private void end(IAttribute end, IAttribute opposite, Map<String, Object> e) throws InvalidEditingException {
         multiplicity(end, (String) e.get("multiplicity"));
         for (Object constraint : list(e.get("constraints"))) {
             basic.createConstraint(end, (String) constraint);
@@ -545,6 +585,23 @@ public final class AstaExport {
         }
         // Astah makes ends private unless told otherwise; UmlCraft leaves out public.
         end.setVisibility(e.get("visibility") instanceof String v ? v : "public");
+        end.setChangeable(!flag(e, "isReadOnly"));
+        end.setStatic(flag(e, "isStatic"));
+        if (!text(e, "defaultValue").isEmpty()) {
+            end.setInitialValue(text(e, "defaultValue"));
+        }
+        for (Object q : list(e.get("qualifiers"))) {
+            Map<String, Object> qualifier = (Map<String, Object>) q;
+            // The API takes the opposite end and puts the qualifier on this one. It types a new
+            // qualifier with a classifier; a type it does not have is set as an expression
+            // afterwards.
+            Object t = qualifier.get("typeRef") == null ? null : type(qualifier.get("typeRef"));
+            IAttribute made = basic.createQualifier(opposite, text(qualifier, "name"),
+                t instanceof IClass c ? c : end.getType());
+            if (t instanceof String s) {
+                made.setTypeExpression(s);
+            }
+        }
     }
 
     private IClass classifier(Object id) {

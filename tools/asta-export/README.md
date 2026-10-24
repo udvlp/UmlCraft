@@ -21,7 +21,9 @@ draws them, and the message rows and fragment frames of sequence diagrams, which
 derives instead of storing. Without an entry for a diagram, the tool falls back to the stored
 bounds. `report.txt` gets one line per finding, tab-separated:
 
-- `dropped <key> <count>`: something the API cannot express, e.g. `query`, `extendCondition`;
+- `dropped <key> <count>`: something the API cannot express, e.g. `query`, `extendCondition`,
+  `templateParameterBounds` (Astah keeps one bound per template parameter),
+  `variadicTemplateParameter`, or `templateParameter` for those of operations;
 - `problem <text>`: a single element that failed;
 - `error <text>`: the export failed as a whole.
 
