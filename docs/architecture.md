@@ -68,6 +68,13 @@ when the app opens them (`sequence_edit::upgrade_document`, not an undoable edit
   resize handles, edge handles (waypoints), rubber-band selection and alignment. Containers (system
   boundaries, packages) graphically contain whatever lies fully inside them (`with_contents`);
   system boundaries are "hollow" and clickable only on their border and title.
+- `route` runs edges in Astah's line styles (`Style::line_shape`): straight through the
+  waypoints, at right angles with the waypoints as corners, or as one cubic Bézier curve whose
+  control points are the first and the last waypoint. Right-angled lines are fitted when drawn,
+  so their first and last segment stay straight while nodes move or grow; the drawn corners are
+  what gets dragged (a segment moves across, the end segments slide their anchor inside the
+  node) and exported. Changing the style changes the route as Astah does (`scene::restyle`):
+  "line" drops the waypoints, right angles turn them into corners.
 - `member` produces and parses the text form of attributes and operations and writes it back to
   the model; known classifiers become real type references.
 - `clipboard` copies the selection including subtrees and the relationships among them, and pastes
@@ -213,6 +220,8 @@ through its official API (`astah-api.jar`):
 - Not available in the API and reported as dropped: the query flag of operations, conditions and
   extension points of extends, return parameters, parameter multiplicity and default values,
   system boundaries.
+- Line styles: `line.shape` is set before the points (Astah would otherwise drop or replace
+  them); right-angled lines send their corners as drawn (the sidecar's `corners`).
 - Edges: `setAllPoints` gets the source anchor, the waypoints and the target anchor as points;
   Astah derives its relative ends (`sourceEndX/Y`, `targetEndX/Y`) from the first and last
   point. Astah stores some links the other way round (a dependency starts at the supplier, a

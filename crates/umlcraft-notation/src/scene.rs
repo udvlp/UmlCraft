@@ -5,11 +5,12 @@ use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Color, DiagramKind,
-    EdgeLabels, ElementKind, Id, InstanceKind, MessageSort, Model, Navigability, Point,
+    EdgeLabels, ElementKind, Id, InstanceKind, LineShape, MessageSort, Model, Navigability, Point,
     Presentation, PseudostateKind, Rect, Shape, Size, StateProps, Style, TypeRef,
 };
 
 use crate::member::member_text;
+use crate::route::{self, Route, anchor_point};
 use crate::sequence::{self, SequenceLayout};
 
 /// Measures text, so nodes can grow with their content. The app measures with the real font;
@@ -305,24 +306,36 @@ pub enum EndMarker {
     Cross,
 }
 
+#[derive(Clone, Debug)]
 pub struct EdgeShape {
     pub id: Id,
-    /// Polyline from the source border through the waypoints to the target border.
+    /// Polyline from the source border through the waypoints to the target border. For curves,
+    /// the control polygon; [`EdgeShape::path`] is the line as drawn.
     pub points: Vec<Point>,
     pub line: LineStyle,
+    /// Straight, right-angled or curved.
+    pub shape: LineShape,
     pub source_marker: EndMarker,
     pub target_marker: EndMarker,
     pub labels: Vec<EdgeLabel>,
     /// The route follows from the layout (sequence messages); it has no waypoints to drag.
     pub fixed: bool,
+    /// Bounds of the source and target node, and where the line aims inside them as stored.
+    pub ends: [Rect; 2],
+    pub anchors: [Option<Point>; 2],
 }
 
-/// A grip on a selected edge: an existing waypoint, or the middle of a segment where dragging
-/// inserts a new waypoint.
+/// A grip on a selected edge: an existing waypoint, the middle of a segment where dragging
+/// inserts a new waypoint, or (on right-angled lines) a segment that moves across.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EdgeHandle {
     Waypoint(usize),
     Insert(usize),
+    Segment(usize),
+}
+
+fn middle(a: Point, b: Point) -> Point {
+    Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)
 }
 
 impl EdgeShape {
@@ -330,16 +343,45 @@ impl EdgeShape {
         &self.points[1..self.points.len() - 1]
     }
 
-    /// Grips in drawing order: waypoints first, then segment middles.
+    /// The line as drawn: the points, or for curves many points along the curve.
+    pub fn path(&self) -> Vec<Point> {
+        if self.shape.is_curve() {
+            route::flatten(&route::bezier(&self.points))
+        } else {
+            self.points.clone()
+        }
+    }
+
+    /// The route as drawn, with the anchors as stored.
+    pub fn route(&self) -> Route {
+        Route {
+            waypoints: self.waypoints().to_vec(),
+            source_anchor: self.anchors[0],
+            target_anchor: self.anchors[1],
+        }
+    }
+
+    /// Grips in drawing order: waypoints first, then segment middles. Right-angled lines are
+    /// changed by moving their segments.
     pub fn handles(&self) -> Vec<(EdgeHandle, Point)> {
         if self.fixed {
             return Vec::new();
         }
+        if self.shape.is_right_angle() {
+            return self
+                .points
+                .windows(2)
+                .enumerate()
+                .map(|(i, w)| (EdgeHandle::Segment(i), middle(w[0], w[1])))
+                .collect();
+        }
         let waypoints =
             self.waypoints().iter().enumerate().map(|(i, &p)| (EdgeHandle::Waypoint(i), p));
-        let inserts = self.points.windows(2).enumerate().map(|(i, w)| {
-            (EdgeHandle::Insert(i), Point::new((w[0].x + w[1].x) / 2.0, (w[0].y + w[1].y) / 2.0))
-        });
+        let inserts = self
+            .points
+            .windows(2)
+            .enumerate()
+            .map(|(i, w)| (EdgeHandle::Insert(i), middle(w[0], w[1])));
         waypoints.chain(inserts).collect()
     }
 
@@ -357,9 +399,35 @@ pub fn drag_waypoint(waypoints: &[Point], handle: EdgeHandle, to: Point) -> Vec<
     match handle {
         EdgeHandle::Waypoint(i) if i < result.len() => result[i] = to,
         EdgeHandle::Insert(i) => result.insert(i.min(result.len()), to),
-        EdgeHandle::Waypoint(_) => {}
+        EdgeHandle::Waypoint(_) | EdgeHandle::Segment(_) => {}
     }
     result
+}
+
+/// The route of `edge` (as drawn) when it gets the line style `shape`, as Astah changes it: a
+/// straight line loses its waypoints, a curve keeps them, and a line that gets right angles
+/// has its waypoints turned into corners.
+pub fn restyle(edge: &EdgeShape, shape: LineShape) -> Route {
+    let route = edge.route();
+    let [source, target] = edge.ends;
+    let (from, to) =
+        (anchor_point(source, route.source_anchor), anchor_point(target, route.target_anchor));
+    let waypoints = match shape {
+        LineShape::Line => Vec::new(),
+        LineShape::Curve => route.waypoints.clone(),
+        _ if edge.shape.is_right_angle() => route.waypoints.clone(),
+        _ => route::orthogonalize(source, from, &route.waypoints, target, to),
+    };
+    Route { waypoints, ..route }
+}
+
+/// The route of `edge` (as drawn when the drag started) after dragging `handle` to `to`.
+pub fn drag_handle(edge: &EdgeShape, handle: EdgeHandle, to: Point) -> Route {
+    let route = edge.route();
+    match handle {
+        EdgeHandle::Segment(i) => route::drag_segment(&edge.points, &route, edge.ends, i, to),
+        _ => Route { waypoints: drag_waypoint(&route.waypoints, handle, to), ..route },
+    }
 }
 
 /// Waypoints of a loop at the top right corner, for edges from a node to itself.
@@ -401,7 +469,7 @@ pub struct Preview {
     pub dx: f32,
     pub dy: f32,
     pub resized: Option<(Id, Rect)>,
-    pub waypoints: Option<(Id, Vec<Point>)>,
+    pub route: Option<(Id, Route)>,
 }
 
 impl Preview {
@@ -552,9 +620,11 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 return None;
             };
             let (source_rect, target_rect) = (*rects.get(source)?, *rects.get(target)?);
-            let mut points = match &preview.waypoints {
-                Some((id, w)) if *id == p.id => w.clone(),
-                _ => waypoints.clone(),
+            let (mut points, anchors) = match &preview.route {
+                Some((id, r)) if *id == p.id => {
+                    (r.waypoints.clone(), [r.source_anchor, r.target_anchor])
+                }
+                _ => (waypoints.clone(), [*source_anchor, *target_anchor]),
             };
             if preview.moved.contains(source) && preview.moved.contains(target) {
                 points.iter_mut().for_each(|w| *w = w.offset(preview.dx, preview.dy));
@@ -580,7 +650,8 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 p.id,
                 element.map(|e| e.kind()),
                 ((source_rect, outline(source)), (target_rect, outline(target))),
-                (*source_anchor, *target_anchor),
+                anchors,
+                p.style.line_shape,
                 &points,
                 label,
                 to_lollipop,
@@ -1204,28 +1275,29 @@ pub fn row_at(scene: &Scene, p: Point) -> Option<(&NodeShape, &Row)> {
     })
 }
 
-/// The point at relative position `anchor` inside `rect`; its center when unset.
-fn anchor_point(rect: Rect, anchor: Option<Point>) -> Point {
-    match anchor {
-        Some(a) => Point::new(rect.x + a.x * rect.width, rect.y + a.y * rect.height),
-        None => rect.center(),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn edge_for(
     id: Id,
     kind: Option<&ElementKind>,
     ((source, source_outline), (target, target_outline)): ((Rect, Outline), (Rect, Outline)),
-    (source_anchor, target_anchor): (Option<Point>, Option<Point>),
+    anchors: [Option<Point>; 2],
+    shape: LineShape,
     waypoints: &[Point],
     name_label: Option<String>,
     to_lollipop: bool,
     placed: &EdgeLabels,
 ) -> EdgeShape {
     // The line runs from the source anchor through the waypoints to the target anchor; it is
-    // drawn from where it leaves the source to where it enters the target.
-    let (from, to) = (anchor_point(source, source_anchor), anchor_point(target, target_anchor));
+    // drawn from where it leaves the source to where it enters the target. Right-angled lines
+    // keep their first and last segment straight as the ends move.
+    let (from, to) = (anchor_point(source, anchors[0]), anchor_point(target, anchors[1]));
+    let fitted;
+    let waypoints = if shape.is_right_angle() {
+        fitted = route::fit_corners(source, from, waypoints, target, to);
+        &fitted[..]
+    } else {
+        waypoints
+    };
     let mut points = Vec::with_capacity(waypoints.len() + 2);
     let first_toward = waypoints.first().copied().unwrap_or(to);
     let last_from = waypoints.last().copied().unwrap_or(from);
@@ -1237,10 +1309,13 @@ fn edge_for(
         id,
         points,
         line: LineStyle::Solid,
+        shape,
         source_marker: EndMarker::None,
         target_marker: EndMarker::None,
         labels: Vec::new(),
         fixed: false,
+        ends: [source, target],
+        anchors,
     };
     let mut ends: [(Option<String>, Option<String>); 2] = [(None, None), (None, None)];
     let mut label = name_label;
@@ -1323,10 +1398,10 @@ fn edge_for(
         anchor: base.offset(offset.x, offset.y),
         align: LabelAlign::Left,
     };
-    let (a, b) = (pts[n / 2 - 1], pts[n / 2]);
-    let middle = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+    let (a, b) = route::middle_segment(pts, shape.is_curve());
+    let center = middle(a, b);
     edge.labels.extend(label.map(|text| match placed.name {
-        Some(offset) => at(text, middle, offset),
+        Some(offset) => at(text, center, offset),
         None => middle_label(text, a, b),
     }));
     let [(source_role, source_mult), (target_role, target_mult)] = ends;
@@ -1445,7 +1520,7 @@ pub fn hit_test(scene: &Scene, p: Point, tolerance: f32) -> Option<Id> {
         .edges
         .iter()
         .rev()
-        .find(|e| e.points.windows(2).any(|w| distance_to_segment(p, w[0], w[1]) <= tolerance));
+        .find(|e| e.path().windows(2).any(|w| distance_to_segment(p, w[0], w[1]) <= tolerance));
     if let Some(edge) = edge {
         return Some(edge.id);
     }
@@ -1797,9 +1872,41 @@ mod tests {
         let moved = drag_waypoint(&waypoints, EdgeHandle::Waypoint(0), Point::new(310.0, 20.0));
         assert_eq!(moved, vec![Point::new(310.0, 20.0)]);
 
-        let preview = Preview { waypoints: Some((edge.id, waypoints)), ..Preview::default() };
+        let route = Route { waypoints, ..edge.route() };
+        let preview = Preview { route: Some((edge.id, route)), ..Preview::default() };
         let scene = build(doc.model(), d, &preview, &ApproxMeasure);
         assert_eq!(scene.edge(edge.id).unwrap().points.len(), 3);
+    }
+
+    #[test]
+    fn line_shapes() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let edge = scene.edges.iter().find(|e| e.labels.len() == 3).unwrap();
+        let (id, [a, b]) = (edge.id, edge.ends);
+        let (from, to) = (a.center(), b.center());
+        assert!(from.x != to.x && from.y != to.y, "the sample's ends do not line up");
+        // Right angles without waypoints: Astah's corners, segments to drag, no waypoint grips.
+        doc.edit("shape", |tx| {
+            tx.update_presentation(d, id, |p| p.style.line_shape = LineShape::RightAngle)
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let edge = scene.edge(id).unwrap();
+        assert_eq!(edge.waypoints(), &route::default_corners(a, from, b, to)[..]);
+        assert!(edge.points.windows(2).all(|w| w[0].x == w[1].x || w[0].y == w[1].y));
+        assert!(edge.handles().iter().all(|(h, _)| matches!(h, EdgeHandle::Segment(_))));
+        // Curves: drawn along the curve, hit along it too.
+        doc.edit("shape", |tx| {
+            tx.update_presentation(d, id, |p| p.style.line_shape = LineShape::CurveRightAngle)
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let edge = scene.edge(id).unwrap();
+        let path = edge.path();
+        assert!(path.len() > edge.points.len());
+        assert_eq!(hit_test(&scene, path[path.len() / 2], 1.0), Some(id));
     }
 
     #[test]

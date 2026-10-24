@@ -6,12 +6,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
-use umlcraft_model::{ElementKind, Id, Point as MPoint, Rect};
+use rust_i18n::t;
+use umlcraft_model::{ElementKind, Id, LineShape, Point as MPoint, Rect};
 use umlcraft_notation::draw::{self, Paint, Primitive};
 use umlcraft_notation::member::member_text;
 use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
+use umlcraft_notation::route::{self, Route};
 use umlcraft_notation::scene::{
     self, EdgeHandle, EdgeShape, FONT_SIZE, Figure, Handle, LabelAlign, LineStyle, NodeShape,
     Preview, Row, RowRole, Scene, TextMeasure,
@@ -19,7 +22,10 @@ use umlcraft_notation::scene::{
 use umlcraft_notation::sequence::SequenceLayout;
 
 use crate::workspace::Workspace;
-use crate::{Cancel, DeleteSelection, RemoveFromDiagram, ResetZoom, SelectAll, ZoomToFit};
+use crate::{
+    Cancel, DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetZoom, SelectAll, SetLineShape,
+    ZoomToFit,
+};
 
 const MIN_ZOOM: f32 = 0.25;
 /// The font of diagram texts. Astah uses Java's "Dialog", which is Arial on Windows.
@@ -81,10 +87,10 @@ enum Drag {
         start: MPoint,
         rect: Rect,
     },
+    /// Dragging a grip of an edge, `original` as drawn when the drag started.
     Waypoint {
-        edge: Id,
         handle: EdgeHandle,
-        original: Vec<MPoint>,
+        original: Rc<EdgeShape>,
         current: MPoint,
     },
     RubberBand {
@@ -283,8 +289,8 @@ impl DiagramCanvas {
             Some(Drag::Resize { presentation, rect, .. }) => {
                 Preview { resized: Some((*presentation, *rect)), ..Preview::default() }
             }
-            Some(Drag::Waypoint { edge, handle, original, current }) => Preview {
-                waypoints: Some((*edge, scene::drag_waypoint(original, *handle, *current))),
+            Some(Drag::Waypoint { handle, original, current }) => Preview {
+                route: Some((original.id, scene::drag_handle(original, *handle, *current))),
                 ..Preview::default()
             },
             _ => Preview::default(),
@@ -445,17 +451,19 @@ impl DiagramCanvas {
         }
         let Some(edge) = self.scene.edge(single) else { return false };
         let Some(handle) = edge.handle_at(p, tolerance) else { return false };
-        let original = edge.waypoints().to_vec();
         match (handle, clicks) {
             (EdgeHandle::Waypoint(i), 2) => {
-                let mut waypoints = original;
-                waypoints.remove(i);
+                let mut route = edge.route();
+                route.waypoints.remove(i);
                 self.workspace.update(cx, |ws, cx| {
-                    ws.set_waypoints(single, waypoints);
+                    ws.set_route(single, route);
                     cx.notify();
                 });
             }
-            _ => self.drag = Some(Drag::Waypoint { edge: single, handle, original, current: p }),
+            _ => {
+                let original = Rc::new(edge.clone());
+                self.drag = Some(Drag::Waypoint { handle, original, current: p });
+            }
         }
         true
     }
@@ -479,6 +487,69 @@ impl DiagramCanvas {
             ws.tool = Tool::Select;
             cx.notify();
         });
+    }
+
+    /// A right click selects what it hits (unless that is selected already), so the context
+    /// menu acts on it.
+    fn on_right_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.commit_edit(cx);
+        self.focus_handle.focus(window, cx);
+        if self.drag.is_some() {
+            return;
+        }
+        let p = self.to_logical(ev.position);
+        let hit = scene::hit_test(&self.scene, p, 4.0 / self.zoom);
+        self.update_workspace(cx, |ws| match hit {
+            Some(id) if ws.selection.contains(&id) => {}
+            Some(id) => ws.select(vec![id]),
+            None => ws.clear_selection(),
+        });
+    }
+
+    /// The selected edges that can be routed by hand (not sequence messages).
+    fn selected_edges(&self, cx: &App) -> Vec<&EdgeShape> {
+        let ws = self.workspace.read(cx);
+        ws.selection.iter().filter_map(|&id| self.scene.edge(id)).filter(|e| !e.fixed).collect()
+    }
+
+    /// Gives the selected edges a line style.
+    pub fn set_line_shape(&mut self, shape: LineShape, cx: &mut Context<Self>) {
+        let edges: Vec<(Id, Route)> =
+            self.selected_edges(cx).into_iter().map(|e| (e.id, scene::restyle(e, shape))).collect();
+        self.update_workspace(cx, |ws| ws.set_line_shape(shape, edges));
+    }
+
+    /// The canvas's context menu: line styles for selected edges, then deleting.
+    fn context_menu(
+        canvas: &Entity<Self>,
+        menu: PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let (current, nothing, focus) = {
+            let this = canvas.read(cx);
+            let current: Vec<LineShape> = this.selected_edges(cx).iter().map(|e| e.shape).collect();
+            (current, this.workspace.read(cx).selection.is_empty(), this.focus_handle.clone())
+        };
+        let mut menu = menu.action_context(focus);
+        if !current.is_empty() {
+            // Checked when all selected edges have that style.
+            menu = menu.submenu(t!("menu.line_style"), window, cx, move |menu, _, _| {
+                LINE_SHAPES.iter().fold(menu, |menu, &(shape, key)| {
+                    let checked = current.iter().all(|&s| s == shape);
+                    menu.menu_with_check(t!(key), checked, Box::new(SetLineShape { shape }))
+                })
+            });
+            menu = menu.separator();
+        }
+        menu.menu_with_disabled(t!("menu.delete"), Box::new(DeleteSelection), nothing)
+            .menu_with_disabled(
+                t!("menu.remove_from_diagram"),
+                Box::new(RemoveFromDiagram),
+                nothing,
+            )
+            .separator()
+            .menu(t!("menu.select_all"), Box::new(SelectAll))
     }
 
     fn on_middle_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -528,10 +599,10 @@ impl DiagramCanvas {
             Some(Drag::Resize { presentation, original, rect, .. }) if rect != original => {
                 self.update_workspace(cx, |ws| ws.set_bounds(presentation, rect));
             }
-            Some(Drag::Waypoint { edge, handle, original, current }) => {
-                let waypoints = scene::drag_waypoint(&original, handle, current);
-                if waypoints != original {
-                    self.update_workspace(cx, |ws| ws.set_waypoints(edge, waypoints));
+            Some(Drag::Waypoint { handle, original, current }) => {
+                let route = scene::drag_handle(&original, handle, current);
+                if route != original.route() {
+                    self.update_workspace(cx, |ws| ws.set_route(original.id, route));
                 }
             }
             Some(Drag::RubberBand { start, extend, .. }) => {
@@ -822,6 +893,9 @@ impl Painter<'_> {
         let line = self.c.line;
         match primitive {
             Primitive::Polyline { points, width, style } => self.line(points, *width, line, *style),
+            Primitive::Curve { points, width, style } => {
+                self.line(&route::flatten(points), *width, line, *style)
+            }
             Primitive::Polygon { points, fill } => self.polygon(points, self.paint(*fill), line),
             Primitive::Ellipse { center, rx, ry, fill, width } => {
                 self.ellipse(*center, *rx, *ry, self.paint(*fill), line, *width)
@@ -958,7 +1032,7 @@ impl Painter<'_> {
 
     fn edge(&mut self, edge: &EdgeShape, selected: bool) {
         let color = if selected { self.c.selection } else { self.c.line };
-        self.line(&edge.points, if selected { 2.0 } else { 1.0 }, color, edge.line);
+        self.line(&edge.path(), if selected { 2.0 } else { 1.0 }, color, edge.line);
         for primitive in draw::markers(edge) {
             self.primitive(&primitive);
         }
@@ -975,7 +1049,7 @@ impl Painter<'_> {
         for (handle, p) in edge.handles() {
             let square = Rect::new(p.x - half, p.y - half, 2.0 * half, 2.0 * half);
             let fill = match handle {
-                EdgeHandle::Waypoint(_) => s,
+                EdgeHandle::Waypoint(_) | EdgeHandle::Segment(_) => s,
                 EdgeHandle::Insert(_) => self.c.background,
             };
             self.window.paint_quad(quad(
@@ -1082,6 +1156,7 @@ impl Render for DiagramCanvas {
         let editing_element = self.editing.as_ref().map(|e| e.element);
         let bounds_cell = self.bounds.clone();
         let this = cx.entity();
+        let menu_owner = this.clone();
         let cursor = if tool == Tool::Select { CursorStyle::Arrow } else { CursorStyle::Crosshair };
 
         // The in-place editor sits over the edited text, in canvas-local pixels.
@@ -1107,6 +1182,7 @@ impl Render for DiagramCanvas {
             .cursor(cursor)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_left_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_down))
             // Window-wide listeners (see the paint closure) follow drags outside the canvas,
             // but only exist from the next frame on; these catch very quick drags.
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
@@ -1134,6 +1210,9 @@ impl Render for DiagramCanvas {
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
                 this.update_workspace(cx, Workspace::select_all);
             }))
+            .on_action(
+                cx.listener(|this, a: &SetLineShape, _, cx| this.set_line_shape(a.shape, cx)),
+            )
             .on_action(cx.listener(|this, _: &ResetZoom, _, cx| this.reset_zoom(cx)))
             .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| this.zoom_to_fit(cx)))
             .child(
@@ -1230,5 +1309,6 @@ impl Render for DiagramCanvas {
                 .size_full(),
             )
             .children(editor)
+            .context_menu(move |menu, window, cx| Self::context_menu(&menu_owner, menu, window, cx))
     }
 }

@@ -7,8 +7,8 @@ use umlcraft_asta_export::Astah;
 use umlcraft_model::sample::order_system;
 use umlcraft_model::{
     CommentProps, DiagramKind, DirectedProps, Document, ElementData, ElementKind, ExtendProps, Id,
-    IncludeProps, InteractionUseProps, LifelineProps, MessageGate, MessageSort, Model, Point, Rect,
-    Shape, TypeRef,
+    IncludeProps, InteractionUseProps, LifelineProps, LineShape, MessageGate, MessageSort, Model,
+    Point, Rect, Shape, TypeRef,
 };
 use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
 use umlcraft_notation::sequence_edit;
@@ -64,14 +64,18 @@ fn sample() -> Document {
         let n_priced = tx.add_node(d, Some(priced), Rect::new(640.0, 80.0, 120.0, 60.0))?;
         let n_status = tx.add_node(d, Some(status), Rect::new(380.0, 260.0, 120.0, 70.0))?;
         let n_note = tx.add_node(d, Some(note), Rect::new(640.0, 260.0, 150.0, 50.0))?;
-        tx.add_edge(d, Some(realization), n_order, n_priced, vec![])?;
-        tx.add_edge(
+        // A curve and a line with right angles.
+        let curve =
+            tx.add_edge(d, Some(realization), n_order, n_priced, vec![Point::new(560.0, 40.0)])?;
+        tx.update_presentation(d, curve, |p| p.style.line_shape = LineShape::Curve)?;
+        let square = tx.add_edge(
             d,
             Some(dependency),
             n_premium,
             n_order,
             vec![Point::new(300.0, 290.0), Point::new(300.0, 140.0)],
         )?;
+        tx.update_presentation(d, square, |p| p.style.line_shape = LineShape::RightAngle)?;
         tx.add_edge(d, None, n_note, n_order, vec![])?;
         let _ = n_status;
         // A line aimed off center, a role placed by hand and an ordered end.
@@ -399,14 +403,18 @@ fn diagram_contents(model: &Model) -> Contents {
                     line
                 }
                 Shape::Edge { source, target, waypoints, source_anchor, target_anchor, labels } => {
-                    // Astah routes the first and last segment of a loop itself.
-                    let points: Vec<String> = if source == target {
-                        vec![format!("loop of {}", waypoints.len())]
+                    // Astah routes the first and last segment of a loop itself, at right angles.
+                    // Right angles are compared as drawn.
+                    let drawn = scene.edge(p.id).map(|e| e.waypoints().to_vec());
+                    let (points, shape): (Vec<String>, _) = if source == target {
+                        (vec![format!("loop of {}", waypoints.len())], None)
                     } else {
-                        waypoints.iter().map(|w| format!("{:.0},{:.0}", w.x, w.y)).collect()
+                        let waypoints = drawn.as_ref().unwrap_or(waypoints);
+                        let points = waypoints.iter().map(|w| format!("{:.0},{:.0}", w.x, w.y));
+                        (points.collect(), Some(p.style.line_shape))
                     };
                     let line = format!(
-                        "{}: {what} {} → {} via [{}]",
+                        "{}: {what} {} → {} via [{}] {shape:?}",
                         d.name(),
                         label(*source),
                         label(*target),

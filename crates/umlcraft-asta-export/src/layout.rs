@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 use umlcraft_model::{EdgeLabels, Id, Model, Point, Rect, Shape};
+use umlcraft_notation::route;
 use umlcraft_notation::scene::{self, Preview, TextMeasure};
 
 #[derive(Serialize)]
@@ -28,6 +29,10 @@ struct DiagramLayout {
     /// segment by Java's whole-pixel width of the text, at most 200.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     label_defaults: BTreeMap<Id, f32>,
+    /// Right-angled edges: their corners as drawn. The drawing keeps the first and last segment
+    /// straight when nodes move or grow, so the stored waypoints may lag behind.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    corners: BTreeMap<Id, Vec<Point>>,
 }
 
 pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
@@ -36,11 +41,16 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
         let scene = scene::build(model, diagram, &Preview::default(), measure);
         let mut labels = BTreeMap::new();
         let mut label_defaults = BTreeMap::new();
+        let mut corners = BTreeMap::new();
         for p in view.presentations() {
             match &p.shape {
                 Shape::Edge { labels: placed, .. } => {
-                    if let Some(edge) = scene.edge(p.id).filter(|_| !placed.is_empty()) {
-                        labels.insert(p.id, absolute(placed, &edge.points));
+                    let Some(edge) = scene.edge(p.id) else { continue };
+                    if !placed.is_empty() {
+                        labels.insert(p.id, absolute(placed, &edge.points, edge.shape.is_curve()));
+                    }
+                    if edge.shape.is_right_angle() {
+                        corners.insert(p.id, edge.waypoints().to_vec());
                     }
                 }
                 Shape::Message { labels: placed, .. } if placed.name.is_some() => {
@@ -68,6 +78,7 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
                 edges: scene.edges.iter().map(|e| (e.id, e.points.clone())).collect(),
                 labels,
                 label_defaults,
+                corners,
             },
         );
     }
@@ -76,9 +87,9 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
 
 /// Label offsets turned into positions: roles and multiplicities are relative to their end of
 /// the line, the name to the middle of its middle segment, as `scene` places them.
-fn absolute(placed: &EdgeLabels, points: &[Point]) -> EdgeLabels {
+fn absolute(placed: &EdgeLabels, points: &[Point], curve: bool) -> EdgeLabels {
     let n = points.len();
-    let (a, b) = (points[n / 2 - 1], points[n / 2]);
+    let (a, b) = route::middle_segment(points, curve);
     let middle = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
     let at = |base: Point, offset: Option<Point>| offset.map(|o| base.offset(o.x, o.y));
     EdgeLabels {

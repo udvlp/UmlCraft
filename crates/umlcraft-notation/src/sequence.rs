@@ -16,7 +16,8 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    ElementKind, Id, InteractionOperator, MessageGate, MessageSort, Model, Point, Rect, Shape, View,
+    ElementKind, Id, InteractionOperator, LineShape, MessageGate, MessageSort, Model, Point, Rect,
+    Shape, View,
 };
 
 use crate::scene::{
@@ -806,10 +807,13 @@ fn message_edge(
         id: m.presentation,
         points,
         line,
+        shape: LineShape::Line,
         source_marker: EndMarker::None,
         target_marker,
         labels,
         fixed: true,
+        ends: [Rect::default(); 2],
+        anchors: [None; 2],
     }
 }
 

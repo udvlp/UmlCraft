@@ -36,6 +36,11 @@ menu:
   align_middle: Vertikal zentrieren
   align_bottom: Unten ausrichten
   wrap_in_fragment: Mit Fragment umschließen
+  line_style: Linienstil
+  line_straight: Linie
+  line_right_angle: Linie (rechtwinklig)
+  line_curve: Kurve
+  line_curve_right_angle: Kurve (rechtwinklig)
   view: Ansicht
   zoom_in: Vergrößern
   zoom_out: Verkleinern
@@ -257,6 +262,7 @@ edit:
   remove_from_diagram: Aus Diagramm entfernen
   properties: Eigenschaften ändern
   waypoints: Linienverlauf ändern
+  line_style: Linienstil ändern
   show: Im Diagramm zeigen
   move_element: Im Modell verschieben
   paste: Einfügen

@@ -13,12 +13,13 @@ use umlcraft_model::{
     AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
     DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps, GeneralizationProps, Id,
     IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
-    InteractionUseProps, LifelineProps, MessageGate, MessageProps, MessageSort, Model,
+    InteractionUseProps, LifelineProps, LineShape, MessageGate, MessageProps, MessageSort, Model,
     Multiplicity, Navigability, Op, OperationProps, ParameterDirection, ParameterProps, Point,
     Presentation, PseudostateKind, Rect, Shape, StateProps, Style, TaggedValue, TransitionProps,
     TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
+use umlcraft_notation::route;
 use umlcraft_notation::scene::border_point_from;
 
 use crate::jser::{Graph, ObjId, Value};
@@ -1591,9 +1592,17 @@ impl Importer<'_> {
             waypoints.reverse();
         }
         let mut presentation = Presentation::edge(element, source, target, waypoints.clone());
+        presentation.style.line_shape = match self.r.style(p, "line.shape").as_deref() {
+            Some("line_right_angle") => LineShape::RightAngle,
+            Some("curve") => LineShape::Curve,
+            Some("curve_right_angle") => LineShape::CurveRightAngle,
+            _ => LineShape::Line,
+        };
+        let curve = presentation.style.line_shape.is_curve();
         let bounds = |id: Id| self.model.view(diagram)?.get(id)?.bounds();
         if let (Some(source_rect), Some(target_rect)) = (bounds(source), bounds(target)) {
-            let geometry = EdgeGeometry { source_rect, target_rect, waypoints, shift, swapped };
+            let geometry =
+                EdgeGeometry { source_rect, target_rect, waypoints, shift, swapped, curve };
             if let Shape::Edge { source_anchor, target_anchor, labels, .. } =
                 &mut presentation.shape
             {
@@ -1637,8 +1646,7 @@ impl Importer<'_> {
         let mut line = vec![start];
         line.extend(&g.waypoints);
         line.push(end);
-        let n = line.len();
-        let (a, b) = (line[n / 2 - 1], line[n / 2]);
+        let (a, b) = route::middle_segment(&line, g.curve);
         let middle = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
 
         // The top left corner of a label, relative to `origin`.
@@ -1691,6 +1699,7 @@ struct EdgeGeometry {
     waypoints: Vec<Point>,
     shift: Point,
     swapped: bool,
+    curve: bool,
 }
 
 struct NodeData {

@@ -248,11 +248,45 @@ pub struct Style {
     /// Messages: leave out the parentheses with the arguments.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_parameters: bool,
+    /// Edges: how the line runs through its waypoints.
+    #[serde(default, skip_serializing_if = "LineShape::is_line")]
+    pub line_shape: LineShape,
 }
 
 impl Style {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// How an edge runs from end to end, Astah's "line style" (`line.shape`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LineShape {
+    /// Straight segments through the waypoints.
+    #[default]
+    Line,
+    /// Horizontal and vertical segments; the waypoints are the corners.
+    RightAngle,
+    /// One smooth curve. As in Astah, a cubic Bézier curve from end to end whose control points
+    /// are the first and the last waypoint.
+    Curve,
+    /// A curve over corners kept at right angles.
+    CurveRightAngle,
+}
+
+impl LineShape {
+    pub fn is_line(&self) -> bool {
+        *self == Self::Line
+    }
+
+    /// The waypoints are corners of horizontal and vertical segments.
+    pub fn is_right_angle(self) -> bool {
+        matches!(self, Self::RightAngle | Self::CurveRightAngle)
+    }
+
+    pub fn is_curve(self) -> bool {
+        matches!(self, Self::Curve | Self::CurveRightAngle)
     }
 }
 

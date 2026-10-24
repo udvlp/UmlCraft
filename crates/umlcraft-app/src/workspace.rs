@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 
 use rust_i18n::t;
 use umlcraft_model::{
-    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Point, Rect, Shape,
-    Style, Visibility,
+    DiagramKind, Document, ElementData, ElementKind, Id, LineShape, Model, ModelError, Point, Rect,
+    Shape, Style, Visibility,
 };
 use umlcraft_notation::clipboard::{self, Clip};
 use umlcraft_notation::member;
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
+use umlcraft_notation::route::Route;
 use umlcraft_notation::scene::{self, Alignment};
 use umlcraft_notation::sequence::Slot;
 
@@ -312,10 +313,30 @@ impl Workspace {
         self.message = Some(message.into());
     }
 
-    pub fn set_waypoints(&mut self, edge: Id, waypoints: Vec<Point>) {
+    pub fn set_route(&mut self, edge: Id, route: Route) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.waypoints").to_string();
-        let result = self.doc.edit(label, |tx| tx.set_waypoints(diagram, edge, waypoints));
+        let anchors = (route.source_anchor, route.target_anchor);
+        let result =
+            self.doc.edit(label, |tx| tx.set_route(diagram, edge, route.waypoints, anchors));
+        self.report(result);
+    }
+
+    /// Gives edges of the active diagram a line style, each with its route for that style, as
+    /// one undo step.
+    pub fn set_line_shape(&mut self, shape: LineShape, edges: Vec<(Id, Route)>) {
+        let Some(diagram) = self.active_diagram else { return };
+        if edges.is_empty() {
+            return;
+        }
+        let label = t!("edit.line_style").to_string();
+        let result = self.doc.edit(label, |tx| {
+            edges.into_iter().try_for_each(|(edge, route)| {
+                let anchors = (route.source_anchor, route.target_anchor);
+                tx.set_route(diagram, edge, route.waypoints, anchors)?;
+                tx.update_presentation(diagram, edge, |p| p.style.line_shape = shape)
+            })
+        });
         self.report(result);
     }
 

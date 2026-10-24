@@ -6,6 +6,7 @@ use std::f32::consts::FRAC_1_SQRT_2;
 
 use umlcraft_model::{Point, Rect};
 
+use crate::route;
 use crate::scene::{
     EdgeLabel, EdgeShape, EndMarker, Figure, HeadIcon, LABEL_HEIGHT, LabelAlign, LineStyle,
     NodeShape,
@@ -41,6 +42,8 @@ pub enum Paint {
 pub enum Primitive {
     /// An open line in [`Paint::Line`].
     Polyline { points: Vec<Point>, width: f32, style: LineStyle },
+    /// A cubic Bézier curve in [`Paint::Line`]: start, two control points, end.
+    Curve { points: [Point; 4], width: f32, style: LineStyle },
     /// A closed polygon with a 1 px [`Paint::Line`] border.
     Polygon { points: Vec<Point>, fill: Paint },
     /// An ellipse with a [`Paint::Line`] border of `width`.
@@ -426,7 +429,17 @@ const ACTION_RADIUS: f32 = 12.0;
 /// Corner radius of states; less round than actions.
 const STATE_RADIUS: f32 = 8.0;
 
-/// The end markers of an edge; the line itself is [`EdgeShape::points`].
+/// The line of an edge, `width` wide: a polyline, or one curve.
+pub fn edge_line(edge: &EdgeShape, width: f32) -> Primitive {
+    if edge.shape.is_curve() {
+        Primitive::Curve { points: route::bezier(&edge.points), width, style: edge.line }
+    } else {
+        Primitive::Polyline { points: edge.points.clone(), width, style: edge.line }
+    }
+}
+
+/// The end markers of an edge. On curves they point along the curve's end, which runs toward
+/// the neighboring control point.
 pub fn markers(edge: &EdgeShape) -> Vec<Primitive> {
     let pts = &edge.points;
     let n = pts.len();

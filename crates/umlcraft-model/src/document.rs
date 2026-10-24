@@ -358,6 +358,22 @@ impl Tx<'_> {
         })
     }
 
+    /// Sets an edge's waypoints and where it aims inside its end nodes.
+    pub fn set_route(
+        &mut self,
+        diagram: Id,
+        id: Id,
+        points: Vec<Point>,
+        anchors: (Option<Point>, Option<Point>),
+    ) -> Result<()> {
+        self.update_presentation(diagram, id, |p| {
+            if let Shape::Edge { waypoints, source_anchor, target_anchor, .. } = &mut p.shape {
+                *waypoints = points;
+                (*source_anchor, *target_anchor) = anchors;
+            }
+        })
+    }
+
     pub fn bring_to_front(&mut self, diagram: Id, id: Id) -> Result<()> {
         let view = self.model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
         let last = view.presentations().len().saturating_sub(1);

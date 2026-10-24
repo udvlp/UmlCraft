@@ -15,7 +15,7 @@ mod op;
 pub mod sample;
 
 pub use diagram::{
-    Color, DiagramKind, EdgeLabels, ParseColorError, Presentation, Shape, Style, View,
+    Color, DiagramKind, EdgeLabels, LineShape, ParseColorError, Presentation, Shape, Style, View,
 };
 pub use document::{Document, Tx};
 pub use element::{

@@ -58,11 +58,7 @@ pub fn render(scene: &Scene, measure: &dyn TextMeasure) -> String {
         }
     }
     for edge in &scene.edges {
-        svg.primitive(&Primitive::Polyline {
-            points: edge.points.clone(),
-            width: 1.0,
-            style: edge.line,
-        });
+        svg.primitive(&draw::edge_line(edge, 1.0));
         for p in draw::markers(edge) {
             svg.primitive(&p);
         }
@@ -94,7 +90,7 @@ fn bounds(scene: &Scene, measure: &dyn TextMeasure) -> Option<Rect> {
             .chain(n.rows.iter().map(|r| text(&r.text, r.rect, r.size, r.bold, r.align)))
     });
     let edges = scene.edges.iter().flat_map(|e| {
-        e.points.iter().map(|&p| Rect::from_corners(p, p)).chain(
+        e.path().into_iter().map(|p| Rect::from_corners(p, p)).chain(
             e.labels.iter().map(|l| text(&l.text, draw::label_area(l), FONT_SIZE, false, l.align)),
         )
     });
@@ -114,6 +110,20 @@ impl Svg<'_> {
             Primitive::Polyline { points, width, style } => format!(
                 "<polyline points=\"{}\" fill=\"none\" stroke=\"{BLACK}\" stroke-width=\"{}\"{}/>",
                 points_attr(points),
+                num(*width),
+                dashes(*style),
+            ),
+            Primitive::Curve { points: [a, b, c, d], width, style } => format!(
+                "<path d=\"M{} {} C{} {} {} {} {} {}\" fill=\"none\" stroke=\"{BLACK}\" \
+                 stroke-width=\"{}\"{}/>",
+                num(a.x),
+                num(a.y),
+                num(b.x),
+                num(b.y),
+                num(c.x),
+                num(c.y),
+                num(d.x),
+                num(d.y),
                 num(*width),
                 dashes(*style),
             ),

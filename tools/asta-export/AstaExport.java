@@ -1054,7 +1054,13 @@ public final class AstaExport {
             } else {
                 return null;
             }
-            if (!route(link, source, target, p)) {
+            // The line style goes first: Astah drops the waypoints of a line set to "line" and
+            // turns them into corners of its own for right angles, but keeps points set later.
+            String shape = lineShape(p);
+            if (shape != null) {
+                link.setProperty("line.shape", shape);
+            }
+            if (!route(link, source, target, p, corners(diagram, p))) {
                 drop("edgeRoute");
             }
             labels(link, diagram, p, element);
@@ -1070,8 +1076,7 @@ public final class AstaExport {
     /// derives where the line meets a node from its first and last point, relative to the node.
     /// Returns false if Astah refused the line; it then keeps its own.
     private static boolean route(ILinkPresentation link, IPresentation source, IPresentation target,
-            Map<String, Object> p) {
-        List<Object> waypoints = list(p.get("waypoints"));
+            Map<String, Object> p, List<Object> waypoints) {
         Object sourceAnchor = p.get("sourceAnchor");
         Object targetAnchor = p.get("targetAnchor");
         if (waypoints.isEmpty() && sourceAnchor == null && targetAnchor == null) {
@@ -1100,6 +1105,30 @@ public final class AstaExport {
         } catch (InvalidEditingException e) {
             return false;
         }
+    }
+
+    /// Astah's `line.shape` for the edge's line style; null for straight lines, Astah's default.
+    private static String lineShape(Map<String, Object> p) {
+        Object shape = p.get("style") instanceof Map<?, ?> style ? style.get("lineShape") : null;
+        if (shape == null) {
+            return null;
+        }
+        return switch ((String) shape) {
+            case "rightAngle" -> "line_right_angle";
+            case "curve" -> "curve";
+            case "curveRightAngle" -> "curve_right_angle";
+            default -> null;
+        };
+    }
+
+    /// The waypoints to export: for right-angled lines the corners as UmlCraft draws them (from
+    /// the layout), otherwise the stored ones.
+    private List<Object> corners(String diagram, Map<String, Object> p) {
+        if (layouts.get(diagram) instanceof Map<?, ?> l && l.get("corners") instanceof Map<?, ?> all
+                && all.get(p.get("id")) instanceof List<?> drawn) {
+            return (List<Object>) drawn;
+        }
+        return list(p.get("waypoints"));
     }
 
     /// A point inside the node, given relative to its bounds; the center without an anchor.

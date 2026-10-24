@@ -1033,6 +1033,10 @@ fn menus(settings: &Settings) -> Vec<Menu> {
                 menu_item("menu.align_middle", AlignMiddle),
                 menu_item("menu.align_bottom", AlignBottom),
             ])),
+            MenuItem::submenu(
+                Menu::new(t!("menu.line_style").to_string())
+                    .items(LINE_SHAPES.map(|(shape, key)| menu_item(key, SetLineShape { shape }))),
+            ),
             menu_item("menu.wrap_in_fragment", WrapInFragment),
         ]),
         Menu::new(t!("menu.view").to_string()).items([
@@ -1143,7 +1147,7 @@ impl Render for MainView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let canvas = self.canvas.clone();
-        let (c1, c2, c3) = (canvas.clone(), canvas.clone(), canvas.clone());
+        let (c1, c2, c3, c4) = (canvas.clone(), canvas.clone(), canvas.clone(), canvas.clone());
         v_flex()
             .id("main")
             .key_context("UmlCraft")
@@ -1207,6 +1211,9 @@ impl Render for MainView {
             .on_action(move |_: &ZoomIn, _, cx| c1.update(cx, |c, cx| c.zoom_by(1.2, cx)))
             .on_action(move |_: &ZoomOut, _, cx| c2.update(cx, |c, cx| c.zoom_by(1.0 / 1.2, cx)))
             .on_action(move |_: &ResetZoom, _, cx| c3.update(cx, |c, cx| c.reset_zoom(cx)))
+            .on_action(move |a: &SetLineShape, _, cx| {
+                c4.update(cx, |c, cx| c.set_line_shape(a.shape, cx))
+            })
             .on_action(move |_: &ZoomToFit, _, cx| canvas.update(cx, |c, cx| c.zoom_to_fit(cx)))
             .child(
                 div()

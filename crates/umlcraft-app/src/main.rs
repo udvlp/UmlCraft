@@ -9,7 +9,7 @@ mod settings;
 mod workspace;
 
 use gpui_kit::*;
-use umlcraft_model::Id;
+use umlcraft_model::{Id, LineShape};
 
 use crate::workspace::NewItem;
 
@@ -61,6 +61,21 @@ pub struct OpenRecent {
     pub index: usize,
 }
 
+/// Gives the selected edges a line style.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct SetLineShape {
+    pub shape: LineShape,
+}
+
+/// The line styles in menu order, with their labels.
+pub const LINE_SHAPES: [(LineShape, &str); 4] = [
+    (LineShape::Line, "menu.line_straight"),
+    (LineShape::RightAngle, "menu.line_right_angle"),
+    (LineShape::Curve, "menu.line_curve"),
+    (LineShape::CurveRightAngle, "menu.line_curve_right_angle"),
+];
+
 /// Commands of the model tree's context menu.
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = umlcraft, no_json)]
@@ -104,6 +119,13 @@ fn main() {
             KeyBinding::new("ctrl-shift-v", PasteAsReference, Some("Canvas")),
             KeyBinding::new("escape", Cancel, Some("Canvas")),
             KeyBinding::new("ctrl-g", WrapInFragment, Some("Canvas")),
+            // Astah's shortcuts for the line styles.
+            KeyBinding::new("ctrl-l", SetLineShape { shape: LineShape::Line }, Some("Canvas")),
+            KeyBinding::new(
+                "ctrl-e",
+                SetLineShape { shape: LineShape::RightAngle },
+                Some("Canvas"),
+            ),
             KeyBinding::new("ctrl-0", ResetZoom, None),
             KeyBinding::new("ctrl-=", ZoomIn, None),
             KeyBinding::new("ctrl--", ZoomOut, None),

@@ -36,6 +36,11 @@ menu:
   align_middle: Center vertically
   align_bottom: Align bottom
   wrap_in_fragment: Surround with fragment
+  line_style: Line style
+  line_straight: Line
+  line_right_angle: Line (right angle)
+  line_curve: Curve
+  line_curve_right_angle: Curve (right angle)
   view: View
   zoom_in: Zoom in
   zoom_out: Zoom out
@@ -257,6 +262,7 @@ edit:
   remove_from_diagram: Remove from diagram
   properties: Change properties
   waypoints: Change line route
+  line_style: Change line style
   show: Show on diagram
   move_element: Move in model
   paste: Paste
