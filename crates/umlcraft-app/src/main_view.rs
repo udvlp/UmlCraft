@@ -1340,7 +1340,12 @@ fn documents_dir() -> Option<PathBuf> {
 }
 
 impl Render for MainView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Actions start at the focused element; with nothing focused (at start, or after a
+        // menu or dialog closed) the toolbar and shortcuts would not reach this view.
+        if window.focused(cx).is_none() {
+            self.canvas.focus_handle(cx).focus(window, cx);
+        }
         let theme = cx.theme();
         let canvas = self.canvas.clone();
         let (c1, c2, c3, c4) = (canvas.clone(), canvas.clone(), canvas.clone(), canvas.clone());
