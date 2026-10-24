@@ -5,7 +5,8 @@ use std::fmt;
 
 use umlcraft_model::{
     ElementData, ElementKind, Id, Model, ModelError, Multiplicity, ParameterDirection,
-    ParameterProps, Result, TemplateParameterProps, Tx, TypeExpr, TypeRef, Visibility,
+    ParameterProps, Result, TemplateParameterKind, TemplateParameterProps, Tx, TypeExpr, TypeRef,
+    Visibility,
 };
 
 pub fn type_label(model: &Model, type_ref: &Option<TypeRef>) -> Option<String> {
@@ -16,7 +17,8 @@ pub fn type_label(model: &Model, type_ref: &Option<TypeRef>) -> Option<String> {
     }
 }
 
-/// A type as written: `Foo`, `List<Foo>`, `? extends Number`, `Foo[]`.
+/// A type as written: `Foo`, `List<Foo>`, `? extends Number`, `Foo[]`. Arguments are separated
+/// by a bare comma (`Map<String,Foo>`), as Astah writes them.
 pub fn type_text(model: &Model, type_ref: &TypeRef) -> String {
     match type_ref {
         TypeRef::Element(id) => model.get(*id).map(|t| t.name().to_owned()).unwrap_or_default(),
@@ -25,7 +27,7 @@ pub fn type_text(model: &Model, type_ref: &TypeRef) -> String {
             let mut s = format!("{}{}", e.prefix, type_text(model, &e.base));
             if !e.arguments.is_empty() {
                 let args: Vec<String> = e.arguments.iter().map(|a| type_text(model, a)).collect();
-                s.push_str(&format!("<{}>", args.join(", ")));
+                s.push_str(&format!("<{}>", args.join(",")));
             }
             s.push_str(&e.modifier);
             s
@@ -45,13 +47,34 @@ pub fn template_parameters(model: &Model, owner: Id) -> Vec<Id> {
         .collect()
 }
 
-/// A template parameter as written in a signature: `T`, `Ts...`.
-fn template_parameter_text(model: &Model, id: Id) -> String {
+/// A template parameter as written in an operation's signature: `T`, `Ts...`.
+fn template_parameter_name(model: &Model, id: Id) -> String {
     let Some(e) = model.get(id) else { return String::new() };
     match e.kind() {
         ElementKind::TemplateParameter(p) if p.is_variadic => format!("{}...", e.name()),
         _ => e.name().to_owned(),
     }
+}
+
+/// A template parameter as Astah writes it in a classifier's template box: `T>Number` for a
+/// bound, `N:int` for a value parameter, `=default` after either.
+pub fn template_parameter_text(model: &Model, id: Id) -> String {
+    let Some(e) = model.get(id) else { return String::new() };
+    let ElementKind::TemplateParameter(p) = e.kind() else { return e.name().to_owned() };
+    let mut s = template_parameter_name(model, id);
+    if !p.bounds.is_empty() {
+        let bounds: Vec<String> = p.bounds.iter().map(|b| type_text(model, b)).collect();
+        s.push_str(&format!(">{}", bounds.join(",")));
+    }
+    if p.parameter == TemplateParameterKind::Value
+        && let Some(t) = type_label(model, &p.type_ref)
+    {
+        s.push_str(&format!(":{t}"));
+    }
+    if let Some(d) = type_label(model, &p.default) {
+        s.push_str(&format!("={d}"));
+    }
+    s
 }
 
 /// The text of a member as shown in a compartment (and offered for editing).
@@ -87,7 +110,7 @@ pub fn member_text(model: &Model, id: Id) -> String {
                 .collect();
             let templates: Vec<String> = template_parameters(model, id)
                 .into_iter()
-                .map(|t| template_parameter_text(model, t))
+                .map(|t| template_parameter_name(model, t))
                 .collect();
             let templates = if templates.is_empty() {
                 String::new()
@@ -100,6 +123,7 @@ pub fn member_text(model: &Model, id: Id) -> String {
             }
             s
         }
+        ElementKind::TemplateParameter(_) => template_parameter_text(model, id),
         _ => name.to_owned(),
     }
 }
@@ -270,6 +294,62 @@ fn parse_parameter(text: &str) -> Result<ParameterSpec, ParseError> {
         direction,
         name: check_name(name, text)?,
         type_text: non_empty(type_text),
+        default: non_empty(default),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TemplateParameterSpec {
+    pub name: String,
+    pub variadic: bool,
+    pub bounds: Vec<String>,
+    /// Set for a value parameter: the type of the value.
+    pub value_type: Option<String>,
+    pub default: Option<String>,
+}
+
+/// A template parameter as typed: `T`, `T>Number`, `T>A,B`, `N:int=10`, `D=Number`, `Ts...`.
+pub fn parse_template_parameter(text: &str) -> Result<TemplateParameterSpec, ParseError> {
+    // The bound starts at the first `>` that closes no `<`.
+    let mut depth = 0;
+    let bound_at = text.char_indices().find_map(|(i, c)| {
+        match c {
+            '<' => depth += 1,
+            '>' if depth == 0 => return Some(i),
+            '>' => depth -= 1,
+            _ => {}
+        }
+        None
+    });
+    let (name, bounds, value_type, default) = match bound_at {
+        Some(i) => {
+            let (rest, default) = split_top(&text[i + 1..], '=');
+            let (bounds, value_type) = split_top(rest, ':');
+            (&text[..i], Some(bounds), value_type, default)
+        }
+        None => {
+            let (head, default) = split_top(text, '=');
+            let (name, value_type) = split_top(head, ':');
+            (name, None, value_type, default)
+        }
+    };
+    let name = name.trim();
+    let (name, variadic) = match name.strip_suffix("...") {
+        Some(name) => (name, true),
+        None => (name, false),
+    };
+    let mut bound_list = Vec::new();
+    let mut remaining = bounds.unwrap_or("");
+    while !remaining.trim().is_empty() {
+        let (bound, rest) = split_top(remaining, ',');
+        bound_list.extend(non_empty(Some(bound)));
+        remaining = rest.unwrap_or("");
+    }
+    Ok(TemplateParameterSpec {
+        name: check_name(name, text)?,
+        variadic,
+        bounds: bound_list,
+        value_type: non_empty(value_type),
         default: non_empty(default),
     })
 }
@@ -486,6 +566,27 @@ pub fn apply_member_text(tx: &mut Tx<'_>, id: Id, text: &str) -> Result<()> {
             }
             Ok(())
         }
+        ElementKind::TemplateParameter(_) => {
+            let spec = parse_template_parameter(text).map_err(invalid)?;
+            let parse = |t: &str| parse_type(tx.model(), id, t);
+            let bounds = spec.bounds.iter().map(|b| parse(b)).collect();
+            let type_ref = spec.value_type.as_deref().map(parse);
+            let default = spec.default.as_deref().map(parse);
+            tx.update(id, |data| {
+                data.name = spec.name;
+                if let ElementKind::TemplateParameter(p) = &mut data.kind {
+                    p.parameter = if type_ref.is_some() {
+                        TemplateParameterKind::Value
+                    } else {
+                        TemplateParameterKind::Type
+                    };
+                    p.type_ref = type_ref;
+                    p.bounds = bounds;
+                    p.default = default;
+                    p.is_variadic = spec.variadic;
+                }
+            })
+        }
         _ => {
             let name = text.trim();
             if name.is_empty() && !matches!(kind, ElementKind::Comment(_)) {
@@ -653,6 +754,39 @@ mod tests {
         assert!(template_parameters(model, op).is_empty());
         assert_eq!(member_text(model, op), "+ max(a : T) : T");
         assert!(parse_operation("f<T(x)").is_err());
+    }
+
+    #[test]
+    fn template_parameters_read_and_write_astahs_form() {
+        let spec = parse_template_parameter("T>Number,Comparable<T>=Integer").unwrap();
+        assert_eq!(spec.name, "T");
+        assert_eq!(spec.bounds, ["Number", "Comparable<T>"]);
+        assert_eq!((spec.value_type, spec.default.as_deref()), (None, Some("Integer")));
+        let spec = parse_template_parameter("N:int=10").unwrap();
+        assert_eq!(
+            (spec.value_type.as_deref(), spec.default.as_deref()),
+            (Some("int"), Some("10"))
+        );
+        let spec = parse_template_parameter("Ts...").unwrap();
+        assert!(spec.variadic && spec.name == "Ts");
+        assert!(parse_template_parameter(">Number").is_err());
+
+        let (mut doc, ids) = order_system();
+        let t = doc
+            .edit("setup", |tx| {
+                let kind = ElementKind::TemplateParameter(TemplateParameterProps::default());
+                tx.create(ids.order, ElementData::new("T", kind))
+            })
+            .unwrap();
+        for text in ["T>Customer=Customer", "N:int=10", "E"] {
+            doc.edit("edit", |tx| apply_member_text(tx, t, text)).unwrap();
+            assert_eq!(member_text(doc.model(), t), text);
+        }
+        doc.edit("edit", |tx| apply_member_text(tx, t, "T>Customer")).unwrap();
+        let ElementKind::TemplateParameter(p) = doc.model().get(t).unwrap().kind() else {
+            panic!()
+        };
+        assert_eq!(p.bounds, [TypeRef::Element(ids.customer)]);
     }
 
     #[test]

@@ -178,7 +178,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
     let r = node.rect;
     let solid = LineStyle::Solid;
     match &node.figure {
-        Figure::Classifier { separators } => {
+        Figure::Classifier { separators, template } => {
             // Astah draws classifier boxes with a 2 px border, compartment lines with 1 px.
             let mut result = vec![Primitive::Frame {
                 rect: r,
@@ -193,6 +193,16 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                     .iter()
                     .map(|&y| line(vec![Point::new(r.x, y), Point::new(r.right(), y)], solid)),
             );
+            // The template box lies over the corner, filled like the box, with a 1 px dotted
+            // border.
+            result.extend(template.map(|rect| Primitive::Frame {
+                rect,
+                width: 1.0,
+                radius: 0.0,
+                fill: Paint::Fill,
+                border: Paint::Line,
+                style: LineStyle::Dotted,
+            }));
             result
         }
         Figure::Lollipop => {

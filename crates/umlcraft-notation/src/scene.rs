@@ -57,7 +57,7 @@ impl Scene {
 
     /// Bounding box of all nodes as drawn.
     pub fn bounds(&self) -> Option<Rect> {
-        self.nodes.iter().map(|n| n.rect).reduce(|a, b| a.union(&b))
+        self.nodes.iter().map(NodeShape::extent).reduce(|a, b| a.union(&b))
     }
 }
 
@@ -77,6 +77,11 @@ impl NodeShape {
     /// count at their border and texts, so clicks inside reach what they contain or the empty
     /// canvas. Lifelines count at their head and along their dashed line.
     pub fn hit(&self, p: Point, tolerance: f32) -> bool {
+        if let Figure::Classifier { template: Some(t), .. } = &self.figure
+            && t.inflate(tolerance).contains(p)
+        {
+            return true;
+        }
         if !self.rect.inflate(tolerance).contains(p) {
             return false;
         }
@@ -95,6 +100,14 @@ impl NodeShape {
         }
     }
 
+    /// What the node covers as drawn: its bounds, and a template box sticking out of them.
+    pub fn extent(&self) -> Rect {
+        match &self.figure {
+            Figure::Classifier { template: Some(t), .. } => self.rect.union(t),
+            _ => self.rect,
+        }
+    }
+
     /// Whether the user may resize the node. Lifelines, activation bars and diagram frames
     /// are sized by the sequence layout.
     pub fn resizable(&self) -> bool {
@@ -104,9 +117,11 @@ impl NodeShape {
 
 /// The outline of a node; its texts are in [`NodeShape::rows`].
 pub enum Figure {
-    /// Box with compartment separators at the given y positions.
+    /// Box with compartment separators at the given y positions; a template's parameters are
+    /// in a dashed box on its top right corner.
     Classifier {
         separators: Vec<f32>,
+        template: Option<Rect>,
     },
     /// Interface drawn as a small circle.
     Lollipop,
@@ -285,6 +300,8 @@ pub enum LineStyle {
     LongDashed,
     /// Dependencies, realizations, include, extend, note anchors; separators between operands.
     ShortDashed,
+    /// Template boxes.
+    Dotted,
 }
 
 impl LineStyle {
@@ -295,6 +312,7 @@ impl LineStyle {
             Self::Dashed => &[10.0, 5.0],
             Self::LongDashed => &[12.0, 6.0],
             Self::ShortDashed => &[5.0, 5.0],
+            Self::Dotted => &[3.0, 3.0],
         }
     }
 }
@@ -1343,7 +1361,50 @@ fn layout_classifier(
         }
         y += PAD_Y;
     }
-    (r, Figure::Classifier { separators }, rows)
+    let template = template_box(model, id, r, measure, &mut rows);
+    (r, Figure::Classifier { separators, template }, rows)
+}
+
+/// The dashed box with a template's parameters (`T>Number, N:int=10`), as Astah draws it: 4 px
+/// around the text, which runs in one line with exact advances, its bottom 5 below the
+/// classifier's top and a fifth of it sticking out on the right. Each parameter is a row of its
+/// own, so it can be edited.
+fn template_box(
+    model: &Model,
+    id: Id,
+    r: Rect,
+    measure: &dyn TextMeasure,
+    rows: &mut Vec<Row>,
+) -> Option<Rect> {
+    const PAD: f32 = 4.0;
+    const BELOW_TOP: f32 = 5.0;
+    const BASELINE_BELOW_TOP: f32 = 15.0;
+    let parameters = crate::member::template_parameters(model, id);
+    if parameters.is_empty() {
+        return None;
+    }
+    let count = parameters.len();
+    let texts: Vec<(Id, String)> = parameters
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let text = crate::member::template_parameter_text(model, p);
+            (p, if i + 1 < count { format!("{text}, ") } else { text })
+        })
+        .collect();
+    let all: String = texts.iter().map(|(_, t)| t.as_str()).collect();
+    let width = measure.width(&all, FONT_SIZE, false) + 2.0 * PAD;
+    let height = line_height(FONT_SIZE) + PAD;
+    let rect = Rect::new(r.right() - 0.8 * width, r.y + BELOW_TOP - height, width, height);
+    let top = rect.y + BASELINE_BELOW_TOP - FONT_SIZE * crate::draw::BASELINE;
+    let mut x = rect.x + PAD;
+    for (parameter, text) in texts {
+        let w = measure.width(&text, FONT_SIZE, false);
+        let line = Line::new(text, FONT_SIZE, RowRole::Member, Some(parameter));
+        rows.push(line.place(Rect::new(x, top, w, line_height(FONT_SIZE)), LabelAlign::Left));
+        x += w;
+    }
+    Some(rect)
 }
 
 /// The text row under `p` on the topmost node there, e.g. for inline editing.
@@ -1821,7 +1882,7 @@ mod tests {
         // Premium (80,260 160x60) → Customer (80,80 160x90): straight up between the boxes.
         assert_eq!(generalization.points, vec![Point::new(160.0, 260.0), Point::new(160.0, 170.0)]);
         let customer = scene.nodes.iter().find(|n| n.element == Some(ids.customer)).unwrap();
-        let Figure::Classifier { separators } = &customer.figure else { panic!() };
+        let Figure::Classifier { separators, .. } = &customer.figure else { panic!() };
         assert_eq!(separators.len(), 2, "attributes and operations");
         let texts: Vec<(&str, RowRole)> =
             customer.rows.iter().map(|r| (r.text.as_str(), r.role)).collect();
@@ -1871,7 +1932,7 @@ mod tests {
         let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
         let order = scene.node(node).unwrap();
         assert!(
-            matches!(&order.figure, Figure::Classifier { separators } if separators.is_empty())
+            matches!(&order.figure, Figure::Classifier { separators, .. } if separators.is_empty())
         );
         assert_eq!(order.rows.len(), 1);
 
@@ -2162,7 +2223,7 @@ mod tests {
         let (doc, ids) = order_system();
         let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
         let customer = scene.nodes.iter().find(|n| n.element == Some(ids.customer)).unwrap();
-        let Figure::Classifier { separators } = &customer.figure else { panic!() };
+        let Figure::Classifier { separators, .. } = &customer.figure else { panic!() };
         let (top, x) = (customer.rect.y, customer.rect.x);
         // Header: 4 px, one 15.09 px line, 4 px; then the attributes the same way; operations empty.
         assert!((separators[0] - (top + 23.09375)).abs() < 1e-3);
@@ -2275,6 +2336,44 @@ mod tests {
         assert!(lines.len() >= 2, "wrapped into {} lines", lines.len());
         assert!(lines[0].text.starts_with("+ submit(first"), "{:?}", lines[0].text);
         assert!(lines.iter().all(|l| l.rect.x == order.rect.x + 10.0));
+    }
+
+    #[test]
+    fn template_parameters_sit_in_a_box_on_the_top_right_corner() {
+        use umlcraft_model::{ElementData, TemplateParameterProps};
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let parameters = doc
+            .edit("templates", |tx| {
+                let mut created = Vec::new();
+                for name in ["T1", "T2"] {
+                    let kind = ElementKind::TemplateParameter(TemplateParameterProps::default());
+                    created.push(tx.create(ids.order, ElementData::new(name, kind))?);
+                }
+                Ok(created)
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let order = scene.nodes.iter().find(|n| n.element == Some(ids.order)).unwrap();
+        let Figure::Classifier { template: Some(t), .. } = order.figure else { panic!() };
+        // As in Astah's `Pair<T1, T2>`: the text plus 4 on each side, one line plus 4 high, the
+        // bottom 5 below the class's top, a fifth sticking out.
+        let text_w = ApproxMeasure.width("T1, T2", FONT_SIZE, false);
+        assert!((t.width - (text_w + 8.0)).abs() < 1e-3, "{t:?}");
+        assert!((t.height - (line_height(FONT_SIZE) + 4.0)).abs() < 1e-3);
+        assert!((t.bottom() - (order.rect.y + 5.0)).abs() < 1e-3);
+        assert!((t.x - (order.rect.right() - 0.8 * t.width)).abs() < 1e-3);
+        let rows: Vec<&Row> =
+            order.rows.iter().filter(|r| parameters.contains(&r.element.unwrap())).collect();
+        assert_eq!(rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["T1, ", "T2"]);
+        assert_eq!(rows[0].rect.x, t.x + 4.0);
+        assert!(
+            (rows[1].rect.x - (t.x + 4.0 + ApproxMeasure.width("T1, ", 12.0, false))).abs() < 1e-3
+        );
+        // The box belongs to the node: it is hit and counts for the drawing's extent.
+        let corner = Point::new(t.right() - 1.0, t.y + 1.0);
+        assert!(!order.rect.contains(corner) && order.hit(corner, 0.0));
+        assert!(scene.bounds().unwrap().contains(corner));
     }
 
     fn doc_operation(model: &Model, class: Id) -> Id {
