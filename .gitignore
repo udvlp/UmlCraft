@@ -24,6 +24,7 @@ CLAUDE.local.md
 # Docs
 /docs/*
 !/docs/architecture.md
+!/docs/handoff-source-import.md
 
 # Editors and IDEs
 .vs/
