@@ -1431,8 +1431,17 @@ public final class AstaExport {
                 }
             }
             double y = y(num(rect(diagram, node), "y"));
+            // Astah wants a name; an unnamed frame shows the interaction it refers to, as in
+            // UmlCraft.
+            String name = name(e);
+            if (name.isEmpty() && e.get("refersTo") instanceof String target) {
+                name = name(elements.get(target));
+            }
+            if (name.isEmpty()) {
+                name = "ref";
+            }
             INodePresentation frame = editor.createInteractionUse(
-                name(e), text(e, "arguments"), null, covered.toArray(new ILifeline[0]), y);
+                name, text(e, "arguments"), null, covered.toArray(new ILifeline[0]), y);
             IInteractionUse use = (IInteractionUse) frame.getModel();
             if (e.get("refersTo") instanceof String target) {
                 references.put(use, target);

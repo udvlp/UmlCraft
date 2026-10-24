@@ -1060,8 +1060,9 @@ impl Importer<'_> {
                 matches!(self.model.get(*id).map(|e| e.kind()), Some(ElementKind::Lifeline(_)))
             })
         };
-        // Found and lost messages start or end at a gate instead of a lifeline.
-        let is_gate = |field| r.obj(object, field).is_some_and(|o| r.class(o) == "UGateImp");
+        // Found and lost messages start or end at a gate instead of a lifeline; Astah's API
+        // leaves that end empty instead.
+        let is_gate = |field| r.obj(object, field).is_none_or(|o| r.class(o) == "UGateImp");
         let (from, to, gate) = match (lifeline("sender"), lifeline("receiver")) {
             (Some(from), Some(to)) => (from, to, MessageGate::None),
             (None, Some(to)) if is_gate("sender") => (to, to, MessageGate::Found),
