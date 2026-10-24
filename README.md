@@ -73,6 +73,20 @@ This completes milestone 1.
   Drawing follows Astah's rules: calls get bars, replies leave at the end of their bar, bars and
   lifelines grow around their content, and the interaction's order follows the drawing. Files
   from earlier versions are laid out once when opened.
+- **Class diagrams as in Astah**: template parameters (type and value parameters with bounds and
+  defaults) drawn in a dashed box, bound templates such as `Box<Holder, 20>`, qualifiers in a
+  box at the association end, static ends underlined, leaf classes and operations, visibility
+  symbols in a column of their own, and Astah's four line styles for edges (line or curve, each
+  also right-angled). Imported from and exported to Astah.
+- **Java import** (`umlcraft-reverse`, Tools › Java › Import Java files … / Import Java
+  folder …): reads declarations from `.java` sources into the open project as Astah's own
+  import does: packages, classes, interfaces, enumerations, records and annotation types with
+  attributes, operations, template parameters, supertypes and Javadoc; library types become
+  placeholders at their package path (`java › util › List`), and fields typed by a model type
+  become associations (`*`, `{ordered}`, `{unique}`, a qualifier for map keys). Method bodies
+  are skipped, files with syntax errors are reported, and importing again updates the model
+  instead of duplicating it. The whole import is one undo step; a project of 6,300 files takes
+  about ten seconds. Built for more languages: C# and C++ are to follow.
 
 Next: composite structure diagrams (ports, parts, connectors), orthogonal regions, moving
 states into other states.
@@ -118,6 +132,8 @@ keeps them as workflow artifacts.
 | `crates/umlcraft-asta` | Read-only import of Astah `.asta` files |
 | `crates/umlcraft-asta-export` | Export to `.asta` through an installed Astah and its API |
 | `tools/asta-export` | The Java tool that drives the Astah API |
+| `crates/umlcraft-reverse` | Source import (Java; C# and C++ planned): tree-sitter front-ends, a language-neutral IR, resolution and merging into the model |
+| `tools/jdk-types` | The Java tool that writes the table of JDK types used by the Java import |
 | `crates/umlcraft-app` | GPUI application (`gpui-kit` 0.8) |
 
 Details: [docs/architecture.md](docs/architecture.md).
