@@ -64,7 +64,10 @@ Light and dark theme, German and English.
 
 - Composite structure diagrams (ports, parts, connectors)
 - Orthogonal regions and internal transitions in state machines; moving states into other states
-- Astah's data flow diagrams and flowcharts (skipped on import)
+- Astah's data flow diagrams and flowcharts, and its composite structure, communication,
+  timing, requirement, ER and mind map diagrams and matrices (skipped on import)
+- The state of an object node's type (`Order [filled]`), lost on import
+- Bound template classes such as `ArrayList<String>` are kept as type expressions and not drawn
 - Component and deployment diagrams are exported to Astah as class diagrams, because Astah's API
   has no editors for them
 - Importing C# and C++ (the source import is built for them, the front-ends are still missing)
@@ -92,7 +95,7 @@ On Debian/Ubuntu, GPUI needs some system libraries first:
 3. The [release workflow](.github/workflows/release.yml) checks that the tag matches the version,
    builds the Windows `.zip`, Linux `.tar.gz` and macOS `.dmg`, adds the third-party license
    notices (`cargo about`, configured in `about.toml`) and creates a draft release.
-4. Review the draft on GitHub and publish it.
+4. Review the draft on GitHub, put a "What's new" section in front of its text and publish it.
 
 Running the workflow by hand (Actions › Release › Run workflow) only builds the packages and
 keeps them as workflow artifacts.
