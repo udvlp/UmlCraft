@@ -160,13 +160,82 @@ impl<'de> Deserialize<'de> for Multiplicity {
     }
 }
 
-/// Type of an attribute, parameter or operation result: either a classifier in the model or
-/// free text (e.g. `int`, or a type that is not modeled).
+/// Type of an attribute, parameter or operation result: a classifier or template parameter in
+/// the model, free text (e.g. `int`, or a type that is not modeled), or a type built from
+/// others.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TypeRef {
     Element(Id),
     Text(String),
+    Expr(Box<TypeExpr>),
+}
+
+/// A type built from others: `List<Foo>`, `Foo[]`, `? extends Number`, `const Foo*`. Each part
+/// is a type reference of its own, so `List` and `Foo` stay linked to the model.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeExpr {
+    pub base: TypeRef,
+    /// Template arguments, in order. Values such as C++'s `10` are text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arguments: Vec<TypeRef>,
+    /// Written before the base, e.g. `? extends ` or `const `.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prefix: String,
+    /// Written after the arguments, e.g. `[]`, `...`, `*` or `&`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub modifier: String,
+}
+
+impl TypeRef {
+    /// The referenced elements: the base first, then the arguments in order.
+    pub fn ids(&self) -> Vec<Id> {
+        let mut ids = Vec::new();
+        self.collect_ids(&mut ids);
+        ids
+    }
+
+    fn collect_ids(&self, into: &mut Vec<Id>) {
+        match self {
+            Self::Element(id) => into.push(*id),
+            Self::Text(_) => {}
+            Self::Expr(e) => {
+                e.base.collect_ids(into);
+                e.arguments.iter().for_each(|a| a.collect_ids(into));
+            }
+        }
+    }
+
+    /// Calls `f` for every referenced element, in the order of [`TypeRef::ids`].
+    pub fn for_each_id_mut(&mut self, f: &mut dyn FnMut(&mut Id)) {
+        match self {
+            Self::Element(id) => f(id),
+            Self::Text(_) => {}
+            Self::Expr(e) => {
+                e.base.for_each_id_mut(f);
+                e.arguments.iter_mut().for_each(|a| a.for_each_id_mut(f));
+            }
+        }
+    }
+
+    /// Replaces every reference to `target` with free text holding `target_name`. Returns
+    /// whether anything changed.
+    pub fn unlink(&mut self, target: Id, target_name: &str) -> bool {
+        match self {
+            Self::Element(id) if *id == target => {
+                *self = Self::Text(target_name.to_owned());
+                true
+            }
+            Self::Element(_) | Self::Text(_) => false,
+            Self::Expr(e) => {
+                let base = e.base.unlink(target, target_name);
+                e.arguments
+                    .iter_mut()
+                    .fold(base, |changed, a| a.unlink(target, target_name) || changed)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +275,9 @@ pub struct OperationProps {
     pub is_static: bool,
     #[serde(default, skip_serializing_if = "is_default")]
     pub is_abstract: bool,
+    /// Cannot be overridden (`final` in Java, `sealed` in C#).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub is_leaf: bool,
     #[serde(default, skip_serializing_if = "is_default")]
     pub is_query: bool,
 }
@@ -231,6 +303,37 @@ pub struct ParameterProps {
     pub multiplicity: Option<Multiplicity>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_value: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TemplateParameterKind {
+    /// Stands for a type, such as Java's `T`.
+    #[default]
+    Type,
+    /// Stands for a value, such as C++'s `int N`.
+    Value,
+}
+
+/// A formal parameter of a template class, interface, data type or operation: `T extends
+/// Number` in Java, `int N = 10` in C++. Its name is the element's name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateParameterProps {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub parameter: TemplateParameterKind,
+    /// Value parameters: the type of the value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_ref: Option<TypeRef>,
+    /// Type parameters: the types an argument must conform to (`extends A & B`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bounds: Vec<TypeRef>,
+    /// Used when no argument is given: a type, or a value as text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<TypeRef>,
+    /// Takes any number of arguments (C++'s `typename... Ts`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub is_variadic: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -371,6 +474,15 @@ pub struct AssociationEnd {
     /// Constraints on this end, without braces, e.g. `ordered` for `{ordered}`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub constraints: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub is_read_only: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub is_static: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_value: String,
+    /// Qualifiers of this end, such as the key of a map.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub qualifiers: Vec<Qualifier>,
 }
 
 impl AssociationEnd {
@@ -383,8 +495,23 @@ impl AssociationEnd {
             aggregation: Aggregation::default(),
             visibility: Visibility::default(),
             constraints: Vec::new(),
+            is_read_only: false,
+            is_static: false,
+            default_value: String::new(),
+            qualifiers: Vec::new(),
         }
     }
+}
+
+/// A qualifier of an association end, such as `key : K`: the participant at the other end is
+/// looked up by it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Qualifier {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_ref: Option<TypeRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -598,6 +725,7 @@ pub enum ElementKind {
     Attribute(AttributeProps),
     Operation(OperationProps),
     Parameter(ParameterProps),
+    TemplateParameter(TemplateParameterProps),
     Actor(ClassifierProps),
     UseCase(ClassifierProps),
     Component(ClassifierProps),
@@ -690,9 +818,11 @@ impl RefRole {
             Self::AssociationEnd
             | Self::Specific
             | Self::General
-            | Self::Type
             | Self::Represents
             | Self::Classifier => target.is_classifier(),
+            Self::Type => {
+                target.is_classifier() || matches!(target, ElementKind::TemplateParameter(_))
+            }
             Self::Including | Self::Addition | Self::Extension | Self::Extended => {
                 matches!(target, ElementKind::UseCase(_))
             }
@@ -800,6 +930,7 @@ impl ElementKind {
             Self::Attribute(_) => "attribute",
             Self::Operation(_) => "operation",
             Self::Parameter(_) => "parameter",
+            Self::TemplateParameter(_) => "templateParameter",
             Self::Actor(_) => "actor",
             Self::UseCase(_) => "useCase",
             Self::Component(_) => "component",
@@ -882,7 +1013,10 @@ impl ElementKind {
             K::Package => self.is_namespace(),
             K::Class(_) | K::Interface(_) | K::Enumeration(_) | K::DataType(_) => {
                 self.is_namespace()
-                    || matches!(self, K::Class(_) | K::Interface(_) | K::Component(_))
+                    || matches!(
+                        self,
+                        K::Class(_) | K::Interface(_) | K::Enumeration(_) | K::Component(_)
+                    )
             }
             // Components nest, and nodes hold nested nodes such as execution environments.
             K::Component(_) | K::Artifact(_) | K::Node(_) => {
@@ -893,6 +1027,9 @@ impl ElementKind {
             K::Attribute(_) | K::Operation(_) => self.is_classifier(),
             K::EnumerationLiteral => matches!(self, K::Enumeration(_)),
             K::Parameter(_) => matches!(self, K::Operation(_)),
+            K::TemplateParameter(_) => {
+                matches!(self, K::Class(_) | K::Interface(_) | K::DataType(_) | K::Operation(_))
+            }
             K::ExtensionPoint => matches!(self, K::UseCase(_)),
             K::Interaction => self.is_namespace() || matches!(self, K::Class(_) | K::UseCase(_)),
             K::Lifeline(_) => matches!(self, K::Interaction),
@@ -925,14 +1062,17 @@ impl ElementKind {
 
     /// All references to other elements, with their role.
     pub fn references(&self) -> Vec<(Id, RefRole)> {
-        let type_ref = |t: &Option<TypeRef>| match t {
-            Some(TypeRef::Element(id)) => vec![(*id, RefRole::Type)],
-            _ => Vec::new(),
+        let types = |t: &mut dyn Iterator<Item = &TypeRef>| -> Vec<(Id, RefRole)> {
+            t.flat_map(TypeRef::ids).map(|id| (id, RefRole::Type)).collect()
         };
+        let type_ref = |t: &Option<TypeRef>| types(&mut t.iter());
         match self {
             Self::Attribute(p) => type_ref(&p.type_ref),
             Self::Operation(p) => type_ref(&p.return_type),
             Self::Parameter(p) => type_ref(&p.type_ref),
+            Self::TemplateParameter(p) => {
+                types(&mut p.type_ref.iter().chain(&p.bounds).chain(&p.default))
+            }
             Self::Lifeline(p) => {
                 p.represents.map(|id| (id, RefRole::Represents)).into_iter().collect()
             }
@@ -961,7 +1101,11 @@ impl ElementKind {
                 vec![(p.source, RefRole::TransitionEnd), (p.target, RefRole::TransitionEnd)]
             }
             Self::Association(p) => {
-                p.ends.iter().map(|end| (end.participant, RefRole::AssociationEnd)).collect()
+                let mut refs: Vec<(Id, RefRole)> =
+                    p.ends.iter().map(|end| (end.participant, RefRole::AssociationEnd)).collect();
+                let qualifiers = p.ends.iter().flat_map(|end| &end.qualifiers);
+                refs.extend(types(&mut qualifiers.filter_map(|q| q.type_ref.as_ref())));
+                refs
             }
             Self::Generalization(p) => {
                 vec![(p.specific, RefRole::Specific), (p.general, RefRole::General)]
@@ -987,14 +1131,17 @@ impl ElementKind {
     /// in the same order, as [`ElementKind::references`].
     pub fn for_each_reference_mut(&mut self, mut f: impl FnMut(&mut Id)) {
         let type_ref = |t: &mut Option<TypeRef>, f: &mut dyn FnMut(&mut Id)| {
-            if let Some(TypeRef::Element(id)) = t {
-                f(id);
-            }
+            t.iter_mut().for_each(|t| t.for_each_id_mut(f));
         };
         match self {
             Self::Attribute(p) => type_ref(&mut p.type_ref, &mut f),
             Self::Operation(p) => type_ref(&mut p.return_type, &mut f),
             Self::Parameter(p) => type_ref(&mut p.type_ref, &mut f),
+            Self::TemplateParameter(p) => {
+                type_ref(&mut p.type_ref, &mut f);
+                p.bounds.iter_mut().for_each(|t| t.for_each_id_mut(&mut f));
+                type_ref(&mut p.default, &mut f);
+            }
             Self::Lifeline(p) => p.represents.iter_mut().for_each(f),
             Self::Instance(p) => p.classifier.iter_mut().for_each(f),
             Self::Message(p) => {
@@ -1016,7 +1163,12 @@ impl ElementKind {
                 f(&mut p.source);
                 f(&mut p.target);
             }
-            Self::Association(p) => p.ends.iter_mut().for_each(|end| f(&mut end.participant)),
+            Self::Association(p) => {
+                p.ends.iter_mut().for_each(|end| f(&mut end.participant));
+                for q in p.ends.iter_mut().flat_map(|end| &mut end.qualifiers) {
+                    type_ref(&mut q.type_ref, &mut f);
+                }
+            }
             Self::Generalization(p) => {
                 f(&mut p.specific);
                 f(&mut p.general);
@@ -1057,14 +1209,8 @@ impl ElementKind {
     /// target's former name, so the attribute still reads the same. Returns whether anything
     /// changed. Strong references are left alone; their owner has to be deleted instead.
     pub fn unlink(&mut self, target: Id, target_name: &str) -> bool {
-        let unlink_type = |t: &mut Option<TypeRef>| {
-            if *t == Some(TypeRef::Element(target)) {
-                *t = Some(TypeRef::Text(target_name.to_owned()));
-                true
-            } else {
-                false
-            }
-        };
+        let unlink_type =
+            |t: &mut Option<TypeRef>| t.as_mut().is_some_and(|t| t.unlink(target, target_name));
         let unlink_vec = |v: &mut Vec<Id>| {
             let len = v.len();
             v.retain(|&id| id != target);
@@ -1082,6 +1228,20 @@ impl ElementKind {
             Self::Attribute(p) => unlink_type(&mut p.type_ref),
             Self::Operation(p) => unlink_type(&mut p.return_type),
             Self::Parameter(p) => unlink_type(&mut p.type_ref),
+            Self::TemplateParameter(p) => {
+                let mut changed = unlink_type(&mut p.type_ref);
+                for bound in &mut p.bounds {
+                    changed |= bound.unlink(target, target_name);
+                }
+                unlink_type(&mut p.default) || changed
+            }
+            Self::Association(p) => {
+                let mut changed = false;
+                for q in p.ends.iter_mut().flat_map(|end| &mut end.qualifiers) {
+                    changed |= unlink_type(&mut q.type_ref);
+                }
+                changed
+            }
             Self::Lifeline(p) => unlink_opt(&mut p.represents),
             Self::Instance(p) => unlink_opt(&mut p.classifier),
             Self::Message(p) => unlink_opt(&mut p.operation),
@@ -1135,6 +1295,37 @@ mod tests {
         }
     }
 
+    /// `base<argument>[]`.
+    fn list_of(base: Id, argument: Id) -> TypeRef {
+        TypeRef::Expr(Box::new(TypeExpr {
+            base: TypeRef::Element(base),
+            arguments: vec![TypeRef::Element(argument)],
+            prefix: String::new(),
+            modifier: "[]".into(),
+        }))
+    }
+
+    #[test]
+    fn unlink_replaces_only_the_affected_part_of_an_expression() {
+        let (list, foo) = (Id::from_u128(1), Id::from_u128(2));
+        let mut kind = ElementKind::attribute(Some(list_of(list, foo)));
+        assert_eq!(kind.references(), vec![(list, RefRole::Type), (foo, RefRole::Type)]);
+        assert!(kind.unlink(foo, "Foo"));
+        let ElementKind::Attribute(p) = &kind else { unreachable!() };
+        let Some(TypeRef::Expr(e)) = &p.type_ref else { panic!("{kind:?}") };
+        assert_eq!(e.base, TypeRef::Element(list));
+        assert_eq!(e.arguments, vec![TypeRef::Text("Foo".into())]);
+        assert_eq!(e.modifier, "[]");
+        assert!(!kind.unlink(foo, "Foo"));
+
+        let mut parameter = ElementKind::TemplateParameter(TemplateParameterProps {
+            bounds: vec![TypeRef::Element(foo)],
+            ..Default::default()
+        });
+        assert!(parameter.unlink(foo, "Foo"));
+        assert!(parameter.references().is_empty());
+    }
+
     #[test]
     fn unlink_turns_type_into_text() {
         let target = Id::from_u128(7);
@@ -1163,6 +1354,20 @@ mod tests {
                 node: ActivityNodeKind::Object,
                 type_ref: Some(TypeRef::Element(a)),
             }),
+            ElementKind::attribute(Some(list_of(b, a))),
+            ElementKind::TemplateParameter(TemplateParameterProps {
+                bounds: vec![TypeRef::Element(b), list_of(a, a)],
+                default: Some(TypeRef::Element(a)),
+                ..Default::default()
+            }),
+            {
+                let mut kind = ElementKind::association(b, a);
+                if let ElementKind::Association(p) = &mut kind {
+                    p.ends[1].qualifiers =
+                        vec![Qualifier { name: "key".into(), type_ref: Some(list_of(b, a)) }];
+                }
+                kind
+            },
         ];
         let map = std::collections::HashMap::from([(a, c)]);
         for kind in &mut kinds {
@@ -1203,6 +1408,16 @@ mod tests {
             component.is_classifier()
                 && !ElementKind::Instance(InstanceProps::default()).is_classifier()
         );
+        let enumeration = ElementKind::Enumeration(ClassifierProps::default());
+        assert!(enumeration.can_own(&ElementKind::class()), "types nested in an enum");
+        let parameter = ElementKind::TemplateParameter(TemplateParameterProps::default());
+        assert!(ElementKind::class().can_own(&parameter));
+        assert!(ElementKind::operation(None).can_own(&parameter), "generic methods");
+        assert!(!ElementKind::Package.can_own(&parameter));
+        assert!(!enumeration.can_own(&parameter));
+        assert!(!parameter.is_classifier() && !parameter.can_own(&ElementKind::attribute(None)));
+        assert!(RefRole::Type.accepts(&parameter), "attributes typed `T`");
+        assert!(!RefRole::General.accepts(&parameter));
     }
 
     #[test]

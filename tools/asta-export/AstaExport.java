@@ -411,8 +411,43 @@ public final class AstaExport {
             if (m.get("text") instanceof String text && !text.isBlank()) {
                 return text;
             }
+            if (m.get("expr") instanceof Map<?, ?>) {
+                return typeText(ref);
+            }
         }
         return "void";
+    }
+
+    /// A type as written: `List<Foo>`, `Foo[]`, `? extends Number`.
+    private String typeText(Object ref) {
+        if (!(ref instanceof Map<?, ?> m)) {
+            return "";
+        }
+        if (m.get("element") instanceof String target) {
+            return name(elements.get(target));
+        }
+        if (m.get("text") instanceof String text) {
+            return text;
+        }
+        if (!(m.get("expr") instanceof Map<?, ?> e)) {
+            return "";
+        }
+        StringBuilder s = new StringBuilder();
+        if (e.get("prefix") instanceof String prefix) {
+            s.append(prefix);
+        }
+        s.append(typeText(e.get("base")));
+        if (e.get("arguments") instanceof List<?> arguments && !arguments.isEmpty()) {
+            s.append('<');
+            for (int i = 0; i < arguments.size(); i++) {
+                s.append(i == 0 ? "" : ", ").append(typeText(arguments.get(i)));
+            }
+            s.append('>');
+        }
+        if (e.get("modifier") instanceof String modifier) {
+            s.append(modifier);
+        }
+        return s.toString();
     }
 
     private static void multiplicity(IAttribute a, String text) throws InvalidEditingException {

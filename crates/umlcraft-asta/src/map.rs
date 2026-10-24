@@ -628,6 +628,7 @@ impl Importer<'_> {
             return_type,
             is_static,
             is_abstract: self.r.flag(object, "isAbst"),
+            is_leaf: self.r.flag(object, "leaf"),
             is_query: self.r.flag(object, "query"),
         });
         let data = self.data(object, kind, &[]);

@@ -121,6 +121,62 @@ fn deleting_a_type_turns_attribute_types_into_text() {
 }
 
 #[test]
+fn template_parameters_type_members_and_unlink_when_deleted() {
+    use umlcraft_model::{TemplateParameterProps, TypeExpr};
+    let mut doc = Document::new(Model::new("m"));
+    let root = doc.model().root();
+    let (list, t, element, holder) = doc
+        .edit("setup", |tx| {
+            let list = tx.create(root, class("List"))?;
+            let parameter = ElementKind::TemplateParameter(TemplateParameterProps::default());
+            let t = tx.create(list, ElementData::new("T", parameter))?;
+            let element = tx.create(
+                list,
+                ElementData::new("e", ElementKind::attribute(Some(TypeRef::Element(t)))),
+            )?;
+            let holder = tx.create(root, class("Holder"))?;
+            let items = TypeRef::Expr(Box::new(TypeExpr {
+                base: TypeRef::Element(list),
+                arguments: vec![TypeRef::Element(holder)],
+                prefix: String::new(),
+                modifier: String::new(),
+            }));
+            tx.create(holder, ElementData::new("items", ElementKind::attribute(Some(items))))?;
+            Ok((list, t, element, holder))
+        })
+        .unwrap();
+    doc.model().check().unwrap();
+    assert_eq!(doc.model().referrers(t).len(), 1);
+    assert_eq!(doc.model().referrers(list).len(), 1, "the base of List<Holder>");
+
+    doc.edit("delete T", |tx| tx.delete(t)).unwrap();
+    assert_eq!(
+        doc.model().get(element).unwrap().kind(),
+        &ElementKind::attribute(Some(TypeRef::Text("T".into())))
+    );
+    doc.edit("delete List", |tx| tx.delete(list)).unwrap();
+    let model = doc.model();
+    model.check().unwrap();
+    let items = model.children(holder)[0];
+    let ElementKind::Attribute(p) = model.get(items).unwrap().kind() else { panic!() };
+    let Some(TypeRef::Expr(e)) = &p.type_ref else { panic!("{p:?}") };
+    assert_eq!(e.base, TypeRef::Text("List".into()));
+    assert_eq!(e.arguments, vec![TypeRef::Element(holder)]);
+}
+
+#[test]
+fn types_cannot_refer_to_non_classifiers() {
+    let mut doc = Document::new(Model::new("m"));
+    let root = doc.model().root();
+    let result = doc.edit("bad", |tx| {
+        let p = tx.create(root, ElementData::new("p", ElementKind::Package))?;
+        let c = tx.create(root, class("C"))?;
+        tx.create(c, ElementData::new("a", ElementKind::attribute(Some(TypeRef::Element(p)))))
+    });
+    assert!(matches!(result, Err(ModelError::InvalidReference { .. })), "{result:?}");
+}
+
+#[test]
 fn deleting_a_package_removes_its_diagrams() {
     let (mut doc, ids) = order_system();
     doc.edit("Delete domain", |tx| tx.delete(ids.domain)).unwrap();

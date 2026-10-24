@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Color, DiagramKind,
     EdgeLabels, ElementKind, Id, InstanceKind, LineShape, MessageSort, Model, Navigability, Point,
-    Presentation, PseudostateKind, Rect, Shape, Size, StateProps, Style, TypeRef,
+    Presentation, PseudostateKind, Rect, Shape, Size, StateProps, Style,
 };
 
 use crate::member::member_text;
@@ -857,10 +857,7 @@ fn layout_activity_node(
     }
     let text = match props.type_ref.as_ref() {
         Some(t) if props.node == ActivityNodeKind::Object => {
-            let type_name = match t {
-                TypeRef::Element(t) => model.get(*t).map(|t| t.name().to_owned()),
-                TypeRef::Text(t) => Some(t.clone()),
-            };
+            let type_name = crate::member::type_label(model, &Some(t.clone()));
             match type_name.filter(|t| !t.is_empty()) {
                 Some(t) if e.name().is_empty() => format!(": {t}"),
                 Some(t) => format!("{} : {t}", e.name()),

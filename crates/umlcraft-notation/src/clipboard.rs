@@ -7,8 +7,8 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    EdgeLabels, ElementData, Id, Model, ModelError, Op, Point, Presentation, Rect, Result, Shape,
-    Tx,
+    EdgeLabels, ElementData, ElementKind, Id, Model, ModelError, Op, Point, Presentation, Rect,
+    Result, Shape, Tx,
 };
 
 use crate::palette::owner_for;
@@ -147,36 +147,46 @@ pub fn free_name(model: &Model, owner: Id, name: &str) -> String {
     (2..).map(|n| format!("{name}{n}")).find(|n| !taken(n)).expect("names are unbounded")
 }
 
+/// Inserts `element` and what it owns. Weak references to copies that are not inserted yet,
+/// such as an attribute typed by a nested class declared after it, are left out and collected
+/// in `deferred` with the element's complete kind, to be set once everything is in place.
 fn insert_tree(
     tx: &mut Tx<'_>,
     element: &ClipElement,
     owner: Id,
     map: &HashMap<Id, Id>,
     rename: bool,
+    deferred: &mut Vec<(Id, ElementKind)>,
 ) -> Result<()> {
     let mut data = element.data.clone();
     data.kind.remap(map);
-    // Weak references to elements deleted since copying are dropped.
-    let missing: Vec<Id> = data
+    let absent: Vec<Id> = data
         .kind
         .references()
         .into_iter()
-        .filter(|(id, role)| {
-            !role.is_strong() && !tx.model().contains(*id) && !map.values().any(|v| v == id)
-        })
+        .filter(|(id, role)| !role.is_strong() && !tx.model().contains(*id))
         .map(|(id, _)| id)
         .collect();
-    for id in missing {
+    let (later, deleted): (Vec<Id>, Vec<Id>) =
+        absent.into_iter().partition(|id| map.values().any(|v| v == id));
+    // Weak references to elements deleted since copying are dropped.
+    for id in deleted {
         data.kind.unlink(id, "");
+    }
+    let id = map[&element.id];
+    if !later.is_empty() {
+        deferred.push((id, data.kind.clone()));
+        for target in later {
+            data.kind.unlink(target, "");
+        }
     }
     if rename {
         data.name = free_name(tx.model(), owner, &data.name);
     }
-    let id = map[&element.id];
     let index = tx.model().element(owner)?.children().len();
     tx.apply(Op::InsertElement { id, owner, index, data })?;
     for child in &element.children {
-        insert_tree(tx, child, id, map, false)?;
+        insert_tree(tx, child, id, map, false, deferred)?;
     }
     Ok(())
 }
@@ -208,11 +218,12 @@ pub fn paste(
         let mut ids = Vec::new();
         clip.roots.iter().chain(&clip.relationships).for_each(|r| collect_ids(r, &mut ids));
         element_map = ids.into_iter().map(|old| (old, Id::generate())).collect();
+        let mut deferred = Vec::new();
         for root in &clip.roots {
             let owner = owner_for(tx.model(), diagram_owner, &root.data.kind).ok_or_else(|| {
                 ModelError::Invalid(format!("cannot paste a {} here", root.data.kind.type_name()))
             })?;
-            insert_tree(tx, root, owner, &element_map, true)?;
+            insert_tree(tx, root, owner, &element_map, true, &mut deferred)?;
         }
         for relationship in &clip.relationships {
             let mut kind = relationship.data.kind.clone();
@@ -230,7 +241,10 @@ pub fn paste(
             let start = tx.model().element(source)?.owner().unwrap_or(diagram_owner);
             let owner = owner_for(tx.model(), start, &kind)
                 .ok_or_else(|| ModelError::Invalid("no owner for a relationship".into()))?;
-            insert_tree(tx, relationship, owner, &element_map, false)?;
+            insert_tree(tx, relationship, owner, &element_map, false, &mut deferred)?;
+        }
+        for (id, kind) in deferred {
+            tx.update(id, |data| data.kind = kind)?;
         }
     }
 
@@ -357,6 +371,50 @@ mod tests {
         assert_eq!(created.len(), 1);
         assert_eq!(doc.model().shown_on(ids.customer).len(), 2);
         assert_eq!(doc.model().len(), elements_before, "no new model elements");
+    }
+
+    #[test]
+    fn paste_keeps_types_that_refer_to_later_copies() {
+        use umlcraft_model::{TemplateParameterProps, TypeRef};
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let (inner, t) = doc
+            .edit("setup", |tx| {
+                let inner =
+                    tx.create(ids.customer, ElementData::new("Inner", ElementKind::class()))?;
+                let parameter = ElementKind::TemplateParameter(TemplateParameterProps::default());
+                let t = tx.create(ids.customer, ElementData::new("T", parameter))?;
+                // Declared before what they refer to.
+                let typed = |name: &str, target| {
+                    ElementData::new(name, ElementKind::attribute(Some(TypeRef::Element(target))))
+                };
+                tx.create_at(ids.customer, 0, typed("inner", inner))?;
+                tx.create_at(ids.customer, 0, typed("value", t))?;
+                Ok((inner, t))
+            })
+            .unwrap();
+        let customer = doc.model().shown_on(ids.customer)[0].1;
+        let clip = copy(doc.model(), d, &[customer]).unwrap();
+        doc.edit("paste", |tx| paste(tx, d, &clip, Point::default(), false)).unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        let copy = model
+            .children(ids.domain)
+            .iter()
+            .copied()
+            .find(|&c| model.get(c).unwrap().name() == "Customer2")
+            .unwrap();
+        let child = |name: &str| {
+            model.children(copy).iter().copied().find(|&c| model.get(c).unwrap().name() == name)
+        };
+        let type_of = |name: &str| match model.get(child(name).unwrap()).unwrap().kind() {
+            ElementKind::Attribute(p) => p.type_ref.clone(),
+            _ => None,
+        };
+        let (inner2, t2) = (child("Inner").unwrap(), child("T").unwrap());
+        assert!(inner2 != inner && t2 != t);
+        assert_eq!(type_of("inner"), Some(TypeRef::Element(inner2)));
+        assert_eq!(type_of("value"), Some(TypeRef::Element(t2)));
     }
 
     #[test]

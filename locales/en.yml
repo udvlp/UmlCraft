@@ -278,6 +278,7 @@ kind:
   attribute: Attribute
   operation: Operation
   parameter: Parameter
+  templateParameter: Template parameter
   actor: Actor
   useCase: Use case
   extensionPoint: Extension point

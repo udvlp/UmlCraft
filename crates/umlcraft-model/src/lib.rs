@@ -25,8 +25,8 @@ pub use element::{
     IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
     InteractionUseProps, LifelineProps, MessageGate, MessageProps, MessageSort, Multiplicity,
     Navigability, OperationProps, ParameterDirection, ParameterProps, ParseMultiplicityError,
-    PseudostateKind, PseudostateProps, RefRole, StateProps, TaggedValue, TransitionProps, TypeRef,
-    Visibility,
+    PseudostateKind, PseudostateProps, Qualifier, RefRole, StateProps, TaggedValue,
+    TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef, Visibility,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

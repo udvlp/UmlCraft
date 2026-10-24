@@ -10,6 +10,15 @@ Like UML (and Astah), `umlcraft-model` separates **elements** from **presentatio
   references, such as the ends of an association, delete the referencing element along with the
   target. **Weak** references, such as attribute types, are cleared; a type then becomes free text
   holding the old name.
+- A type (`TypeRef`) is a classifier or template parameter, free text, or an expression built from
+  other types (`TypeExpr`: base, template arguments, a prefix such as `? extends ` and a modifier
+  such as `[]` or `*`). In `List<Foo>[]` both `List` and `Foo` stay references of their own;
+  deleting one turns only that part into text. `member::parse_type` reads the written form and
+  links what it finds, as seen from the member: template parameters of the member's owners
+  first, then qualified names (`java.util.List`), then a classifier whose name is unique.
+- Template parameters (`ElementKind::TemplateParameter`) belong to classes, interfaces, data types
+  or operations and stand for a type (with bounds) or a value (with its type, C++'s `int N`),
+  optionally with a default and variadic.
 - Every diagram element has a `View` with presentations in z-order. A node has `bounds`; an edge
   connects two presentations of the same view.
 

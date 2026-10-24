@@ -248,11 +248,7 @@ fn path(model: &Model, id: Id) -> String {
 }
 
 fn type_text(model: &Model, t: &Option<TypeRef>) -> String {
-    match t {
-        Some(TypeRef::Element(id)) => name(model, *id),
-        Some(TypeRef::Text(text)) => text.clone(),
-        None => String::new(),
-    }
+    umlcraft_notation::member::type_label(model, t).unwrap_or_default()
 }
 
 /// Named elements with their place in the ownership tree and their essentials.

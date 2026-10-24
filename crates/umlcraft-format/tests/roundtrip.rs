@@ -54,6 +54,58 @@ fn every_property_survives() {
 }
 
 #[test]
+fn templates_and_type_expressions_survive() {
+    use umlcraft_model::{Qualifier, TemplateParameterKind, TemplateParameterProps, TypeExpr};
+    let (mut doc, ids) = order_system();
+    doc.edit("generics", |tx| {
+        let bound = TemplateParameterProps {
+            bounds: vec![TypeRef::Element(ids.customer)],
+            ..Default::default()
+        };
+        let t =
+            tx.create(ids.order, ElementData::new("T", ElementKind::TemplateParameter(bound)))?;
+        let size = TemplateParameterProps {
+            parameter: TemplateParameterKind::Value,
+            type_ref: Some(TypeRef::Text("int".into())),
+            default: Some(TypeRef::Text("10".into())),
+            is_variadic: true,
+            ..Default::default()
+        };
+        tx.create(ids.order, ElementData::new("N", ElementKind::TemplateParameter(size)))?;
+        let items = TypeRef::Expr(Box::new(TypeExpr {
+            base: TypeRef::Text("List".into()),
+            arguments: vec![TypeRef::Element(t)],
+            prefix: String::new(),
+            modifier: "[]".into(),
+        }));
+        tx.create(ids.order, ElementData::new("items", ElementKind::attribute(Some(items))))?;
+        let mut op = ElementKind::operation(None);
+        if let ElementKind::Operation(p) = &mut op {
+            p.is_leaf = true;
+        }
+        tx.create(ids.order, ElementData::new("total", op))?;
+        tx.update(ids.order_customer, |d| {
+            if let ElementKind::Association(p) = &mut d.kind {
+                let end = &mut p.ends[1];
+                end.is_read_only = true;
+                end.is_static = true;
+                end.default_value = "none".into();
+                end.qualifiers = vec![Qualifier {
+                    name: "key".into(),
+                    type_ref: Some(TypeRef::Element(ids.order)),
+                }];
+            }
+        })
+    })
+    .unwrap();
+    let json = to_string(doc.model());
+    assert_eq!(from_str(&json).unwrap(), *doc.model());
+    for key in ["\"templateParameter\"", "\"expr\"", "\"bounds\"", "\"isLeaf\"", "\"qualifiers\""] {
+        assert!(json.contains(key), "{key} in {json}");
+    }
+}
+
+#[test]
 fn output_is_stable_and_readable() {
     let (doc, ids) = order_system();
     let json = to_string(doc.model());
