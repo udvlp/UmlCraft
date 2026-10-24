@@ -6,8 +6,8 @@ use crate::document::Document;
 use crate::element::{
     ActivityNodeKind, Aggregation, ClassifierProps, CombinedFragmentProps, DirectedProps,
     ElementData, ElementKind, InstanceKind, InstanceProps, InteractionOperandProps,
-    InteractionOperator, LifelineProps, MessageSort, Multiplicity, PseudostateKind, StateProps,
-    TransitionProps, TypeRef, Visibility,
+    InteractionOperator, LifelineProps, MessageSort, Multiplicity, PseudostateKind, SlotProps,
+    StateProps, TransitionProps, TypeRef, Visibility,
 };
 use crate::geometry::{Point, Rect};
 use crate::id::Id;
@@ -30,6 +30,8 @@ pub struct OrderSystem {
     pub state_diagram: Id,
     pub component_diagram: Id,
     pub deployment_diagram: Id,
+    /// A class diagram showing objects and a link.
+    pub object_diagram: Id,
 }
 
 pub fn order_system() -> (Document, OrderSystem) {
@@ -348,6 +350,42 @@ pub fn order_system() -> (Document, OrderSystem) {
             tx.add_edge(deployment_diagram, Some(network), n_app, n_db, vec![])?;
             let _ = n_web1;
 
+            // Objects: Ada has placed order o1, an instance of the order–customer association.
+            let object = |classifier| {
+                ElementKind::Instance(InstanceProps {
+                    instance: InstanceKind::Object,
+                    classifier: Some(classifier),
+                })
+            };
+            let ada = tx.create(domain, ElementData::new("ada", object(customer)))?;
+            let o1 = tx.create(domain, ElementData::new("o1", object(order)))?;
+            let slot = |tx: &mut crate::Tx<'_>, owner, attribute, value: &str| {
+                let props = SlotProps { attribute: Some(attribute), value: value.into() };
+                let name = tx.model().element(attribute)?.name().to_owned();
+                tx.create(owner, ElementData::new(name, ElementKind::Slot(props)))
+            };
+            let attribute = |tx: &crate::Tx<'_>, class: Id| tx.model().children(class)[0];
+            let name = attribute(tx, customer);
+            slot(tx, ada, name, "\"Ada\"")?;
+            let total = attribute(tx, order);
+            slot(tx, o1, total, "120")?;
+            let mut link = ElementKind::link(o1, ada);
+            if let ElementKind::Link(p) = &mut link {
+                p.ends[1].role = "customer".into();
+                p.association = Some(order_customer);
+                p.ends[1].navigability = crate::Navigability::Navigable;
+            }
+            let placed = tx.create(domain, ElementData::new("", link))?;
+            let object_diagram = tx.create(
+                domain,
+                ElementData::new("Orders", ElementKind::diagram(DiagramKind::Class)),
+            )?;
+            let n_ada =
+                tx.add_node(object_diagram, Some(ada), Rect::new(80.0, 80.0, 140.0, 50.0))?;
+            let n_o1 =
+                tx.add_node(object_diagram, Some(o1), Rect::new(380.0, 80.0, 140.0, 50.0))?;
+            tx.add_edge(object_diagram, Some(placed), n_o1, n_ada, vec![])?;
+
             // The order's life: filled while open, then shipped or cancelled.
             let machine =
                 tx.create(order, ElementData::new("Order lifecycle", ElementKind::StateMachine))?;
@@ -433,6 +471,7 @@ pub fn order_system() -> (Document, OrderSystem) {
                 state_diagram,
                 component_diagram,
                 deployment_diagram,
+                object_diagram,
             })
         })
         .expect("sample model is valid");

@@ -93,6 +93,14 @@ when the app opens them (`sequence_edit::upgrade_document`, not an undoable edit
   "line" drops the waypoints, right angles turn them into corners.
 - `member` produces and parses the text form of attributes and operations and writes it back to
   the model; known classifiers become real type references.
+- `object` derives an object's slots from its classifier: one per attribute, inherited ones
+  included (own first, then the generals depth first), as Astah shows them. Only slots with a
+  value are stored, as `Slot` children of the object that refer to their attribute; deleting the
+  attribute deletes them. So slots follow the class when attributes are added, renamed or
+  removed. An object's box is drawn as Astah draws it: `name : Class` underlined, and below it
+  always a slot compartment, 8 high when empty. Links are `Link` elements with two ends
+  (instance, role, navigability, aggregation) and optionally the association they instantiate;
+  they are drawn like associations, with plain role names.
 - `clipboard` copies the selection including subtrees and the relationships among them, and pastes
   it as a duplicate (new IDs, free names) or as another presentation of the same elements.
 - `palette` defines which tools a diagram type offers, which connections are allowed (e.g.
@@ -150,6 +158,10 @@ name; `map` translates that graph into a new `Model`, element by element through
 so every invariant is checked. What has no counterpart in UmlCraft is skipped and counted
 (`Imported::skipped`). Template parameters, bound templates (as type expressions), array
 modifiers, qualifiers and the tagged values of Astah's language profiles are imported too.
+Objects bring their slot values (`UAttributeLinkImp`, whose value is an instance named by the
+value text); links (`ULinkImp`) have no owner in Astah and go into the package of their first
+object, their ends' navigability and aggregation come from the tagged values
+`object_navigable_type` and `object_aggregation_kind`.
 The format details are kept in local notes (`docs/asta-format.md`) that are not published.
 Two examples help when exploring files: `asta-dump` (raw objects) and `asta-import` (the
 resulting model).
@@ -264,6 +276,10 @@ through its official API (`astah-api.jar`):
   when created (they cannot be moved) and sized by Astah. UmlCraft's class diagrams accept
   components, nodes and instances, so such a file comes back intact apart from the diagram
   kind. A usage (`createUsage`) is an `IUsage`, not an `IDependency`.
+- Object diagrams are class diagrams. Slot values are set with `getSlot(name).setValue`; links
+  are created between two presentations (`createInstanceSpecificationLink`), and their ends are
+  matched to UmlCraft's by instance. The API cannot set the association a link instantiates,
+  which is reported as `linkAssociation`.
 - State machine diagrams: `createStatemachineDiagram` brings its own state machine. States are
   created from the outside in, each composite state at its size before its substates go into it
   (`createState(name, parent, …)`). The API gives a transition leaving a state an event called

@@ -72,6 +72,7 @@ tool:
   lifeline: Lifeline
   systemBoundary: System boundary
   association: Association
+  link: Link
   generalization: Generalization
   realization: Realization
   dependency: Dependency
@@ -172,6 +173,8 @@ prop:
   covered: Covered lifelines
   covered_automatic: None ticked – the fragment covers the lifelines of its messages.
   classifier: Instance of
+  slots: Slots (one "name = value" per line)
+  instance_of_association: Instance of association
   refers_to: Refers to
   leaf: Leaf (cannot be specialized or overridden)
   parameter_kind: Parameter kind
@@ -256,6 +259,7 @@ export_dropped:
   unmatchedReply: Replies without a call (exported as calls)
   replyArguments: Arguments of replies
   messageOperation: Operations called by messages
+  linkAssociation: Associations that links instantiate
   emptyOperand: Empty operands of combined fragments
   nestedEnumeration: Nested enumerations (moved to the package)
   activity: Activities without a diagram
@@ -298,6 +302,7 @@ edit:
   labels: Reset label positions
   show: Show on diagram
   move_element: Move in model
+  set_slots: Change slot values
   paste: Paste
   wrap_in_fragment: Surround with fragment
   import_source: Import source code
@@ -369,4 +374,6 @@ kind:
   componentInstance: Component instance
   nodeInstance: Node instance
   object: Object
+  slot: Slot
+  link: Link
   interactionUse: Interaction use

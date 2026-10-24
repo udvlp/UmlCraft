@@ -5,8 +5,9 @@ use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Color, DiagramKind,
-    EdgeLabels, ElementKind, Id, InstanceKind, LineShape, MessageSort, Model, Navigability, Point,
-    Presentation, PseudostateKind, Qualifier, Rect, Shape, Size, StateProps, Style,
+    EdgeLabels, ElementKind, Id, InstanceKind, LineShape, LinkEnd, MessageSort, Model,
+    Navigability, Point, Presentation, PseudostateKind, Qualifier, Rect, Shape, Size, StateProps,
+    Style,
 };
 
 use crate::member::member_text;
@@ -272,6 +273,8 @@ pub enum RowRole {
     Name,
     /// A member element (attribute, operation, literal).
     Member,
+    /// A slot of an object; the row's element is the slot's attribute, the node's the object.
+    Slot,
 }
 
 /// One line of text inside or below a node.
@@ -863,6 +866,9 @@ fn layout_element(
         ElementKind::Component(_) | ElementKind::Artifact(_) | ElementKind::Node(_) => {
             layout_box(model, id, e.kind(), None, bounds, measure)
         }
+        ElementKind::Instance(p) if p.instance == InstanceKind::Object => {
+            layout_object(model, id, p.classifier, bounds, measure)
+        }
         ElementKind::Instance(p) => {
             let figure = match p.instance {
                 InstanceKind::Object => ElementKind::Class(Default::default()),
@@ -1085,6 +1091,86 @@ fn layout_box(
         _ => Figure::Rectangle,
     };
     (r, figure, rows)
+}
+
+/// An object as Astah draws it: a box like a class's, with `name : Class` underlined in the
+/// header and one compartment of slots (`total = 42`) below, 8 px high when empty.
+fn layout_object(
+    model: &Model,
+    id: Id,
+    classifier: Option<Id>,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    const PAD_X: f32 = 10.0;
+    const PAD_Y: f32 = 4.0;
+    let e = model.get(id).expect("caller checked");
+    let mut header = Vec::new();
+    let stereotypes = &e.data().stereotypes;
+    if !stereotypes.is_empty() {
+        header.push(Line::new(
+            stereotype_text(stereotypes),
+            FONT_SIZE,
+            RowRole::Stereotype,
+            Some(id),
+        ));
+    }
+    let type_name = classifier.and_then(|c| model.get(c)).map(|c| c.name());
+    let text = match type_name {
+        Some(t) if e.name().is_empty() => format!(": {t}"),
+        Some(t) => format!("{} : {t}", e.name()),
+        None => e.name().to_owned(),
+    };
+    let mut name = Line::new(text, FONT_SIZE, RowRole::Name, Some(id));
+    name.underline = true;
+    // Without a name Astah centers " : Class" but draws it from the colon on: the text sits
+    // as far left as the missing space is wide.
+    let shift = if e.name().is_empty() && type_name.is_some() {
+        let astah = |l: &Line, text: &str| {
+            l.width_of(text, measure, false).max(l.width_of(text, measure, true))
+        };
+        astah(&name, &format!(" {}", name.text)) - astah(&name, &name.text)
+    } else {
+        0.0
+    };
+    header.push(name);
+    let slots: Vec<Line> = crate::object::slots(model, id)
+        .into_iter()
+        .map(|(attribute, value)| {
+            let text = crate::object::slot_text(model, attribute, &value);
+            Line::new(text, FONT_SIZE, RowRole::Slot, Some(attribute))
+        })
+        .collect();
+
+    let widest = header.iter().chain(&slots).map(|l| l.width(measure)).fold(0.0, f32::max);
+    let block =
+        |lines: &[Line]| 2.0 * PAD_Y + lines.iter().map(|l| line_height(l.size)).sum::<f32>();
+    let content_h = block(&header) + block(&slots);
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width.max(widest + 2.0 * PAD_X).max(40.0),
+        bounds.height.max(content_h),
+    );
+    let mut rows = Vec::new();
+    let mut y = r.y + PAD_Y;
+    for line in header {
+        let h = line_height(line.size);
+        let width = if line.role == RowRole::Name { r.width - shift } else { r.width };
+        rows.push(line.place(Rect::new(r.x, y, width, h), LabelAlign::Center));
+        y += h;
+    }
+    y += PAD_Y;
+    let separators = vec![y];
+    y += PAD_Y;
+    for line in slots {
+        let h = line_height(line.size);
+        rows.push(
+            line.place(Rect::new(r.x + PAD_X, y, r.width - 2.0 * PAD_X, h), LabelAlign::Left),
+        );
+        y += h;
+    }
+    (r, Figure::Classifier { separators, template: None }, rows)
 }
 
 fn layout_state(
@@ -1572,6 +1658,21 @@ fn edge_for(
                 edge.qualifiers.push((b, rows));
             }
         }
+        // A link looks like an association between objects, with plain role names.
+        Some(ElementKind::Link(p)) => {
+            let marker = |end: &LinkEnd| {
+                end_marker(&AssociationEnd {
+                    navigability: end.navigability,
+                    aggregation: end.aggregation,
+                    ..AssociationEnd::new(end.instance)
+                })
+            };
+            let [a, b] = &p.ends;
+            edge.source_marker = marker(a);
+            edge.target_marker = marker(b);
+            let role = |end: &LinkEnd| (!end.role.is_empty()).then(|| end.role.clone());
+            ends = [(role(a), None, false), (role(b), None, false)];
+        }
         Some(ElementKind::Generalization(_)) => edge.target_marker = EndMarker::HollowTriangle,
         // Realizing an interface drawn as a circle is a plain line ("lollipop").
         Some(ElementKind::Realization(_)) if to_lollipop => {}
@@ -2027,6 +2128,50 @@ mod tests {
         assert_eq!(texts, vec![("Customer", RowRole::Name), ("- name : String", RowRole::Member)]);
         // The stored bounds are big enough, so the box keeps them.
         assert_eq!(customer.rect, Rect::new(80.0, 80.0, 160.0, 90.0));
+    }
+
+    #[test]
+    fn objects_show_slots_and_links_their_roles() {
+        let (mut doc, ids) = order_system();
+        let d = ids.object_diagram;
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        assert_eq!(scene.nodes.len(), 2);
+        let ada = &scene.nodes[0];
+        let Figure::Classifier { separators, .. } = &ada.figure else { panic!() };
+        assert_eq!(separators.len(), 1);
+        let texts: Vec<(&str, RowRole, bool)> =
+            ada.rows.iter().map(|r| (r.text.as_str(), r.role, r.underline)).collect();
+        assert_eq!(
+            texts,
+            vec![("ada : Customer", RowRole::Name, true), ("name = \"Ada\"", RowRole::Slot, false)]
+        );
+        assert_eq!(ada.rows[1].element, Some(doc.model().children(ids.customer)[0]));
+
+        let link = &scene.edges[0];
+        assert_eq!(link.source_marker, EndMarker::None);
+        assert_eq!(link.target_marker, EndMarker::OpenArrow);
+        let labels: Vec<&str> = link.labels.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(labels, ["customer"]);
+
+        // An unnamed object of a class without attributes keeps an empty slot compartment.
+        let node = doc
+            .edit("object", |tx| {
+                crate::palette::create_node(
+                    tx,
+                    d,
+                    crate::palette::NodeTool::Object,
+                    Point::new(100.0, 300.0),
+                    "",
+                )
+                .map(|(_, n)| n)
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let object = scene.node(node).unwrap();
+        let Figure::Classifier { separators, .. } = &object.figure else { panic!() };
+        assert_eq!(separators.len(), 1);
+        assert_eq!(object.rows.len(), 1);
+        assert!(object.rows[0].underline);
     }
 
     #[test]

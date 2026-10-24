@@ -50,6 +50,9 @@ import com.change_vision.jude.api.inf.model.IElement;
 import com.change_vision.jude.api.inf.model.IEnumeration;
 import com.change_vision.jude.api.inf.model.IFlow;
 import com.change_vision.jude.api.inf.model.IInstanceSpecification;
+import com.change_vision.jude.api.inf.model.ILink;
+import com.change_vision.jude.api.inf.model.ILinkEnd;
+import com.change_vision.jude.api.inf.model.ISlot;
 import com.change_vision.jude.api.inf.model.IInteractionOperand;
 import com.change_vision.jude.api.inf.model.IInteractionUse;
 import com.change_vision.jude.api.inf.model.ILifeline;
@@ -236,6 +239,10 @@ public final class AstaExport {
                 // The API creates instance specifications on class diagrams only.
                 drop("instance");
             }
+            if ("link".equals(type(e)) && !created.containsKey(e.get("id"))) {
+                // Links, too, are made with their presentation.
+                drop("link");
+            }
         }
     }
 
@@ -289,8 +296,8 @@ public final class AstaExport {
                     }
                     diagrams.addAll(own.subList(0, Math.min(1, own.size())));
                 }
-                // Comments and instances are created with their presentations on diagrams.
-                case "comment", "instance" -> {
+                // Comments, instances and links are created with their presentations on diagrams.
+                case "comment", "instance", "link" -> {
                 }
                 default -> drop(type);
             }
@@ -1099,7 +1106,72 @@ public final class AstaExport {
         }
         created.put(id, instance);
         common(id, instance, Set.of());
+        // Astah gives the instance a slot per attribute of its classifier; set the values.
+        for (String child : children(id)) {
+            Map<String, Object> s = elements.get(child);
+            if ("slot".equals(type(s))) {
+                attempt(child, () -> slot(instance, s));
+            }
+        }
         return node;
+    }
+
+    private Object slot(IInstanceSpecification instance, Map<String, Object> s) throws Exception {
+        Map<String, Object> attribute =
+            s.get("attribute") instanceof String a ? elements.get(a) : null;
+        ISlot slot = instance.getSlot(attribute != null ? name(attribute) : name(s));
+        if (slot == null) {
+            drop("slot");
+            return null;
+        }
+        slot.setValue(text(s, "value"));
+        return slot;
+    }
+
+    /// A link between two objects. Its ends follow the objects; the API cannot say which
+    /// association the link instantiates.
+    private ILinkPresentation link(ClassDiagramEditor editor, String id, INodePresentation source,
+            INodePresentation target) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        ILinkPresentation presentation = editor.createInstanceSpecificationLink(source, target);
+        ILink link = (ILink) presentation.getModel();
+        if (!name(e).isEmpty()) {
+            link.setName(name(e));
+        }
+        for (Object o : list(e.get("ends"))) {
+            Map<String, Object> end = (Map<String, Object>) o;
+            Object object = created.get(end.get("instance"));
+            for (ILinkEnd made : link.getMemberEnds()) {
+                if (made.getType() == object) {
+                    linkEnd(made, end);
+                    break;
+                }
+            }
+        }
+        if (e.get("association") != null) {
+            drop("linkAssociation");
+        }
+        created.put(id, link);
+        common(id, link, Set.of());
+        return presentation;
+    }
+
+    private static void linkEnd(ILinkEnd end, Map<String, Object> e) throws InvalidEditingException {
+        if (!text(e, "role").isEmpty()) {
+            end.setName(text(e, "role"));
+        }
+        switch (text(e, "navigability")) {
+            case "navigable" -> end.setNavigability("Navigable");
+            case "nonNavigable" -> end.setNavigability("Non_Navigable");
+            default -> {
+            }
+        }
+        switch (text(e, "aggregation")) {
+            case "shared" -> end.setAggregation(true);
+            case "composite" -> end.setComposite(true);
+            default -> {
+            }
+        }
     }
 
     private INodePresentation note(BasicDiagramEditor editor, String comment, Point2D at) throws Exception {
@@ -1137,6 +1209,9 @@ public final class AstaExport {
                     && "transition".equals(type(elements.get(element)))
                     && source instanceof INodePresentation s && target instanceof INodePresentation t) {
                 link = transition(sm, (String) element, s, t);
+            } else if (editor instanceof ClassDiagramEditor cd && "link".equals(type(elements.get(element)))
+                    && source instanceof INodePresentation s && target instanceof INodePresentation t) {
+                link = link(cd, (String) element, s, t);
             } else if (editor instanceof StructureDiagramEditor sd && created.get(element) instanceof IElement model
                     && source instanceof INodePresentation s && target instanceof INodePresentation t) {
                 link = sd.createLinkPresentation(model, s, t);

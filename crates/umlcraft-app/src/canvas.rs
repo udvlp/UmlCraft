@@ -17,6 +17,7 @@ use umlcraft_model::{
 };
 use umlcraft_notation::draw::{self, Paint, Primitive};
 use umlcraft_notation::member::member_text;
+use umlcraft_notation::object;
 use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
 use umlcraft_notation::route::{self, Route};
 use umlcraft_notation::scene::{
@@ -235,6 +236,8 @@ enum Editor {
 /// Text being edited in place, over the row it replaces.
 struct InlineEdit {
     element: Id,
+    /// For a slot row: the object whose slot for the attribute `element` is edited.
+    slot_of: Option<Id>,
     /// Logical rectangle of the edited text.
     rect: Rect,
     editor: Editor,
@@ -835,6 +838,7 @@ impl DiagramCanvas {
     /// Starts editing the name or member row under `p`. Returns whether there was one.
     fn start_edit_at(&mut self, p: MPoint, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let row = scene::row_at(&self.scene, p);
+        let mut slot_of = None;
         let (presentation, element, role, rect) = match row {
             Some((node, row)) => {
                 let Some(element) = row.element else { return false };
@@ -843,6 +847,9 @@ impl DiagramCanvas {
                 } else {
                     row.rect
                 };
+                if row.role == RowRole::Slot {
+                    slot_of = node.element;
+                }
                 (node.id, element, row.role, rect)
             }
             // A message of a sequence diagram: edit its label.
@@ -868,6 +875,14 @@ impl DiagramCanvas {
             ElementKind::Message(m) if m.arguments.is_empty() => (e.name().to_owned(), false),
             ElementKind::Message(m) => (format!("{}({})", e.name(), m.arguments), false),
             _ if role == RowRole::Member => (member_text(model, element), false),
+            // A slot shows as `name = value`; only the value is taken back.
+            _ if role == RowRole::Slot => {
+                let value = slot_of
+                    .and_then(|o| object::slots(model, o).into_iter().find(|(a, _)| *a == element))
+                    .map(|(_, v)| v)
+                    .unwrap_or_default();
+                (format!("{} = {value}", e.name()), false)
+            }
             _ => (e.name().to_owned(), false),
         };
         let node_id = presentation;
@@ -901,7 +916,7 @@ impl DiagramCanvas {
             (Editor::Line(state), subscription)
         };
         self.editing =
-            Some(InlineEdit { element, rect, editor: editor.0, _subscription: editor.1 });
+            Some(InlineEdit { element, slot_of, rect, editor: editor.0, _subscription: editor.1 });
         cx.notify();
         true
     }
@@ -914,7 +929,10 @@ impl DiagramCanvas {
             Editor::Area(s) => s.read(cx).value().to_string(),
         };
         let element = edit.element;
-        self.update_workspace(cx, |ws| ws.apply_text(element, &text));
+        match edit.slot_of {
+            Some(object) => self.update_workspace(cx, |ws| ws.set_slot(object, element, &text)),
+            None => self.update_workspace(cx, |ws| ws.apply_text(element, &text)),
+        }
     }
 }
 

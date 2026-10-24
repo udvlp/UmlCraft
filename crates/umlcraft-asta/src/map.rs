@@ -13,10 +13,11 @@ use umlcraft_model::{
     AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
     DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps, GeneralizationProps, Id,
     IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
-    InteractionUseProps, LifelineProps, LineShape, MessageGate, MessageProps, MessageSort, Model,
-    Multiplicity, Navigability, Op, OperationProps, ParameterDirection, ParameterProps, Point,
-    Presentation, PseudostateKind, Qualifier, Rect, Shape, StateProps, Style, TaggedValue,
-    TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef, Visibility,
+    InteractionUseProps, LifelineProps, LineShape, LinkEnd, LinkProps, MessageGate, MessageProps,
+    MessageSort, Model, Multiplicity, Navigability, Op, OperationProps, ParameterDirection,
+    ParameterProps, Point, Presentation, PseudostateKind, Qualifier, Rect, Shape, SlotProps,
+    StateProps, Style, TaggedValue, TemplateParameterKind, TemplateParameterProps, TransitionProps,
+    TypeExpr, TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::route;
@@ -317,6 +318,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     for (owner, instance) in std::mem::take(&mut im.instances) {
         im.instance(owner, instance);
     }
+    im.links();
     for (owner, relationship) in std::mem::take(&mut im.relationships) {
         im.relationship(owner, relationship);
     }
@@ -586,7 +588,53 @@ impl Importer<'_> {
             self.r.list(object, "classifiers").first().and_then(|&c| self.classifier(c));
         let data =
             self.data(object, ElementKind::Instance(InstanceProps { instance, classifier }), &[]);
-        self.create(owner, data, Some(object));
+        let Some(id) = self.create(owner, data, Some(object)) else { return };
+        // Slots: the value is an instance whose name is the value's text.
+        for slot in self.r.list(object, "slots") {
+            let attribute = self.r.obj(slot, "attribute").and_then(|a| self.ids.get(&a).copied());
+            let value = self.r.obj(slot, "value").map(|v| self.r.name(v)).unwrap_or_default();
+            if attribute.is_none() || value.is_empty() {
+                continue;
+            }
+            let data = self.data(slot, ElementKind::Slot(SlotProps { attribute, value }), &[]);
+            self.create(id, data, Some(slot));
+        }
+    }
+
+    /// Links between objects. Astah keeps them outside the ownership tree, reachable from their
+    /// objects only; they go next to their first object. Navigability and aggregation of an end
+    /// are tagged values.
+    fn links(&mut self) {
+        let r = self.r;
+        for link in (0..r.g.objects.len()).map(ObjId).filter(|&o| r.class(o) == "ULinkImp") {
+            let ends: Vec<LinkEnd> = r
+                .list(link, "connections")
+                .into_iter()
+                .filter_map(|end| {
+                    let instance = *self.ids.get(&r.obj(end, "instance")?)?;
+                    let navigability = match self.tag(end, "object_navigable_type").as_str() {
+                        "navigable" => Navigability::Navigable,
+                        "non navigable" => Navigability::NonNavigable,
+                        _ => Navigability::Unspecified,
+                    };
+                    let aggregation = match self.tag(end, "object_aggregation_kind").as_str() {
+                        "aggregate" => Aggregation::Shared,
+                        "composite" => Aggregation::Composite,
+                        _ => Aggregation::None,
+                    };
+                    Some(LinkEnd { instance, role: r.name(end), navigability, aggregation })
+                })
+                .collect();
+            let Ok(ends) = <[LinkEnd; 2]>::try_from(ends) else {
+                self.skip(link);
+                continue;
+            };
+            let association = r.obj(link, "association").and_then(|a| self.ids.get(&a).copied());
+            let owner = self.model.get(ends[0].instance).and_then(|e| e.owner());
+            let owner = owner.unwrap_or_else(|| self.model.root());
+            let data = self.data(link, ElementKind::Link(LinkProps { ends, association }), &[]);
+            self.create(owner, data, Some(link));
+        }
     }
 
     /// The type of an attribute, parameter, qualifier or template parameter default. Astah marks
@@ -1862,6 +1910,7 @@ struct NodeData {
 fn edge_ends(kind: &ElementKind) -> Option<(Id, Id)> {
     match kind {
         ElementKind::Association(p) => Some((p.ends[0].participant, p.ends[1].participant)),
+        ElementKind::Link(p) => Some((p.ends[0].instance, p.ends[1].instance)),
         ElementKind::Generalization(p) => Some((p.specific, p.general)),
         ElementKind::Realization(p) | ElementKind::Dependency(p) => Some((p.client, p.supplier)),
         ElementKind::Include(p) => Some((p.including, p.addition)),

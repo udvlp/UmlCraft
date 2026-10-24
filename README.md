@@ -18,6 +18,7 @@ release notes explain how to start them anyway. What changed between releases is
 | Diagram | What it covers |
 | --- | --- |
 | Class | Classes, interfaces (also as a circle), enumerations and packages; attributes, operations and template parameters with bounds and defaults; associations with roles, multiplicities, navigability, aggregation, qualifiers and static ends; generalization, realization, dependency; bound templates such as `Box<Holder, 20>` |
+| Object | Objects `name : Class` with a slot for every attribute of the class, inherited ones included; links with roles, navigability and aggregation, as instances of associations. As in Astah, they are drawn on class diagrams |
 | Use case | Actors, use cases with extension points, system boundary, include and extend with condition |
 | Sequence | Lifelines, synchronous, asynchronous, reply, create, destroy, self, found and lost messages, activation bars, message numbers, combined fragments (alt, opt, loop, par, …) with operands and guards, interaction uses |
 | Activity | Actions, initial and final nodes, decision, merge, fork and join, object nodes, flows with guards, partitions (also nested) |

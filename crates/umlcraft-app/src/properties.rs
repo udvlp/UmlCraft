@@ -11,11 +11,12 @@ use gpui_kit::component::{ActiveTheme, IndexPath, Sizable, StyledExt, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    Aggregation, DiagramKind, ElementData, ElementKind, Id, InstanceProps, InteractionOperator,
-    LifelineProps, MessageSort, Model, Multiplicity, Navigability, Style, TemplateParameterKind,
-    TypeRef,
+    Aggregation, AssociationEnd, AssociationProps, DiagramKind, ElementData, ElementKind, Id,
+    InstanceKind, InstanceProps, InteractionOperator, LifelineProps, LinkEnd, LinkProps,
+    MessageSort, Model, Multiplicity, Navigability, Style, TemplateParameterKind, TypeRef,
 };
 use umlcraft_notation::member::{self, member_text};
+use umlcraft_notation::object;
 use umlcraft_notation::sequence::operator_keyword;
 
 use crate::labels::{self, VISIBILITIES};
@@ -72,9 +73,10 @@ enum Field {
     ValueType,
     Bounds,
     Default,
+    Slots,
 }
 
-const TEXT_FIELDS: [Field; 16] = [
+const TEXT_FIELDS: [Field; 17] = [
     Field::Name,
     Field::Declaration,
     Field::Stereotypes,
@@ -91,6 +93,7 @@ const TEXT_FIELDS: [Field; 16] = [
     Field::ValueType,
     Field::Bounds,
     Field::Default,
+    Field::Slots,
 ];
 
 /// Inputs for one association end.
@@ -109,6 +112,8 @@ pub struct PropertiesPanel {
     condition: Entity<InputState>,
     stereotypes: Entity<InputState>,
     text: Entity<TextareaState>,
+    /// An object's slots, one `name = value` per line.
+    slots: Entity<TextareaState>,
     visibility: Entity<Choice>,
     ends: [EndFields; 2],
     arguments: Entity<InputState>,
@@ -132,6 +137,9 @@ pub struct PropertiesPanel {
     /// Classifiers a lifeline can represent, with their ids (`None` for "none").
     represents: Entity<Choice>,
     represents_ids: Vec<Option<Id>>,
+    /// Associations a link can be an instance of, with their ids (`None` for "none").
+    association: Entity<Choice>,
+    association_ids: Vec<Option<Id>>,
     /// Element, document revision and locale the fields currently show.
     shown: Option<(Id, u64, String)>,
     /// Element whose text fields are being edited. Edits always go back to this element, even
@@ -194,10 +202,37 @@ fn reference_items(model: &Model, targets: &[Option<Id>]) -> Vec<SharedString> {
     targets
         .iter()
         .map(|t| match t.and_then(|t| model.get(t)) {
+            // An unnamed association reads as the classes it connects: "Customer – Order".
+            Some(e) if e.name().is_empty() && matches!(e.kind(), ElementKind::Association(_)) => {
+                let ElementKind::Association(p) = e.kind() else { unreachable!() };
+                let name = |end: &AssociationEnd| {
+                    model.get(end.participant).map(labels::display_name).unwrap_or_default()
+                };
+                format!("{} – {}", name(&p.ends[0]), name(&p.ends[1])).into()
+            }
             Some(e) => labels::display_name(e).into(),
             None => "—".into(),
         })
         .collect()
+}
+
+/// The associations a link can be an instance of: those between the classifiers of its
+/// objects, either way round.
+fn associations_for(model: &Model, link: &LinkProps) -> Vec<Option<Id>> {
+    let classifier = |end: &LinkEnd| match model.get(end.instance).map(|e| e.kind()) {
+        Some(ElementKind::Instance(p)) => p.classifier,
+        _ => None,
+    };
+    let (a, b) = (classifier(&link.ends[0]), classifier(&link.ends[1]));
+    let fits = |p: &AssociationProps| {
+        let (x, y) = (Some(p.ends[0].participant), Some(p.ends[1].participant));
+        (x == a && y == b) || (x == b && y == a)
+    };
+    let found = model.elements().filter_map(|e| match e.kind() {
+        ElementKind::Association(p) if fits(p) => Some(Some(e.id())),
+        _ => None,
+    });
+    std::iter::once(None).chain(found).collect()
 }
 
 /// The operations a message can call: those of the classifier its receiver represents.
@@ -266,6 +301,7 @@ impl PropertiesPanel {
         let condition = input(window, cx);
         let stereotypes = cx.new(|cx| InputState::new(window, cx).placeholder("entity, control"));
         let text = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 12));
+        let slots = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 12));
         let visibility = cx.new(|cx| SelectState::new(visibility_items(), None, window, cx));
         let end = |window: &mut Window, cx: &mut Context<Self>| EndFields {
             role: cx.new(|cx| InputState::new(window, cx)),
@@ -292,6 +328,7 @@ impl PropertiesPanel {
         let operator = cx.new(|cx| SelectState::new(operator_items(), None, window, cx));
         let operation = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
         let represents = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
+        let association = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
 
         let mut subscriptions =
             vec![cx.observe_in(&workspace, window, |this, _, window, cx| this.sync(window, cx))];
@@ -330,6 +367,26 @@ impl PropertiesPanel {
                 this.on_input(Field::Text, ev, cx);
             }
         }));
+        subscriptions.push(cx.subscribe_in(&slots, window, |this, _, ev: &InputEvent, _, cx| {
+            if !matches!(ev, InputEvent::PressEnter { .. }) {
+                this.on_input(Field::Slots, ev, cx);
+            }
+        }));
+        subscriptions.push(cx.subscribe_in(
+            &association,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(&target) = selected(state, cx).and_then(|ix| this.association_ids.get(ix))
+                else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::Link(p) = &mut data.kind {
+                        p.association = target;
+                    }
+                });
+            },
+        ));
         subscriptions.push(cx.subscribe_in(
             &visibility,
             window,
@@ -425,10 +482,10 @@ impl PropertiesPanel {
                     else {
                         return;
                     };
-                    this.apply_shown(cx, move |data| {
-                        if let ElementKind::Association(p) = &mut data.kind {
-                            p.ends[i].navigability = n;
-                        }
+                    this.apply_shown(cx, move |data| match &mut data.kind {
+                        ElementKind::Association(p) => p.ends[i].navigability = n,
+                        ElementKind::Link(p) => p.ends[i].navigability = n,
+                        _ => {}
                     });
                 },
             ));
@@ -440,10 +497,10 @@ impl PropertiesPanel {
                     else {
                         return;
                     };
-                    this.apply_shown(cx, move |data| {
-                        if let ElementKind::Association(p) = &mut data.kind {
-                            p.ends[i].aggregation = a;
-                        }
+                    this.apply_shown(cx, move |data| match &mut data.kind {
+                        ElementKind::Association(p) => p.ends[i].aggregation = a,
+                        ElementKind::Link(p) => p.ends[i].aggregation = a,
+                        _ => {}
                     });
                 },
             ));
@@ -456,6 +513,7 @@ impl PropertiesPanel {
             condition,
             stereotypes,
             text,
+            slots,
             visibility,
             ends,
             arguments,
@@ -476,6 +534,8 @@ impl PropertiesPanel {
             operation_ids: Vec::new(),
             represents,
             represents_ids: Vec::new(),
+            association,
+            association_ids: Vec::new(),
             shown: None,
             editing: None,
             _subscriptions: subscriptions,
@@ -636,10 +696,23 @@ impl PropertiesPanel {
             }
             Field::Role(i) => {
                 let value = Self::value(&self.ends[i].role, cx);
-                self.apply(id, cx, move |data| {
-                    if let ElementKind::Association(p) = &mut data.kind {
-                        p.ends[i].role = value;
-                    }
+                self.apply(id, cx, move |data| match &mut data.kind {
+                    ElementKind::Association(p) => p.ends[i].role = value,
+                    ElementKind::Link(p) => p.ends[i].role = value,
+                    _ => {}
+                });
+            }
+            Field::Slots => {
+                // One `name = value` per line; names that are no slot of the object are ignored.
+                let text = self.slots.read(cx).value().to_string();
+                let values: Vec<(String, String)> = text
+                    .lines()
+                    .filter_map(|line| line.split_once('='))
+                    .map(|(name, value)| (name.trim().to_owned(), value.trim().to_owned()))
+                    .collect();
+                self.workspace.update(cx, |ws, cx| {
+                    ws.set_slots(id, &values);
+                    cx.notify();
                 });
             }
             Field::Multiplicity(i) => {
@@ -742,7 +815,19 @@ impl PropertiesPanel {
             ElementKind::Message(_) => operations_for(model, id),
             ElementKind::Lifeline(_) | ElementKind::Instance(_) => classifiers(model),
             ElementKind::InteractionUse(_) => interactions(model),
+            ElementKind::Link(p) => associations_for(model, p),
             _ => Vec::new(),
+        };
+        let slots = match &data.kind {
+            ElementKind::Instance(_) => object::slots(model, id)
+                .into_iter()
+                .map(|(attribute, value)| {
+                    let name = model.get(attribute).map(|a| a.name()).unwrap_or_default();
+                    format!("{name} = {value}")
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
         };
         let reference_labels = reference_items(model, &references);
         self.shown = Some(key);
@@ -766,6 +851,7 @@ impl PropertiesPanel {
             _ => data.documentation.clone(),
         };
         self.text.update(cx, |s, cx| s.set_value(text, window, cx));
+        self.slots.update(cx, |s, cx| s.set_value(slots, window, cx));
         let choose = |state: &Entity<Choice>,
                       ix: Option<usize>,
                       items: Option<Vec<SharedString>>,
@@ -802,6 +888,20 @@ impl PropertiesPanel {
                 let ix = references.iter().position(|c| c == classifier);
                 choose(&self.represents, ix, Some(reference_labels), window, cx);
                 self.represents_ids = references;
+            }
+            ElementKind::Link(p) => {
+                let ix = references.iter().position(|a| *a == p.association);
+                choose(&self.association, ix, Some(reference_labels), window, cx);
+                self.association_ids = references;
+                for (i, end) in p.ends.iter().enumerate() {
+                    set(&self.ends[i].role, end.role.clone(), window, cx);
+                    let n = NAVIGABILITIES.iter().position(|&x| x == end.navigability);
+                    let items = locale_changed.then(navigability_items);
+                    choose(&self.ends[i].navigability, n, items, window, cx);
+                    let a = AGGREGATIONS.iter().position(|&x| x == end.aggregation);
+                    let items = locale_changed.then(aggregation_items);
+                    choose(&self.ends[i].aggregation, a, items, window, cx);
+                }
             }
             ElementKind::CombinedFragment(p) => {
                 let ix = OPERATORS.iter().position(|&o| o == p.operator);
@@ -1247,11 +1347,43 @@ impl Render for PropertiesPanel {
                     Select::new(&self.represents).small().into_any_element(),
                 ));
             }
-            ElementKind::Instance(_) => {
+            ElementKind::Instance(p) => {
                 body = body.child(field(
                     t!("prop.classifier").into(),
                     Select::new(&self.represents).small().into_any_element(),
                 ));
+                // Objects give their classifier's attributes values.
+                if p.instance == InstanceKind::Object && p.classifier.is_some() {
+                    body = body.child(field(
+                        t!("prop.slots").into(),
+                        Textarea::new(&self.slots).small().into_any_element(),
+                    ));
+                }
+            }
+            ElementKind::Link(p) => {
+                body = body.child(field(
+                    t!("prop.instance_of_association").into(),
+                    Select::new(&self.association).small().into_any_element(),
+                ));
+                for (i, end) in p.ends.iter().enumerate() {
+                    let object =
+                        model.get(end.instance).map(labels::display_name).unwrap_or_default();
+                    let fields = &self.ends[i];
+                    body = body
+                        .child(heading(format!("{} {} – {object}", t!("prop.end"), ["A", "B"][i])))
+                        .child(field(
+                            t!("prop.role").into(),
+                            Input::new(&fields.role).small().into_any_element(),
+                        ))
+                        .child(field(
+                            t!("prop.navigability").into(),
+                            Select::new(&fields.navigability).small().into_any_element(),
+                        ))
+                        .child(field(
+                            t!("prop.aggregation").into(),
+                            Select::new(&fields.aggregation).small().into_any_element(),
+                        ));
+                }
             }
             ElementKind::InteractionUse(_) => {
                 body = body

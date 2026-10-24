@@ -3,6 +3,13 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Object diagrams as in Astah**: objects `name : Class` on class diagrams with one slot per
+  attribute of the class, inherited ones included, edited inline or in the properties panel
+  (`name = value`); links between objects with roles, navigability and aggregation, optionally
+  as an instance of an association. Imported from and exported to Astah.
+
 ## 0.4.0 – 2026-10-24
 
 - **Java import** (Tools › Java › Import Java files … / Import Java folder …): reads declarations

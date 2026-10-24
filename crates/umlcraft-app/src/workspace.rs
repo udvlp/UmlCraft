@@ -9,6 +9,7 @@ use umlcraft_model::{
 };
 use umlcraft_notation::clipboard::{self, Clip};
 use umlcraft_notation::member;
+use umlcraft_notation::object;
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::route::Route;
 use umlcraft_notation::scene::{self, Alignment, ApproxMeasure, TextMeasure};
@@ -483,6 +484,37 @@ impl Workspace {
                 }
             }),
             _ => member::apply_member_text(tx, element, text),
+        });
+        self.report(result);
+    }
+
+    /// Sets the value `instance` gives `attribute`, typed in place as `name = value`.
+    pub fn set_slot(&mut self, instance: Id, attribute: Id, text: &str) {
+        let label = t!("edit.set_slots").to_string();
+        let result = self.edit(label, |tx| object::set_slot(tx, instance, attribute, text));
+        self.report(result);
+    }
+
+    /// Sets the values of an object's slots by attribute name, as one undo step. Names that are
+    /// no slot of the object are left out.
+    pub fn set_slots(&mut self, instance: Id, values: &[(String, String)]) {
+        let model = self.doc.model();
+        let changes: Vec<(Id, &str)> = object::slots(model, instance)
+            .into_iter()
+            .filter_map(|(attribute, old)| {
+                let name = model.get(attribute)?.name();
+                let (_, value) = values.iter().find(|(n, _)| n == name)?;
+                (*value != old).then_some((attribute, value.as_str()))
+            })
+            .collect();
+        if changes.is_empty() {
+            return;
+        }
+        let label = t!("edit.set_slots").to_string();
+        let result = self.edit(label, |tx| {
+            changes.iter().try_for_each(|&(attribute, value)| {
+                object::set_slot(tx, instance, attribute, value)
+            })
         });
         self.report(result);
     }

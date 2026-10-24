@@ -56,6 +56,7 @@ pub enum NodeTool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EdgeTool {
     Association,
+    Link,
     Generalization,
     Realization,
     Dependency,
@@ -98,8 +99,15 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
     use NodeTool as N;
     let (nodes, edges): (&[NodeTool], &[EdgeTool]) = match kind {
         DiagramKind::Class => (
-            &[N::Class, N::Interface, N::Enumeration, N::Package, N::Note],
-            &[E::Association, E::Generalization, E::Realization, E::Dependency, E::NoteAnchor],
+            &[N::Class, N::Interface, N::Enumeration, N::Package, N::Object, N::Note],
+            &[
+                E::Association,
+                E::Generalization,
+                E::Realization,
+                E::Dependency,
+                E::Link,
+                E::NoteAnchor,
+            ],
         ),
         DiagramKind::UseCase => (
             &[N::Actor, N::UseCase, N::SystemBoundary, N::Note],
@@ -171,7 +179,7 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
                 N::Interface,
                 N::Note,
             ],
-            &[E::Association, E::Dependency, E::Realization, E::NoteAnchor],
+            &[E::Association, E::Link, E::Dependency, E::Realization, E::NoteAnchor],
         ),
     };
     std::iter::once(Tool::Select)
@@ -381,6 +389,7 @@ impl EdgeTool {
     pub fn key(self) -> &'static str {
         match self {
             Self::Association => "association",
+            Self::Link => "link",
             Self::Generalization => "generalization",
             Self::Realization => "realization",
             Self::Dependency => "dependency",
@@ -430,6 +439,7 @@ impl EdgeTool {
                 !same && matches!((source, target), (K::Lifeline(_), K::Lifeline(_)))
             }
             Self::Association => source.is_classifier() && target.is_classifier(),
+            Self::Link => matches!((source, target), (K::Instance(_), K::Instance(_))),
             Self::Generalization => {
                 !same
                     && std::mem::discriminant(source) == std::mem::discriminant(target)
@@ -495,6 +505,7 @@ impl EdgeTool {
                 }
                 Some(kind)
             }
+            Self::Link => Some(ElementKind::link(source, target)),
             Self::Generalization => Some(ElementKind::generalization(source, target)),
             Self::Realization => Some(ElementKind::Realization(directed)),
             Self::Dependency => Some(ElementKind::Dependency(directed)),
@@ -801,7 +812,7 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
     // Only associations and transitions may loop back to the same node; they get a loop of
     // waypoints.
     let self_loop = source == target;
-    let may_loop = matches!(tool, EdgeTool::Association | EdgeTool::Transition);
+    let may_loop = matches!(tool, EdgeTool::Association | EdgeTool::Link | EdgeTool::Transition);
     if (self_loop && !may_loop) || !tool.accepts(sk, tk, s == t) {
         return Err(ModelError::Invalid(format!(
             "{} cannot connect {} to {}",
@@ -1033,6 +1044,33 @@ mod tests {
         assert!(EdgeTool::NoteAnchor.accepts(&note, &class, false));
         assert!(EdgeTool::NoteAnchor.accepts(&class, &note, false));
         assert!(!EdgeTool::NoteAnchor.accepts(&note, &note, false));
+    }
+
+    #[test]
+    fn links_connect_objects() {
+        let object = ElementKind::Instance(InstanceProps {
+            instance: InstanceKind::Object,
+            classifier: None,
+        });
+        assert!(palette(DiagramKind::Class).contains(&Tool::Edge(EdgeTool::Link)));
+        assert!(EdgeTool::Link.accepts(&object, &object, false));
+        assert!(EdgeTool::Link.accepts(&object, &object, true));
+        assert!(!EdgeTool::Link.accepts(&object, &ElementKind::class(), false));
+
+        let (mut doc, ids) = order_system();
+        let d = ids.object_diagram;
+        let link = doc
+            .edit("link", |tx| {
+                let (_, a) = create_node(tx, d, NodeTool::Object, Point::new(100.0, 300.0), "")?;
+                let (_, b) = create_node(tx, d, NodeTool::Object, Point::new(400.0, 300.0), "")?;
+                connect(tx, d, EdgeTool::Link, a, b)
+            })
+            .unwrap();
+        let model = doc.model();
+        let element = model.view(d).unwrap().get(link).unwrap().element.unwrap();
+        assert_eq!(model.get(element).unwrap().owner(), Some(ids.domain));
+        assert!(matches!(model.get(element).unwrap().kind(), ElementKind::Link(_)));
+        model.check().unwrap();
     }
 
     #[test]

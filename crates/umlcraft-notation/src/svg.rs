@@ -246,8 +246,9 @@ impl Svg<'_> {
         }
         self.text(&row.text, row.rect, row.size, row.bold, row.italic, row.align, width);
         if row.underline && !row.text.is_empty() {
-            let width = self.measure.width(&row.text, row.size, row.bold);
+            // Astah starts the line where the text starts and makes it as long as the text.
             let x = draw::text_left(row.rect, width, row.align);
+            let width = self.measure.width(&row.text, row.size, row.bold);
             let y = row.rect.y + row.size * draw::UNDERLINE;
             self.primitive(&Primitive::Polyline {
                 points: vec![Point::new(x, y), Point::new(x + width, y)],

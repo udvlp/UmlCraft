@@ -27,6 +27,7 @@ pub fn tree_name(model: &Model, e: &Element) -> String {
     let guard =
         |g: &str| if g.trim().is_empty() { String::new() } else { format!("[{}]", g.trim()) };
     let shown = match e.kind() {
+        ElementKind::Slot(p) => format!("{} = {}", e.name(), p.value),
         _ if !e.name().is_empty() => String::new(),
         ElementKind::Message(_) => message_text(model, e.id()),
         ElementKind::CombinedFragment(p) => operator_keyword(p.operator).to_owned(),

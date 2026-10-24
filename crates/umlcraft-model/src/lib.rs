@@ -23,10 +23,11 @@ pub use element::{
     AssociationProps, AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps,
     DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, GeneralizationProps,
     IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
-    InteractionUseProps, LifelineProps, MessageGate, MessageProps, MessageSort, Multiplicity,
-    Navigability, OperationProps, ParameterDirection, ParameterProps, ParseMultiplicityError,
-    PseudostateKind, PseudostateProps, Qualifier, RefRole, StateProps, TaggedValue,
-    TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef, Visibility,
+    InteractionUseProps, LifelineProps, LinkEnd, LinkProps, MessageGate, MessageProps, MessageSort,
+    Multiplicity, Navigability, OperationProps, ParameterDirection, ParameterProps,
+    ParseMultiplicityError, PseudostateKind, PseudostateProps, Qualifier, RefRole, SlotProps,
+    StateProps, TaggedValue, TemplateParameterKind, TemplateParameterProps, TransitionProps,
+    TypeExpr, TypeRef, Visibility,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

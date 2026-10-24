@@ -271,6 +271,10 @@ fn tree(model: &Model) -> BTreeSet<String> {
             ElementKind::Instance(p) => {
                 format!(" : {}", p.classifier.map(|c| name(model, c)).unwrap_or_default())
             }
+            ElementKind::Slot(p) => {
+                let attribute = p.attribute.map(|a| path(model, a)).unwrap_or_default();
+                format!(" = {} ({attribute})", p.value)
+            }
             ElementKind::Component(_) | ElementKind::Artifact(_) | ElementKind::Node(_) => {
                 String::new()
             }
@@ -322,6 +326,20 @@ fn relationships(model: &Model) -> BTreeSet<String> {
                         )
                     };
                     format!("association {} — {}", end(0), end(1))
+                }
+                // Which association a link instantiates, the API cannot say.
+                ElementKind::Link(p) => {
+                    let end = |i: usize| {
+                        let end = &p.ends[i];
+                        format!(
+                            "{}:{} {:?} {:?}",
+                            end.role,
+                            n(end.instance),
+                            end.navigability,
+                            end.aggregation
+                        )
+                    };
+                    format!("link {:?} {} — {}", e.name(), end(0), end(1))
                 }
                 ElementKind::Generalization(p) => {
                     format!("generalization {} → {}", n(p.specific), n(p.general))

@@ -707,6 +707,52 @@ pub struct InstanceProps {
     pub classifier: Option<Id>,
 }
 
+/// The value an object gives one attribute of its classifier, such as `total = 42`. Owned by
+/// the object and named like the attribute; deleting the attribute deletes its slots.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotProps {
+    /// The attribute this slot gives a value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribute: Option<Id>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub value: String,
+}
+
+/// One end of a link: the object it connects and how the link reaches it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkEnd {
+    pub instance: Id,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub navigability: Navigability,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub aggregation: Aggregation,
+}
+
+impl LinkEnd {
+    pub fn new(instance: Id) -> Self {
+        Self {
+            instance,
+            role: String::new(),
+            navigability: Navigability::default(),
+            aggregation: Aggregation::default(),
+        }
+    }
+}
+
+/// A link between two objects: an instance of an association.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkProps {
+    pub ends: [LinkEnd; 2],
+    /// The association this link is an instance of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub association: Option<Id>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagramProps {
@@ -743,6 +789,8 @@ pub enum ElementKind {
     Node(ClassifierProps),
     /// An instance specification: an object, a component instance or a node instance.
     Instance(InstanceProps),
+    /// The value of one attribute in an object.
+    Slot(SlotProps),
     ExtensionPoint,
     /// The system (subject) whose use cases are drawn inside its boundary.
     SystemBoundary,
@@ -766,6 +814,8 @@ pub enum ElementKind {
     Pseudostate(PseudostateProps),
     Transition(TransitionProps),
     Association(AssociationProps),
+    /// A link between two objects, drawn on object (class) diagrams.
+    Link(LinkProps),
     Generalization(GeneralizationProps),
     Realization(DirectedProps),
     Dependency(DirectedProps),
@@ -798,6 +848,12 @@ pub enum RefRole {
     TransitionEnd,
     Classifier,
     RefersTo,
+    /// A slot's attribute.
+    DefiningAttribute,
+    /// The objects a link connects.
+    LinkEnd,
+    /// The association a link is an instance of.
+    Instantiates,
 }
 
 impl RefRole {
@@ -818,6 +874,8 @@ impl RefRole {
                 | Self::MessageEnd
                 | Self::FlowEnd
                 | Self::TransitionEnd
+                | Self::LinkEnd
+                | Self::DefiningAttribute
         )
     }
 
@@ -841,6 +899,9 @@ impl RefRole {
             Self::FlowEnd => matches!(target, ElementKind::ActivityNode(_)),
             Self::RefersTo => matches!(target, ElementKind::Interaction),
             Self::TransitionEnd => target.is_vertex(),
+            Self::DefiningAttribute => matches!(target, ElementKind::Attribute(_)),
+            Self::LinkEnd => matches!(target, ElementKind::Instance(_)),
+            Self::Instantiates => matches!(target, ElementKind::Association(_)),
             Self::Client | Self::Supplier | Self::Annotated => {
                 !matches!(target, ElementKind::Model | ElementKind::Diagram(_))
             }
@@ -877,6 +938,10 @@ impl ElementKind {
         Self::Association(AssociationProps {
             ends: [AssociationEnd::new(a), AssociationEnd::new(b)],
         })
+    }
+
+    pub fn link(a: Id, b: Id) -> Self {
+        Self::Link(LinkProps { ends: [LinkEnd::new(a), LinkEnd::new(b)], association: None })
     }
 
     pub fn generalization(specific: Id, general: Id) -> Self {
@@ -946,6 +1011,7 @@ impl ElementKind {
             Self::Artifact(_) => "artifact",
             Self::Node(_) => "node",
             Self::Instance(_) => "instance",
+            Self::Slot(_) => "slot",
             Self::ExtensionPoint => "extensionPoint",
             Self::SystemBoundary => "systemBoundary",
             Self::Interaction => "interaction",
@@ -964,6 +1030,7 @@ impl ElementKind {
             Self::Pseudostate(_) => "pseudostate",
             Self::Transition(_) => "transition",
             Self::Association(_) => "association",
+            Self::Link(_) => "link",
             Self::Generalization(_) => "generalization",
             Self::Realization(_) => "realization",
             Self::Dependency(_) => "dependency",
@@ -995,6 +1062,7 @@ impl ElementKind {
         matches!(
             self,
             Self::Association(_)
+                | Self::Link(_)
                 | Self::Generalization(_)
                 | Self::Realization(_)
                 | Self::Dependency(_)
@@ -1031,7 +1099,8 @@ impl ElementKind {
             K::Component(_) | K::Artifact(_) | K::Node(_) => {
                 self.is_namespace() || matches!(self, K::Component(_) | K::Node(_))
             }
-            K::Instance(_) => self.is_namespace(),
+            K::Instance(_) | K::Link(_) => self.is_namespace(),
+            K::Slot(_) => matches!(self, K::Instance(_)),
             K::Actor(_) | K::UseCase(_) | K::SystemBoundary => self.is_namespace(),
             K::Attribute(_) | K::Operation(_) => self.is_classifier(),
             K::EnumerationLiteral => matches!(self, K::Enumeration(_)),
@@ -1091,6 +1160,11 @@ impl ElementKind {
             }
             Self::Lifeline(p) => p.represents.iter().for_each(|&id| f(id, RefRole::Represents)),
             Self::Instance(p) => p.classifier.iter().for_each(|&id| f(id, RefRole::Classifier)),
+            Self::Slot(p) => p.attribute.iter().for_each(|&id| f(id, RefRole::DefiningAttribute)),
+            Self::Link(p) => {
+                p.ends.iter().for_each(|end| f(end.instance, RefRole::LinkEnd));
+                p.association.iter().for_each(|&id| f(id, RefRole::Instantiates));
+            }
             Self::Message(p) => {
                 f(p.from, RefRole::MessageEnd);
                 f(p.to, RefRole::MessageEnd);
@@ -1154,6 +1228,11 @@ impl ElementKind {
             }
             Self::Lifeline(p) => p.represents.iter_mut().for_each(f),
             Self::Instance(p) => p.classifier.iter_mut().for_each(f),
+            Self::Slot(p) => p.attribute.iter_mut().for_each(f),
+            Self::Link(p) => {
+                p.ends.iter_mut().for_each(|end| f(&mut end.instance));
+                p.association.iter_mut().for_each(f);
+            }
             Self::Message(p) => {
                 f(&mut p.from);
                 f(&mut p.to);
@@ -1254,6 +1333,7 @@ impl ElementKind {
             }
             Self::Lifeline(p) => unlink_opt(&mut p.represents),
             Self::Instance(p) => unlink_opt(&mut p.classifier),
+            Self::Link(p) => unlink_opt(&mut p.association),
             Self::Message(p) => unlink_opt(&mut p.operation),
             Self::CombinedFragment(p) => unlink_vec(&mut p.covered),
             Self::InteractionUse(p) => {

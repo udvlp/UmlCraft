@@ -72,6 +72,7 @@ tool:
   lifeline: Lebenslinie
   systemBoundary: Systemgrenze
   association: Assoziation
+  link: Link
   generalization: Generalisierung
   realization: Realisierung
   dependency: Abhängigkeit
@@ -172,6 +173,8 @@ prop:
   covered: Umfasste Lebenslinien
   covered_automatic: Keine angekreuzt – das Fragment umfasst die Lebenslinien seiner Nachrichten.
   classifier: Instanz von
+  slots: Slots (je Zeile „Name = Wert“)
+  instance_of_association: Instanz der Assoziation
   refers_to: Verweist auf
   leaf: Blatt (nicht spezialisier- oder überschreibbar)
   parameter_kind: Parameterart
@@ -256,6 +259,7 @@ export_dropped:
   unmatchedReply: Antworten ohne Aufruf (als Aufruf exportiert)
   replyArguments: Argumente von Antworten
   messageOperation: Von Nachrichten aufgerufene Operationen
+  linkAssociation: Von Links instanziierte Assoziationen
   emptyOperand: Leere Operanden kombinierter Fragmente
   nestedEnumeration: Verschachtelte Aufzählungen (ins Paket verschoben)
   activity: Aktivitäten ohne Diagramm
@@ -298,6 +302,7 @@ edit:
   labels: Beschriftungen zurücksetzen
   show: Im Diagramm zeigen
   move_element: Im Modell verschieben
+  set_slots: Slot-Werte ändern
   paste: Einfügen
   wrap_in_fragment: Mit Fragment umschließen
   import_source: Quellcode importieren
@@ -369,4 +374,6 @@ kind:
   componentInstance: Komponenteninstanz
   nodeInstance: Knoteninstanz
   object: Objekt
+  slot: Slot
+  link: Link
   interactionUse: Interaktionsverweis

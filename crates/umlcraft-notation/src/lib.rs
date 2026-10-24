@@ -11,6 +11,7 @@ pub mod clipboard;
 pub mod draw;
 pub mod member;
 pub mod metrics;
+pub mod object;
 pub mod palette;
 pub mod route;
 pub mod scene;
