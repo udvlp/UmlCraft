@@ -17,10 +17,12 @@ use crate::sequence::{self, SequenceLayout};
 pub trait TextMeasure {
     fn width(&self, text: &str, font_size: f32, bold: bool) -> f32;
 
-    /// The width with every character's advance rounded to whole pixels. Astah centers the
-    /// names in boxes by this width, though it draws them with exact advances.
+    /// The width with every character's advance in whole pixels, as Java measures Astah's font
+    /// ([`metrics`](crate::metrics)). Astah centers the names in boxes by this width and sizes
+    /// tabs by it, though it draws the texts with exact advances.
     fn rounded_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
-        self.width(text, font_size, bold)
+        crate::metrics::java_width(text, font_size, bold)
+            .unwrap_or_else(|| self.width(text, font_size, bold))
     }
 }
 
@@ -264,6 +266,8 @@ pub struct Row {
     pub role: RowRole,
     /// Element this row edits: the node's element for names, the member for members.
     pub element: Option<Id>,
+    /// Drawn with whole-pixel advances, as Astah draws the texts in fragment tabs.
+    pub hinted: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -498,6 +502,7 @@ impl Line {
             align,
             role: self.role,
             element: self.element,
+            hinted: false,
         }
     }
 }
@@ -1445,6 +1450,23 @@ pub fn hit_test(scene: &Scene, p: Point, tolerance: f32) -> Option<Id> {
         return Some(edge.id);
     }
     scene.nodes.iter().rev().find(|n| n.hit(p, tolerance)).map(|n| n.id)
+}
+
+/// The label of a sequence message under `p`: the message's presentation and the top left corner
+/// of its name label (the first one; a stereotype above it moves with it).
+pub fn message_label_at(scene: &Scene, p: Point, measure: &dyn TextMeasure) -> Option<(Id, Point)> {
+    scene.edges.iter().rev().filter(|e| e.fixed).find_map(|e| {
+        let hit = e.labels.iter().any(|l| {
+            let area = crate::draw::label_area(l);
+            let width = measure.width(&l.text, FONT_SIZE, false);
+            let left = crate::draw::text_left(area, width, l.align);
+            Rect::new(left, l.anchor.y, width, LABEL_HEIGHT).contains(p)
+        });
+        let name = e.labels.first()?;
+        let width = measure.width(&name.text, FONT_SIZE, false);
+        let left = crate::draw::text_left(crate::draw::label_area(name), width, name.align);
+        hit.then_some((e.id, Point::new(left, name.anchor.y)))
+    })
 }
 
 /// Nodes lying completely inside `area`, e.g. a rubber band.

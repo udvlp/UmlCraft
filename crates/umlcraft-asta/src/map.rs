@@ -1374,7 +1374,7 @@ impl Importer<'_> {
         let Some(ElementKind::Message(props)) = self.model.get(element).map(|e| e.kind()) else {
             return;
         };
-        let gate = props.gate;
+        let (gate, props_sort) = (props.gate, props.sort);
         let points: Vec<Point> =
             r.points(p, "allPoints").into_iter().map(|pt| pt.offset(shift.x, shift.y)).collect();
         let (Some(&first), Some(&last)) = (points.first(), points.last()) else { return };
@@ -1413,8 +1413,9 @@ impl Importer<'_> {
             });
         }
         presentation.style = self.fill(p);
-        presentation.style.hide_parameters =
-            r.g.field(p, "parameterVisibility").and_then(Value::as_bool) == Some(false);
+        // Astah hides the parentheses of every reply; only for calls it is a choice.
+        presentation.style.hide_parameters = props_sort != MessageSort::Reply
+            && r.g.field(p, "parameterVisibility").and_then(Value::as_bool) == Some(false);
         self.insert(diagram, presentation, false);
     }
 

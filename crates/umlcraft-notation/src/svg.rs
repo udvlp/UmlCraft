@@ -175,6 +175,38 @@ impl Svg<'_> {
     /// A row of a node. Astah centers such texts by their rounded width.
     fn row(&mut self, row: &Row) {
         let width = self.measure.rounded_width(&row.text, row.size, row.bold);
+        // Whole-pixel advances: every character at its own x.
+        let advances: Option<Vec<f32>> = row
+            .hinted
+            .then(|| {
+                row.text
+                    .chars()
+                    .map(|c| {
+                        crate::metrics::java_width(c.encode_utf8(&mut [0; 4]), row.size, row.bold)
+                    })
+                    .collect()
+            })
+            .flatten();
+        if let Some(advances) = advances.filter(|a| !a.is_empty()) {
+            let mut x = draw::text_left(row.rect, width, row.align);
+            let xs: Vec<String> = advances
+                .iter()
+                .map(|a| {
+                    let at = num(x);
+                    x += a;
+                    at
+                })
+                .collect();
+            self.out += &format!(
+                "<text x=\"{}\" y=\"{}\" font-size=\"{}\"{}>{}</text>\n",
+                xs.join(" "),
+                num(row.rect.y + row.size * draw::BASELINE),
+                num(row.size),
+                if row.bold { " font-weight=\"bold\"" } else { "" },
+                escape(&row.text),
+            );
+            return;
+        }
         self.text(&row.text, row.rect, row.size, row.bold, row.italic, row.align, width);
         if row.underline && !row.text.is_empty() {
             let width = self.measure.width(&row.text, row.size, row.bold);

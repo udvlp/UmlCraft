@@ -105,6 +105,13 @@ enum Drag {
         start: MPoint,
         current: MPoint,
     },
+    /// Dragging the label of a sequence message; `origin` is its top left corner at the start.
+    MessageLabel {
+        message: Id,
+        origin: MPoint,
+        start: MPoint,
+        current: MPoint,
+    },
     Pan {
         last: Point<Pixels>,
     },
@@ -362,6 +369,14 @@ impl DiagramCanvas {
                 if ev.click_count == 2 && self.start_edit_at(p, window, cx) {
                     return;
                 }
+                // A message's label can be moved away from its line.
+                let label = scene::message_label_at(&self.scene, p, &FontMeasure::new(window));
+                if let Some((message, origin)) = label.filter(|_| !extend) {
+                    self.workspace.update(cx, |ws, _| ws.select(vec![message]));
+                    self.drag = Some(Drag::MessageLabel { message, origin, start: p, current: p });
+                    cx.notify();
+                    return;
+                }
                 match scene::hit_test(&self.scene, p, 4.0 / self.zoom) {
                     Some(id) => {
                         let already = selection.contains(&id);
@@ -487,7 +502,8 @@ impl DiagramCanvas {
             Drag::Waypoint { current, .. } => *current = snap_point(p),
             Drag::RubberBand { current, .. }
             | Drag::Connect { current, .. }
-            | Drag::Reorder { current, .. } => *current = p,
+            | Drag::Reorder { current, .. }
+            | Drag::MessageLabel { current, .. } => *current = p,
             Drag::Pan { last } => {
                 let delta = position - *last;
                 *last = position;
@@ -550,6 +566,12 @@ impl DiagramCanvas {
                 {
                     self.update_workspace(cx, |ws| ws.move_to_slot(element, slot));
                 }
+            }
+            Some(Drag::MessageLabel { message, origin, start, current })
+                if start.distance(current) > 2.0 =>
+            {
+                let to = origin.offset(current.x - start.x, current.y - start.y);
+                self.update_workspace(cx, |ws| ws.place_message_label(message, to));
             }
             _ => {}
         }
@@ -1169,6 +1191,28 @@ impl Render for DiagramCanvas {
                                         layout.and_then(|l| l.slot_at(current.y).map(|s| (l, s)))
                                     {
                                         p.insertion_line(layout, slot.y);
+                                    }
+                                }
+                                Some(Drag::MessageLabel { message, start, current, .. }) => {
+                                    // The labels where they will go.
+                                    let (dx, dy) = (current.x - start.x, current.y - start.y);
+                                    let s = p.c.selection;
+                                    for label in scene.edge(*message).iter().flat_map(|e| &e.labels)
+                                    {
+                                        let moved = scene::EdgeLabel {
+                                            anchor: label.anchor.offset(dx, dy),
+                                            ..label.clone()
+                                        };
+                                        let area = draw::label_area(&moved);
+                                        p.text(
+                                            &moved.text,
+                                            area,
+                                            FONT_SIZE,
+                                            false,
+                                            false,
+                                            s,
+                                            moved.align,
+                                        );
                                     }
                                 }
                                 Some(Drag::Connect { source, current, .. }) => {

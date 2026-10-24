@@ -9,6 +9,7 @@
 pub mod clipboard;
 pub mod draw;
 pub mod member;
+pub mod metrics;
 pub mod palette;
 pub mod scene;
 pub mod sequence;

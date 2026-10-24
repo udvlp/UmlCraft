@@ -393,6 +393,16 @@ impl Workspace {
         }
     }
 
+    /// Puts a message's label where the user dragged it.
+    pub fn place_message_label(&mut self, presentation: Id, top_left: Point) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.move").to_string();
+        let result = self.doc.edit(label, |tx| {
+            umlcraft_notation::sequence_edit::place_label(tx, diagram, presentation, top_left)
+        });
+        self.report(result);
+    }
+
     pub fn set_bounds(&mut self, presentation: Id, bounds: Rect) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.resize").to_string();
@@ -454,7 +464,8 @@ impl Workspace {
                     tx.delete(e)?;
                 }
             }
-            Ok(())
+            // Bars of deleted messages go too.
+            umlcraft_notation::sequence_edit::tidy_all(tx)
         });
         if self.report(result).is_some() {
             self.clear_selection();
@@ -472,7 +483,7 @@ impl Workspace {
                     tx.remove_presentation(diagram, p)?;
                 }
             }
-            Ok(())
+            umlcraft_notation::sequence_edit::tidy_all(tx)
         });
         if self.report(result).is_some() {
             self.clear_selection();
@@ -603,7 +614,10 @@ impl Workspace {
     /// Deletes one element from the model (with everything that depends on it).
     pub fn delete_element(&mut self, id: Id) {
         let label = t!("edit.delete").to_string();
-        let result = self.doc.edit(label, |tx| tx.delete(id));
+        let result = self.doc.edit(label, |tx| {
+            tx.delete(id)?;
+            umlcraft_notation::sequence_edit::tidy_all(tx)
+        });
         if self.report(result).is_some() {
             self.validate();
             if self.selected_element.is_none() {

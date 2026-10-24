@@ -589,6 +589,12 @@ public final class AstaExport {
                 }
                 common(interaction, d.getInteraction(), Set.of());
                 sequenceDiagrams.put(interaction, d);
+                // Message numbers and return values, as the diagram shows them.
+                Map<String, Object> props = elements.get(id);
+                d.setProperty("message_index_visibility",
+                    Boolean.toString(!Boolean.TRUE.equals(props.get("hideMessageNumbers"))));
+                d.setProperty("message_return_value_initial_visibility",
+                    Boolean.toString(!Boolean.TRUE.equals(props.get("hideReturnValues"))));
                 new Sequence(id, sd).build();
                 diagram = d;
             }
@@ -1168,7 +1174,7 @@ public final class AstaExport {
     // ----- Sequence diagrams ------------------------------------------------------------------
 
     /// A combined fragment shown on the diagram, with the messages inside each operand.
-    private record Fragment(String id, Map<String, Object> frame, List<Operand> operands) {
+    private record Fragment(String id, Map<String, Object> frame, Map<String, Object> shape, List<Operand> operands) {
     }
 
     private record Operand(String id, String guard, List<IPresentation> messages) {
@@ -1179,12 +1185,15 @@ public final class AstaExport {
         final String lane;
         final double top;
         final double bottom;
+        /// Its fill; the API's bars are white, Astah's editor makes them yellow.
+        final String fill;
         INodePresentation astah;
 
-        Bar(String lane, double top, double bottom) {
+        Bar(String lane, double top, double bottom, String fill) {
             this.lane = lane;
             this.top = top;
             this.bottom = bottom;
+            this.fill = fill;
         }
     }
 
@@ -1224,7 +1233,10 @@ public final class AstaExport {
                     lifelines.add(p);
                 } else if ("activation".equals(shape)) {
                     double top = num(p, "top");
-                    bars.add(new Bar((String) p.get("lifeline"), top, top + num(p, "height")));
+                    Map<String, Object> style = (Map<String, Object>) p.get("style");
+                    String fill = style != null && style.get("fill") instanceof String f && f.length() >= 7
+                        ? f.substring(0, 7).toUpperCase() : DEFAULT_FILL;
+                    bars.add(new Bar((String) p.get("lifeline"), top, top + num(p, "height"), fill));
                 } else if ("message".equals(shape) && p.get("element") instanceof String element) {
                     messageOf.putIfAbsent(element, p);
                 } else if (p.get("element") instanceof String element) {
@@ -1257,6 +1269,7 @@ public final class AstaExport {
             for (Fragment f : fragments) {
                 attempt(f.id(), () -> fragment(f));
             }
+            displayAll();
 
             // Astah grows bars itself, mostly as UmlCraft does; what it can be told is kept.
             for (Bar bar : bars) {
@@ -1314,7 +1327,7 @@ public final class AstaExport {
                 } else if ("combinedFragment".equals(type)) {
                     Map<String, Object> node = nodeOf.get(child);
                     List<Operand> operands = new ArrayList<>();
-                    Fragment fragment = node == null ? null : new Fragment(child, rect(diagram, node), operands);
+                    Fragment fragment = node == null ? null : new Fragment(child, rect(diagram, node), node, operands);
                     if (fragment != null) {
                         fragments.add(fragment);
                     }
@@ -1375,7 +1388,37 @@ public final class AstaExport {
                 Bar bar = barStarting(lane, y);
                 if (bar != null && bar.astah == null) {
                     bar.astah = n;
+                    try {
+                        n.setProperty("fill.color", bar.fill);
+                    } catch (InvalidEditingException e) {
+                        drop("barColor");
+                    }
                 }
+            }
+        }
+
+        /// Display options of a message: arguments shown or not, and its label where UmlCraft has
+        /// it. The label is kept relative to the sender's lifeline. Astah moves a label by as much
+        /// as `name.point` differs from its own value; where Astah puts it by itself comes with
+        /// the layout.
+        private void display(ILinkPresentation link, Map<String, Object> p, String from, double at)
+                throws InvalidEditingException {
+            Map<String, Object> style = (Map<String, Object>) p.get("style");
+            if (style != null && Boolean.TRUE.equals(style.get("hideParameters"))) {
+                link.setProperty("parameter_visibility", "false");
+            }
+            Map<String, Object> labels = (Map<String, Object>) p.get("labels");
+            if (labels != null && labels.get("name") instanceof Map<?, ?> offset) {
+                Map<String, Object> head = head(laneShapes.get(from));
+                double center = num(head, "x") + num(head, "width") / 2;
+                double x = center + num((Map<String, Object>) offset, "x");
+                double y = y(at + num((Map<String, Object>) offset, "y"));
+                Object defaults = layouts.get(diagram) instanceof Map<?, ?> l ? l.get("labelDefaults") : null;
+                Object own = defaults instanceof Map<?, ?> d ? d.get(p.get("id")) : null;
+                double point = Double.parseDouble(link.getProperty("name.point.x"));
+                double shift = own instanceof Number n ? point - n.doubleValue() : -2.45;
+                link.setProperty("name.point.x", Double.toString(x + shift));
+                link.setProperty("name.point.y", Double.toString(y));
             }
         }
 
@@ -1459,6 +1502,15 @@ public final class AstaExport {
             return link;
         }
 
+        /// Sets the display options of every message made, once their texts are complete:
+        /// Astah centers a label anew when its text changes.
+        private void displayAll() throws InvalidEditingException {
+            for (Map.Entry<String, ILinkPresentation> m : made.entrySet()) {
+                Map<String, Object> p = messageOf.get(m.getKey());
+                display(m.getValue(), p, (String) p.get("source"), num(p, "y"));
+            }
+        }
+
         /// A "ref" frame across the lifelines it covers (all of them when none are given) where
         /// it is drawn. Its diagram is set once all diagrams exist.
         private INodePresentation interactionUse(String id) throws Exception {
@@ -1540,45 +1592,70 @@ public final class AstaExport {
             return link;
         }
 
-        /// Wraps the fragment around the messages of its operands, then gives it UmlCraft's
-        /// frame as far as Astah lets it. A fragment without any message is drawn where it is.
+        /// Draws the fragment where UmlCraft has it; Astah takes the messages inside into its
+        /// first operand. Further operands get their messages (an empty one cannot be added), the
+        /// separators their places through `operand.N.length` and guards moved by hand theirs
+        /// through `guard.N.point`.
         private Object fragment(Fragment f) throws Exception {
             Map<String, Object> e = elements.get(f.id());
             String operator = text(e, "operator").isEmpty() ? "alt" : text(e, "operator");
-            List<Operand> filled = new ArrayList<>();
-            for (Operand o : f.operands()) {
-                if (o.messages().isEmpty()) {
+            Map<String, Object> r = f.frame();
+            double top = num(r, "y");
+            INodePresentation node = editor.createCombinedFragment(name(e), operator,
+                new Point2D.Double(num(r, "x"), y(top)), num(r, "width"), num(r, "height"));
+            List<Operand> made = new ArrayList<>();
+            List<Integer> kept = new ArrayList<>();
+            for (int i = 0; i < f.operands().size(); i++) {
+                Operand o = f.operands().get(i);
+                if (i == 0) {
+                    made.add(o);
+                    kept.add(i);
+                } else if (o.messages().isEmpty()) {
                     drop("emptyOperand");
                 } else {
-                    filled.add(o);
+                    try {
+                        editor.addInteractionOperand(node, o.messages().toArray(new IPresentation[0]),
+                            name(elements.get(o.id())), o.guard());
+                    } catch (InvalidEditingException x) {
+                        // Astah allows one operand for opt, loop, break and the like; the
+                        // messages stay in the first one.
+                        drop("extraOperand");
+                        continue;
+                    }
+                    made.add(o);
+                    kept.add(i);
                 }
-            }
-            Map<String, Object> r = f.frame();
-            INodePresentation node;
-            if (filled.isEmpty()) {
-                node = editor.createCombinedFragment(name(e), operator, new Point2D.Double(num(r, "x"), y(num(r, "y"))),
-                    num(r, "width"), num(r, "height"));
-                if (!f.operands().isEmpty()) {
-                    filled.add(f.operands().get(0));
-                }
-            } else {
-                node = editor.createCombinedFragment(operator, filled.get(0).messages().toArray(new IPresentation[0]));
-                for (Operand o : filled.subList(1, filled.size())) {
-                    editor.addInteractionOperand(node, o.messages().toArray(new IPresentation[0]), name(elements.get(o.id())), o.guard());
-                }
-                place(node, r);
             }
             ICombinedFragment model = (ICombinedFragment) node.getModel();
             if (!name(e).isEmpty()) {
                 model.setName(name(e));
             }
             IInteractionOperand[] operands = model.getInteractionOperands();
-            for (int i = 0; i < operands.length && i < filled.size(); i++) {
-                operands[i].setGuard(filled.get(i).guard());
-                common(filled.get(i).id(), operands[i], Set.of());
+            for (int i = 0; i < operands.length && i < made.size(); i++) {
+                operands[i].setGuard(made.get(i).guard());
+                common(made.get(i).id(), operands[i], Set.of());
             }
-            if (operands.length > 0 && filled.isEmpty()) {
-                operands[0].setGuard("");
+            // Separators: each operand as long as from its separator to the next one.
+            List<Object> separators = list(f.shape().get("separators"));
+            List<Object> guards = list(f.shape().get("guards"));
+            double previous = 0;
+            for (int k = 0; k + 1 < made.size(); k++) {
+                int next = kept.get(k + 1);
+                if (next - 1 < separators.size() && separators.get(next - 1) instanceof Number s) {
+                    node.setProperty("operand." + (k + 1) + ".length", Double.toString(s.doubleValue() - previous));
+                    previous = s.doubleValue();
+                }
+            }
+            for (int k = 0; k < made.size(); k++) {
+                int i = kept.get(k);
+                if (i < guards.size() && guards.get(i) instanceof Map<?, ?> moved) {
+                    double operandTop = i == 0 ? top + 25.09375
+                        : top + ((Number) separators.get(i - 1)).doubleValue();
+                    double x = num(r, "x") + 10 + num((Map<String, Object>) moved, "x");
+                    double gy = y(operandTop + 2 + num((Map<String, Object>) moved, "y"));
+                    node.setProperty("guard." + (k + 1) + ".point.x", Double.toString(x));
+                    node.setProperty("guard." + (k + 1) + ".point.y", Double.toString(gy));
+                }
             }
             common(f.id(), model, Set.of());
             return node;

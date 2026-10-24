@@ -119,6 +119,8 @@ prop:
   declaration: Deklaration
   static: Statisch
   read_only: Schreibgeschützt
+  message_numbers: Nachrichtennummern anzeigen
+  return_values: Rückgabewerte anzeigen
   query: Abfrage (ändert nichts)
   end: Ende
   role: Rolle

@@ -164,6 +164,69 @@ fn sample() -> Document {
         let below = sequence_edit::next_y(tx.model(), ids.sequence_diagram);
         let n = n_customer_in_sequence;
         sequence_edit::add_message(tx, ids.sequence_diagram, lost, n, n, below)?;
+
+        // Display options: a label moved by hand, a message without its arguments, a diagram
+        // without message numbers.
+        let message = |model: &Model, name: &str| {
+            let view = model.view(ids.sequence_diagram).unwrap();
+            view.presentations()
+                .iter()
+                .find(|p| {
+                    matches!(p.shape, Shape::Message { .. })
+                        && p.element.is_some_and(|e| model.get(e).unwrap().name() == name)
+                })
+                .unwrap()
+                .id
+        };
+        let add_item = message(tx.model(), "addItem");
+        let submit = message(tx.model(), "submit");
+        sequence_edit::place_label(tx, ids.sequence_diagram, add_item, Point::new(200.0, 110.0))?;
+        tx.update_presentation(ids.sequence_diagram, submit, |p| p.style.hide_parameters = true)?;
+        tx.update(pay_diagram, |data| {
+            if let ElementKind::Diagram(p) = &mut data.kind {
+                p.hide_message_numbers = true;
+            }
+        })?;
+
+        // A fragment with two operands below everything, a call in each.
+        let submit_element =
+            tx.model().view(ids.sequence_diagram).unwrap().get(submit).unwrap().element.unwrap();
+        let d = ids.sequence_diagram;
+        let below = sequence_edit::next_y(tx.model(), d);
+        let (alt, alt_node) = umlcraft_notation::palette::create_fragment(
+            tx,
+            d,
+            umlcraft_notation::palette::NodeTool::CombinedFragment,
+            None,
+            Vec::new(),
+            Point::new(0.0, below),
+        )?;
+        // Astah allows a second operand for alt, not for the default opt.
+        tx.update(alt, |data| {
+            if let ElementKind::CombinedFragment(p) = &mut data.kind {
+                p.operator = umlcraft_model::InteractionOperator::Alt;
+            }
+        })?;
+        umlcraft_notation::palette::add_operand(tx, alt)?;
+        let Shape::Fragment { bounds, separators, .. } =
+            tx.model().view(d).unwrap().get(alt_node).unwrap().shape.clone()
+        else {
+            unreachable!("a fragment")
+        };
+        let submitted =
+            tx.model().view(d).unwrap().presentations_of(submit_element).next().unwrap();
+        let Shape::Message { source, target, .. } = submitted.shape else {
+            unreachable!("a message")
+        };
+        let order = tx.model().view(d).unwrap().get(target).unwrap().element.unwrap();
+        let kind = ElementKind::message(MessageSort::Asynchronous, ids.customer_lifeline, order);
+        let cancel = tx.create(interaction, ElementData::new("cancel", kind))?;
+        sequence_edit::add_message(tx, d, cancel, source, target, bounds.y + separators[0] + 20.0)?;
+        let retry = tx.create(
+            interaction,
+            ElementData::new("retry", tx.model().get(cancel).unwrap().kind().clone()),
+        )?;
+        sequence_edit::add_message(tx, d, retry, source, target, bounds.y + 45.0)?;
         Ok(())
     })
     .unwrap();
@@ -475,10 +538,34 @@ fn sequence_geometry(model: &Model) -> BTreeMap<String, Vec<String>> {
             .map(|(e, h)| format!("lifeline {} at {:.0}", name(model, *e), h.x - left))
             .collect();
         for p in view.presentations() {
-            if let Shape::Message { y, .. } = p.shape {
+            if let Shape::Message { y, labels, .. } = p.shape {
                 let m = p.element.map(|e| name(model, e)).unwrap_or_default();
-                lines.push(format!("message {m:?} at {:.0}", y - top));
+                let label = labels.name.map(|l| format!(" label {:.0},{:.0}", l.x, l.y));
+                lines.push(format!(
+                    "message {m:?} at {:.0}{} parameters {}",
+                    y - top,
+                    label.unwrap_or_default(),
+                    !p.style.hide_parameters
+                ));
             }
+        }
+        for p in view.presentations() {
+            if let Shape::Fragment { bounds, separators, .. } = &p.shape {
+                lines.push(format!(
+                    "fragment at {:.0},{:.0} size {:.0}x{:.0} separators {:?}",
+                    bounds.x - left,
+                    bounds.y - top,
+                    bounds.width,
+                    bounds.height,
+                    separators.iter().map(|s| s.round()).collect::<Vec<_>>()
+                ));
+            }
+        }
+        if let ElementKind::Diagram(p) = d.kind() {
+            lines.push(format!(
+                "numbers {} returns {}",
+                !p.hide_message_numbers, !p.hide_return_values
+            ));
         }
         lines.sort();
         result.insert(d.name().to_owned(), lines);

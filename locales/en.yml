@@ -119,6 +119,8 @@ prop:
   declaration: Declaration
   static: Static
   read_only: Read-only
+  message_numbers: Show message numbers
+  return_values: Show return values
   query: Query (changes nothing)
   end: End
   role: Role

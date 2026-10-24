@@ -537,19 +537,27 @@ fn plain_row(text: String, element: Id) -> Row {
         align: LabelAlign::Left,
         role: RowRole::Member,
         element: Some(element),
+        hinted: false,
     }
 }
 
 /// The tab of a fragment or interaction use: the keyword with 10 on either side.
 fn tab(keyword: &str, r: Rect, measure: &dyn TextMeasure) -> Rect {
-    let w = measure.width(keyword, 12.0, false);
-    Rect::new(r.x, r.y, 2.0 * TAB_INDENT + w, TAB_HEIGHT)
+    // A loop's tab with its condition is 3 wider than others.
+    let extra = if keyword.starts_with("loop [") { 3.0 } else { 0.0 };
+    Rect::new(r.x, r.y, 2.0 * TAB_INDENT + wide(keyword, measure) + extra, TAB_HEIGHT)
+}
+
+/// The larger of a plain text's whole-pixel and exact width, by which Astah sizes tabs.
+fn wide(text: &str, measure: &dyn TextMeasure) -> f32 {
+    measure.rounded_width(text, 12.0, false).max(measure.width(text, 12.0, false))
 }
 
 fn tab_row(keyword: &str, r: Rect, top: f32, element: Id) -> Row {
     Row {
         rect: Rect::new(r.x + TAB_INDENT, r.y + top, 40.0, line_height(12.0)),
         role: RowRole::Stereotype,
+        hinted: true,
         ..plain_row(keyword.to_owned(), element)
     }
 }
@@ -564,8 +572,8 @@ fn diagram_frame(
     let sd = "sd";
     let sd_width = measure.width(sd, 12.0, true);
     let name_width = measure.width(name, 12.0, false);
-    // Astah sizes the tab by the name in bold.
-    let tab = Rect::new(r.x, r.y, 36.0 + measure.width(name, 12.0, true), TAB_HEIGHT);
+    // "sd" in bold (14), 3 apart from the name, and 10 on either side.
+    let tab = Rect::new(r.x, r.y, 37.0 + wide(name, measure), TAB_HEIGHT);
     let h = line_height(12.0);
     let kind = Row {
         rect: Rect::new(r.x + TAB_INDENT, r.y + ROW_18, sd_width, h),

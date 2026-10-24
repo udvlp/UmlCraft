@@ -1,8 +1,8 @@
 //! Imports an `.asta` file and writes each diagram as UmlCraft's SVG export, to compare it with
 //! Astah's own: `cargo run -p umlcraft-asta --example asta-svg -- file.asta out-dir [name]`.
 //!
-//! Texts are measured with the system's Arial the way Java does: exact advances, and rounded to
-//! whole pixels per character where Astah centers by such widths.
+//! Texts are measured with the system's Arial with exact advances, as Java draws them; whole
+//! pixel widths come from Java's own table (`umlcraft_notation::metrics`).
 
 use std::path::PathBuf;
 
@@ -34,10 +34,6 @@ impl ArialMeasure {
 impl TextMeasure for ArialMeasure {
     fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
         self.advances(text, font_size, bold).iter().sum()
-    }
-
-    fn rounded_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
-        self.advances(text, font_size, bold).iter().map(|a| a.round()).sum()
     }
 }
 

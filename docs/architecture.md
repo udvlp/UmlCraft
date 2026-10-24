@@ -80,8 +80,8 @@ when the app opens them (`sequence_edit::upgrade_document`, not an undoable edit
   them with its theme colors (and a node's own fill color on a light background); `svg` writes
   them as Astah exports SVG: black lines, Astah's yellow `#FFFFCC` where a node has no color of
   its own, a margin of 10 and 4/3 pixels per unit. So the figure geometry exists once, for both.
-  Texts in nodes are centered by their rounded width (`TextMeasure::rounded_width`), as Astah
-  does, and written at a fixed x.
+  Texts in nodes are centered by Java's whole-pixel width (`TextMeasure::rounded_width`, from
+  the table in `metrics`), as Astah does, and written at a fixed x.
 
 ## Sequence diagrams
 
@@ -114,8 +114,10 @@ sender has none, a bar of 45 on the sender (60 for create, 30 for lost messages)
 at the end of the bar it returns from; a message to self comes back 20 lower into a bar of its
 own; a create message brings the new lifeline's head down to it; a destroy message ends the
 lifeline in a cross below its bar. Dragging a message moves it with the bar it starts and
-everything sent from that bar (`move_item`). The layout's `Slot`s carry the height the user
-pointed at.
+everything sent from that bar (`move_item`); a message's label can be dragged on its own
+(`place_label`). Combined fragments grow to hold the bars and messages that start in them, and
+bars that no message reaches any more are removed. The layout's `Slot`s carry the height the
+user pointed at.
 
 ## Astah import
 
@@ -195,12 +197,19 @@ through its official API (`astah-api.jar`):
   covered lifelines, all of them when none are given) at their height and then sized; since
   Astah refers to sequence diagrams, the reference is set once every diagram exists. Found and
   lost messages use `createFoundMessage` and `createLostMessage` at the stored `gate_x`.
-- Combined fragments are built around their messages: `createCombinedFragment(operator,
-  messages)` for the first operand, `addInteractionOperand` for the others, outer fragments
-  before inner ones. Astah sizes these frames itself and refuses to move them (reported as
-  `framePosition`), so a nested fragment that spans the same lifelines is drawn on top of its
-  parent's border. Empty operands are dropped; a fragment without any message is created with
-  UmlCraft's frame.
+- Combined fragments are drawn where UmlCraft has them, outer ones before inner ones
+  (`createCombinedFragment(name, operator, location, width, height)`); Astah takes the messages
+  inside into the first operand. `addInteractionOperand` moves the messages of each further
+  operand into it; Astah refuses that for empty operands and for operators with a single
+  operand (reported as `emptyOperand`, `extraOperand`). The separators go to their places
+  through `operand.N.length`, guards moved by hand through `guard.N.point.x/y`.
+- Message display options: `parameter_visibility`, and labels moved by hand through
+  `name.point.x/y`. Astah moves a label by as much as `name.point` differs from its own value,
+  so the layout sidecar says where Astah puts each such label by itself (`labelDefaults`: the
+  last segment's middle minus half of Java's whole-pixel width, at most 200). The diagram's
+  `message_index_visibility` and `message_return_value_initial_visibility` carry
+  `DiagramProps::hide_message_numbers` and `hide_return_values`. The API makes bars white;
+  they get their UmlCraft fill (`fill.color`, Astah's yellow by default).
 - Not available in the API and reported as dropped: the query flag of operations, conditions and
   extension points of extends, return parameters, parameter multiplicity and default values,
   system boundaries.

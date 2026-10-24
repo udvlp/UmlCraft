@@ -11,8 +11,8 @@ use gpui_kit::component::{ActiveTheme, IndexPath, Sizable, StyledExt, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    Aggregation, ElementData, ElementKind, Id, InstanceProps, InteractionOperator, LifelineProps,
-    MessageSort, Model, Multiplicity, Navigability, Style,
+    Aggregation, DiagramKind, ElementData, ElementKind, Id, InstanceProps, InteractionOperator,
+    LifelineProps, MessageSort, Model, Multiplicity, Navigability, Style,
 };
 use umlcraft_notation::member::member_text;
 use umlcraft_notation::sequence::operator_keyword;
@@ -867,6 +867,33 @@ impl Render for PropertiesPanel {
         }
 
         match &kind {
+            ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => {
+                body = body
+                    .child(flag(
+                        "message-numbers",
+                        t!("prop.message_numbers").into(),
+                        !p.hide_message_numbers,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::Diagram(p) = &mut d.kind {
+                                p.hide_message_numbers = !v;
+                            }
+                        },
+                    ))
+                    .child(flag(
+                        "return-values",
+                        t!("prop.return_values").into(),
+                        !p.hide_return_values,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::Diagram(p) = &mut d.kind {
+                                p.hide_return_values = !v;
+                            }
+                        },
+                    ));
+            }
             ElementKind::Class(p) => {
                 body = body.child(flag(
                     "abstract",

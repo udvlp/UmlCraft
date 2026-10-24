@@ -46,6 +46,8 @@ const USE_HEIGHT: f32 = 60.0;
 const FRAGMENT_MARGIN: f32 = 10.0;
 /// How much a fragment grows for a new operand.
 const OPERAND_HEIGHT: f32 = 50.0;
+/// Space a fragment keeps below what lies in it.
+const FRAGMENT_PADDING: f32 = 10.0;
 
 #[derive(Clone, Copy)]
 struct Lane {
@@ -437,6 +439,26 @@ pub fn add_operand_space(tx: &mut Tx<'_>, fragment: Id) -> Result<()> {
     Ok(())
 }
 
+/// Puts the name label of the message presentation `message` with its top left corner at
+/// `top_left`. It is kept relative to the sender's lifeline at the message's height, so it moves
+/// along with both.
+pub fn place_label(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    message: Id,
+    top_left: umlcraft_model::Point,
+) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    let Some(m) = g.messages.iter().find(|m| m.id == message) else { return Ok(()) };
+    let Some(lane) = g.lane(m.source) else { return Ok(()) };
+    let offset = umlcraft_model::Point::new(top_left.x - lane.center(), top_left.y - m.y);
+    tx.update_presentation(diagram, message, |p| {
+        if let Shape::Message { labels, .. } = &mut p.shape {
+            labels.name = Some(offset);
+        }
+    })
+}
+
 /// Moves a message, together with the bar it starts and everything sent from it, or a
 /// fragment's frame, so that it starts at height `y`.
 pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()> {
@@ -521,10 +543,43 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
 /// Grows bars, lifelines and the diagram frame around their content and puts the
 /// interaction's messages and fragments in the order and operands they are drawn in.
 pub fn tidy(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+    drop_idle_bars(tx, diagram)?;
     fit_bars(tx, diagram)?;
+    fit_fragments(tx, diagram)?;
     fit_lifelines(tx, diagram)?;
     fit_frame(tx, diagram)?;
     sync_order(tx, diagram)
+}
+
+/// Tidies every sequence diagram, e.g. after deleting elements that may have been shown there.
+pub fn tidy_all(tx: &mut Tx<'_>) -> Result<()> {
+    let diagrams: Vec<Id> = tx
+        .model()
+        .elements()
+        .filter(|e| e.kind().as_diagram() == Some(umlcraft_model::DiagramKind::Sequence))
+        .map(|e| e.id())
+        .collect();
+    diagrams.into_iter().try_for_each(|d| tidy(tx, d))
+}
+
+/// Removes bars that no message reaches any more, as Astah removes a bar with the message that
+/// started it.
+fn drop_idle_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    let touches = |bar: &Bar, lane: Id, y: f32| {
+        lane == bar.lane && bar.top - 0.5 <= y && y <= bar.bottom + 0.5
+    };
+    let idle: indexmap::IndexSet<Id> = g
+        .bars
+        .iter()
+        .filter(|bar| {
+            !g.messages
+                .iter()
+                .any(|m| touches(bar, m.source, m.y) || touches(bar, m.target, m.end()))
+        })
+        .map(|bar| bar.id)
+        .collect();
+    if idle.is_empty() { Ok(()) } else { tx.remove_presentations(diagram, idle) }
 }
 
 fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
@@ -567,6 +622,56 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             tx.update_presentation(diagram, id, |p| {
                 if let Shape::Activation { height: h, .. } = &mut p.shape {
                     *h = height;
+                }
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Grows combined fragments to hold the bars, messages and frames that start inside them:
+/// Astah refuses a bar that reaches out of the fragment its message lies in.
+fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+    // Inner fragments first, so that outer ones grow around them.
+    for _ in 0..8 {
+        let g = Geometry::read(tx.model(), diagram)?;
+        let center = |lane: Id| g.lane(lane).map_or(f32::MIN, |l| l.center());
+        let mut grown = Vec::new();
+        for f in &g.frames {
+            if !matches!(
+                tx.model().get(f.element).map(|e| e.kind()),
+                Some(ElementKind::CombinedFragment(_))
+            ) {
+                continue;
+            }
+            let r = f.rect;
+            let inside = |x: f32, y: f32| r.y < y && y < r.bottom() && r.x <= x && x <= r.right();
+            let bars = g.bars.iter().filter(|b| inside(center(b.lane), b.top)).map(|b| b.bottom);
+            let messages = g
+                .messages
+                .iter()
+                .filter(|m| inside(center(m.source), m.y))
+                .map(|m| m.y.max(m.end()));
+            let frames = g
+                .frames
+                .iter()
+                .filter(|o| o.id != f.id && inside(o.rect.x, o.rect.y))
+                .map(|o| o.rect.bottom());
+            let need = bars
+                .chain(messages)
+                .chain(frames)
+                .fold(r.bottom(), |n, b| n.max(b + FRAGMENT_PADDING));
+            if need > r.bottom() + 0.01 {
+                grown.push((f.id, need - r.y));
+            }
+        }
+        if grown.is_empty() {
+            return Ok(());
+        }
+        for (id, height) in grown {
+            tx.update_presentation(diagram, id, |p| {
+                if let Shape::Fragment { bounds, .. } = &mut p.shape {
+                    bounds.height = height;
                 }
             })?;
         }
@@ -1054,6 +1159,36 @@ mod tests {
         let numbers: Vec<String> = labels(&scene_of(&doc, d));
         assert_eq!(numbers[..2], ["1: ".to_owned(), "1.1: ".to_owned()]);
         doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn deleting_a_call_takes_its_bars_along() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let first = draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        draw(&mut doc, d, EdgeTool::Message, a, b, 220.0);
+        assert_eq!(bars(&doc, d).len(), 4);
+        doc.edit("delete", |tx| {
+            tx.delete(first)?;
+            super::tidy_all(tx)
+        })
+        .unwrap();
+        assert_eq!(bars(&doc, d), [(220.0, 245.0), (220.0, 265.0)]);
+    }
+
+    #[test]
+    fn a_label_moved_by_hand_stays_with_its_message() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let call = draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let p = doc.model().view(d).unwrap().presentations_of(call).next().unwrap().id;
+        let at = Point::new(150.0, 60.0);
+        doc.edit("label", |tx| super::place_label(tx, d, p, at)).unwrap();
+        let label = |doc: &Document| scene_of(doc, d).edge(p).unwrap().labels[0].anchor;
+        assert_eq!(label(&doc), at);
+        // Moving the message takes the label along.
+        let interaction = doc.model().get(d).unwrap().owner().unwrap();
+        let slot = Slot { y: 150.0, owner: interaction, index: 0 };
+        doc.edit("move", |tx| palette::move_to_slot(tx, call, slot)).unwrap();
+        assert_eq!(label(&doc), Point::new(150.0, 90.0));
     }
 
     #[test]
