@@ -148,7 +148,9 @@ user pointed at.
 object serialization stream and turns it into a graph of objects addressed by class and field
 name; `map` translates that graph into a new `Model`, element by element through `Model::apply`,
 so every invariant is checked. What has no counterpart in UmlCraft is skipped and counted
-(`Imported::skipped`). The format details are kept in local notes (`docs/asta-format.md`) that are not published.
+(`Imported::skipped`). Template parameters, bound templates (as type expressions), array
+modifiers, qualifiers and the tagged values of Astah's language profiles are imported too.
+The format details are kept in local notes (`docs/asta-format.md`) that are not published.
 Two examples help when exploring files: `asta-dump` (raw objects) and `asta-import` (the
 resulting model).
 

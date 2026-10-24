@@ -67,6 +67,28 @@ fn sample_model() {
 }
 
 #[test]
+fn sample_templates() {
+    let Some(path) = astah_file("Sample.asta") else { return };
+    let model = umlcraft_asta::import(&path).unwrap().model;
+    model.check().unwrap();
+    let pair = find(&model, "Pair", |k| matches!(k, ElementKind::Class(_)));
+    let parameters = umlcraft_notation::member::template_parameters(&model, pair.id());
+    let names: Vec<&str> = parameters.iter().map(|&p| model.get(p).unwrap().name()).collect();
+    assert_eq!(names, ["T1", "T2"]);
+    // Members typed by a template parameter refer to it.
+    let first = find(&model, "first", |k| matches!(k, ElementKind::Attribute(_)));
+    let ElementKind::Attribute(a) = first.kind() else { unreachable!() };
+    assert_eq!(a.type_ref, Some(TypeRef::Element(parameters[0])));
+    // A bound template is an expression whose parts are linked.
+    let a_pair = find(&model, "aPair", |k| matches!(k, ElementKind::Attribute(_)));
+    let ElementKind::Attribute(a) = a_pair.kind() else { unreachable!() };
+    let Some(TypeRef::Expr(e)) = &a.type_ref else { panic!("{:?}", a.type_ref) };
+    assert_eq!(e.base, TypeRef::Element(pair.id()));
+    assert_eq!(e.arguments.len(), 2);
+    assert!(e.arguments.iter().all(|t| matches!(t, TypeRef::Element(_))), "{e:?}");
+}
+
+#[test]
 fn sample_project() {
     let Some(path) = astah_file("Sample.asta") else { return };
     let imported = umlcraft_asta::import(&path).unwrap();
@@ -415,10 +437,12 @@ fn reference_class_diagram() {
         ["Projekt", "einfuegenAufgabe", "loescheAufgabe", "sucheAufgabe", "ersetzeAufgabe"]
     );
 
-    // Bound templates become their textual name.
+    // Bound templates become type expressions.
     let aenderungen = find(&model, "aenderungen", |k| matches!(k, ElementKind::Attribute(_)));
     let ElementKind::Attribute(a) = aenderungen.kind() else { unreachable!() };
-    assert_eq!(a.type_ref, Some(TypeRef::Text("Stack<Aufgabe>".into())));
+    let label = umlcraft_notation::member::type_label(&model, &a.type_ref);
+    assert_eq!(label.as_deref(), Some("Stack<Aufgabe>"));
+    assert!(matches!(a.type_ref, Some(TypeRef::Expr(_))), "{:?}", a.type_ref);
 
     // The edge to "- projekte" aims where Astah's line does, and the role sits where Astah put it.
     let association = model

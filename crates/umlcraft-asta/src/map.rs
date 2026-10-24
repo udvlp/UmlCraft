@@ -15,8 +15,8 @@ use umlcraft_model::{
     IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
     InteractionUseProps, LifelineProps, LineShape, MessageGate, MessageProps, MessageSort, Model,
     Multiplicity, Navigability, Op, OperationProps, ParameterDirection, ParameterProps, Point,
-    Presentation, PseudostateKind, Rect, Shape, StateProps, Style, TaggedValue, TransitionProps,
-    TypeRef, Visibility,
+    Presentation, PseudostateKind, Qualifier, Rect, Shape, StateProps, Style, TaggedValue,
+    TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::route;
@@ -80,30 +80,6 @@ impl<'g> Reader<'g> {
 
     fn name(&self, id: ObjId) -> String {
         self.text(id, "name")
-    }
-
-    /// The name of a type as Astah shows it. A bound template such as `List<Projekt>` is an
-    /// anonymous classifier whose template binding names the template and the arguments.
-    fn type_name(&self, ty: ObjId, depth: usize) -> String {
-        let name = self.name(ty);
-        let Some(&binding) = self.list(ty, "templateBinding").first() else { return name };
-        if !name.is_empty() || depth > 8 {
-            return name;
-        }
-        let Some(signature) = self.obj(binding, "signature") else { return name };
-        let template = self.obj(signature, "template").map(|t| self.name(t)).unwrap_or_default();
-        let formals = self.list(signature, "ownedParameter");
-        let mut substitutions = self.list(binding, "parameterSubstition");
-        let position = |s: &ObjId| {
-            let formal = self.obj(*s, "formal");
-            formals.iter().position(|f| Some(*f) == formal).unwrap_or(usize::MAX)
-        };
-        substitutions.sort_by_key(position);
-        let arguments: Vec<String> = substitutions
-            .iter()
-            .filter_map(|s| self.list(*s, "actual").first().map(|a| self.type_name(*a, depth + 1)))
-            .collect();
-        format!("{template}<{}>", arguments.join(", "))
     }
 
     fn num(&self, id: ObjId, field: &str) -> Option<f64> {
@@ -193,9 +169,32 @@ fn action_type(r: Reader<'_>, message: ObjId) -> Option<i64> {
     r.g.field(r.obj(message, "action")?, "actionType").and_then(Value::as_i64)
 }
 
-/// Tagged values Astah uses for itself.
+/// Tagged values Astah uses for itself. Those of its language profiles stay: they hold
+/// modifiers such as Java's `transient` (`jude.java.transient`), which UML has no place for.
 fn is_internal_tag(key: &str) -> bool {
-    key.starts_with("jude.") || matches!(key, "hiddenDependency" | "matrix_access_type")
+    let profile =
+        ["jude.java.", "jude.c_sharp.", "jude.c_plus."].iter().any(|p| key.starts_with(p));
+    (key.starts_with("jude.") && !profile)
+        || matches!(key, "hiddenDependency" | "matrix_access_type")
+}
+
+/// `ty` followed by `modifier` (`[]`, `*` …); a bound template takes it on directly.
+fn with_modifier(ty: TypeRef, modifier: String) -> TypeRef {
+    if modifier.is_empty() {
+        return ty;
+    }
+    match ty {
+        TypeRef::Expr(mut e) if e.modifier.is_empty() => {
+            e.modifier = modifier;
+            TypeRef::Expr(e)
+        }
+        base => TypeRef::Expr(Box::new(TypeExpr {
+            base,
+            arguments: Vec::new(),
+            prefix: String::new(),
+            modifier,
+        })),
+    }
 }
 
 /// Stereotypes such as "Java Class" or "C# Method" mark the target language of code generation;
@@ -285,6 +284,8 @@ struct Importer<'g> {
     /// Activity graphs and state machines with the element they belong to.
     behaviors: Vec<(Id, ObjId)>,
     diagrams: Vec<(Id, ObjId)>,
+    /// Template classifiers, whose parameters are created once every classifier exists.
+    templates: Vec<(Id, ObjId)>,
 }
 
 pub fn import(graph: &Graph) -> Option<Imported> {
@@ -304,9 +305,11 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         references: Vec::new(),
         behaviors: Vec::new(),
         diagrams: Vec::new(),
+        templates: Vec::new(),
     };
     let root_id = im.model.root();
     im.walk(root, root_id);
+    im.template_parameters();
     for (owner, feature) in std::mem::take(&mut im.features) {
         im.feature(owner, feature);
     }
@@ -400,6 +403,14 @@ impl Importer<'_> {
         }
     }
 
+    /// Whether a classifier of Astah's stands for a template parameter. Some classes declare
+    /// `templateParameter` as a (usually empty) list.
+    fn is_template_parameter(&self, classifier: ObjId) -> bool {
+        ["owningParameter", "templateParameter"].iter().any(|&field| {
+            self.r.obj(classifier, field).is_some_and(|p| self.r.class(p) != "ArrayList")
+        })
+    }
+
     fn kind_of(&self, object: ObjId) -> Option<&ElementKind> {
         self.ids.get(&object).and_then(|id| self.model.get(*id)).map(|e| e.kind())
     }
@@ -435,25 +446,23 @@ impl Importer<'_> {
                 "UClassifierImp" | "UInterfaceImp" | "UActorImp" | "UUseCaseImp"
                 | "UComponentImp" | "UArtifactImp" | "UNodeImp" => {
                     // Anonymous classifiers bind a template to arguments; they live on as type
-                    // names such as `List<Projekt>` (see `Reader::type_name`).
+                    // expressions such as `List<Projekt>` (see `type_of`).
                     if !self.r.list(child, "templateBinding").is_empty()
                         && self.r.name(child).is_empty()
                     {
                         continue;
                     }
-                    // Template parameters are classifiers owned by a template parameter. Some
-                    // classes declare `templateParameter` as a (usually empty) list. Astah
-                    // creates them for library types like `List<E>`; UmlCraft has no templates
-                    // and shows their uses as type names, so they are left out silently.
-                    let is_parameter = |field| {
-                        self.r.obj(child, field).is_some_and(|p| self.r.class(p) != "ArrayList")
-                    };
-                    if is_parameter("owningParameter") || is_parameter("templateParameter") {
+                    // Template parameters are classifiers owned by a template parameter; they
+                    // are created with their template (see `template_parameters`).
+                    if self.is_template_parameter(child) {
                         continue;
                     }
                     let (kind, hide) = self.classifier_kind(child);
                     let data = self.data(child, kind, hide);
                     if let Some(classifier) = self.create(id, data, Some(child)) {
+                        if self.r.obj(child, "ownedTemplateSignatrue").is_some() {
+                            self.templates.push((classifier, child));
+                        }
                         // The feature lists hold the order Astah displays; ownership does not.
                         for list in ["structuralFeature", "behavioralFeature"] {
                             for feature in self.r.list(child, list) {
@@ -580,14 +589,128 @@ impl Importer<'_> {
         self.create(owner, data, Some(object));
     }
 
-    /// A type reference: a classifier of the model, or the type's name as text.
+    /// The type of an attribute, parameter, qualifier or template parameter default. Astah marks
+    /// arrays with a `jude.type_modifier` tag (`[][]`), or with one unset multiplicity range per
+    /// dimension when the type was written as `Foo[]`. Like typed text (`member::parse_type`), a
+    /// type that links to nothing in the model stays text.
     fn type_ref(&self, typed: ObjId) -> Option<TypeRef> {
-        let ty = self.r.obj(typed, "type")?;
-        if let Some(id) = self.classifier(ty) {
+        let ty = self.type_of(self.r.obj(typed, "type")?, 0)?;
+        let mut modifier = self.tag(typed, "jude.type_modifier");
+        if modifier.is_empty() {
+            let unset = |range: &ObjId| {
+                let bound = |field| self.r.g.field(*range, field).and_then(Value::as_i64);
+                bound("lower") == Some(-100) && bound("upper") == Some(-100)
+            };
+            let ranges =
+                self.r.obj(typed, "multiplicity").map(|m| self.r.list(m, "multiplicityRange"));
+            modifier = "[]".repeat(ranges.unwrap_or_default().iter().filter(|r| unset(r)).count());
+        }
+        let ty = with_modifier(ty, modifier);
+        Some(match ty {
+            TypeRef::Expr(_) if ty.ids().is_empty() => {
+                TypeRef::Text(umlcraft_notation::member::type_text(&self.model, &ty))
+            }
+            ty => ty,
+        })
+    }
+
+    /// A type object: a classifier or template parameter of the model, a bound template such
+    /// as `List<Projekt>` (an anonymous classifier whose template binding names the template
+    /// and the arguments), or else the type's name as text.
+    fn type_of(&self, ty: ObjId, depth: usize) -> Option<TypeRef> {
+        let r = self.r;
+        if let Some(&id) = self.ids.get(&ty)
+            && self.model.get(id).is_some_and(|e| {
+                e.kind().is_classifier() || matches!(e.kind(), ElementKind::TemplateParameter(_))
+            })
+        {
             return Some(TypeRef::Element(id));
         }
-        let name = self.r.type_name(ty, 0);
+        let name = r.name(ty);
+        let binding = r.list(ty, "templateBinding").first().copied();
+        if let Some(binding) = binding.filter(|_| name.is_empty() && depth < 8)
+            && let Some(signature) = r.obj(binding, "signature")
+        {
+            let base = r.obj(signature, "template").and_then(|t| self.type_of(t, depth + 1))?;
+            let formals = r.list(signature, "ownedParameter");
+            let mut substitutions = r.list(binding, "parameterSubstition");
+            let position = |s: &ObjId| {
+                let formal = r.obj(*s, "formal");
+                formals.iter().position(|f| Some(*f) == formal).unwrap_or(usize::MAX)
+            };
+            substitutions.sort_by_key(position);
+            let arguments =
+                substitutions.iter().filter_map(|&s| self.actual(s, depth + 1)).collect();
+            return Some(TypeRef::Expr(Box::new(TypeExpr {
+                base,
+                arguments,
+                prefix: String::new(),
+                modifier: String::new(),
+            })));
+        }
         (!name.is_empty()).then_some(TypeRef::Text(name))
+    }
+
+    /// The argument of a template parameter substitution: a type, or a value such as `20`.
+    fn actual(&self, substitution: ObjId, depth: usize) -> Option<TypeRef> {
+        let r = self.r;
+        let argument = match r.list(substitution, "actual").first() {
+            Some(&a) if r.class(a) == "UExpression" => Some(TypeRef::Text(r.text(a, "body"))),
+            Some(&a) => self.type_of(a, depth),
+            None => None,
+        };
+        let argument = argument.filter(|a| *a != TypeRef::Text(String::new())).or_else(|| {
+            Some(self.tag(substitution, "actual_value"))
+                .filter(|v| !v.is_empty())
+                .map(TypeRef::Text)
+        })?;
+        Some(with_modifier(argument, self.tag(substitution, "jude.type_modifier")))
+    }
+
+    /// The value of one of Astah's tagged values, or an empty string.
+    fn tag(&self, object: ObjId, key: &str) -> String {
+        let tags = self.r.tagged_values(object);
+        tags.into_iter().find(|(k, _)| k == key).map(|(_, v)| v).unwrap_or_default()
+    }
+
+    /// Creates the template parameters of template classifiers, before the features that use
+    /// them. Astah's parameter owns a classifier that stands for it: its generalizations are
+    /// the bounds, and a `jude.type` tag makes it a value parameter of that type.
+    fn template_parameters(&mut self) {
+        let r = self.r;
+        for (owner, template) in std::mem::take(&mut self.templates) {
+            let Some(signature) = r.obj(template, "ownedTemplateSignatrue") else { continue };
+            for parameter in r.list(signature, "ownedParameter") {
+                let Some(element) = r.obj(parameter, "ownedParameteredElement") else {
+                    self.skip(parameter);
+                    continue;
+                };
+                let value_type = Some(self.tag(element, "jude.type")).filter(|t| !t.is_empty());
+                let bounds = r
+                    .list(element, "generalization")
+                    .into_iter()
+                    .filter_map(|g| r.obj(g, "supertype"))
+                    .filter_map(|s| self.type_of(s, 0))
+                    .collect();
+                let default = r.obj(parameter, "defaultValue").and_then(|d| match r.g.string(d) {
+                    Some(text) => Some(TypeRef::Text(text.to_owned())),
+                    None => self.type_of(d, 0),
+                });
+                let props = TemplateParameterProps {
+                    parameter: if value_type.is_some() {
+                        TemplateParameterKind::Value
+                    } else {
+                        TemplateParameterKind::Type
+                    },
+                    type_ref: value_type.map(TypeRef::Text),
+                    bounds,
+                    default,
+                    is_variadic: false,
+                };
+                let data = self.data(element, ElementKind::TemplateParameter(props), &[]);
+                self.create(owner, data, Some(element));
+            }
+        }
     }
 
     fn feature(&mut self, owner: Id, object: ObjId) {
@@ -663,6 +786,12 @@ impl Importer<'_> {
                     .filter_map(|end| self.association_end(end))
                     .collect();
                 ends.try_into().ok().map(|ends| ElementKind::Association(AssociationProps { ends }))
+            }
+            // A template parameter's generalizations are its bounds (see `template_parameters`).
+            "UGeneralizationImp"
+                if r.obj(object, "subtype").is_some_and(|s| self.is_template_parameter(s)) =>
+            {
+                return;
             }
             "UGeneralizationImp" => {
                 let specific = r.obj(object, "subtype").and_then(|o| self.classifier(o));
@@ -748,6 +877,15 @@ impl Importer<'_> {
             "aggregate" | "shared" => Aggregation::Shared,
             _ => Aggregation::None,
         };
+        result.is_read_only = matches!(r.text(end, "changeable").as_str(), "frozen" | "readOnly");
+        result.is_static = r.text(end, "targetScope") == "classifier";
+        result.default_value = r.text(end, "initialValue");
+        // A qualifier belongs to the end whose participant its box is drawn at.
+        result.qualifiers = r
+            .list(end, "qualifier")
+            .into_iter()
+            .map(|q| Qualifier { name: r.name(q), type_ref: self.type_ref(q) })
+            .collect();
         Some(result)
     }
 
@@ -1733,6 +1871,16 @@ fn edge_ends(kind: &ElementKind) -> Option<(Id, Id)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_profile_tags_are_kept() {
+        for tag in ["jude.java.transient", "jude.c_sharp.override", "jude.c_plus.virtual"] {
+            assert!(!is_internal_tag(tag), "{tag}");
+        }
+        for tag in ["jude.type", "jude.type_modifier", "jude.hyperlink", "hiddenDependency"] {
+            assert!(is_internal_tag(tag), "{tag}");
+        }
+    }
 
     #[test]
     fn language_markers() {
