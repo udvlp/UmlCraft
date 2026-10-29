@@ -110,7 +110,7 @@ fn children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
 }
 
 /// The children of `node` with the names of their fields.
-fn fields<'t>(node: Node<'t>) -> Vec<(Option<&'static str>, Node<'t>)> {
+fn fields<'t>(node: Node<'t>) -> Vec<(Option<&'t str>, Node<'t>)> {
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .enumerate()
