@@ -37,7 +37,7 @@ embed-resource = "3"
 # Font metrics for comparing SVG exports with Astah's outside the app.
 ttf-parser = "0.25"
 # Source import parses declarations with tree-sitter grammars (built from C by `cc`).
-tree-sitter = "0.25"
+tree-sitter = "0.27"
 tree-sitter-java = "0.23"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
