@@ -31,7 +31,7 @@ pretty_assertions = "1"
 rust-i18n = "4"
 sys-locale = "0.3"
 # PNG export rasterizes the SVG export; diagrams contain no raster images.
-resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 # The app icon in umlcraft.exe.
 embed-resource = "3"
 # Font metrics for comparing SVG exports with Astah's outside the app.
