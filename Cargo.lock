@@ -6878,6 +6878,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "umlcraft-erm"
+version = "0.17.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "umlcraft-format"
 version = "0.17.0"
 dependencies = [
