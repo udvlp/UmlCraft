@@ -830,8 +830,8 @@ attributes (keys, partial keys, derived, multivalued, composite), relationships 
 n-ary, identifying, with attributes) and generalization (IS-A), with `[min,max]` on the lines
 read look-across (`[1,1]` at `Kunde` on `Kunde – bucht – Ticket`: every ticket has one
 customer). They are drawn like the ER shapes of draw.io; draw.io is Apache-2.0 licensed, its
-drawing rules were worked out from its source and exports, none of its code is used. Drawing,
-the app window and the SQL import follow in later steps.
+drawing rules were worked out from its source and exports, none of its code is used. The app
+window and the SQL import follow in later steps.
 
 - **Model** (`model`). A `Diagram` is a graph like draw.io's: `Node`s with a typed `NodeKind`
   (`Entity { weak }`, `AssociativeEntity`, `Attribute { key, derived, multivalued }`,
@@ -860,11 +860,38 @@ the app window and the SQL import follow in later steps.
   older ones migrated step by step (none yet). `to_value` and `read_value` give the same
   document as a JSON value, for embedding it elsewhere. serde_json reads floats with
   `float_roundtrip`, otherwise a number like `15.6254` could change when written again.
+- **Text** (`metrics`). Widths of Liberation Sans Regular and Bold, metric-compatible with
+  the Helvetica and Arial draw.io names: advances plus the pairs of the font's `kern` table
+  (the browser draw.io runs in kerns), embedded as `metrics/liberation-sans.txt` and written
+  by `tools/erm-metrics/liberation.py`. Lines are 1.2 × the size apart and break at spaces,
+  never inside a word; a word too wide for its shape sticks out. Baseline and underline
+  positions were measured in draw.io's PNG exports.
+- **Geometry** (`geometry`, `size`). Outlines of rectangle, ellipse (with draw.io's direction
+  cut to whole numbers), rhombus and the IS-A triangle; fixed ports projected onto the
+  outline and not rounded; floating ends aiming at the next point, the target end first;
+  labels `x` along the line in whole pixels, `y` to its left; double lines 2 px to each side;
+  second frames 5 (weak entity), 3 (multivalued) and 4 px (identifying) inside. `size::fit`
+  gives nodes a size that fits their name, for the import and the editor.
+- **Drawing** (`draw`, `svg`). `draw` turns a diagram into primitives (rectangles, ellipses,
+  polygons, polylines with dash patterns, label backgrounds, text lines with their baseline
+  and width) in drawing order: lines, nodes, line labels, free texts. Underlines are lines of
+  their own, dotted for partial keys. `svg::render` writes a standalone SVG: the drawing plus
+  10 px, white or transparent background, shapes moved by half a pixel like draw.io's, texts
+  as `<text>` with our line breaks and the fonts `Helvetica, Arial, "Liberation Sans"`.
+  Labels sit on whole pixels as draw.io puts its HTML labels. PNG images are the SVG
+  rasterized by the app (`png.rs`). `cargo run -p umlcraft-erm --example erm-svg --
+  FILE.ucerm [OUT.svg]` draws a file.
 - **Tests.** `tests/roundtrip.rs` reads and writes back byte for byte the flight example
   (drawn in draw.io, translated by the reference tools), a file with every Chen shape and one
   with labels moved by offsets as today's draw.io GUI writes them; `tests/invalid.rs` has one
   rejected file per rule and format error; `tests/random.rs` writes and reads 300 random
-  valid diagrams from fixed seeds.
+  valid diagrams from fixed seeds; `tests/drawing.rs` keeps the SVG images of two fixtures
+  (`UMLCRAFT_ERM_BLESS=1` writes them anew). With `UMLCRAFT_ERM_REFS` pointing at the
+  references (draw.io files and their exports, outside the repository), `tests/drawio.rs`
+  reads draw.io's files with a small test helper and compares: every straight line ends
+  within 0.05 px of draw.io's, every label on draw.io's pixel, and our images rasterized with
+  resvg differ from draw.io's PNGs in at most the share of pixels `tests/drawio_deviations.txt`
+  allows each file, with the reason (text smoothing, right-angle routing, stroke widths).
 
 ## MCP server
 
