@@ -12,15 +12,18 @@
 //! - [`write`] and [`read`]: the `.ucerm` file, pretty-printed JSON like `.ucraft`.
 //! - [`metrics`], [`size`], [`geometry`]: text widths and breaks, text boxes and sizes that
 //!   fit a name, outlines, line ends and label positions as draw.io computes them.
+//! - [`draw`] and [`svg`]: what is drawn, and the SVG image of it.
 
 pub mod check;
 pub mod create;
+pub mod draw;
 pub mod geometry;
 pub mod metrics;
 pub mod model;
 pub mod read;
 mod record;
 pub mod size;
+pub mod svg;
 pub mod write;
 
 pub use check::{Issue, IssueKind, Severity, check};
