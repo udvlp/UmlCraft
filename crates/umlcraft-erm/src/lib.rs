@@ -10,9 +10,11 @@
 //! - [`create`]: adding elements with the sizes and texts a new diagram uses.
 //! - [`check`]: the rules a valid diagram keeps (which nodes may be joined, owners, …).
 //! - [`write`] and [`read`]: the `.ucerm` file, pretty-printed JSON like `.ucraft`.
+//! - [`metrics`]: text widths and line breaks as draw.io's labels get them.
 
 pub mod check;
 pub mod create;
+pub mod metrics;
 pub mod model;
 pub mod read;
 mod record;
