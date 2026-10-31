@@ -823,6 +823,49 @@ reason in `tests/structorizer_deviations.txt`. Snapshots of the fixtures' layout
 SVG (`tests/drawing.rs`) guard the rest. `cargo run -p umlcraft-nsd --example nsd-svg --
 FILE.nsd` draws a file.
 
+## Entity-relationship diagrams
+
+`umlcraft-erm` holds ER diagrams in Chen notation: entities (also weak and associative ones),
+attributes (keys, partial keys, derived, multivalued, composite), relationships (binary,
+n-ary, identifying, with attributes) and generalization (IS-A), with `[min,max]` on the lines
+read look-across (`[1,1]` at `Kunde` on `Kunde – bucht – Ticket`: every ticket has one
+customer). They are drawn like the ER shapes of draw.io; draw.io is Apache-2.0 licensed, its
+drawing rules were worked out from its source and exports, none of its code is used. Drawing,
+the app window and the SQL import follow in later steps.
+
+- **Model** (`model`). A `Diagram` is a graph like draw.io's: `Node`s with a typed `NodeKind`
+  (`Entity { weak }`, `AssociativeEntity`, `Attribute { key, derived, multivalued }`,
+  `Relationship { identifying }`, `IsA { total, disjoint }`), a box, deviations from the
+  standard `Style` and database `Props` named as in Astah's ER model (`physicalName`,
+  `datatype`, `lengthPrecision`, `notNull`, `defaultValue`, `comment`; kept, not drawn);
+  `Link`s with optional fixed ports (draw.io's `exitX/Y`, `entryX/Y`), a `Label` (free text or
+  a `Cardinality`) and a role placed as draw.io places edge labels (`x` along the line from
+  -1 to 1, `y` px to its left, then an offset), a line style and waypoints; free `Text`s.
+  Links point from an attribute to its owner, from a relationship to its participants, from
+  an IS-A to its super- and subtypes (`superType` marks the supertype).
+- **Rules** (`check`). Twelve rules: unique ids, existing ends, the allowed pairs of kinds
+  (`check::allowed`), one owner per attribute and no composite cycles, at least two
+  participants per relationship, one weak entity per identifying relationship, one supertype
+  per IS-A, valid geometry and cardinalities are errors; a weak entity without identifying
+  relationship and a cardinality outside a participation are warnings.
+- **New elements** (`create`) get the sizes of the flight example the feature started from
+  (entity 100 × 40, attribute 70 × 28, relationship 60 × 40) or those of draw.io's library
+  (`SizeSet::Palette`); `connect` only joins allowed kinds.
+- **File** (`read`, `write`): `.ucerm`, pretty-printed JSON like `.ucraft` (`format`
+  `umlcraft-erm`, `formatVersion` 1, `meta`, `nodes`, `links`, `texts` sorted by id, new ids
+  UUIDv7), default values left out, whole numbers without `.0`, LF and a final newline. The
+  file goes through flat records (`record`), so that unknown fields and fields of another kind
+  (`weak` on an attribute) are errors with line and column; then `check` runs, its errors
+  reject the file and its warnings come back with the diagram. Newer versions are refused,
+  older ones migrated step by step (none yet). `to_value` and `read_value` give the same
+  document as a JSON value, for embedding it elsewhere. serde_json reads floats with
+  `float_roundtrip`, otherwise a number like `15.6254` could change when written again.
+- **Tests.** `tests/roundtrip.rs` reads and writes back byte for byte the flight example
+  (drawn in draw.io, translated by the reference tools), a file with every Chen shape and one
+  with labels moved by offsets as today's draw.io GUI writes them; `tests/invalid.rs` has one
+  rejected file per rule and format error; `tests/random.rs` writes and reads 300 random
+  valid diagrams from fixed seeds.
+
 ## MCP server
 
 AI clients (Claude Code, Claude Desktop, Cursor) read and edit UML models through the Model
