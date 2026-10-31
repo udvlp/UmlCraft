@@ -1,0 +1,10 @@
+{
+  "format": "umlcraft-erm",
+  "formatVersion": 2,
+  "meta": {
+    "name": "invalid"
+  },
+  "nodes": [],
+  "links": [],
+  "texts": []
+}

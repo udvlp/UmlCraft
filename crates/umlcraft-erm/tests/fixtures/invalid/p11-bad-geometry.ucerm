@@ -1,0 +1,22 @@
+{
+  "format": "umlcraft-erm",
+  "formatVersion": 1,
+  "meta": {
+    "name": "invalid"
+  },
+  "nodes": [
+    {
+      "id": "a",
+      "type": "entity",
+      "name": "A",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 40
+      }
+    }
+  ],
+  "links": [],
+  "texts": []
+}
