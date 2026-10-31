@@ -17,6 +17,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+# The comparison with draw.io reads its files and SVG images and rasterizes ours.
+quick-xml.workspace = true
+resvg.workspace = true
 
 [lints]
 workspace = true
