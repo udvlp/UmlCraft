@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.13.0 – 2026-11-01
 
 - **Labels out of the way**: names, stereotypes, guards, role names and multiplicities of lines
   no longer cover nodes, lines or each other where there is room nearby. A label stays where it
