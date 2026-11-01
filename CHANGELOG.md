@@ -15,7 +15,8 @@ today.
   element to connect to, as the tools do; before, on a lifeline it always offered messages to
   itself.
 - **Replies keep to their bar**: a reply moved below the bar it returns from takes the end of
-  that bar along, so it never starts outside an activation.
+  that bar along, so it never starts outside an activation; moved back up, it shortens the
+  bar again.
 
 ## 0.15.0 – 2026-11-01
 

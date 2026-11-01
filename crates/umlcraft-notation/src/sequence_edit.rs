@@ -714,6 +714,8 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     };
     let sends = m.sort != MessageSort::Reply && gate != MessageGate::Found;
     let left = g.bar_at(m.source, m.y).filter(|b| sends && !bars.contains(&b.id));
+    // The bar a reply leaves, which ends where the reply now starts.
+    let returned = g.bar_at(m.source, m.y).filter(|_| m.sort == MessageSort::Reply);
     for id in bars {
         tx.update_presentation(diagram, id, |p| {
             if let Shape::Activation { top, .. } = &mut p.shape {
@@ -743,6 +745,9 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     // The bar it left keeps only what is still in it; bars otherwise only grow.
     if let Some(bar) = left {
         shrink_bar(tx, diagram, bar)?;
+    }
+    if let Some(bar) = returned {
+        end_at_reply(tx, diagram, bar, m.id)?;
     }
     // Moved off its sender's bar, a message gets a bar there, as `add_message` gives it: the
     // one ending just above goes on, else a new one starts. Replies leave the bar they end and
@@ -775,6 +780,35 @@ fn shrink_bar(tx: &mut Tx<'_>, diagram: Id, bar: Bar) -> Result<()> {
     let called = g.messages.iter().any(|m| m.target == lane && (bar.top - m.end()).abs() < 0.5);
     let mut need = bar.top + if called { RECEIVER_BAR } else { SENDER_BAR };
     for m in &g.messages {
+        if (m.source == lane && inside(m.y)) || (m.target == lane && inside(m.end())) {
+            need = need.max(m.y.max(m.end()) + BAR_MARGIN);
+        }
+    }
+    for b in g.bars.iter().filter(|b| b.lane == lane && b.id != bar.id && inside(b.top)) {
+        need = need.max(b.bottom + BAR_MARGIN);
+    }
+    if need >= bar.bottom - 0.01 {
+        return Ok(());
+    }
+    tx.update_presentation(diagram, bar.id, |p| {
+        if let Shape::Activation { height, .. } = &mut p.shape {
+            *height = need - bar.top;
+        }
+    })
+}
+
+/// Lets `bar` (as it was before an edit) end at the reply `reply` moved up inside it, unless
+/// something else in the bar still needs room below.
+fn end_at_reply(tx: &mut Tx<'_>, diagram: Id, bar: Bar, reply: Id) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    let Some(r) = g.messages.iter().find(|m| m.id == reply) else { return Ok(()) };
+    if r.y <= bar.top + 0.5 || r.y >= bar.bottom - 0.01 {
+        return Ok(());
+    }
+    let lane = bar.lane;
+    let inside = |y: f32| bar.top + 0.5 < y && y <= bar.bottom + 0.5;
+    let mut need = r.y;
+    for m in g.messages.iter().filter(|m| m.id != reply) {
         if (m.source == lane && inside(m.y)) || (m.target == lane && inside(m.end())) {
             need = need.max(m.y.max(m.end()) + BAR_MARGIN);
         }
@@ -1601,6 +1635,26 @@ mod tests {
                 _ => None,
             });
         assert_eq!(called, Some(230.0));
+    }
+
+    #[test]
+    fn a_reply_moved_up_shortens_its_bar() {
+        let (mut doc, d, a, b) = two_lifelines();
+        draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let reply = draw(&mut doc, d, EdgeTool::Reply, b, a, 130.0);
+        let called = |doc: &Document| {
+            doc.model().view(d).unwrap().presentations().iter().find_map(|p| match p.shape {
+                Shape::Activation { lifeline, top, height, .. } if lifeline == b => {
+                    Some(top + height)
+                }
+                _ => None,
+            })
+        };
+        doc.edit("move", |tx| super::move_item(tx, d, reply, 230.0)).unwrap();
+        assert_eq!(called(&doc), Some(230.0));
+        doc.edit("move", |tx| super::move_item(tx, d, reply, 160.0)).unwrap();
+        assert_eq!(called(&doc), Some(160.0));
+        doc.model().check().unwrap();
     }
 
     #[test]
