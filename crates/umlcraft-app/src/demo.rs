@@ -841,19 +841,19 @@ impl Builder<'_, '_> {
             }
         })?;
 
-        use MessageSort::{Asynchronous, Create, Reply, Synchronous};
+        use MessageSort::{Create, Reply, Synchronous};
         for (name, sort, from, to, arguments, y) in [
             ("scan", Synchronous, ada, app, "code", 120.0),
-            ("startRental", Asynchronous, app, service, "ada, d4", 160.0),
+            ("startRental", Synchronous, app, service, "ada, d4", 160.0),
             ("checkAccount", Synchronous, service, service, "ada", 200.0),
             ("authorize", Synchronous, service, gateway, "deposit", 270.0),
             ("", Reply, gateway, service, "approved", 295.0),
             ("new", Create, service, rental, "ada, e42", 360.0),
             ("release", Synchronous, service, dock, "", 420.0),
             ("", Reply, dock, service, "true", 445.0),
-            ("rentalStarted", Asynchronous, service, app, "r", 475.0),
-            ("declined", Asynchronous, service, app, "reason", 530.0),
-            ("track", Asynchronous, app, service, "position", 650.0),
+            ("rentalStarted", Synchronous, service, app, "r", 475.0),
+            ("declined", Synchronous, service, app, "reason", 530.0),
+            ("track", Synchronous, app, service, "position", 650.0),
         ] {
             let mut kind = ElementKind::message(sort, from, to);
             if let ElementKind::Message(p) = &mut kind {

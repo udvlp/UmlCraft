@@ -13,6 +13,7 @@ today.
   leaving the bar at its end.
 - **Back from a member**: with an attribute or operation selected, a click on the class name
   (or elsewhere in the box) selects the class again.
+- **Sample project**: all calls in "Rent a bike" are synchronous.
 
 ## 0.15.1 – 2026-11-01
 
