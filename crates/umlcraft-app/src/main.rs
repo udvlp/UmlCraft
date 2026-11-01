@@ -121,6 +121,17 @@ pub struct DeleteMember {
     pub member: Id,
 }
 
+/// Connects `source` to `target` with a line of `tool`, from the menu a line dragged from a
+/// handle offers; a message goes where the drag started (`start`).
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct ConnectAs {
+    pub tool: EdgeTool,
+    pub source: Id,
+    pub target: Id,
+    pub start: umlcraft_model::Point,
+}
+
 /// Turns the selected relationship into another kind, from the canvas's context menu.
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = umlcraft, no_json)]

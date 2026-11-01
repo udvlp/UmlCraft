@@ -8,7 +8,9 @@ use std::sync::{Arc, OnceLock};
 
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Sizable};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
@@ -29,8 +31,8 @@ use umlcraft_notation::sequence::SequenceLayout;
 use crate::workspace::{EndChange, NewItem, Workspace};
 use crate::{
     AddAttribute, AddExtensionPoint, AddLiteral, AddOperation, Cancel, ChangeRelationship,
-    DeleteMember, DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetLabels, ResetLineEnds,
-    ResetZoom, SelectAll, SetAssociationEnd, SetLineShape, SetMemberType, ZoomToFit,
+    ConnectAs, DeleteMember, DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetLabels,
+    ResetLineEnds, ResetZoom, SelectAll, SetAssociationEnd, SetLineShape, SetMemberType, ZoomToFit,
 };
 
 const MIN_ZOOM: f32 = 0.25;
@@ -58,6 +60,15 @@ fn diagram_font() -> SharedString {
 /// `scene::line_height(12)`. Texts are moved down to Astah's baseline (`draw::baseline`).
 const GPUI_BASELINE: f32 = 11.70703 / 12.0;
 const MAX_ZOOM: f32 = 4.0;
+/// Height of a hover handle and the gap between handles, in screen pixels.
+const HANDLE_SIZE: f32 = 20.0;
+const HANDLE_GAP: f32 = 3.0;
+/// How wide the column of handles right of a box is taken to be: the mouse keeps the handles
+/// while it moves onto them.
+const HANDLE_COLUMN: f32 = 120.0;
+/// A top left corner (x, y) and an area (left, top, right, bottom), in canvas-local pixels.
+type Corner = (f32, f32);
+type Area = (f32, f32, f32, f32);
 const GRID: f32 = 20.0;
 /// Smallest node edge when resizing.
 const MIN_NODE: f32 = 20.0;
@@ -364,6 +375,13 @@ enum Drag {
         top: f32,
         current: MPoint,
     },
+    /// Drawing a line from a hover handle of `source`, or a message from its lifeline.
+    HandleLine {
+        source: Id,
+        start: MPoint,
+        current: MPoint,
+        message: bool,
+    },
 }
 
 enum Editor {
@@ -403,6 +421,35 @@ struct NewMember {
     after: Option<Id>,
 }
 
+/// What a handle beside the node under the mouse does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HoverHandle {
+    /// Dragged to another node, draws a line to it.
+    Connect,
+    /// Opens an empty row for a new member at the end of the compartment.
+    AddMember(Compartment),
+    /// Dragged to a lifeline, draws a message from `lifeline` at the height `y`.
+    Message { lifeline: Id, y: f32 },
+}
+
+/// The node under the mouse and the handles it shows beside it.
+#[derive(Clone, Debug, PartialEq)]
+struct Hover {
+    node: Id,
+    handles: Vec<HoverHandle>,
+}
+
+/// A line dragged from a handle onto a node it can reach in several ways: the menu offering
+/// them, at `position` (window pixels), built on the next render.
+struct Offer {
+    source: Id,
+    target: Id,
+    start: MPoint,
+    tools: Vec<EdgeTool>,
+    position: Point<Pixels>,
+    menu: Option<(Entity<PopupMenu>, Subscription)>,
+}
+
 pub struct DiagramCanvas {
     workspace: Entity<Workspace>,
     focus_handle: FocusHandle,
@@ -437,6 +484,10 @@ pub struct DiagramCanvas {
     /// drag the scene is only built again when one of them changes, not on every pan, zoom or
     /// caret blink.
     scene_key: Option<(u64, Id, Display, String)>,
+    /// The node under the mouse with its handles (Select tool, nothing dragged or edited).
+    hover: Option<Hover>,
+    /// The kinds of line a line dragged from a handle can become.
+    offer: Option<Offer>,
 }
 
 thread_local! {
@@ -583,6 +634,8 @@ impl DiagramCanvas {
             display: Display::default(),
             corner_radius: 0.0,
             scene_key: None,
+            hover: None,
+            offer: None,
         }
     }
 
@@ -1006,6 +1059,274 @@ impl DiagramCanvas {
         true
     }
 
+    // ----- Hover handles -------------------------------------------------------------------
+
+    /// Shows the handles of the node under the mouse, if they change.
+    fn update_hover(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let hover = self.hover_at(position, cx);
+        if hover != self.hover {
+            self.hover = hover;
+            cx.notify();
+        }
+    }
+
+    /// The node under `position` and its handles: a line handle on classes, interfaces,
+    /// enumerations, data types, actors, use cases and objects, one for each compartment that
+    /// takes members, and on a sequence diagram a message handle on activation bars and
+    /// lifelines. Over the handles shown, they stay.
+    fn hover_at(&self, position: Point<Pixels>, cx: &App) -> Option<Hover> {
+        let ws = self.workspace.read(cx);
+        if ws.tool != Tool::Select
+            || self.drag.is_some()
+            || self.editing.is_some()
+            || self.offer.is_some()
+        {
+            return None;
+        }
+        let origin = self.bounds.get().origin;
+        let (x, y) = (f32::from(position.x - origin.x), f32::from(position.y - origin.y));
+        if let Some(old) = &self.hover
+            && let Some((_, (left, top, right, bottom))) = self.hover_layout(old)
+            && (left..=right).contains(&x)
+            && (top..=bottom).contains(&y)
+        {
+            return Some(old.clone());
+        }
+        let p = self.to_logical(position);
+        let model = ws.doc.model();
+        let view = model.view(ws.active_diagram?)?;
+        let tolerance = self.hit_tolerance();
+        if self.scene.sequence.is_some() {
+            let bars = self.scene.nodes.iter().rev();
+            let bar = bars
+                .filter(|n| matches!(n.figure, Figure::Activation))
+                .find(|n| n.rect.inflate(tolerance).contains(p));
+            let line = || {
+                self.scene.nodes.iter().rev().find(|n| {
+                    lifeline_end(n).is_some_and(|(lx, top, bottom)| {
+                        (p.x - lx).abs() <= tolerance && p.y > top && p.y < bottom
+                    })
+                })
+            };
+            let node = bar.or_else(line)?;
+            let lifeline = palette::lifeline_of(view, node.id);
+            let handles = vec![HoverHandle::Message { lifeline, y: p.y }];
+            return Some(Hover { node: node.id, handles });
+        }
+        let node = self.scene.nodes.iter().rev().find(|n| n.hit(p, tolerance))?;
+        use ElementKind as K;
+        let connects = matches!(
+            model.get(node.element?)?.kind(),
+            K::Class(_)
+                | K::Interface(_)
+                | K::Enumeration(_)
+                | K::DataType(_)
+                | K::Actor(_)
+                | K::UseCase(_)
+                | K::Instance(_)
+        );
+        let mut handles = Vec::new();
+        if connects {
+            handles.push(HoverHandle::Connect);
+        }
+        if let Figure::Classifier { compartments, .. } = &node.figure {
+            let takes = compartments.iter().filter(|&&c| c != Compartment::Slots);
+            handles.extend(takes.map(|&c| HoverHandle::AddMember(c)));
+        }
+        (!handles.is_empty()).then_some(Hover { node: node.id, handles })
+    }
+
+    /// Where the handles of `hover` go, in canvas-local pixels: the top left corner of the
+    /// first, and the area (left, top, right, bottom) that keeps them while the mouse is on
+    /// it. A box has them in a column at its right, a lifeline one beside its line or bar.
+    fn hover_layout(&self, hover: &Hover) -> Option<(Corner, Area)> {
+        let node = self.scene.node(hover.node)?;
+        let screen = |q: MPoint| (self.pan.x + q.x * self.zoom, self.pan.y + q.y * self.zoom);
+        if let [HoverHandle::Message { y, .. }] = hover.handles[..] {
+            let right = match node.figure {
+                Figure::Activation => node.rect.right(),
+                _ => lifeline_end(node)?.0,
+            };
+            let (x, y) = screen(MPoint::new(right, y));
+            let at = (x + HANDLE_GAP, y - HANDLE_SIZE / 2.0);
+            let area = (x, at.1 - 2.0, at.0 + HANDLE_SIZE + 2.0, at.1 + HANDLE_SIZE + 2.0);
+            return Some((at, area));
+        }
+        let (x, y) = screen(MPoint::new(node.rect.right(), node.rect.y));
+        let at = (x + HANDLE_GAP, y);
+        let height = hover.handles.len() as f32 * (HANDLE_SIZE + HANDLE_GAP);
+        Some((at, (x, y, at.0 + HANDLE_COLUMN, y + height)))
+    }
+
+    /// The handles of the node under the mouse, as buttons over the canvas.
+    fn hover_handles(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let hover = self.hover.clone()?;
+        if self.drag.is_some() || self.editing.is_some() || self.offer.is_some() {
+            return None;
+        }
+        let ((x, y), _) = self.hover_layout(&hover)?;
+        let theme = cx.theme();
+        let (border, fill, ink, accent) =
+            (theme.input, theme.popover, theme.popover_foreground, theme.accent);
+        let mut column = div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(px(HANDLE_GAP));
+        for (i, handle) in hover.handles.iter().copied().enumerate() {
+            let (icon, label, tip) = match handle {
+                HoverHandle::Connect => ("arrow_right", None, t!("canvas.handle_connect")),
+                HoverHandle::Message { .. } => ("arrow_right", None, t!("canvas.handle_message")),
+                HoverHandle::AddMember(c) => {
+                    let (kind, tip) = match c {
+                        Compartment::Operations => ("kind.operation", "menu.add_operation"),
+                        Compartment::Literals => ("kind.enumerationLiteral", "menu.add_literal"),
+                        _ => ("kind.attribute", "menu.add_attribute"),
+                    };
+                    ("add", Some(t!(kind)), t!(tip))
+                }
+            };
+            let tip = SharedString::from(tip.to_string());
+            let button = div()
+                .id(("hover-handle", i))
+                .h(px(HANDLE_SIZE))
+                .min_w(px(HANDLE_SIZE))
+                .px(px(3.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .rounded(px(4.0))
+                .border_1()
+                .border_color(border)
+                .bg(fill)
+                .text_color(ink)
+                .text_xs()
+                .cursor_pointer()
+                .hover(move |s| s.bg(accent))
+                .child(crate::shell::icon(crate::icons::fluent(icon)).xsmall())
+                .when_some(label, |b, label| b.pr(px(6.0)).child(label.to_string()))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.grab_hover_handle(handle, ev.position, window, cx);
+                    }),
+                );
+            column = column.child(button);
+        }
+        Some(column)
+    }
+
+    /// A press on a handle: a new member row, or a line or message drawn from there.
+    fn grab_hover_handle(
+        &mut self,
+        handle: HoverHandle,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_edit(cx);
+        self.focus_handle.focus(window, cx);
+        let Some(hover) = self.hover.take() else { return };
+        let p = self.to_logical(position);
+        match handle {
+            HoverHandle::AddMember(compartment) => {
+                if let Some(hit) = scene::compartment_of(&self.scene, hover.node, compartment) {
+                    self.open_new_member(hit, window, cx);
+                }
+            }
+            HoverHandle::Connect => {
+                let source = hover.node;
+                self.drag = Some(Drag::HandleLine { source, start: p, current: p, message: false });
+            }
+            HoverHandle::Message { lifeline, y } => {
+                let start = MPoint::new(p.x, y);
+                self.drag =
+                    Some(Drag::HandleLine { source: lifeline, start, current: p, message: true });
+            }
+        }
+        cx.notify();
+    }
+
+    /// A line dragged from a handle of `source` dropped on `target`: drawn at once if only one
+    /// kind of line fits, else a menu at `position` offers the kinds that do.
+    fn offer_connections(
+        &mut self,
+        source: Id,
+        target: Id,
+        start: MPoint,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let tools = {
+            let ws = self.workspace.read(cx);
+            let model = ws.doc.model();
+            let Some(diagram) = ws.active_diagram else { return };
+            let Some(ElementKind::Diagram(props)) = model.get(diagram).map(|d| d.kind()) else {
+                return;
+            };
+            let Some(view) = model.view(diagram) else { return };
+            let element = |p: Id| view.get(p).and_then(|p| p.element);
+            let (Some(s), Some(t)) = (element(source), element(target)) else { return };
+            let (Some(sk), Some(tk)) = (model.get(s), model.get(t)) else { return };
+            palette::connections(props, sk.kind(), tk.kind(), s == t)
+        };
+        match tools[..] {
+            [] => {}
+            [only] => self.finish_connect(only, source, target, start, cx),
+            _ => {
+                self.offer = Some(Offer { source, target, start, tools, position, menu: None });
+                cx.notify();
+            }
+        }
+    }
+
+    /// The menu of [`Offer`], built on the first render after the drop.
+    fn offer_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let focus = self.focus_handle.clone();
+        let offer = self.offer.as_mut()?;
+        if offer.menu.is_none() {
+            let (source, target, start) = (offer.source, offer.target, offer.start);
+            let tools = offer.tools.clone();
+            let menu = PopupMenu::build(window, cx, move |menu, _, _| {
+                tools
+                    .iter()
+                    .fold(menu, |menu, &tool| {
+                        let label = crate::ribbon::tool_label(Tool::Edge(tool));
+                        let icon = crate::shell::icon(crate::icons::tool_icon(Tool::Edge(tool)));
+                        let action = Box::new(ConnectAs { tool, source, target, start });
+                        menu.menu_with_icon(label, icon, action)
+                    })
+                    .action_context(focus)
+            });
+            let subscription =
+                cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, window, cx| {
+                    this.offer = None;
+                    this.focus_handle.focus(window, cx);
+                    cx.notify();
+                });
+            let focus = menu.focus_handle(cx);
+            cx.defer_in(window, move |_, window, cx| focus.focus(window, cx));
+            offer.menu = Some((menu, subscription));
+        }
+        let (menu, _) = offer.menu.as_ref()?;
+        Some(
+            deferred(
+                anchored()
+                    .position(offer.position)
+                    .snap_to_window_with_margin(px(8.0))
+                    .child(menu.clone()),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
     /// Connects `source` to `target`. Messages go where the drawing started (`start`).
     fn finish_connect(
         &mut self,
@@ -1211,7 +1532,8 @@ impl DiagramCanvas {
             | Drag::Connect { current, .. }
             | Drag::Reorder { current, .. }
             | Drag::MessageLabel { current, .. }
-            | Drag::KeywordLabel { current, .. } => *current = p,
+            | Drag::KeywordLabel { current, .. }
+            | Drag::HandleLine { current, .. } => *current = p,
             Drag::RegionLine { current, .. }
             | Drag::FreeLine { current, .. }
             | Drag::LineEnd { current, .. }
@@ -1299,6 +1621,12 @@ impl DiagramCanvas {
                     _ => {}
                 }
             }
+            Some(Drag::HandleLine { source, start, message, .. }) => {
+                let tool = if message { EdgeTool::Message } else { EdgeTool::Association };
+                if let Some(target) = self.connect_target(tool, p, cx) {
+                    self.offer_connections(source, target, start, position, cx);
+                }
+            }
             Some(Drag::Reorder { element, start, current })
                 if (current.y - start.y).abs() > 6.0 =>
             {
@@ -1332,6 +1660,7 @@ impl DiagramCanvas {
     }
 
     fn on_scroll(&mut self, ev: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.hover = None;
         let delta = ev.delta.pixel_delta(px(16.0));
         let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
         if ev.modifiers.control {
@@ -1353,6 +1682,7 @@ impl DiagramCanvas {
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
         self.drag = None;
         self.editing = None;
+        self.offer = None;
         self.update_workspace(cx, |ws| ws.tool = Tool::Select);
     }
 
@@ -2120,6 +2450,9 @@ impl Render for DiagramCanvas {
         let menu_owner = this.clone();
         let cursor = if tool == Tool::Select { CursorStyle::Arrow } else { CursorStyle::Crosshair };
 
+        let handles = self.hover_handles(cx).filter(|_| tool == Tool::Select);
+        let offer_menu = self.offer_menu(window, cx);
+
         // The in-place editor sits over the edited text, in canvas-local pixels.
         let editor = self.editing.as_ref().map(|edit| {
             let r = edit.rect;
@@ -2150,6 +2483,13 @@ impl Render for DiagramCanvas {
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
                 if this.drag.is_some() {
                     this.drag_to(ev.position, cx);
+                } else {
+                    this.update_hover(ev.position, cx);
+                }
+            }))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered && this.hover.take().is_some() {
+                    cx.notify();
                 }
             }))
             .on_mouse_up(
@@ -2206,6 +2546,10 @@ impl Render for DiagramCanvas {
                 let edges: Vec<Id> =
                     selection.into_iter().filter(|&id| this.scene.edge(id).is_some()).collect();
                 this.update_workspace(cx, |ws| ws.reset_labels(&edges));
+            }))
+            .on_action(cx.listener(|this, a: &ConnectAs, _, cx| {
+                this.offer = None;
+                this.finish_connect(a.tool, a.source, a.target, a.start, cx);
             }))
             .on_action(cx.listener(|this, a: &ChangeRelationship, _, cx| {
                 this.update_workspace(cx, |ws| ws.change_relationship(a.edge, a.tool));
@@ -2345,6 +2689,15 @@ impl Render for DiagramCanvas {
                                     );
                                     p.grips(&[end]);
                                 }
+                                Some(Drag::HandleLine { source, start, current, message }) => {
+                                    // A message runs from where it starts, a line from the
+                                    // border of its node.
+                                    let node = scene.node(*source).filter(|_| !*message);
+                                    let from = node
+                                        .map_or(*start, |n| scene::border_point(n.rect, *current));
+                                    let s = p.c.selection;
+                                    p.line(&[from, *current], 1.5, s, LineStyle::Dashed);
+                                }
                                 Some(Drag::Connect { source, current, .. }) => {
                                     if let Some(node) = scene.node(*source) {
                                         let from = scene::border_point(node.rect, *current);
@@ -2360,6 +2713,8 @@ impl Render for DiagramCanvas {
                 .size_full(),
             )
             .children(editor)
+            .children(handles)
+            .children(offer_menu)
             .context_menu(move |menu, window, cx| Self::context_menu(&menu_owner, menu, window, cx))
     }
 }

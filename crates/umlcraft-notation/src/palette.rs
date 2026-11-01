@@ -213,6 +213,28 @@ pub fn diagram_palette(props: &DiagramProps) -> Vec<Tool> {
     }
 }
 
+/// The lines a diagram drawn with `props` offers from an element of kind `source` to one of
+/// kind `target` (`same`: both are one element), in palette order: what a line dragged from a
+/// node's handle can become. Note anchors and messages with one lifeline are left out.
+pub fn connections(
+    props: &DiagramProps,
+    source: &ElementKind,
+    target: &ElementKind,
+    same: bool,
+) -> Vec<EdgeTool> {
+    diagram_palette(props)
+        .into_iter()
+        .filter_map(|t| match t {
+            Tool::Edge(e) => Some(e),
+            _ => None,
+        })
+        .filter(|e| {
+            !matches!(e, EdgeTool::NoteAnchor | EdgeTool::FoundMessage | EdgeTool::LostMessage)
+        })
+        .filter(|e| e.accepts(source, target, same))
+        .collect()
+}
+
 /// Tools offered for an object diagram: a class diagram's, with Object and Link first.
 pub fn object_palette() -> Vec<Tool> {
     let mut tools = palette(DiagramKind::Class);
@@ -1363,6 +1385,46 @@ mod tests {
         );
         assert_eq!(objects[3], Tool::Node(NodeTool::Class));
         assert_eq!(objects.len(), palette(DiagramKind::Class).len());
+    }
+
+    #[test]
+    fn handles_offer_the_lines_allowed_between_two_elements() {
+        let props = |kind| match ElementKind::diagram(kind) {
+            ElementKind::Diagram(p) => p,
+            _ => unreachable!(),
+        };
+        let (class, interface) = (ElementKind::class(), ElementKind::interface());
+        let classes = props(DiagramKind::Class);
+        use EdgeTool as E;
+        assert_eq!(
+            connections(&classes, &class, &class, false),
+            [E::Association, E::Generalization, E::Dependency]
+        );
+        assert_eq!(
+            connections(&classes, &class, &interface, false),
+            [E::Association, E::Realization, E::Dependency]
+        );
+        assert_eq!(connections(&classes, &class, &class, true), [E::Association]);
+        let (actor, use_case) = (ElementKind::actor(), ElementKind::use_case());
+        let use_cases = props(DiagramKind::UseCase);
+        assert_eq!(
+            connections(&use_cases, &actor, &use_case, false),
+            [E::Association, E::Dependency]
+        );
+        assert_eq!(
+            connections(&use_cases, &use_case, &use_case, false),
+            [E::Association, E::Generalization, E::Include, E::Extend, E::Dependency]
+        );
+        let lifeline = ElementKind::Lifeline(Default::default());
+        let sequence = props(DiagramKind::Sequence);
+        assert_eq!(
+            connections(&sequence, &lifeline, &lifeline, false),
+            [E::Message, E::AsyncMessage, E::Reply, E::CreateMessage, E::DestroyMessage]
+        );
+        assert_eq!(
+            connections(&sequence, &lifeline, &lifeline, true),
+            [E::Message, E::AsyncMessage, E::Reply]
+        );
     }
 
     #[test]

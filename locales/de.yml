@@ -330,6 +330,8 @@ status:
   hint_line: "Vom Anfang zum Ende ziehen · Esc: abbrechen"
 canvas:
   no_diagram: Kein Diagramm geöffnet. Doppelklick oder Kontextmenü im Modellbaum.
+  handle_connect: Ziehen, um eine Linie zu einem anderen Element zu zeichnen
+  handle_message: Ziehen, um eine Nachricht zu einer Lebenslinie zu zeichnen
 dialog:
   unsaved: Das Projekt enthält ungespeicherte Änderungen.
   unsaved_detail: Sollen die Änderungen gespeichert werden?

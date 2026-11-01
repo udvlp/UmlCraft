@@ -5,6 +5,13 @@ today.
 
 ## Unreleased
 
+- **Handles beside the element under the mouse**: classes, interfaces, enumerations and data
+  types show buttons that open an empty row for a new attribute, operation or literal. Classes,
+  interfaces, enumerations, data types, actors, use cases and objects have an arrow handle:
+  dragged onto another element it draws a line, and a menu offers the kinds UML allows between
+  the two (a single one is drawn at once). On sequence diagrams, lifelines and activation bars
+  have an arrow handle at the height of the mouse that draws a message to another lifeline;
+  the menu offers call, asynchronous message, reply, create and destroy.
 - **Sorted model tree**: packages and models list packages first, then diagrams and
   structograms, interactions, activities and state machines, then the other elements by kind
   and name, relationships last. Members and the parts of an interaction keep their order.

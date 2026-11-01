@@ -330,6 +330,8 @@ status:
   hint_line: "Drag from start to end · Esc: cancel"
 canvas:
   no_diagram: No diagram open. Double-click one or use the model tree's context menu.
+  handle_connect: Drag to draw a line to another element
+  handle_message: Drag to draw a message to a lifeline
 dialog:
   unsaved: The project has unsaved changes.
   unsaved_detail: Do you want to save them?

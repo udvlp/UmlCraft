@@ -30,6 +30,7 @@ icons are embedded.
 | 100 %, light, dark, language, settings | `ic_fluent_ratio_one_to_one_…`, `ic_fluent_weather_sunny_…`, `ic_fluent_weather_moon_…`, `ic_fluent_local_language_…`, `ic_fluent_settings_…` |
 | Source import, Astah import and export, image export, image to clipboard | `ic_fluent_code_…`, `ic_fluent_arrow_import_…`, `ic_fluent_arrow_export_ltr_…`, `ic_fluent_image_arrow_forward_…`, `ic_fluent_image_copy_…` |
 | New diagram (no diagram open) | `ic_fluent_document_add_24_regular.svg` |
+| Hover handles on the canvas: new member, draw a line or message | `ic_fluent_add_24_regular.svg`, `ic_fluent_arrow_right_24_regular.svg` |
 ## `uml/`
 
 UmlCraft's own icons for the diagram tools, named after the palette's tool keys

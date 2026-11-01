@@ -115,9 +115,11 @@ the ribbon to its tabs; in a narrow window its buttons show icons only.
 
 Inline editing by double-click with a parser for `+ name : Type [0..*] = init` and
 `+ op(p : T) : R`; a properties panel for everything else. A double click below the members of
-a compartment, or Add attribute/operation/literal in the context menu, opens an empty row for a
-new member, and Enter opens the next one. A right click on a member selects it, offers its
-type (the basic types the model already uses, then its classes) and deletes just that member;
+a compartment, Add attribute/operation/literal in the context menu, or the buttons beside the
+box under the mouse open an empty row for a new member, and Enter opens the next one. An arrow
+handle beside classes, actors, use cases and objects, and beside lifelines and activation bars,
+draws a line or message when dragged onto another element; a menu offers the kinds that fit.
+A right click on a member selects it, offers its type (the basic types the model already uses, then its classes) and deletes just that member;
 the properties panel splits an attribute into name, type, multiplicity and initial value. Role
 names (`# buyer {ordered}`) and multiplicities are edited by double-click on their label or
 near the end of the association. Change kind in a relationship's context menu
