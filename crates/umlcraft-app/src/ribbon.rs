@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Selectable, Sizable, StyledExt, h_flex, v_flex,
+    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -568,9 +568,20 @@ const CHAR: f32 = 6.5;
 const LARGE_MIN: f32 = 52.0;
 const SMALL_ICON: f32 = 28.0;
 const GROUP_PADDING: f32 = 18.0;
+const CARET: f32 = 14.0;
 
 fn label_width(label: &str) -> f32 {
     label.chars().count() as f32 * CHAR
+}
+
+/// A large button's label on two lines, broken as Office does: a single word stays on the
+/// first line, a longer label breaks at the space that leaves its longer line shortest.
+pub fn label_lines(label: &str) -> (&str, &str) {
+    label
+        .match_indices(' ')
+        .map(|(i, _)| (&label[..i], &label[i + 1..]))
+        .min_by_key(|(first, second)| first.chars().count().max(second.chars().count()))
+        .unwrap_or((label, ""))
 }
 
 /// About how wide the groups are with labels; with less room the ribbon shows icons only.
@@ -590,7 +601,10 @@ pub fn width(groups: &[Group]) -> f32 {
                 match item.size {
                     Size::Large => {
                         flush(&mut column, &mut width);
-                        width += (label_width(&item.label) + 16.0).max(LARGE_MIN);
+                        let (first, second) = label_lines(&item.label);
+                        let caret = if item.menu.is_empty() { 0.0 } else { CARET };
+                        let label = label_width(first).max(label_width(second) + caret);
+                        width += (label + 16.0).max(LARGE_MIN);
                     }
                     Size::Small | Size::Icon => {
                         let w = match item.size {
@@ -612,9 +626,14 @@ pub fn width(groups: &[Group]) -> f32 {
 
 // ----- Drawing ------------------------------------------------------------------------------
 
-const HEIGHT: Pixels = px(68.0);
+/// Room for a large button: its icon and two lines of label.
+const HEIGHT: Pixels = px(76.0);
 /// The tab strip.
 const STRIP: Pixels = px(34.0);
+/// A line of a large button's label.
+const LABEL_LINE: Pixels = px(15.0);
+/// The lower part of a split button, with the label.
+const SPLIT_LOWER: Pixels = px(34.0);
 
 /// Sends `action` to the view shown (`focus`), wherever the keyboard focus is, as the menus do:
 /// after a click in the tree a structogram's commands still reach the structogram.
@@ -674,16 +693,25 @@ fn group_menu(
     }
 }
 
-fn large_button(item: &Item, compact: bool, focus: &FocusHandle) -> AnyElement {
+fn large_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> AnyElement {
     let icon = shell::icon(item.icon.clone()).size(px(if compact { 20.0 } else { 24.0 }));
     let menu: Entries = Rc::new(item.menu.clone());
-    let content = |label: bool| {
+    let caret = (!menu.is_empty())
+        .then(|| Icon::new(IconName::ChevronDown).size_3().text_color(cx.theme().muted_foreground));
+    // Two lines, a caret after the second, as Office labels its large buttons, so that their
+    // icons stay level; with icons only, the caret alone.
+    let label = if compact {
+        v_flex().items_center().children(caret)
+    } else {
+        let (first, second) = label_lines(&item.label);
         v_flex()
             .items_center()
-            .gap_1()
-            .child(icon.clone())
-            .when(label, |this| this.child(div().text_xs().child(item.label.clone())))
+            .text_xs()
+            .line_height(LABEL_LINE)
+            .child(div().h(LABEL_LINE).child(first.to_string()))
+            .child(h_flex().h(LABEL_LINE).gap_0p5().child(second.to_string()).children(caret))
     };
+    let content = |label: Div| v_flex().items_center().gap_1().child(icon.clone()).child(label);
     let base = |id: SharedString| {
         Button::new(id)
             .ghost()
@@ -693,32 +721,30 @@ fn large_button(item: &Item, compact: bool, focus: &FocusHandle) -> AnyElement {
             .selected(item.selected)
             .tooltip(item.tooltip.clone().unwrap_or_else(|| item.label.clone()))
     };
-    match (&item.action, menu.is_empty()) {
-        (Some(action), true) => base(item.id.clone())
+    match &item.action {
+        Some(action) if menu.is_empty() => base(item.id.clone())
             .h(HEIGHT - px(8.0))
-            .child(content(!compact))
+            .child(content(label))
             .on_click(dispatch(action.as_ref(), focus))
             .into_any_element(),
-        // Split: the upper part runs the action, the lower one opens the menu.
-        (Some(action), false) => v_flex()
+        // Split: the upper part runs the action, the lower one, the label, opens the menu.
+        Some(action) => v_flex()
             .child(
                 base(item.id.clone())
-                    .h(HEIGHT - px(30.0))
+                    .h(HEIGHT - px(8.0) - SPLIT_LOWER)
                     .child(icon.clone())
                     .on_click(dispatch(action.as_ref(), focus)),
             )
             .child(
                 base(format!("{}-menu", item.id).into())
-                    .h(px(22.0))
-                    .when(!compact, |this| this.child(div().text_xs().child(item.label.clone())))
-                    .dropdown_caret(true)
+                    .h(SPLIT_LOWER)
+                    .child(label)
                     .dropdown_menu(entries_menu(menu, focus.clone())),
             )
             .into_any_element(),
-        (None, _) => base(item.id.clone())
+        None => base(item.id.clone())
             .h(HEIGHT - px(8.0))
-            .child(content(!compact))
-            .dropdown_caret(true)
+            .child(content(label))
             .dropdown_menu(entries_menu(menu, focus.clone()))
             .into_any_element(),
     }
@@ -754,15 +780,22 @@ fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> im
         if column.is_empty() {
             row
         } else {
-            // Icons line up at the left of the column.
-            row.child(v_flex().gap_0p5().items_start().justify_center().children(column.drain(..)))
+            // Icons line up at the left of the column, the column in the middle of the row.
+            row.child(
+                v_flex()
+                    .h_full()
+                    .gap_0p5()
+                    .items_start()
+                    .justify_center()
+                    .children(column.drain(..)),
+            )
         }
     };
     for item in &group.items {
         match item.size {
             Size::Large => {
                 row = flush(row, &mut column);
-                row = row.child(large_button(item, compact, focus));
+                row = row.child(large_button(item, compact, focus, cx));
             }
             Size::Small | Size::Icon => {
                 column.push(small_button(item, compact, focus));
@@ -880,7 +913,7 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
-    use super::{DIAGRAM_KINDS, RibbonTab, State, diagram, tabs};
+    use super::{DIAGRAM_KINDS, RibbonTab, State, diagram, label_lines, tabs};
     use umlcraft_model::DiagramKind;
     use umlcraft_notation::palette::{self, Tool};
 
@@ -902,6 +935,14 @@ mod tests {
         let first = |id: &str| groups.iter().find(|g| g.id == id).map(|g| g.items[0].id.clone());
         assert_eq!(first("elements").as_deref(), Some("tool-object"));
         assert_eq!(first("relations").as_deref(), Some("tool-link"));
+    }
+
+    #[test]
+    fn labels_break_where_the_longer_line_is_shortest() {
+        assert_eq!(label_lines("Einfügen"), ("Einfügen", ""));
+        assert_eq!(label_lines("Neues Diagramm"), ("Neues", "Diagramm"));
+        assert_eq!(label_lines("Wrap in a fragment"), ("Wrap in a", "fragment"));
+        assert_eq!(label_lines("Linien neu führen"), ("Linien", "neu führen"));
     }
 
     #[test]

@@ -29,6 +29,8 @@ today.
   end of the lifeline it destroys with it.
 - **New diagram in the Home tab**: the button that creates diagrams moves from its own box left
   of the ribbon into the Home tab, as its first group.
+- **Ribbon labels on two lines**: labels of large ribbon buttons break onto two lines as in
+  Office, with the arrow of a menu after the second line.
 
 ## 0.15.2 – 2026-11-01
 
