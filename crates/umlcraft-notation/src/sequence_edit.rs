@@ -886,6 +886,20 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                         need = need.max(m.end() + BAR_MARGIN);
                     }
                 }
+                // And it leaves the bar its call arrived in at its end, however far below.
+                if m.sort == MessageSort::Reply && m.source == bar.lane && m.y > bar.bottom {
+                    let call = g
+                        .messages
+                        .iter()
+                        .filter(|c| c.sort != MessageSort::Reply && c.end() < m.y)
+                        .filter(|c| c.source == m.target && c.target == m.source)
+                        .max_by(|a, b| a.y.total_cmp(&b.y));
+                    let arrived =
+                        |c: &&Msg| g.bar_at(bar.lane, c.end()).is_some_and(|b| b.id == bar.id);
+                    if call.as_ref().is_some_and(arrived) {
+                        need = need.max(m.y);
+                    }
+                }
             }
             if need > bar.bottom + 0.01 {
                 grown.push((bar.id, need - bar.top));
@@ -1562,6 +1576,31 @@ mod tests {
             .unwrap();
         assert!(caller.0 <= 120.0 && y < caller.1, "reply at {y}, caller's bar {caller:?}");
         doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn a_reply_moved_down_takes_the_end_of_its_bar_along() {
+        let (mut doc, d, a, b) = two_lifelines();
+        draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let reply = draw(&mut doc, d, EdgeTool::Reply, b, a, 130.0);
+        let p = doc.model().view(d).unwrap().presentations_of(reply).next().unwrap().id;
+        doc.edit("move", |tx| {
+            tx.update_presentation(d, p, |p| {
+                if let Shape::Message { y, .. } = &mut p.shape {
+                    *y = 230.0;
+                }
+            })?;
+            super::tidy(tx, d)
+        })
+        .unwrap();
+        let called =
+            doc.model().view(d).unwrap().presentations().iter().find_map(|p| match p.shape {
+                Shape::Activation { lifeline, top, height, .. } if lifeline == b => {
+                    Some(top + height)
+                }
+                _ => None,
+            });
+        assert_eq!(called, Some(230.0));
     }
 
     #[test]

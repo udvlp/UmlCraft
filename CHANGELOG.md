@@ -9,6 +9,8 @@ today.
   its head, where the constructor runs.
 - **Sample project**: no multiplicities at the ends that are not navigable; ada's activation
   bar in "Rent a bike" lasts until the end of the ride.
+- **Replies keep to their bar**: a reply moved below the bar it returns from takes the end of
+  that bar along, so it never starts outside an activation.
 
 ## 0.15.0 – 2026-11-01
 
