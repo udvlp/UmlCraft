@@ -194,11 +194,14 @@ check for new versions.
 - **When:** at its first start UmlCraft asks whether it may look for new versions. Only if you
   agree does it ask GitHub, at start and at most once a day. You can change your answer in
   Settings › Updates. The button "Check for updates" in About UmlCraft asks once, whenever you
-  click it.
+  click it. UmlCraft downloads a new version only when you click "Update" in the title bar or
+  "Install now" in About UmlCraft.
 - **What is sent:** a request to `api.github.com` for the latest release of UmlCraft. Like any
   connection, it shows GitHub your IP address and the time. The request names UmlCraft and its
   version (`User-Agent: UmlCraft/0.15.2`). Nothing about you, your computer or your projects is
-  sent. UmlCraft keeps only the date of the last check and the version found, in its settings
+  sent. If you download a new version, UmlCraft fetches it and the release's checksums from
+  `github.com` and its download servers, with requests that likewise name only UmlCraft and its
+  version. UmlCraft keeps only the date of the last check and the version found, in its settings
   file on your computer.
 - **Who receives it:** GitHub, Inc. (USA), certified under the EU-US Data Privacy Framework.
   What GitHub does with the data is described in the

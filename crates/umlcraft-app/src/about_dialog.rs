@@ -10,7 +10,7 @@ use gpui_kit::*;
 use rust_i18n::t;
 
 use crate::icons;
-use crate::main_view::{MainView, ManualUpdate};
+use crate::main_view::{MainView, ManualUpdate, UpdateDownload};
 use crate::update;
 
 /// UmlCraft's web site.
@@ -29,8 +29,9 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
         let link = |id: &'static str, label: &'static str, url: &'static str| {
             Button::new(id).link().label(label).on_click(move |_, _, cx| cx.open_url(url))
         };
+        let main = view.upgrade();
         let state =
-            view.upgrade().map_or(ManualUpdate::Idle, |v| v.read(cx).manual_update().clone());
+            main.as_ref().map_or(ManualUpdate::Idle, |v| v.read(cx).manual_update().clone());
         let checker = view.clone();
         let check = Button::new("about-check")
             .small()
@@ -39,13 +40,13 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             .on_click(move |_, window, cx| {
                 checker.update(cx, |this, cx| this.check_for_update(true, window, cx)).ok();
             });
-        let result = match state {
+        let result = match &state {
             ManualUpdate::Idle => None,
             ManualUpdate::Checking => Some(div().child(t!("about.checking").to_string())),
             ManualUpdate::UpToDate => Some(div().child(t!("about.up_to_date").to_string())),
             ManualUpdate::Failed => Some(div().child(t!("about.check_failed").to_string())),
             ManualUpdate::Found(version) => {
-                let url = update::release_url(&version);
+                let url = update::release_url(version);
                 Some(
                     div().child(
                         Button::new("about-new-version")
@@ -56,7 +57,39 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                 )
             }
         };
-        let updates = h_flex().gap_2().text_sm().text_color(muted).child(check).children(result);
+        // Installing it right away, where UmlCraft can do that itself.
+        let install = match (&state, &main, update::install()) {
+            (ManualUpdate::Found(version), Some(main), Some(_)) => {
+                let main = main.read(cx);
+                let running = matches!(main.update_download(), UpdateDownload::Running(_));
+                let failed = main.update_download() == UpdateDownload::Failed;
+                let label = main.update_label(version, t!("about.install").to_string());
+                let (version, installer) = (version.clone(), view.clone());
+                (!failed).then(|| {
+                    Button::new("about-install")
+                        .small()
+                        .primary()
+                        .label(label)
+                        .disabled(running)
+                        .on_click(move |_, window, cx| {
+                            installer
+                                .update(cx, |this, cx| {
+                                    this.install_update(version.clone(), window, cx)
+                                })
+                                .ok();
+                        })
+                })
+            }
+            _ => None,
+        };
+        let updates = h_flex()
+            .flex_wrap()
+            .gap_2()
+            .text_sm()
+            .text_color(muted)
+            .child(check)
+            .children(result)
+            .children(install);
         dialog
             .title(t!("about.title").to_string())
             .width(px(380.0))

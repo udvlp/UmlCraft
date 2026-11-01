@@ -9,18 +9,22 @@ about:
   up_to_date: This is the latest version.
   check_failed: GitHub cannot be reached right now.
   new_version: "Version %{version} is out"
+  install: Install now
 update:
   question: "Should UmlCraft look for new versions on GitHub when it starts? GitHub learns your IP address doing so."
   privacy: Privacy
   "yes": Yes, look
   "no": "No"
+  downloading: "Downloading %{version} …"
+  progress: "Downloading %{version} … %{percent} %"
+  failed: "Update %{version} (download failed)"
 privacy:
   title: Privacy
   intro: "UmlCraft works offline and sends nothing anywhere, with one exception that you choose: the check for new versions."
   when_title: When
-  when: "At its first start UmlCraft asks whether it may look for new versions. Only if you agree does it ask GitHub, at start and at most once a day. You can change your answer in Settings › Updates. \"Check for updates\" in About UmlCraft asks once, whenever you click it."
+  when: "At its first start UmlCraft asks whether it may look for new versions. Only if you agree does it ask GitHub, at start and at most once a day. You can change your answer in Settings › Updates. \"Check for updates\" in About UmlCraft asks once, whenever you click it. UmlCraft downloads the new version itself only when you click \"Update\" or \"Install now\"."
   what_title: What is sent
-  what: "A request to api.github.com for the latest release of UmlCraft. Like any connection, it shows GitHub your IP address and the time. The request names UmlCraft and its version. Nothing about you, your computer or your projects is sent. UmlCraft keeps only the date of the last check and the version found, in its settings file on your computer."
+  what: "A request to api.github.com for the latest release of UmlCraft. Like any connection, it shows GitHub your IP address and the time. The request names UmlCraft and its version. Nothing about you, your computer or your projects is sent. If you download a new version, UmlCraft fetches it and its checksums from github.com and its download servers; these requests, too, name only UmlCraft and its version. UmlCraft keeps only the date of the last check and the version found, in its settings file on your computer."
   who_title: Who receives it
   who: "GitHub, Inc. (USA), certified under the EU-US Data Privacy Framework. What GitHub does with the data is described in the GitHub General Privacy Statement on docs.github.com."
   basis_title: Why and on what basis
@@ -40,6 +44,7 @@ toolbar:
   about: About UmlCraft
   update: "Update %{version}"
   update_tip: A new version is out on GitHub; opens its page in the browser
+  update_install_tip: A new version is out on GitHub; downloads and installs it and restarts UmlCraft
   zoom_reset: "Reset zoom to 100 % (Ctrl+0)"
   zoom_fit: Fit
 ribbon:

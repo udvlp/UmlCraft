@@ -9,18 +9,22 @@ about:
   up_to_date: Das ist die neueste Version.
   check_failed: GitHub ist gerade nicht erreichbar.
   new_version: "Version %{version} ist erschienen"
+  install: Jetzt installieren
 update:
   question: "Soll UmlCraft beim Start bei GitHub nach neuen Versionen suchen? GitHub erfährt dabei deine IP-Adresse."
   privacy: Datenschutz
   "yes": Ja, suchen
   "no": Nein
+  downloading: "Lade %{version} …"
+  progress: "Lade %{version} … %{percent} %"
+  failed: "Update %{version} (Download fehlgeschlagen)"
 privacy:
   title: Datenschutz
   intro: "UmlCraft arbeitet offline und sendet nichts – mit einer Ausnahme, über die du entscheidest: der Suche nach neuen Versionen."
   when_title: Wann
-  when: "Beim ersten Start fragt UmlCraft, ob es suchen darf. Nur wenn du zustimmst, fragt es beim Start bei GitHub nach, höchstens einmal am Tag. Deine Antwort kannst du unter Einstellungen › Updates ändern. „Nach Updates suchen“ in „Über UmlCraft“ fragt einmal, wenn du darauf klickst."
+  when: "Beim ersten Start fragt UmlCraft, ob es suchen darf. Nur wenn du zustimmst, fragt es beim Start bei GitHub nach, höchstens einmal am Tag. Deine Antwort kannst du unter Einstellungen › Updates ändern. „Nach Updates suchen“ in „Über UmlCraft“ fragt einmal, wenn du darauf klickst. Die neue Version selbst lädt UmlCraft nur, wenn du auf „Update“ oder „Jetzt installieren“ klickst."
   what_title: Was gesendet wird
-  what: "Eine Anfrage an api.github.com nach dem neuesten Release von UmlCraft. Wie jede Verbindung zeigt sie GitHub deine IP-Adresse und die Uhrzeit. Die Anfrage nennt UmlCraft und seine Version. Nichts über dich, deinen Rechner oder deine Projekte wird gesendet. UmlCraft speichert nur das Datum der letzten Suche und die gefundene Version, in seiner Einstellungsdatei auf deinem Rechner."
+  what: "Eine Anfrage an api.github.com nach dem neuesten Release von UmlCraft. Wie jede Verbindung zeigt sie GitHub deine IP-Adresse und die Uhrzeit. Die Anfrage nennt UmlCraft und seine Version. Nichts über dich, deinen Rechner oder deine Projekte wird gesendet. Lädst du eine neue Version, holt UmlCraft sie und ihre Prüfsummen von github.com und dessen Download-Servern; auch diese Anfragen nennen nur UmlCraft und seine Version. UmlCraft speichert nur das Datum der letzten Suche und die gefundene Version, in seiner Einstellungsdatei auf deinem Rechner."
   who_title: Wer es erhält
   who: "GitHub, Inc. (USA), zertifiziert nach dem EU-US Data Privacy Framework. Was GitHub mit den Daten macht, beschreibt die GitHub General Privacy Statement auf docs.github.com."
   basis_title: Wozu und auf welcher Grundlage
@@ -40,6 +44,7 @@ toolbar:
   about: Über UmlCraft
   update: "Update %{version}"
   update_tip: Eine neue Version ist auf GitHub erschienen; öffnet ihre Seite im Browser
+  update_install_tip: Eine neue Version ist auf GitHub erschienen; lädt und installiert sie und startet UmlCraft neu
   zoom_reset: "Zoom auf 100 % zurücksetzen (Strg+0)"
   zoom_fit: Einpassen
 ribbon:

@@ -51,6 +51,8 @@ embed-resource = "3"
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 semver = "1"
+# Checks a downloaded update against the release's SHA256SUMS.txt.
+sha2 = "0.10"
 # Font metrics for comparing SVG exports with Astah's outside the app.
 ttf-parser = "0.25"
 # Source import parses declarations with tree-sitter grammars (built from C by `cc`).

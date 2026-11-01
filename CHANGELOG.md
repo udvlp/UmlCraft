@@ -12,6 +12,10 @@ today.
   new versions on GitHub. If you agree, it checks at most once a day, and a new release shows
   as a button in the title bar that opens its page. About UmlCraft can check at any time. What
   the check sends is shown in the app, offline, and under [Privacy](README.md#privacy).
+- **Updates install themselves**: installed with the Windows installer, as an AppImage or as the
+  macOS app, UmlCraft downloads the new release when you click the update button, checks it
+  against the release's checksums, asks to save your changes, installs it and starts again.
+  Other packages keep opening the release page.
 - **Bars stay in their operand**: in an alt or another fragment with several operands, the
   dashed line between two operands moves down below the activation bars of the one above, as
   long as there is room before what comes next.

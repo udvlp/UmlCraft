@@ -89,3 +89,16 @@ Root: HKA; Subkey: "Software\Classes\Applications\umlcraft.exe\SupportedTypes"; 
 
 [Run]
 Filename: "{app}\umlcraft.exe"; Description: "{cm:LaunchProgram,UmlCraft}"; Flags: nowait postinstall skipifsilent
+; UmlCraft installing its own update runs Setup silently with /RELAUNCH and quits.
+Filename: "{app}\umlcraft.exe"; Flags: nowait runasoriginaluser; Check: Relaunch
+
+[Code]
+function Relaunch: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+      Result := True;
+end;

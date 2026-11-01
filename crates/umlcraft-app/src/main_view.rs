@@ -57,6 +57,16 @@ pub enum ManualUpdate {
     Failed,
 }
 
+/// The download of a new version to install, started from the title bar or the About dialog.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum UpdateDownload {
+    Idle,
+    /// Downloading, with the percentage done if GitHub gave the size.
+    Running(Option<u8>),
+    /// The download or the start of the installation failed; the release page has to do.
+    Failed,
+}
+
 /// At most this many problem files are listed after a source import.
 const LISTED_PROBLEMS: usize = 20;
 
@@ -105,6 +115,7 @@ pub struct MainView {
     shown: Option<Id>,
     /// How the check for a new version asked for in the About dialog went.
     manual_update: ManualUpdate,
+    update_download: UpdateDownload,
     /// Where `umlcraft-cli mcp` reaches the open project; announced while it lives.
     _live: Option<umlcraft_mcp::live::LiveServer>,
     _subscriptions: Vec<Subscription>,
@@ -190,6 +201,7 @@ impl MainView {
             structogram_notes: HashMap::new(),
             shown: None,
             manual_update: ManualUpdate::Idle,
+            update_download: UpdateDownload::Idle,
             _live: live,
             _subscriptions: subscriptions,
         };
@@ -1589,6 +1601,86 @@ impl MainView {
         .detach();
     }
 
+    pub fn update_download(&self) -> UpdateDownload {
+        self.update_download
+    }
+
+    /// Downloads `version` and installs it once the user saved or dropped their changes; UmlCraft
+    /// quits for that and starts again. Where it cannot install itself, or after the download
+    /// failed, it opens the release page instead.
+    pub fn install_update(&mut self, version: String, window: &mut Window, cx: &mut Context<Self>) {
+        let install = match (self.update_download, update::install()) {
+            (UpdateDownload::Running(_), _) => return,
+            (UpdateDownload::Idle, Some(install)) => install,
+            _ => {
+                cx.open_url(&update::release_url(&version));
+                return;
+            }
+        };
+        self.update_download = UpdateDownload::Running(None);
+        cx.notify();
+        let (progress_tx, progress) = async_channel::unbounded();
+        let job = cx.background_executor().spawn(async move {
+            let mut shown = None;
+            update::download(install, &version, |done, total| {
+                let percent = total.filter(|&t| t > 0).map(|t| (done * 100 / t).min(100) as u8);
+                if percent != shown {
+                    shown = percent;
+                    let _ = progress_tx.try_send(percent);
+                }
+            })
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            while let Ok(percent) = progress.recv().await {
+                let shown = this.update(cx, |this, cx| {
+                    this.update_download = UpdateDownload::Running(percent);
+                    cx.notify();
+                });
+                if shown.is_err() {
+                    return;
+                }
+            }
+            let downloaded = job.await;
+            this.update_in(cx, move |this, window, cx| {
+                // Cancelling the question leaves the update for another click, which takes the
+                // file downloaded now.
+                this.update_download = UpdateDownload::Idle;
+                cx.notify();
+                let Ok(file) = downloaded else {
+                    this.update_download = UpdateDownload::Failed;
+                    return;
+                };
+                this.confirm_discard(
+                    window,
+                    cx,
+                    Box::new(move |this, _, cx| match update::apply(install, &file) {
+                        Ok(()) => cx.quit(),
+                        Err(_) => {
+                            this.update_download = UpdateDownload::Failed;
+                            cx.notify();
+                        }
+                    }),
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The update button's label for `version` while it downloads, or its plain label.
+    pub fn update_label(&self, version: &str, plain: String) -> String {
+        match self.update_download {
+            UpdateDownload::Running(Some(percent)) => {
+                t!("update.progress", version = version, percent = percent).to_string()
+            }
+            UpdateDownload::Running(None) => {
+                t!("update.downloading", version = version).to_string()
+            }
+            UpdateDownload::Failed => t!("update.failed", version = version).to_string(),
+            UpdateDownload::Idle => plain,
+        }
+    }
+
     /// Saves the settings and draws, sizes and exports diagrams as they say from now on.
     fn apply_display(&mut self, cx: &mut Context<Self>) {
         self.settings.save();
@@ -1679,14 +1771,23 @@ impl MainView {
                 })
                 .child(div().flex_1())
                 .when_some(self.settings.available_update(), |this, version| {
-                    let url = update::release_url(&version);
+                    let plain = t!("toolbar.update", version = version).to_string();
+                    let label = self.update_label(&version, plain);
+                    let tip = match (self.update_download, update::install()) {
+                        (UpdateDownload::Failed, _) | (_, None) => t!("toolbar.update_tip"),
+                        _ => t!("toolbar.update_install_tip"),
+                    };
+                    let running = matches!(self.update_download, UpdateDownload::Running(_));
                     this.child(shell::in_title_bar(
                         Button::new("update")
                             .primary()
                             .small()
-                            .label(t!("toolbar.update", version = version).to_string())
-                            .tooltip(t!("toolbar.update_tip").to_string())
-                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                            .label(label)
+                            .tooltip(tip.to_string())
+                            .disabled(running)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.install_update(version.clone(), window, cx);
+                            })),
                     ))
                 })
                 .child(shell::in_title_bar(shell::icon_button(
