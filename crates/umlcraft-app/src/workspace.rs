@@ -870,17 +870,29 @@ impl Workspace {
     pub fn set_bounds(&mut self, presentation: Id, bounds: Rect) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.resize").to_string();
-        let sequence = self.doc.model().get(diagram).and_then(|d| d.kind().as_diagram())
-            == Some(umlcraft_model::DiagramKind::Sequence);
+        let model = self.doc.model();
+        let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+        // A state resized may now lie in another state, and its substates outside it.
+        let substates: Vec<Id> = match (kind, model.view(diagram)) {
+            (Some(umlcraft_model::DiagramKind::StateMachine), Some(view)) => {
+                let state = view.get(presentation).and_then(|p| p.element);
+                let inside = |p: &&Presentation| {
+                    state.zip(p.element).is_some_and(|(s, e)| model.is_ancestor(s, e))
+                };
+                let inner = view.presentations().iter().filter(inside).map(|p| p.id);
+                std::iter::once(presentation).chain(inner).collect()
+            }
+            _ => Vec::new(),
+        };
         let result = self.edit(label, |tx| {
             tx.set_bounds(diagram, presentation, bounds)?;
             // A box sized by hand keeps that size, as in Astah.
             tx.update_presentation(diagram, presentation, |p| p.style.auto_size = false)?;
             // A fragment grown over messages takes them in.
-            if sequence {
+            if kind == Some(umlcraft_model::DiagramKind::Sequence) {
                 umlcraft_notation::sequence_edit::tidy(tx, diagram)?;
             }
-            Ok(())
+            state_edit::reparent_vertices(tx, diagram, &substates)
         });
         self.report(result);
     }

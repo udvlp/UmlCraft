@@ -1930,8 +1930,10 @@ fn layout_use_case(
 }
 
 /// Nodes drawn completely inside container nodes (system boundaries, packages) among `ids`,
-/// recursively, together with `ids` themselves. Moving a container moves its contents.
-pub fn with_contents(scene: &Scene, ids: &[Id]) -> Vec<Id> {
+/// recursively, together with `ids` themselves; for states also their substates, which may reach
+/// out of them (a vertex belongs to the state its center lies in). Moving a container moves its
+/// contents.
+pub fn with_contents(model: &Model, scene: &Scene, ids: &[Id]) -> Vec<Id> {
     let nodes: HashMap<Id, &NodeShape> = scene.nodes.iter().map(|n| (n.id, n)).collect();
     let mut result: Vec<Id> = ids.to_vec();
     let mut taken: HashSet<Id> = result.iter().copied().collect();
@@ -1948,9 +1950,16 @@ pub fn with_contents(scene: &Scene, ids: &[Id]) -> Vec<Id> {
                     | Figure::Component { .. }
             )
         {
+            let substate = |n: &NodeShape| {
+                matches!(container.figure, Figure::State { .. })
+                    && container
+                        .element
+                        .zip(n.element)
+                        .is_some_and(|(s, e)| model.is_ancestor(s, e))
+            };
             for n in &scene.nodes {
                 if n.id != container.id
-                    && container.rect.contains_rect(&n.rect)
+                    && (container.rect.contains_rect(&n.rect) || substate(n))
                     && taken.insert(n.id)
                 {
                     result.push(n.id);
@@ -3191,7 +3200,7 @@ mod tests {
 
         // The "Place order" use case (220,110 140x60) lies inside the boundary (180,60 300x360).
         let use_case = doc.model().shown_on(doc.model().children(doc.model().root())[2])[0].1;
-        let moved = with_contents(&scene, &[boundary]);
+        let moved = with_contents(doc.model(), &scene, &[boundary]);
         assert!(moved.contains(&boundary) && moved.contains(&use_case), "{moved:?}");
         assert_eq!(moved.len(), 2, "the actor at x=60 is outside");
     }
@@ -4311,8 +4320,27 @@ mod tests {
         assert!(labels.contains(&"[in stock] / ship"), "{labels:?}");
         assert_eq!(labels.iter().filter(|&&l| l == "add item").count(), 2);
         // Moving the composite state moves its substates.
-        let moved = with_contents(&scene, &[open.id]);
+        let moved = with_contents(doc.model(), &scene, &[open.id]);
         assert_eq!(moved.len(), 4, "the state, its initial pseudostate and two substates");
+    }
+
+    #[test]
+    fn substates_reaching_out_of_their_state_go_along() {
+        let (mut doc, ids) = order_system();
+        let d = ids.state_diagram;
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        fn node(scene: &Scene, name: &str) -> (Id, Rect) {
+            let found = scene.nodes.iter().find(|n| n.rows.first().is_some_and(|r| r.text == name));
+            found.map(|n| (n.id, n.rect)).unwrap()
+        }
+        let ((open, outline), (empty, rect)) = (node(&scene, "Open"), node(&scene, "Empty"));
+        // Half out of its state, its center still inside: still a substate.
+        let x = outline.right() - rect.width * 0.75;
+        let bounds = doc.model().view(d).unwrap().get(empty).unwrap().bounds().unwrap();
+        doc.edit("out", |tx| tx.set_bounds(d, empty, Rect { x, ..bounds })).unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        assert!(!outline.contains_rect(&node(&scene, "Empty").1));
+        assert!(with_contents(doc.model(), &scene, &[open]).contains(&empty));
     }
 
     #[test]
@@ -4410,7 +4438,7 @@ mod tests {
         assert_eq!(web1.rows[0].rect.y, web1.rect.y + 4.0);
         assert!(matches!(figure(&scene, ": Shop"), Figure::Component { .. }));
         // A node takes what is deployed on it along.
-        assert_eq!(with_contents(&scene, &[web1.id]).len(), 2);
+        assert_eq!(with_contents(model, &scene, &[web1.id]).len(), 2);
     }
 
     #[test]

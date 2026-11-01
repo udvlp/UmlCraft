@@ -1010,10 +1010,11 @@ impl DiagramCanvas {
                         {
                             let reselect =
                                 (already && !extend && selection.len() > 1).then_some(id);
-                            // Containers (boundaries, packages) take the nodes drawn inside
-                            // them along.
-                            let selection = &self.workspace.read(cx).selection;
-                            let moved = scene::with_contents(&self.scene, selection);
+                            // Containers (boundaries, packages, states) take the nodes drawn
+                            // inside them along.
+                            let ws = self.workspace.read(cx);
+                            let moved =
+                                scene::with_contents(ws.doc.model(), &self.scene, &ws.selection);
                             self.drag =
                                 Some(Drag::Move { start: p, dx: 0.0, dy: 0.0, reselect, moved });
                         }
