@@ -1,5 +1,5 @@
 //! The settings dialog (Tools › Settings …, Ctrl+,): language, theme and how classes show
-//! their members, in one place. Every change applies at once and is saved, so the dialog
+//! their members and that they are abstract, in one place. Every change applies at once and is saved, so the dialog
 //! only has to be closed.
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -30,10 +30,11 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             .and_then(|l| LANGUAGES.iter().position(|&(code, _)| code == l))
             .map_or(0, |ix| ix + 1);
         let column = settings.visibility_column;
+        let stereotype = settings.abstract_stereotype;
         let dark = cx.theme().is_dark();
         let muted = cx.theme().muted_foreground;
 
-        let (v1, v2, v3) = (view.clone(), view.clone(), view.clone());
+        let (v1, v2, v3, v4) = (view.clone(), view.clone(), view.clone(), view.clone());
         let languages = RadioGroup::horizontal("settings-language")
             .child(t!("settings.system_language").to_string())
             .children(LANGUAGES.map(|(_, name)| name))
@@ -76,6 +77,27 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                     .text_color(muted)
                     .child(t!("settings.visibility_column_detail").to_string()),
             );
+        let abstract_mark = v_flex()
+            .gap_1()
+            .child(div().text_sm().child(t!("settings.abstract").to_string()))
+            .child(
+                RadioGroup::horizontal("settings-abstract")
+                    .children([
+                        t!("settings.abstract_keyword").to_string(),
+                        t!("settings.abstract_stereotype").to_string(),
+                    ])
+                    .selected_index(Some(usize::from(stereotype)))
+                    .on_change(move |&ix, _, cx| {
+                        let on = ix == 1;
+                        v4.update(cx, |this, cx| {
+                            if this.settings().abstract_stereotype != on {
+                                this.set_abstract_stereotype(on, cx);
+                            }
+                        })
+                        .ok();
+                    }),
+            );
+        let classes = v_flex().gap_3().child(visibility_column).child(abstract_mark);
 
         dialog
             .title(t!("settings.title").to_string())
@@ -86,7 +108,7 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                     .pb_1()
                     .child(section(t!("settings.language").to_string(), languages))
                     .child(section(t!("settings.theme").to_string(), theme))
-                    .child(section(t!("settings.classes").to_string(), visibility_column)),
+                    .child(section(t!("settings.classes").to_string(), classes)),
             )
             .footer(
                 DialogFooter::new().child(

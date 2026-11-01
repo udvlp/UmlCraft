@@ -2,7 +2,10 @@
 //! things where the user puts them and then tidy up:
 //!
 //! - A call gets a bar of 25 on the receiver; a sender without a bar there gets one of 45 (60
-//!   for a create message, 30 for a lost message). A reply leaves at the end of its bar.
+//!   for a create message, 30 for a lost message), unless a bar of its ends just above: that
+//!   one goes on. A reply leaves at the end of its bar.
+//! - A further call to the same receiver starts below the bar the last one started there, 20
+//!   apart, so that the two bars do not run into each other.
 //! - Bars grow to end 20 below the last thing inside them, lifelines to reach 30 below the last
 //!   thing on them, the diagram frame to surround everything.
 //! - The interaction's order follows the heights: messages and fragments belong to the operand
@@ -39,6 +42,11 @@ const FRAME_ABOVE_HEADS: f32 = 35.093_75;
 const ICON_NAME: f32 = 15.093_75;
 /// Distance between a new message and the last thing above it.
 const NEXT: f32 = 40.0;
+/// Space between the bar a call starts and the next call from the same sender to the same
+/// receiver.
+const MESSAGE_GAP: f32 = 20.0;
+/// How far below a bar a message sent from its lifeline still continues that bar.
+const CONTINUE_BAR: f32 = SENDER_BAR;
 /// Where lifelines start on a diagram without any.
 const FIRST_LINE_TOP: f32 = 60.0;
 /// The shortest lifeline a new one gets.
@@ -209,6 +217,55 @@ impl Geometry {
             .copied()
     }
 
+    /// The bar on `lane` that a message sent at `y` continues: one ending at most
+    /// `CONTINUE_BAR` above, the lowest of them, unless a reply has ended it.
+    fn bar_ending_above(&self, lane: Id, y: f32) -> Option<Bar> {
+        let replied = |bar: &Bar| {
+            self.messages.iter().any(|m| {
+                m.sort == MessageSort::Reply && m.source == lane && (m.y - bar.bottom).abs() < 0.5
+            })
+        };
+        self.bars
+            .iter()
+            .filter(|b| b.lane == lane && b.bottom < y && y - b.bottom <= CONTINUE_BAR)
+            .filter(|b| !replied(b))
+            .max_by(|a, b| a.bottom.total_cmp(&b.bottom))
+            .copied()
+    }
+
+    /// Where a call from `from` to `to` drawn at `y` goes: below the bars earlier calls between
+    /// the two started on `to`, unless `to` called back in between (a nested call).
+    fn clear_of_calls(&self, from: Id, to: Id, mut y: f32) -> f32 {
+        let started_by_from = |bar: &Bar| {
+            self.messages.iter().any(|m| {
+                m.source == from
+                    && m.target == to
+                    && m.sort != MessageSort::Reply
+                    && (bar.top - m.end()).abs() < 0.5
+            })
+        };
+        let called_back = |bar: &Bar, y: f32| {
+            self.messages
+                .iter()
+                .any(|m| m.source == to && m.target == from && bar.top < m.y && m.y < y)
+        };
+        // Each step moves `y` below one more bar; there are only so many.
+        for _ in 0..self.bars.len() {
+            let blocking = self.bars.iter().find(|b| {
+                b.lane == to
+                    && b.top < y
+                    && y < b.bottom + MESSAGE_GAP
+                    && started_by_from(b)
+                    && !called_back(b, y)
+            });
+            match blocking {
+                Some(bar) => y = bar.bottom + MESSAGE_GAP,
+                None => break,
+            }
+        }
+        y
+    }
+
     /// The lowest point of what is drawn between the heads and the lifelines' ends.
     fn content_bottom(&self) -> Option<f32> {
         let messages = self.messages.iter().map(|m| m.end());
@@ -297,6 +354,29 @@ fn add_bar(tx: &mut Tx<'_>, diagram: Id, lane: Id, top: f32, height: f32) -> Res
     tx.add_presentation(diagram, Presentation::activation(lane, top, height))
 }
 
+/// Gives a message sent from `lane` at `y` a bar there: the bar ending just above goes on to
+/// hold it, else a new one of `height` starts.
+fn sender_bar(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    g: &Geometry,
+    lane: Id,
+    y: f32,
+    height: f32,
+) -> Result<()> {
+    if g.bar_at(lane, y).is_some() {
+        return Ok(());
+    }
+    match g.bar_ending_above(lane, y) {
+        Some(bar) => tx.update_presentation(diagram, bar.id, |p| {
+            if let Shape::Activation { height: h, .. } = &mut p.shape {
+                *h = y - bar.top + BAR_MARGIN;
+            }
+        }),
+        None => add_bar(tx, diagram, lane, y, height).map(|_| ()),
+    }
+}
+
 /// Draws `message` from lane `source` to lane `target` (the same one for messages to self and
 /// for found and lost messages) at height `y`, with the bars Astah gives it.
 pub fn add_message(
@@ -317,12 +397,13 @@ pub fn add_message(
         (Some(from), Some(to)) => (*from, *to),
         _ => return Err(ModelError::Invalid("messages connect lifelines".into())),
     };
-    let sender = |tx: &mut Tx<'_>, height: f32| -> Result<()> {
-        if g.bar_at(from.id, y).is_none() {
-            add_bar(tx, diagram, from.id, y, height)?;
-        }
-        Ok(())
+    let call = matches!(sort, MessageSort::Synchronous | MessageSort::Asynchronous);
+    let y = if call && gate == MessageGate::None && source != target {
+        g.clear_of_calls(from.id, to.id, y)
+    } else {
+        y
     };
+    let sender = |tx: &mut Tx<'_>, height: f32| sender_bar(tx, diagram, &g, from.id, y, height);
     let mut presentation = Presentation::message(message, source, target, y);
     match (gate, sort) {
         (MessageGate::Found, _) => {
@@ -606,6 +687,13 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
             }
         }
     }
+    // The bar the message was sent from, unless it moves along.
+    let gate = match tx.model().get(element).map(|e| e.kind()) {
+        Some(ElementKind::Message(p)) => p.gate,
+        _ => MessageGate::None,
+    };
+    let sends = m.sort != MessageSort::Reply && gate != MessageGate::Found;
+    let left = g.bar_at(m.source, m.y).filter(|b| sends && !bars.contains(&b.id));
     for id in bars {
         tx.update_presentation(diagram, id, |p| {
             if let Shape::Activation { top, .. } = &mut p.shape {
@@ -632,24 +720,56 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
             }
         })?;
     }
-    // Moved off its sender's bar, a message gets a bar of its own there, as `add_message` gives
-    // it. Replies leave the bar they end and found messages have no sender.
-    let gate = match tx.model().get(element).map(|e| e.kind()) {
-        Some(ElementKind::Message(p)) => p.gate,
-        _ => MessageGate::None,
-    };
-    if m.sort != MessageSort::Reply && gate != MessageGate::Found {
+    // The bar it left keeps only what is still in it; bars otherwise only grow.
+    if let Some(bar) = left {
+        shrink_bar(tx, diagram, bar)?;
+    }
+    // Moved off its sender's bar, a message gets a bar there, as `add_message` gives it: the
+    // one ending just above goes on, else a new one starts. Replies leave the bar they end and
+    // found messages have no sender.
+    if sends {
         let moved = Geometry::read(tx.model(), diagram)?;
-        if moved.bar_at(m.source, y).is_none() {
-            let height = match (gate, m.sort) {
-                (MessageGate::Lost, _) => LOST_SENDER_BAR,
-                (_, MessageSort::Create) => CREATE_SENDER_BAR,
-                _ => SENDER_BAR,
-            };
-            add_bar(tx, diagram, m.source, y, height)?;
-        }
+        let height = match (gate, m.sort) {
+            (MessageGate::Lost, _) => LOST_SENDER_BAR,
+            (_, MessageSort::Create) => CREATE_SENDER_BAR,
+            _ => SENDER_BAR,
+        };
+        sender_bar(tx, diagram, &moved, m.source, y, height)?;
     }
     tidy(tx, diagram)
+}
+
+/// Shortens `bar` (as it was before an edit) to what still lies in it: down to the height a new
+/// bar gets, 20 below the last message or bar inside. A bar a reply ends keeps its end.
+fn shrink_bar(tx: &mut Tx<'_>, diagram: Id, bar: Bar) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    let lane = bar.lane;
+    let inside = |y: f32| bar.top + 0.5 < y && y <= bar.bottom + 0.5;
+    let replied = g.messages.iter().any(|m| {
+        m.sort == MessageSort::Reply && m.source == lane && (m.y - bar.bottom).abs() < 0.5
+    });
+    if replied {
+        return Ok(());
+    }
+    // A bar a call starts is a receiver's; any other a sender's.
+    let called = g.messages.iter().any(|m| m.target == lane && (bar.top - m.end()).abs() < 0.5);
+    let mut need = bar.top + if called { RECEIVER_BAR } else { SENDER_BAR };
+    for m in &g.messages {
+        if (m.source == lane && inside(m.y)) || (m.target == lane && inside(m.end())) {
+            need = need.max(m.y.max(m.end()) + BAR_MARGIN);
+        }
+    }
+    for b in g.bars.iter().filter(|b| b.lane == lane && b.id != bar.id && inside(b.top)) {
+        need = need.max(b.bottom + BAR_MARGIN);
+    }
+    if need >= bar.bottom - 0.01 {
+        return Ok(());
+    }
+    tx.update_presentation(diagram, bar.id, |p| {
+        if let Shape::Activation { height, .. } = &mut p.shape {
+            *height = need - bar.top;
+        }
+    })
 }
 
 /// Grows bars, lifelines and the diagram frame around their content and puts the
@@ -1458,6 +1578,41 @@ mod tests {
         doc.edit("move", |tx| super::move_item(tx, d, onward, 200.0)).unwrap();
         let tops = bars(&doc, d).iter().filter(|(top, _)| *top == 200.0).count();
         assert_eq!(tops, 2, "{:?}", bars(&doc, d));
+        doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn calls_one_after_the_other_share_the_senders_bar() {
+        let (mut doc, d, a, b) = two_lifelines();
+        // The bars on one lifeline, from the top.
+        let on = |doc: &Document, lane: Id| -> Vec<(f32, f32)> {
+            let mut bars: Vec<(f32, f32)> = shapes(doc, d)
+                .into_iter()
+                .filter_map(|s| match s {
+                    Shape::Activation { lifeline, top, height, .. } if lifeline == lane => {
+                        Some((top, top + height))
+                    }
+                    _ => None,
+                })
+                .collect();
+            bars.sort_by(|x, y| x.0.total_cmp(&y.0));
+            bars
+        };
+        draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        // Drawn into the receiver's bar, the second call starts 20 below it.
+        let second = draw(&mut doc, d, EdgeTool::Message, a, b, 130.0);
+        assert!(matches!(message(&doc, d, second), Shape::Message { y: 165.0, .. }));
+        assert_eq!(on(&doc, b), [(120.0, 145.0), (165.0, 190.0)]);
+        assert_eq!(on(&doc, a), [(120.0, 185.0)]);
+        // Dragged far down, it leaves the first bar as short as before and starts its own.
+        doc.edit("move", |tx| super::move_item(tx, d, second, 300.0)).unwrap();
+        assert_eq!(on(&doc, a), [(120.0, 165.0), (300.0, 345.0)]);
+        // Back just below the first bar, it continues that one; no second bar is left over.
+        doc.edit("move", |tx| super::move_item(tx, d, second, 190.0)).unwrap();
+        assert_eq!(on(&doc, a), [(120.0, 210.0)]);
+        // A call drawn just below the sender's bar continues it as well.
+        draw(&mut doc, d, EdgeTool::Message, a, b, 240.0);
+        assert_eq!(on(&doc, a), [(120.0, 260.0)]);
         doc.model().check().unwrap();
     }
 

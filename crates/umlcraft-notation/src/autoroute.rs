@@ -608,6 +608,15 @@ fn nudge(
     }
 }
 
+/// Routes lines just drawn or brought along, like [`route_lines`], except on use case diagrams,
+/// whose lines are drawn straight; Route lines still routes them on request.
+pub fn route_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> {
+    if tx.model().element(diagram)?.kind().as_diagram() == Some(DiagramKind::UseCase) {
+        return Ok(0);
+    }
+    route_lines(tx, diagram, edges)
+}
+
 /// Routes the edges `edges` of `diagram` around its nodes and makes them right-angled lines
 /// that the router keeps (`Style::auto_route`). Edges from a node to itself, edges to or from
 /// another edge, edges whose node contains the other end and those without a way through stay

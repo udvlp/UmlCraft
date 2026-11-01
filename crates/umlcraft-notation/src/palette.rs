@@ -977,6 +977,33 @@ pub fn add_operand(tx: &mut Tx<'_>, fragment: Id) -> Result<Id> {
     Ok(id)
 }
 
+/// Gives `fragment` a second operand guarded `else` when it has become an `alt` with a single
+/// operand, since an alternative comes with its other case. Returns the new operand.
+pub fn add_else(tx: &mut Tx<'_>, fragment: Id) -> Result<Option<Id>> {
+    let model = tx.model();
+    let alt = matches!(
+        model.element(fragment)?.kind(),
+        ElementKind::CombinedFragment(p) if p.operator == InteractionOperator::Alt
+    );
+    let operands = model
+        .children(fragment)
+        .iter()
+        .filter(|&&c| {
+            matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::InteractionOperand(_)))
+        })
+        .count();
+    if !alt || operands != 1 {
+        return Ok(None);
+    }
+    let operand = add_operand(tx, fragment)?;
+    tx.update(operand, |d| {
+        if let ElementKind::InteractionOperand(p) = &mut d.kind {
+            p.guard = "else".into();
+        }
+    })?;
+    Ok(Some(operand))
+}
+
 /// Makes `class` bind the template and arguments of `binding` (`Pair<int,Holder>`), or nothing
 /// with `None`. The class keeps one «bind» dependency on its template, drawn on `diagram` where
 /// that shows both; dependencies on a former template go.
@@ -1114,6 +1141,43 @@ mod tests {
     use super::*;
     use umlcraft_model::Shape;
     use umlcraft_model::sample::order_system;
+
+    #[test]
+    fn an_alt_gets_its_else_once() {
+        let (mut doc, ids) = order_system();
+        let d = ids.sequence_diagram;
+        let operands = |model: &Model, f: Id| -> Vec<String> {
+            model
+                .children(f)
+                .iter()
+                .filter_map(|&c| match model.get(c)?.kind() {
+                    ElementKind::InteractionOperand(p) => Some(p.guard.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (fragment, _) = doc
+            .edit("fragment", |tx| {
+                create_fragment(tx, d, NodeTool::CombinedFragment, None, Vec::new(), None)
+            })
+            .unwrap();
+        // An opt stays as it is.
+        doc.edit("else", |tx| add_else(tx, fragment)).unwrap();
+        assert_eq!(operands(doc.model(), fragment), [""]);
+        doc.edit("alt", |tx| {
+            tx.update(fragment, |data| {
+                if let ElementKind::CombinedFragment(p) = &mut data.kind {
+                    p.operator = InteractionOperator::Alt;
+                }
+            })?;
+            add_else(tx, fragment)
+        })
+        .unwrap();
+        assert_eq!(operands(doc.model(), fragment), ["", "else"]);
+        // Two operands are enough.
+        doc.edit("else", |tx| add_else(tx, fragment)).unwrap();
+        assert_eq!(operands(doc.model(), fragment), ["", "else"]);
+    }
 
     #[test]
     fn bindings_keep_one_bind_line() {

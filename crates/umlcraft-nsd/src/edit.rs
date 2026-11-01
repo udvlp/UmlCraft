@@ -21,15 +21,16 @@ pub enum EditError {
 
 type Result<T> = std::result::Result<T, EditError>;
 
-/// The texts Structorizer's editor starts new elements with (its "Structure Preferences" as
-/// installed). Case lines: selector, two cases, default.
+/// The texts new elements start with: Structorizer's (its "Structure Preferences" as
+/// installed), but conditions without the parentheses it puts around them, which a
+/// structogram does not need. Case lines: selector, two cases, default.
 pub fn default_text(kind: ElementKind) -> Vec<String> {
     let text: &[&str] = match kind {
-        ElementKind::Alternative => &["(?)"],
-        ElementKind::Case => &["(?)", "!", "!", "default"],
+        ElementKind::Alternative => &["?"],
+        ElementKind::Case => &["?", "!", "!", "default"],
         ElementKind::For => &["for ? <- ? to ?"],
-        ElementKind::While => &["while (?)"],
-        ElementKind::Repeat => &["until (?)"],
+        ElementKind::While => &["while ?"],
+        ElementKind::Repeat => &["until ?"],
         ElementKind::Parallel => &["2"],
         _ => &[""],
     };

@@ -33,6 +33,7 @@ ribbon:
     nsd_loops: Schleifen
     nsd_element: Element
     nsd_export: Structorizer
+    numbering: Nummerierung
   paste: Einfügen
   cut: Ausschneiden
   copy: Kopieren
@@ -42,13 +43,16 @@ ribbon:
   wrap_in_fragment: In Fragment
   auto_arrange: Automatisch anordnen
   route_lines: Linien führen
+  message_numbers: Nummern
+  flat_numbers: Durchgehend
   light: Hell
   dark: Dunkel
   files: Dateien …
   folder: Ordner …
   import: Importieren
   export: Exportieren
-  export_nsd: .nsd exportieren
+  export_nsd: Für Structorizer speichern
+  export_nsd_tip: Speichert das Struktogramm als .nsd-Datei, die Structorizer öffnen und bearbeiten kann
   copy_image: In Zwischenablage
   new_diagram: Neues Diagramm
 menu:
@@ -98,6 +102,7 @@ menu:
   navigability: Navigierbarkeit
   aggregation: Aggregation
   multiplicity: Multiplizität
+  clicked_end: "%{end} – angeklicktes Ende"
   unspecified: nicht festgelegt
   view: Ansicht
   zoom_in: Vergrößern
@@ -178,8 +183,11 @@ tool:
   nodeInstance: Knoteninstanz
   object: Objekt
   interactionUse: Interaktionsverweis
-  foundMessage: Gefunden
-  lostMessage: Verloren
+  foundMessage: Gefundene Nachricht
+  lostMessage: Verlorene Nachricht
+tool_tip:
+  foundMessage: "Eine Nachricht von außerhalb des Diagramms, etwa der erste Aufruf einer Sequenz: auf die Lebenslinie klicken, die sie empfängt"
+  lostMessage: "Eine Nachricht, deren Empfänger das Diagramm nicht zeigt: auf die Lebenslinie klicken, die sie sendet"
 diagram:
   class: Klassendiagramm
   useCase: Anwendungsfalldiagramm
@@ -205,6 +213,7 @@ prop:
   read_only: Schreibgeschützt
   message_numbers: Nachrichtennummern anzeigen
   return_values: Rückgabewerte anzeigen
+  flat_message_numbers: Durchnummerieren (1, 2, 3 statt 2.1)
   query: Abfrage (ändert nichts)
   end: Ende
   role: Rolle
@@ -414,6 +423,9 @@ settings:
   dark: Dunkel
   classes: Klassen
   visibility_column: Sichtbarkeit in eigener Spalte
+  abstract: Abstrakte Klassen zusätzlich zur Kursivschrift kennzeichnen mit
+  abstract_keyword: "{abstract} unter dem Namen"
+  abstract_stereotype: "«abstract» über dem Namen"
   visibility_column_detail: "Richtet die Namen aller Attribute und Operationen einer Klasse untereinander aus. Ausgeschaltet steht die Sichtbarkeit direkt vor dem Namen."
   close: Schließen
 project:
@@ -461,6 +473,8 @@ skipped:
   deleted_function: gelöschte Funktionen (= delete)
   friend: friend-Deklarationen
   statement: Anweisungen, die nichts deklarieren
+new_name:
+  systemBoundary: System
 kind:
   model: Projekt
   package: Paket

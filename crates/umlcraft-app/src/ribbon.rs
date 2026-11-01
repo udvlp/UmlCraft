@@ -43,6 +43,8 @@ pub struct State {
     pub can_align: bool,
     pub can_paste: bool,
     pub can_wrap: bool,
+    /// On a sequence diagram: whether it shows message numbers, and whether flat ones.
+    pub numbering: Option<(bool, bool)>,
     pub dark: bool,
 }
 
@@ -60,6 +62,8 @@ pub struct Item {
     pub id: SharedString,
     pub icon: SharedString,
     pub label: String,
+    /// Shown on hover; without one, the label.
+    pub tooltip: Option<String>,
     pub size: Size,
     /// What a click does; without one, a click opens `menu`.
     pub action: Option<Box<dyn Action>>,
@@ -75,6 +79,7 @@ impl Item {
             id: id.into(),
             icon,
             label: label.into(),
+            tooltip: None,
             size: Size::Large,
             action: None,
             menu: Vec::new(),
@@ -85,6 +90,11 @@ impl Item {
 
     fn action(mut self, action: impl Action) -> Self {
         self.action = Some(Box::new(action));
+        self
+    }
+
+    fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
         self
     }
 
@@ -150,7 +160,7 @@ pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
     match tab {
         RibbonTab::Home => home(state),
         RibbonTab::Diagram => match (state.diagram, state.structogram) {
-            (Some(kind), _) => diagram(kind, state.tool),
+            (Some(kind), _) => diagram(kind, state.tool, state.numbering),
             (None, Some(allowed)) => structogram(allowed),
             (None, None) => Vec::new(),
         },
@@ -270,25 +280,60 @@ pub fn tool_label(tool: Tool) -> String {
     }
 }
 
-fn diagram(kind: DiagramKind, current: Tool) -> Vec<Group> {
+fn diagram(kind: DiagramKind, current: Tool, numbering: Option<(bool, bool)>) -> Vec<Group> {
     let tools = palette::palette(kind);
     let items = |which: ToolGroup, size: Size| -> Vec<Item> {
         tools
             .iter()
             .filter(|&&tool| tool_group(tool) == which)
             .map(|&tool| {
-                Item::new(format!("tool-{}", tool.key()), icons::tool_icon(tool), tool_label(tool))
-                    .action(SelectTool { tool })
-                    .size(size)
-                    .selected(tool == current)
+                let item = Item::new(
+                    format!("tool-{}", tool.key()),
+                    icons::tool_icon(tool),
+                    tool_label(tool),
+                )
+                .action(SelectTool { tool })
+                .size(size)
+                .selected(tool == current);
+                // Tools whose name alone does not say how they are used.
+                match tool {
+                    Tool::Edge(EdgeTool::FoundMessage | EdgeTool::LostMessage) => {
+                        item.tooltip(t!(format!("tool_tip.{}", tool.key())))
+                    }
+                    _ => item,
+                }
             })
             .collect()
     };
+    let numbering = numbering.map_or_else(Vec::new, |(shown, flat)| {
+        vec![
+            Item::new(
+                "message-numbers",
+                icons::own_icon("messageNumbers"),
+                t!("ribbon.message_numbers"),
+            )
+            .tooltip(t!("prop.message_numbers"))
+            .action(crate::ToggleMessageNumbers)
+            .size(Size::Small)
+            .selected(shown),
+            Item::new(
+                "flat-numbers",
+                icons::own_icon("flatMessageNumbers"),
+                t!("ribbon.flat_numbers"),
+            )
+            .tooltip(t!("prop.flat_message_numbers"))
+            .action(crate::ToggleFlatNumbers)
+            .size(Size::Small)
+            .selected(flat)
+            .enabled(shown),
+        ]
+    });
     [
         ("select", items(ToolGroup::Select, Size::Large)),
         ("elements", items(ToolGroup::Elements, Size::Large)),
         ("relations", items(ToolGroup::Relations, Size::Small)),
         ("notes", items(ToolGroup::Notes, Size::Small)),
+        ("numbering", numbering),
     ]
     .into_iter()
     .filter(|(_, items)| !items.is_empty())
@@ -354,6 +399,7 @@ fn structogram(allowed: crate::nsd::Allowed) -> Vec<Group> {
             "nsd_export",
             vec![
                 Item::new("nsd-export", fluent("arrow_export_ltr"), t!("ribbon.export_nsd"))
+                    .tooltip(t!("ribbon.export_nsd_tip"))
                     .action(crate::nsd::ExportStructogram),
             ],
         ),
@@ -553,7 +599,7 @@ fn large_button(item: &Item, compact: bool, focus: &FocusHandle) -> AnyElement {
             .px_1()
             .disabled(!item.enabled)
             .selected(item.selected)
-            .tooltip(item.label.clone())
+            .tooltip(item.tooltip.clone().unwrap_or_else(|| item.label.clone()))
     };
     match (&item.action, menu.is_empty()) {
         (Some(action), true) => base(item.id.clone())
@@ -594,7 +640,7 @@ fn small_button(item: &Item, compact: bool, focus: &FocusHandle) -> AnyElement {
         .h(px(20.0))
         .icon(shell::icon(item.icon.clone()).size_4())
         .when(label, |this| this.label(item.label.clone()))
-        .tooltip(item.label.clone())
+        .tooltip(item.tooltip.clone().unwrap_or_else(|| item.label.clone()))
         .disabled(!item.enabled)
         .selected(item.selected);
     match &item.action {
@@ -780,7 +826,7 @@ mod tests {
     #[test]
     fn every_tool_of_every_diagram_kind_is_in_one_group() {
         for kind in DIAGRAM_KINDS {
-            let groups = diagram(kind, Tool::Select);
+            let groups = diagram(kind, Tool::Select, None);
             for tool in palette::palette(kind) {
                 let id = format!("tool-{}", tool.key());
                 let found = groups.iter().flat_map(|g| &g.items).filter(|i| i.id == id).count();
@@ -799,6 +845,7 @@ mod tests {
             can_align: false,
             can_paste: false,
             can_wrap: false,
+            numbering: None,
             dark: false,
         };
         assert!(!tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));

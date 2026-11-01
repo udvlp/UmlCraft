@@ -101,13 +101,13 @@ impl MainView {
         if settings.dark == Some(true) {
             Theme::change(ThemeMode::Dark, Some(window), cx);
         }
-        let column = settings.visibility_column;
+        let display = settings.display();
         let workspace = cx.new(|cx| {
-            Workspace::new(blank_document(), None).with_measure(AppMeasure::new(cx, column))
+            Workspace::new(blank_document(), None).with_measure(AppMeasure::new(cx, display))
         });
         let canvas = cx.new(|cx| {
             let mut canvas = DiagramCanvas::new(workspace.clone(), cx);
-            canvas.visibility_column = column;
+            canvas.display = display;
             // Inside the card's 1 px border.
             canvas.corner_radius = f32::from(shell::RADIUS) - 1.0;
             canvas
@@ -381,9 +381,9 @@ impl MainView {
     }
 
     fn replace_document(&mut self, doc: Document, path: Option<PathBuf>, cx: &mut Context<Self>) {
-        let column = self.settings.visibility_column;
+        let display = self.settings.display();
         self.workspace.update(cx, |ws, cx| {
-            *ws = Workspace::new(doc, path).with_measure(AppMeasure::new(cx, column));
+            *ws = Workspace::new(doc, path).with_measure(AppMeasure::new(cx, display));
             cx.notify();
         });
         self.collapsed.clear();
@@ -410,7 +410,7 @@ impl MainView {
             window,
             cx,
             Box::new(|this, _, cx| {
-                let measure = AppMeasure::new(cx, this.settings.visibility_column);
+                let measure = AppMeasure::new(cx, this.settings.display());
                 this.replace_document(crate::demo::velo(&measure), None, cx)
             }),
         );
@@ -1040,7 +1040,7 @@ impl MainView {
         let ws = self.workspace.read(cx);
         let diagram = ws.active_diagram?;
         let model = ws.doc.model();
-        let measure = FontMeasure::new(window, self.settings.visibility_column);
+        let measure = FontMeasure::new(window, self.settings.display());
         let scene = scene::build(model, diagram, &Preview::default(), &measure);
         // Fine units keep the letters evenly spaced in programs such as Word.
         let svg = umlcraft_notation::svg::render_scaled(
@@ -1384,6 +1384,14 @@ impl MainView {
             can_align: ws.selected_nodes().len() > 1,
             can_paste: structogram.is_some() || (self.clipboard.is_some() && diagram.is_some()),
             can_wrap: has_selection && diagram == Some(DiagramKind::Sequence),
+            numbering: ws.active_diagram.and_then(|d| ws.doc.model().get(d)).and_then(|e| match e
+                .kind()
+            {
+                ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => {
+                    Some((!p.hide_message_numbers, p.flat_message_numbers))
+                }
+                _ => None,
+            }),
             dark: cx.theme().is_dark(),
         };
         let tabs = ribbon::tabs(&state);
@@ -1468,13 +1476,25 @@ impl MainView {
     /// Turns UmlCraft's visibility column on or off, for drawing, sizing boxes and exporting.
     pub fn set_visibility_column(&mut self, on: bool, cx: &mut Context<Self>) {
         self.settings.visibility_column = on;
+        self.apply_display(cx);
+    }
+
+    /// Marks abstract classes with «abstract» above their name, or with `{abstract}` below it.
+    pub fn set_abstract_stereotype(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.settings.abstract_stereotype = on;
+        self.apply_display(cx);
+    }
+
+    /// Saves the settings and draws, sizes and exports diagrams as they say from now on.
+    fn apply_display(&mut self, cx: &mut Context<Self>) {
         self.settings.save();
+        let display = self.settings.display();
         self.canvas.update(cx, |canvas, cx| {
-            canvas.visibility_column = on;
+            canvas.display = display;
             cx.notify();
         });
         self.workspace.update(cx, |ws, cx| {
-            ws.measure = Box::new(AppMeasure::new(cx, on));
+            ws.measure = Box::new(AppMeasure::new(cx, display));
             cx.notify();
         });
     }
@@ -2283,6 +2303,12 @@ impl Render for MainView {
             }))
             .on_action(cx.listener(|this, _: &RouteLines, _, cx| {
                 this.with_workspace(cx, Workspace::route_lines)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleMessageNumbers, _, cx| {
+                this.with_workspace(cx, |ws| ws.toggle_numbering(false))
+            }))
+            .on_action(cx.listener(|this, _: &ToggleFlatNumbers, _, cx| {
+                this.with_workspace(cx, |ws| ws.toggle_numbering(true))
             }))
             .on_action(cx.listener(move |this, _: &ZoomToFit, _, cx| {
                 match this.active_structogram(cx) {

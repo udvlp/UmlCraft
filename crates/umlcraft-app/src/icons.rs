@@ -80,6 +80,11 @@ pub fn nsd_kind_icon(kind: umlcraft_nsd::ElementKind) -> SharedString {
 }
 
 /// A command on structogram elements: `color`, `disabled`, `addBranch`, `removeBranch`.
+/// One of UmlCraft's own icons that stands for no tool, e.g. `messageNumbers`.
+pub fn own_icon(name: &str) -> SharedString {
+    uml(name)
+}
+
 pub fn nsd_icon(name: &str) -> SharedString {
     uml(&format!("nsd{}{}", name[..1].to_uppercase(), &name[1..]))
 }

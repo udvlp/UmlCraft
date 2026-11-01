@@ -33,6 +33,7 @@ ribbon:
     nsd_loops: Loops
     nsd_element: Element
     nsd_export: Structorizer
+    numbering: Numbering
   paste: Paste
   cut: Cut
   copy: Copy
@@ -42,13 +43,16 @@ ribbon:
   wrap_in_fragment: In fragment
   auto_arrange: Arrange automatically
   route_lines: Route lines
+  message_numbers: Numbers
+  flat_numbers: Straight through
   light: Light
   dark: Dark
   files: Files …
   folder: Folder …
   import: Import
   export: Export
-  export_nsd: Export .nsd
+  export_nsd: Save for Structorizer
+  export_nsd_tip: Saves the structogram as an .nsd file that Structorizer can open and edit
   copy_image: To clipboard
   new_diagram: New diagram
 menu:
@@ -98,6 +102,7 @@ menu:
   navigability: Navigability
   aggregation: Aggregation
   multiplicity: Multiplicity
+  clicked_end: "%{end} – the end clicked"
   unspecified: not specified
   view: View
   zoom_in: Zoom in
@@ -178,8 +183,11 @@ tool:
   nodeInstance: Node instance
   object: Object
   interactionUse: Interaction use
-  foundMessage: Found
-  lostMessage: Lost
+  foundMessage: Found message
+  lostMessage: Lost message
+tool_tip:
+  foundMessage: "A message from outside the diagram, such as the first call of a sequence: click the lifeline that receives it"
+  lostMessage: "A message whose receiver the diagram does not show: click the lifeline that sends it"
 diagram:
   class: Class diagram
   useCase: Use case diagram
@@ -205,6 +213,7 @@ prop:
   read_only: Read-only
   message_numbers: Show message numbers
   return_values: Show return values
+  flat_message_numbers: Number straight through (1, 2, 3 instead of 2.1)
   query: Query (changes nothing)
   end: End
   role: Role
@@ -414,6 +423,9 @@ settings:
   dark: Dark
   classes: Classes
   visibility_column: Visibility in a column of its own
+  abstract: Besides the italic name, abstract classes show
+  abstract_keyword: "{abstract} below the name"
+  abstract_stereotype: "«abstract» above the name"
   visibility_column_detail: "Lines up the names of all attributes and operations of a class. Off, the visibility stands right before the name."
   close: Close
 project:
@@ -461,6 +473,8 @@ skipped:
   deleted_function: deleted functions (= delete)
   friend: friend declarations
   statement: statements that declare nothing
+new_name:
+  systemBoundary: System
 kind:
   model: Project
   package: Package

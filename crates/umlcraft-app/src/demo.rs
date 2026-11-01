@@ -299,11 +299,14 @@ impl Builder<'_, '_> {
         self.field(station, "name", string())?;
         self.field(station, "location", of(geo))?;
         self.field(station, "capacity", integer())?;
+        let place = [("name", string()), ("location", of(geo)), ("capacity", integer())];
+        self.method(station, "Station", &place, None)?;
         self.method(station, "freeDocks", &[], integer())?;
         let rebalance = self.method(station, "rebalance", &[], None)?;
 
         let dock = self.create(fleet, "Dock", ElementKind::class())?;
         self.field(dock, "number", integer())?;
+        self.method(dock, "Dock", &[("number", integer())], None)?;
         let release = self.method(dock, "release", &[], text("boolean"))?;
         self.operation(dock, "isEmpty", &[], text("boolean"), |p| p.is_query = true)?;
 
@@ -312,16 +315,18 @@ impl Builder<'_, '_> {
         self.field(vehicle, "id", string())?;
         self.field(vehicle, "state", of(states))?;
         self.attribute(vehicle, "kilometres", integer(), |a| a.default_value = "0".into())?;
+        // Only subclasses make vehicles.
+        let made = self.method(vehicle, "Vehicle", &[("id", string())], None)?;
+        self.tx.update(made, |d| d.visibility = Visibility::Protected)?;
         self.method(vehicle, "unlock", &[], text("boolean"))?;
         self.method(vehicle, "lock", &[("dock", of(dock))], None)?;
 
         let bike = self.create(fleet, "Bike", ElementKind::class())?;
         self.field(bike, "gears", integer())?;
+        self.method(bike, "Bike", &[("id", string()), ("gears", integer())], None)?;
         let ebike = self.create(fleet, "EBike", ElementKind::class())?;
-        self.attribute(ebike, "charge", integer(), |a| {
-            a.multiplicity = Some(Multiplicity::ONE);
-            a.default_value = "100".into();
-        })?;
+        self.attribute(ebike, "charge", integer(), |a| a.default_value = "100".into())?;
+        self.method(ebike, "EBike", &[("id", string())], None)?;
         self.operation(ebike, "range", &[], text("double"), |p| p.is_query = true)?;
 
         let money = self.create(rental, "Money", ElementKind::DataType(classifier()))?;
@@ -335,6 +340,7 @@ impl Builder<'_, '_> {
         self.field(rider, "name", string())?;
         self.field(rider, "email", string())?;
         self.field(rider, "membership", of(membership))?;
+        self.method(rider, "Rider", &[("name", string()), ("email", string())], None)?;
         self.method(rider, "rent", &[("vehicle", of(vehicle))], None)?;
 
         let rental_class = self.create(rental, "Rental", ElementKind::class())?;
@@ -343,6 +349,8 @@ impl Builder<'_, '_> {
             a.multiplicity = Some(Multiplicity::OPTIONAL)
         })?;
         self.attribute(rental_class, "duration", text("Duration"), |a| a.is_derived = true)?;
+        let parties = [("rider", of(rider)), ("vehicle", of(vehicle))];
+        self.method(rental_class, "Rental", &parties, None)?;
         self.method(rental_class, "close", &[("dock", of(dock))], None)?;
         self.operation(rental_class, "cost", &[], of(money), |p| p.is_query = true)?;
 
@@ -367,6 +375,7 @@ impl Builder<'_, '_> {
         // Relationships, with the ends as the diagram reads them.
         let station_docks = self.association(fleet, station, dock, |p| {
             p.ends[0].aggregation = Aggregation::Composite;
+            p.ends[0].navigability = Navigability::NonNavigable;
             p.ends[1].role = "docks".into();
             p.ends[1].multiplicity = Some(Multiplicity::MANY);
             p.ends[1].navigability = Navigability::Navigable;
@@ -374,11 +383,14 @@ impl Builder<'_, '_> {
         let dock_vehicle = self.association(fleet, dock, vehicle, |p| {
             p.ends[0].role = "dock".into();
             p.ends[0].multiplicity = Some(Multiplicity::OPTIONAL);
+            p.ends[0].navigability = Navigability::Navigable;
             p.ends[1].role = "parked".into();
             p.ends[1].multiplicity = Some(Multiplicity::OPTIONAL);
+            p.ends[1].navigability = Navigability::Navigable;
         })?;
         let rider_rentals = self.association(rental, rider, rental_class, |p| {
             p.ends[0].multiplicity = Some(Multiplicity::ONE);
+            p.ends[0].navigability = Navigability::NonNavigable;
             p.ends[1].role = "rentals".into();
             p.ends[1].multiplicity = Some(Multiplicity::MANY);
             p.ends[1].navigability = Navigability::Navigable;
@@ -393,6 +405,7 @@ impl Builder<'_, '_> {
         })?;
         let rental_policy = self.association(rental, rental_class, policy, |p| {
             p.ends[0].multiplicity = Some(Multiplicity::MANY);
+            p.ends[0].navigability = Navigability::NonNavigable;
             p.ends[1].role = "tariff".into();
             p.ends[1].multiplicity = Some(Multiplicity::ONE);
             p.ends[1].navigability = Navigability::Navigable;
@@ -406,13 +419,13 @@ impl Builder<'_, '_> {
 
         let n_geo = self.class_box(d, geo, (40.0, 40.0))?;
         let n_station = self.class_box(d, station, (230.0, 40.0))?;
-        let n_dock = self.class_box(d, dock, (620.0, 40.0))?;
-        let n_vehicle = self.class_box(d, vehicle, (920.0, 40.0))?;
-        let n_states = self.class_box(d, states, (1210.0, 40.0))?;
-        let n_bike = self.class_box(d, bike, (950.0, 260.0))?;
-        let n_ebike = self.class_box(d, ebike, (1130.0, 260.0))?;
+        let n_dock = self.class_box(d, dock, (700.0, 40.0))?;
+        let n_vehicle = self.class_box(d, vehicle, (980.0, 40.0))?;
+        let n_states = self.class_box(d, states, (1290.0, 40.0))?;
+        let n_bike = self.class_box(d, bike, (1000.0, 260.0))?;
+        let n_ebike = self.class_box(d, ebike, (1190.0, 260.0))?;
         let n_membership = self.class_box(d, membership, (40.0, 360.0))?;
-        let n_rider = self.class_box(d, rider, (230.0, 360.0))?;
+        let n_rider = self.class_box(d, rider, (180.0, 360.0))?;
         let n_rental = self.class_box(d, rental_class, (620.0, 360.0))?;
         let n_money = self.class_box(d, money, (40.0, 580.0))?;
         let n_policy = self.class_box(d, policy, (620.0, 580.0))?;

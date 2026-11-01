@@ -40,6 +40,12 @@ pub trait TextMeasure {
     fn visibility_column(&self) -> bool {
         false
     }
+
+    /// Whether abstract classes say so with the stereotype «abstract» above their name instead
+    /// of UML's `{abstract}` below it, a setting.
+    fn abstract_stereotype(&self) -> bool {
+        false
+    }
 }
 
 pub struct ApproxMeasure;
@@ -92,6 +98,17 @@ pub struct NodeShape {
 }
 
 impl NodeShape {
+    /// The rectangle lines end at: the drawn bounds, for an actor grown down over the name
+    /// below the figure, so that a line from below stops under the name instead of crossing it.
+    pub fn clip_rect(&self) -> Rect {
+        let r = self.rect;
+        if !matches!(self.figure, Figure::Actor) {
+            return r;
+        }
+        let bottom = self.rows.iter().map(|row| row.rect.bottom()).fold(r.bottom(), f32::max);
+        Rect::new(r.x, r.y, r.width, bottom - r.y)
+    }
+
     /// Whether `p` hits the node. Hollow frames (system boundaries, combined fragments) only
     /// count at their border and texts, so clicks inside reach what they contain or the empty
     /// canvas. Lifelines count at their head and along their dashed line.
@@ -776,6 +793,8 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         (None, Vec::new())
     };
     let mut rects: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
+    // Anchors are relative to `rects`; lines are clipped at these.
+    let clips: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.clip_rect())).collect();
     let mut outlines: HashMap<Id, Outline> =
         nodes.iter().map(|n| (n.id, n.figure.outline())).collect();
     let is_message = |p: &Presentation| {
@@ -847,6 +866,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             });
             let to_lollipop = iconic_interfaces.contains(target);
             let outline = |id| outlines.get(id).copied().unwrap_or(Outline::Rect);
+            let clip = |id, rect| clips.get(id).copied().unwrap_or(rect);
             let qualifiers = match element.map(|e| e.kind()) {
                 Some(ElementKind::Association(a)) => a
                     .ends
@@ -858,7 +878,10 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 p.id,
                 element.map(|e| e.kind()),
                 &qualifiers,
-                ((source_rect, outline(source)), (target_rect, outline(target))),
+                (
+                    (source_rect, clip(source, source_rect), outline(source)),
+                    (target_rect, clip(target, target_rect), outline(target)),
+                ),
                 anchors,
                 p.style.line_shape,
                 &points,
@@ -1894,18 +1917,26 @@ fn layout_classifier(
     let kind = e.kind();
     let size = style.font_size.unwrap_or(FONT_SIZE);
 
+    // Italics alone are easy to miss, so abstract classes say it in words as well: UML's
+    // `{abstract}` below the name or, as a setting, «abstract» above it.
+    let is_abstract = matches!(kind, ElementKind::Class(p) if p.is_abstract);
+    let keyword = is_abstract && !measure.abstract_stereotype();
     let mut stereotypes: Vec<String> = match kind {
         ElementKind::Interface(_) => vec!["interface".into()],
         ElementKind::Enumeration(_) => vec!["enumeration".into()],
         ElementKind::DataType(_) => vec!["dataType".into()],
+        _ if is_abstract && !keyword => vec!["abstract".into()],
         _ => Vec::new(),
     };
     stereotypes.extend(e.data().stereotypes.iter().cloned());
     let mut header = stereotype_lines([&stereotypes], size, id);
     let mut name = Line::new(crate::member::display_name(model, id), size, RowRole::Name, Some(id));
     name.bold = true;
-    name.italic = matches!(kind, ElementKind::Class(p) if p.is_abstract);
+    name.italic = is_abstract;
     header.push(name);
+    if keyword {
+        header.push(Line::new("{abstract}", size, RowRole::Stereotype, Some(id)));
+    }
 
     let members = |pick: fn(&ElementKind) -> bool| -> Vec<Line> {
         e.children()
@@ -2085,7 +2116,12 @@ fn edge_for(
     kind: Option<&ElementKind>,
     // An association's qualifiers per end, as text.
     qualifiers: &[Vec<String>; 2],
-    ((source, source_outline), (target, target_outline)): ((Rect, Outline), (Rect, Outline)),
+    // Each end's rectangle the anchors are relative to, the one the line is clipped at, and
+    // its outline.
+    ((source_anchors, source, source_outline), (target_anchors, target, target_outline)): (
+        (Rect, Rect, Outline),
+        (Rect, Rect, Outline),
+    ),
     anchors: [Option<Point>; 2],
     shape: LineShape,
     waypoints: &[Point],
@@ -2097,7 +2133,8 @@ fn edge_for(
     // The line runs from the source anchor through the waypoints to the target anchor; it is
     // drawn from where it leaves the source to where it enters the target. Right-angled lines
     // keep their first and last segment straight as the ends move.
-    let (from, to) = (anchor_point(source, anchors[0]), anchor_point(target, anchors[1]));
+    let (from, to) =
+        (anchor_point(source_anchors, anchors[0]), anchor_point(target_anchors, anchors[1]));
     let fitted;
     let waypoints = if shape.is_right_angle() {
         fitted = route::fit_corners(source, from, waypoints, target, to);
@@ -3080,6 +3117,70 @@ mod tests {
         doc.edit("delete", |tx| tx.remove_presentations(d, [extend].into_iter().collect()))
             .unwrap();
         assert!(doc.model().view(d).unwrap().get(anchor).is_none());
+    }
+
+    #[test]
+    fn abstract_classes_say_so_in_words() {
+        use crate::palette::{NodeTool, create_node};
+        struct Stereotype;
+        impl TextMeasure for Stereotype {
+            fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+                ApproxMeasure.width(text, font_size, bold)
+            }
+            fn abstract_stereotype(&self) -> bool {
+                true
+            }
+        }
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let (class, node) = doc
+            .edit("class", |tx| {
+                create_node(tx, d, NodeTool::Class, Point::new(600.0, 400.0), "Shape")
+            })
+            .unwrap();
+        doc.edit("abstract", |tx| {
+            tx.update(class, |data| {
+                if let ElementKind::Class(p) = &mut data.kind {
+                    p.is_abstract = true;
+                }
+            })
+        })
+        .unwrap();
+        let header = |measure: &dyn TextMeasure| -> Vec<(String, bool)> {
+            let scene = build(doc.model(), d, &Preview::default(), measure);
+            let rows = &scene.node(node).unwrap().rows;
+            rows.iter().take(2).map(|r| (r.text.clone(), r.italic)).collect()
+        };
+        assert_eq!(
+            header(&ApproxMeasure),
+            [("Shape1".to_owned(), true), ("{abstract}".to_owned(), false)]
+        );
+        assert_eq!(
+            header(&Stereotype),
+            [("<<abstract>>".to_owned(), false), ("Shape1".to_owned(), true)]
+        );
+    }
+
+    #[test]
+    fn lines_from_below_an_actor_stop_under_its_name() {
+        use crate::palette::{EdgeTool, NodeTool, connect, create_node};
+        let (mut doc, ids) = order_system();
+        let d = ids.use_case_diagram;
+        let (upper, edge) = doc
+            .edit("actors", |tx| {
+                let (_, upper) =
+                    create_node(tx, d, NodeTool::Actor, Point::new(600.0, 40.0), "Actor")?;
+                let (_, lower) =
+                    create_node(tx, d, NodeTool::Actor, Point::new(600.0, 300.0), "Actor")?;
+                Ok((upper, connect(tx, d, EdgeTool::Generalization, upper, lower)?))
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let actor = scene.nodes.iter().find(|n| n.id == upper).unwrap();
+        let name = actor.rows[0].rect;
+        assert!(name.bottom() > actor.rect.bottom(), "the name hangs below the box");
+        let start = scene.edge(edge).unwrap().points[0];
+        assert!(start.y >= name.bottom() - 0.01, "{start:?} crosses {name:?}");
     }
 
     #[test]

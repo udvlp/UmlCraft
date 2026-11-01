@@ -116,15 +116,17 @@ Inline editing by double-click with a parser for `+ name : Type [0..*] = init` a
 cut and paste (as a copy or as the same elements), rubber-band and multiple selection, alignment,
 waypoints, zoom to fit, drag and drop within the model tree and from the tree onto the canvas.
 Automatic layout: new lines are routed around the nodes at right angles and follow when their
-nodes move, until their route is edited by hand; Route lines (Ctrl+Shift+R) does that for the
-selected lines or the whole diagram. Arrange automatically (Ctrl+Shift+L) lays out class,
+nodes move, until their route is edited by hand (on use case diagrams they start straight);
+Route lines (Ctrl+Shift+R) does that for the selected lines or the whole diagram. Arrange automatically (Ctrl+Shift+L) lays out class,
 component and deployment diagrams in layers, top to bottom or left to right, generals above
 their specifics; with a selection only that, pushing other nodes aside.
 Free texts and lines on every diagram (Text and Line tools): texts edited in place, lines
 dashed or with arrowheads, their ends dragged one by one. Light and dark theme, German and
 English. Members show their visibility right before the name (`- name`); UmlCraft's
-visibility column lines up all names of a compartment instead. Theme, language and the column
-are chosen in the settings (the gear in the title bar, or Ctrl+,).
+visibility column lines up all names of a compartment instead. Abstract classes show
+`{abstract}` below their italic name, or «abstract» above it. Theme, language, the column and
+how abstract classes are marked are chosen in the settings (the gear in the title bar, or
+Ctrl+,).
 
 ## AI assistants (MCP)
 

@@ -75,6 +75,9 @@ actions!(
         ResetLabels,
         // Routes the selected lines, or all of the diagram, around the nodes.
         RouteLines,
+        // Sequence diagrams: shows or hides the message numbers, numbers them 1, 2, 3 or 2.1.
+        ToggleMessageNumbers,
+        ToggleFlatNumbers,
         AddExtensionPoint,
         // Folds the ribbon to its tabs, or unfolds it.
         ToggleRibbon,

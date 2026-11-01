@@ -806,7 +806,7 @@ fn show_element(host: &mut dyn Host, args: &Value) -> Outcome {
         let before = lines(tx.model());
         let node = palette::show_element(tx, diagram, element, origin)?;
         let new: Vec<Id> = lines(tx.model()).into_iter().filter(|l| !before.contains(l)).collect();
-        autoroute::route_lines(tx, diagram, &new)?;
+        autoroute::route_new_lines(tx, diagram, &new)?;
         if is_sequence(tx.model(), diagram) {
             sequence_edit::tidy(tx, diagram)?;
         }
@@ -837,7 +837,7 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
             palette::connect(tx, diagram, tool, source, target)?
         };
         if tool != EdgeTool::NoteAnchor {
-            autoroute::route_lines(tx, diagram, &[edge])?;
+            autoroute::route_new_lines(tx, diagram, &[edge])?;
         }
         Ok(edge)
     })?;

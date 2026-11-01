@@ -1,7 +1,8 @@
 //! The element editor: one dialog for an element's text, comment and whether it is disabled,
 //! and for the diagram's signature, comment and kind. A new element is only inserted when the
 //! dialog is confirmed, so cancelling leaves nothing to undo. Like Structorizer's, the dialog
-//! selects the first `?` of a default text.
+//! selects the first `?` of a default text. Enter breaks the line; Shift+Enter and Ctrl+Enter
+//! confirm, so the dialog can be left without the mouse.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -124,18 +125,39 @@ pub fn open(
         Some(_) => (t!("nsd.text"), None),
     };
 
-    window.open_dialog(cx, move |dialog, _, cx| {
-        let muted = cx.theme().muted_foreground;
-        let ok = {
-            let (view, target, collect) = (view.clone(), target.clone(), collect.clone());
-            move |window: &mut Window, cx: &mut App| {
-                let edited = collect(cx);
-                let target = target.clone();
-                view.update(cx, |v, cx| v.apply_dialog(target, edited, window, cx)).ok();
-                window.close_dialog(cx);
+    let ok = {
+        let (target, collect) = (target.clone(), collect.clone());
+        // Once only: the dialog stays a moment while it closes.
+        let done = Cell::new(false);
+        Rc::new(move |window: &mut Window, cx: &mut App| {
+            if done.replace(true) {
+                return;
             }
-        };
-        let ok_click = ok.clone();
+            let edited = collect(cx);
+            let target = target.clone();
+            view.update(cx, |v, cx| v.apply_dialog(target, edited, window, cx)).ok();
+            window.close_dialog(cx);
+        })
+    };
+    // The text fields take Enter with any modifier as a line break, so the keys that confirm
+    // are caught before them. The dialog's builder holds the subscription: it ends with it.
+    let confirm_keys = {
+        let (ok, handle) = (ok.clone(), window.window_handle());
+        Rc::new(cx.intercept_keystrokes(move |event, window, cx| {
+            let k = &event.keystroke;
+            let confirms = k.key == "enter"
+                && (k.modifiers.shift || k.modifiers.control || k.modifiers.platform);
+            if confirms && window.window_handle() == handle && window.has_active_dialog(cx) {
+                cx.stop_propagation();
+                ok(window, cx);
+            }
+        }))
+    };
+
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let _keys = &confirm_keys;
+        let muted = cx.theme().muted_foreground;
+        let (ok, ok_click) = (ok.clone(), ok.clone());
 
         let mut body = v_flex().gap_3().pb_1();
         if has_text {

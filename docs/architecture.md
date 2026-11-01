@@ -100,11 +100,13 @@ that a diff shows which element changed.
   twice the canvas size and with the system's fonts, on a background thread. `png::copy` puts
   both on the clipboard in one item, as the formats `image/svg+xml` and `PNG` (on Windows):
   Word and PowerPoint take the SVG as a vector image, other programs the PNG.
-- `settings.rs` stores recent files, language, theme and the visibility column
-  (`visibilityColumn`) in `UmlCraft/settings.json` in the platform's settings folder (`%APPDATA%` on Windows,
-  `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The column reaches layout and
-  drawing through `TextMeasure::visibility_column` of the measures the canvas and the
-  workspace use. `settings_dialog.rs` shows language, theme and the column in a dialog
+- `settings.rs` stores recent files, language, theme, the visibility column
+  (`visibilityColumn`) and whether abstract classes show «abstract» instead of `{abstract}`
+  (`abstractStereotype`) in `UmlCraft/settings.json` in the platform's settings folder (`%APPDATA%` on Windows,
+  `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). Both
+  reach layout and drawing through `TextMeasure::visibility_column` and
+  `TextMeasure::abstract_stereotype` of the measures the canvas and the workspace use (built
+  from `canvas::Display`). `settings_dialog.rs` shows language, theme and both in a dialog
   (`gpui-component`'s `Dialog`), which applies each change at once through `MainView`; for the
   column it sets the canvas's flag and gives the workspace a new measure.
 - Texts come from `locales/{de,en}.yml` (rust-i18n). Without a setting, the system language is used.
@@ -216,8 +218,12 @@ the rules measured through the `.asta` export API: a call gets a bar of 25 on th
 sender has none, a bar of 45 on the sender (60 for create, 30 for lost messages); a reply leaves
 at the end of the bar it returns from; a message to self comes back 20 lower into a bar of its
 own; a create message brings the new lifeline's head down to it; a destroy message ends the
-lifeline in a cross below its bar. Dragging a message moves it with the bar it starts and
-everything sent from that bar (`move_item`); a message's label can be dragged on its own
+lifeline in a cross below its bar. UmlCraft's own rules on top: a message sent at most 45 below
+a sender's bar continues that bar instead of starting one, and a further call to the same
+receiver goes 20 below the bar the last one started there (`clear_of_calls`). Dragging a
+message moves it with the bar it starts and everything sent from that bar (`move_item`); the
+sender's bar it leaves shrinks to what is still in it (`shrink_bar`), the only time a bar gets
+shorter. A message's label can be dragged on its own
 (`place_label`). Combined fragments grow to hold the bars and messages that start in them, and
 bars that no message reaches any more are removed. The layout's `Slot`s carry the height the
 user pointed at.

@@ -23,6 +23,9 @@ pub struct Settings {
     /// Draw members' visibility in a column of its own, so all names of a compartment start
     /// in one line. Off by default: members then look as in Astah.
     pub visibility_column: bool,
+    /// Mark abstract classes with the stereotype «abstract» above their name instead of UML's
+    /// `{abstract}` below it.
+    pub abstract_stereotype: bool,
     /// The ribbon shows only its tabs.
     pub ribbon_collapsed: bool,
 }
@@ -73,6 +76,7 @@ impl Settings {
             language: field(&fields, "language"),
             dark: field(&fields, "dark"),
             visibility_column: field(&fields, "visibilityColumn"),
+            abstract_stereotype: field(&fields, "abstractStereotype"),
             ribbon_collapsed: field(&fields, "ribbonCollapsed"),
         }
     }
@@ -105,6 +109,14 @@ impl Settings {
         }
         self.add_recent(path);
         self.save();
+    }
+
+    /// How diagrams are drawn, as far as the settings decide it.
+    pub fn display(&self) -> crate::canvas::Display {
+        crate::canvas::Display {
+            visibility_column: self.visibility_column,
+            abstract_stereotype: self.abstract_stereotype,
+        }
     }
 
     /// The language to show: the chosen one, else the system's.

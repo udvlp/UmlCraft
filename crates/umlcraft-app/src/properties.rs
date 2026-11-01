@@ -1202,21 +1202,14 @@ impl Render for PropertiesPanel {
                     Input::new(&self.declaration).small().into_any_element(),
                 ));
             }
-            // Behavior parts have a name but no visibility worth editing.
-            ElementKind::Message(_)
-            | ElementKind::Lifeline(_)
-            | ElementKind::Activity
-            | ElementKind::ActivityNode(_)
-            | ElementKind::ActivityEdge(_)
-            | ElementKind::Partition
-            | ElementKind::Region
-            | ElementKind::TemplateParameter(_) => {
-                body = body.child(field(
-                    t!("prop.name").into(),
-                    Input::new(&self.name).small().into_any_element(),
-                ));
-            }
-            _ => {
+            // Visibility matters where code is made of it: packages and classifiers. Objects,
+            // actors, use cases, states and lines have it in the metamodel only.
+            ElementKind::Package
+            | ElementKind::Class(_)
+            | ElementKind::Interface(_)
+            | ElementKind::Enumeration(_)
+            | ElementKind::DataType(_)
+            | ElementKind::Component(_) => {
                 body = body
                     .child(field(
                         t!("prop.name").into(),
@@ -1226,6 +1219,12 @@ impl Render for PropertiesPanel {
                         t!("prop.visibility").into(),
                         Select::new(&self.visibility).small().into_any_element(),
                     ));
+            }
+            _ => {
+                body = body.child(field(
+                    t!("prop.name").into(),
+                    Input::new(&self.name).small().into_any_element(),
+                ));
             }
         }
         if !unnamed {
@@ -1247,6 +1246,18 @@ impl Render for PropertiesPanel {
                         |d, v| {
                             if let ElementKind::Diagram(p) = &mut d.kind {
                                 p.hide_message_numbers = !v;
+                            }
+                        },
+                    ))
+                    .child(flag(
+                        "flat-message-numbers",
+                        t!("prop.flat_message_numbers").into(),
+                        p.flat_message_numbers,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::Diagram(p) = &mut d.kind {
+                                p.flat_message_numbers = v;
                             }
                         },
                     ))

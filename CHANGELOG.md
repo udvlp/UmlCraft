@@ -13,9 +13,31 @@ today.
 - **Diagram to the clipboard**: Edit › Copy diagram as image (Ctrl+Shift+C, or Tools › To
   clipboard) copies the open diagram or structogram as SVG and PNG at once. Word and PowerPoint
   paste it as a vector image that stays sharp at any size; other programs take the PNG.
-
+- **Sequence diagrams**: calls one after the other from the same lifeline share its bar. A call
+  drawn just below the sender's bar continues that bar instead of starting a second one, and a
+  further call to the same receiver starts 20 below the bar the last one started there. A
+  message dragged off a bar no longer leaves it longer than what is still in it, and dragged
+  back below it continues it.
+- **alt with else**: a combined fragment switched to `alt` gets its second operand, `[else]`.
+- **Numbering**: the Sequence tab switches message numbers on and off and between 1, 2, 3 and
+  2.1; the diagram's properties have the second switch too. The found and lost message tools
+  are named in full and say on hover how they are used.
+- **Abstract classes** say so in words besides the italic name: `{abstract}` below it, or, in
+  the settings, «abstract» above it.
+- **Associations**: the context menu lists the end nearer the click first and marks it, so a
+  change of aggregation, navigability or multiplicity lands on the side clicked.
+- **Use case diagrams**: new lines are straight; Route lines still routes them. A new system
+  boundary is named "System". Lines from below an actor end under its name instead of crossing
+  it.
+- **Visibility** is offered for packages, classes, interfaces, enumerations, data types and
+  components only, no longer for objects, actors, use cases, states and lines.
+- **Structograms**: Shift+Enter and Ctrl+Enter confirm the element dialog, Enter still breaks
+  the line. New conditions start as `?` instead of Structorizer's `(?)` (`while ?`,
+  `until ?`). The export button is called "Save for Structorizer" and explains itself.
 - **Sample project**: a station holds its docks in a plain composition, `docks` with `*`; the
   qualifier `number` is gone from the domain model. UmlCraft still draws and edits qualifiers.
+  Classes have constructors, `EBike.charge` lost its `[1]`, every end that cannot be navigated
+  shows its ×, and dock and vehicle know each other, with arrows at both ends.
 
 ## 0.12.1 – 2026-10-31
 

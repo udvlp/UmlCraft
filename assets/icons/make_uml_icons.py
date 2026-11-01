@@ -178,6 +178,14 @@ ICONS = {
     'foundMessage': [dot(4.5, 9.5, 2), path('M6.5 9.5H13'), MESSAGE_HEAD],
     'lostMessage': [path('M2.5 9.5H9.5'), path('M8.5 6.5L13 9.5L8.5 12.5Z', FILL),
                     dot(15.5, 9.5, 2)],
+    # Sequence diagram switches: a numbered message, and messages numbered 1, 2 straight on.
+    'messageNumbers': [path('M3 4.5L5 2.5V8.5'), dot(7.5, 8, 1), path('M10.5 5.5H17'),
+                       path('M2.5 13.5H13'), path('M12.5 10.5L17.5 13.5L12.5 16.5Z', FILL)],
+    'flatMessageNumbers': [path('M3 3.5L4.5 2V7'), path('M7.5 4.5H13'),
+                           path('M12.5 2.5L16 4.5L12.5 6.5Z', FILL),
+                           path('M2.5 11.5C2.5 10.3 3.4 9.5 4.5 9.5C5.6 9.5 6.5 10.3 6.5 11.3'
+                                'C6.5 12.6 4.6 13.9 2.5 16.5H6.5'),
+                           path('M9.5 14.5H15'), path('M14.5 12.5L18 14.5L14.5 16.5Z', FILL)],
     'flow': NAVIGABLE,
     'transition': NAVIGABLE,
     'freeLine': [path('M16 4L3.5 16.5', dash(2, 2)), path('M11.5 3.5H16.5V8.5')],

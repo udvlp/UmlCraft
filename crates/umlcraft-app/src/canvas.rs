@@ -13,7 +13,7 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
     Aggregation, AssociationEnd, ElementKind, Id, LineShape, Model, Multiplicity, Navigability,
-    Point as MPoint, Rect,
+    Point as MPoint, Rect, Shape,
 };
 use umlcraft_notation::draw::{self, Paint, Primitive};
 use umlcraft_notation::member::member_text;
@@ -76,28 +76,50 @@ fn snap_point(p: MPoint) -> MPoint {
 
 /// One end of an association as the context menu shows it.
 struct EndEntry {
+    /// The end's index in the association.
+    index: usize,
     label: String,
     end: AssociationEnd,
 }
 
-/// The association edge `presentation` shows, with a menu label for each end: the participant's
-/// name and its role, if any.
+/// The association `edge` shows, with a menu label for each end: the participant's name and its
+/// role, if any. The end drawn nearer to `click` comes first and is marked as the clicked one,
+/// so that a change made from the menu lands where the user clicked.
 fn association_ends(
     model: &Model,
     diagram: Option<Id>,
-    presentation: Id,
+    edge: &EdgeShape,
+    click: Option<MPoint>,
 ) -> Option<(Id, Vec<EndEntry>)> {
-    let element = model.view(diagram?)?.get(presentation)?.element?;
+    let view = model.view(diagram?)?;
+    let presentation = view.get(edge.id)?;
+    let element = presentation.element?;
     let ElementKind::Association(p) = model.get(element)?.kind() else { return None };
-    let ends = p
+    let Shape::Edge { source, target, .. } = &presentation.shape else { return None };
+    let mut ends: Vec<EndEntry> = p
         .ends
         .iter()
-        .map(|end| {
+        .enumerate()
+        .map(|(index, end)| {
             let name = model.get(end.participant).map(|e| e.name().to_owned()).unwrap_or_default();
             let label = if end.role.is_empty() { name } else { format!("{name} ({})", end.role) };
-            EndEntry { label, end: end.clone() }
+            EndEntry { index, label, end: end.clone() }
         })
         .collect();
+    if let Some(click) = click {
+        let [from, to] = edge.node_tips;
+        let near_target = click.distance(to) < click.distance(from);
+        let node = if near_target { *target } else { *source };
+        let participant = view.get(node).and_then(|n| n.element);
+        // A reflexive association has the same participant at both ends: the line's own end
+        // then decides, as the source shows the first end.
+        let near = match p.ends.iter().position(|e| Some(e.participant) == participant) {
+            Some(i) if p.ends[0].participant != p.ends[1].participant => i,
+            _ => usize::from(near_target),
+        };
+        ends.swap(0, near);
+        ends[0].label = t!("menu.clicked_end", end = ends[0].label).to_string();
+    }
     Some((element, ends))
 }
 
@@ -166,7 +188,7 @@ fn association_menu(
                 }
                 menu = menu.label(entry.label.clone());
                 choices(&entry.end).into_iter().fold(menu, |menu, (label, checked, change)| {
-                    let action = SetAssociationEnd { association, end: i, change };
+                    let action = SetAssociationEnd { association, end: entry.index, change };
                     menu.menu_with_check(label, checked, Box::new(action))
                 })
             })
@@ -314,18 +336,20 @@ pub struct DiagramCanvas {
     /// The scene as last painted; mouse handling works on what the user sees.
     scene: Rc<Scene>,
     drag: Option<Drag>,
+    /// Where the last right click went, for the context menu.
+    right_click: Option<MPoint>,
     editing: Option<InlineEdit>,
     /// An element whose row is edited inline once the next scene shows it.
     edit_when_drawn: Option<Id>,
-    /// Members show their visibility in UmlCraft's own column (a setting).
-    pub visibility_column: bool,
+    /// How the diagram is drawn beyond what it stores (settings).
+    pub display: Display,
     /// The corner radius of the card the canvas fills; background and grid keep inside the
     /// corners.
     pub corner_radius: f32,
-    /// What the scene was built from: revision, diagram, column setting and locale. Without a
+    /// What the scene was built from: revision, diagram, display settings and locale. Without a
     /// drag the scene is only built again when one of them changes, not on every pan, zoom or
     /// caret blink.
-    scene_key: Option<(u64, Id, bool, String)>,
+    scene_key: Option<(u64, Id, Display, String)>,
 }
 
 thread_local! {
@@ -339,17 +363,26 @@ thread_local! {
 /// Measured widths kept at most, so that typing in long texts cannot fill the memory.
 const MAX_MEASURED: usize = 50_000;
 
+/// How diagrams are drawn beyond what they store: the user's settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Display {
+    /// Members show their visibility in UmlCraft's own column.
+    pub visibility_column: bool,
+    /// Abstract classes show «abstract» above their name instead of `{abstract}` below it.
+    pub abstract_stereotype: bool,
+}
+
 /// Measures text with the window's font system, at 100 % zoom.
 pub struct FontMeasure<'a> {
     window: &'a Window,
     family: SharedString,
-    column: bool,
+    display: Display,
 }
 
 impl<'a> FontMeasure<'a> {
-    /// Measures in the diagram font; `column` turns on UmlCraft's visibility column.
-    pub fn new(window: &'a Window, column: bool) -> Self {
-        Self { window, family: diagram_font(), column }
+    /// Measures in the diagram font, for drawing as `display` says.
+    pub fn new(window: &'a Window, display: Display) -> Self {
+        Self { window, family: diagram_font(), display }
     }
 }
 
@@ -387,7 +420,11 @@ impl TextMeasure for FontMeasure<'_> {
     }
 
     fn visibility_column(&self) -> bool {
-        self.column
+        self.display.visibility_column
+    }
+
+    fn abstract_stereotype(&self) -> bool {
+        self.display.abstract_stereotype
     }
 }
 
@@ -397,16 +434,16 @@ pub struct AppMeasure {
     text: Arc<TextSystem>,
     regular: FontId,
     bold: FontId,
-    column: bool,
+    display: Display,
 }
 
 impl AppMeasure {
-    /// `column` turns on UmlCraft's visibility column.
-    pub fn new(cx: &App, column: bool) -> Self {
+    /// Measures for drawing as `display` says.
+    pub fn new(cx: &App, display: Display) -> Self {
         let text = cx.text_system().clone();
         let regular = text.resolve_font(&font(diagram_font()));
         let bold = text.resolve_font(&font(diagram_font()).bold());
-        Self { text, regular, bold, column }
+        Self { text, regular, bold, display }
     }
 }
 
@@ -419,7 +456,11 @@ impl TextMeasure for AppMeasure {
     }
 
     fn visibility_column(&self) -> bool {
-        self.column
+        self.display.visibility_column
+    }
+
+    fn abstract_stereotype(&self) -> bool {
+        self.display.abstract_stereotype
     }
 }
 
@@ -436,9 +477,10 @@ impl DiagramCanvas {
             bounds: Rc::new(Cell::new(Bounds::default())),
             scene: Rc::new(Scene::empty()),
             drag: None,
+            right_click: None,
             editing: None,
             edit_when_drawn: None,
-            visibility_column: false,
+            display: Display::default(),
             corner_radius: 0.0,
             scene_key: None,
         }
@@ -685,7 +727,7 @@ impl DiagramCanvas {
                 let label = scene::message_label_at(
                     &self.scene,
                     p,
-                    &FontMeasure::new(window, self.visibility_column),
+                    &FontMeasure::new(window, self.display),
                 );
                 if let Some((message, origin)) = label.filter(|_| !extend) {
                     self.workspace.update(cx, |ws, _| ws.select(vec![message]));
@@ -697,7 +739,7 @@ impl DiagramCanvas {
                 let label = scene::keyword_label_at(
                     &self.scene,
                     p,
-                    &FontMeasure::new(window, self.visibility_column),
+                    &FontMeasure::new(window, self.display),
                 );
                 if let Some((edge, origin, middle)) = label.filter(|_| !extend) {
                     self.workspace.update(cx, |ws, _| ws.select(vec![edge]));
@@ -835,6 +877,7 @@ impl DiagramCanvas {
             return;
         }
         let p = self.to_logical(ev.position);
+        self.right_click = Some(p);
         let hit = scene::hit_test(&self.scene, p, self.hit_tolerance());
         self.update_workspace(cx, |ws| match hit {
             Some(id) if ws.selection.contains(&id) => {}
@@ -870,9 +913,9 @@ impl DiagramCanvas {
             let current: Vec<LineShape> = this.selected_edges(cx).iter().map(|e| e.shape).collect();
             let labeled = ws.selection.iter().any(|&id| this.scene.edge(id).is_some());
             let association = match ws.selection[..] {
-                [single] if this.scene.edge(single).is_some_and(|e| !e.fixed) => {
-                    association_ends(ws.doc.model(), ws.active_diagram, single)
-                }
+                [single] => this.scene.edge(single).filter(|e| !e.fixed).and_then(|edge| {
+                    association_ends(ws.doc.model(), ws.active_diagram, edge, this.right_click)
+                }),
                 _ => None,
             };
             let nothing = ws.selection.is_empty();
@@ -1441,7 +1484,8 @@ impl Painter<'_> {
         let width = match column {
             // The visibility symbol centered in a column as wide as a "+", the rest after it.
             Some((symbol, rest)) => {
-                let slot = AppMeasure::new(self.cx, true).width("+", row.size, row.bold);
+                let column = Display { visibility_column: true, ..Display::default() };
+                let slot = AppMeasure::new(self.cx, column).width("+", row.size, row.bold);
                 let r = row.rect;
                 let cell = Rect::new(r.x, r.y, slot, r.height);
                 self.text(symbol, cell, row.size, row.bold, row.italic, color, LabelAlign::Center);
@@ -1669,9 +1713,8 @@ impl Render for DiagramCanvas {
         let font_family = diagram_font();
         let key = {
             let ws = self.workspace.read(cx);
-            ws.active_diagram.map(|d| {
-                (ws.doc.revision(), d, self.visibility_column, rust_i18n::locale().to_string())
-            })
+            ws.active_diagram
+                .map(|d| (ws.doc.revision(), d, self.display, rust_i18n::locale().to_string()))
         };
         // While dragging, the preview changes the scene on every mouse move.
         let reuse = self.drag.is_none() && key.is_some() && key == self.scene_key;
@@ -1679,7 +1722,7 @@ impl Render for DiagramCanvas {
             self.scene.clone()
         } else {
             let ws = self.workspace.read(cx);
-            let measure = FontMeasure::new(window, self.visibility_column);
+            let measure = FontMeasure::new(window, self.display);
             let scene = match ws.active_diagram {
                 Some(d) => scene::build(ws.doc.model(), d, &self.preview(), &measure),
                 None => Scene::empty(),
@@ -1724,7 +1767,7 @@ impl Render for DiagramCanvas {
             selection: theme.blue,
         };
         let (pan, zoom, drag) = (self.pan, self.zoom, self.drag.clone());
-        let column = self.visibility_column;
+        let column = self.display.visibility_column;
         let corner = self.corner_radius;
         let editing_element = self.editing.as_ref().map(|e| e.element);
         let bounds_cell = self.bounds.clone();

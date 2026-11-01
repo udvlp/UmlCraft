@@ -178,7 +178,12 @@ impl Workspace {
     /// Creates an element with `tool` at `origin` on the active diagram and selects it.
     pub fn create_node(&mut self, tool: NodeTool, origin: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let base = name_base(&format!("kind.{}", tool.key()), keeps_words(tool));
+        // A system boundary is named for the system it bounds, not for itself.
+        let key = match tool {
+            NodeTool::SystemBoundary => "new_name.systemBoundary".to_string(),
+            _ => format!("kind.{}", tool.key()),
+        };
+        let base = name_base(&key, keeps_words(tool));
         let label = t!("edit.create").to_string();
         let result = self.edit(label, |tx| palette::create_node(tx, diagram, tool, origin, &base));
         if let Some((element, node)) = self.report(result) {
@@ -285,14 +290,14 @@ impl Workspace {
     }
 
     /// Draws a line with `tool` and selects it. Lines but note anchors are routed around the
-    /// nodes and kept routed (see [`autoroute`]).
+    /// nodes and kept routed, except on use case diagrams (see [`autoroute::route_new_lines`]).
     pub fn connect(&mut self, tool: EdgeTool, source: Id, target: Id) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.connect").to_string();
         let result = self.edit(label, |tx| {
             let edge = palette::connect(tx, diagram, tool, source, target)?;
             if tool != EdgeTool::NoteAnchor {
-                autoroute::route_lines(tx, diagram, &[edge])?;
+                autoroute::route_new_lines(tx, diagram, &[edge])?;
             }
             Ok(edge)
         });
@@ -350,6 +355,21 @@ impl Workspace {
         let label = t!("edit.move_element").to_string();
         let result = self.edit(label, |tx| palette::move_to_slot(tx, item, slot));
         self.report(result);
+    }
+
+    /// Shows or hides the message numbers of the open sequence diagram, or with `flat`
+    /// switches between numbers 1, 2, 3 and 2.1.
+    pub fn toggle_numbering(&mut self, flat: bool) {
+        let Some(diagram) = self.active_diagram else { return };
+        self.update_element(diagram, |d| {
+            if let ElementKind::Diagram(p) = &mut d.kind {
+                if flat {
+                    p.flat_message_numbers = !p.flat_message_numbers;
+                } else {
+                    p.hide_message_numbers = !p.hide_message_numbers;
+                }
+            }
+        });
     }
 
     /// Adds an operand to a combined fragment and selects it.
@@ -711,7 +731,7 @@ impl Workspace {
             let node = palette::show_element(tx, diagram, element, at)?;
             let mut new: Vec<Id> = edges(tx).difference(&before).copied().collect();
             new.sort();
-            autoroute::route_lines(tx, diagram, &new)?;
+            autoroute::route_new_lines(tx, diagram, &new)?;
             Ok(node)
         });
         if let Some(node) = self.report(result) {
@@ -1033,8 +1053,17 @@ impl Workspace {
             _ => None,
         };
         let before = covered(self.doc.model());
+        let is_alt = |model: &umlcraft_model::Model| {
+            matches!(model.get(id).map(|e| e.kind()), Some(ElementKind::CombinedFragment(p))
+                if p.operator == umlcraft_model::InteractionOperator::Alt)
+        };
+        let was_alt = is_alt(self.doc.model());
         let result = self.edit(label, |tx| {
             tx.update(id, f)?;
+            // A fragment turned into an alt gets its else.
+            if !was_alt && is_alt(tx.model()) {
+                palette::add_else(tx, id)?;
+            }
             // Frames span the lifelines they cover once the user changes them.
             if covered(tx.model()) != before {
                 umlcraft_notation::sequence_edit::cover(tx, id)?;
