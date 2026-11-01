@@ -198,6 +198,7 @@ tool_tip:
   lostMessage: "A message whose receiver the diagram does not show: click the lifeline that sends it"
 diagram:
   class: Class diagram
+  object: Object diagram
   useCase: Use case diagram
   sequence: Sequence diagram
   activity: Activity diagram
@@ -438,6 +439,11 @@ settings:
   abstract_stereotype: "«abstract» above the name"
   read_only: "Mark read-only attributes with {readOnly}"
   visibility_column_detail: "Lines up the names of all attributes and operations of a class. Off, the visibility stands right before the name."
+  structograms: Structograms
+  keywords: Keywords of new structograms
+  keywords_ui: As the user interface
+  keywords_de: "German (solange, für, gib)"
+  keywords_en: "English (while, for, return)"
   close: Close
 project:
   untitled: New project
@@ -616,6 +622,7 @@ nsd:
   exception: Name of the caught exception
   case_hint: "First line: what is examined; then one line per case; last line: the default (% for none)."
   for_hint: "for i <- 1 to 10 by 2 counts, foreach x in list goes through a list; anything else stays free text."
+  for_hint_german: "für i := 1 bis 10 Schritt 2 counts, für jedes x in liste goes through a list; anything else stays free text."
   root_program: Program
   root_sub: Subroutine
   root_includable: Includable

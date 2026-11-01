@@ -14,6 +14,7 @@ use crate::{Made, NoteKind, Report};
 pub fn diagram(member: &Member, src: &str, made: &Made) -> (Diagram, Report) {
     let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
     let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
+    d.set_keywords(made.keywords);
     if let Some(doc) = &member.doc {
         d.set_comment(doc);
     }
@@ -46,8 +47,8 @@ pub fn statement(b: &mut Builder<CSharp>, node: Node, out: &mut Vec<Element>) {
         },
         "if_statement" => out.push(b.if_statement(node)),
         "for_statement" => {
-            let counting =
-                counted(node, src).and_then(|(var, start)| pseudo::counting(node, var, start, src));
+            let counting = counted(node, src)
+                .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
             b.for_loop(node, counting, out);
         }
         "foreach_statement" => {
@@ -165,7 +166,10 @@ impl Builder<'_, CSharp> {
             "switch_expression" if returns => self.switch_expression(value, Some(Sink::Return)),
             "throw_expression" => vec![self.jump(value)],
             _ if returns => {
-                vec![self.element(ElementKind::Jump, &pseudo::give(lines(value, self.src)))]
+                vec![self.element(
+                    ElementKind::Jump,
+                    &pseudo::give(self.keywords(), lines(value, self.src)),
+                )]
             }
             _ => self.expression(value),
         }

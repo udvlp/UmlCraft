@@ -37,6 +37,8 @@ pub struct Workspace {
     pub message: Option<String>,
     /// Measures texts for boxes sized to their content.
     pub measure: Box<dyn TextMeasure>,
+    /// The language of the keywords of new structograms.
+    pub keywords: umlcraft_nsd::Keywords,
 }
 
 impl Workspace {
@@ -53,7 +55,14 @@ impl Workspace {
             tool: Tool::Select,
             message: None,
             measure: Box::new(ApproxMeasure),
+            keywords: umlcraft_nsd::Keywords::English,
         }
+    }
+
+    /// Writes new structograms with the keywords of `keywords`.
+    pub fn with_keywords(mut self, keywords: umlcraft_nsd::Keywords) -> Self {
+        self.keywords = keywords;
+        self
     }
 
     /// Measures texts with `measure` instead of an estimate.
@@ -964,6 +973,8 @@ pub enum NewItem {
     ExtensionPoint,
     TemplateParameter,
     Diagram(DiagramKind),
+    /// A class diagram whose palette starts with Object and Link.
+    ObjectDiagram,
     Structogram,
 }
 
@@ -983,7 +994,9 @@ impl NewItem {
                 Some(behavior) => kind.can_own(&behavior),
                 None => kind.can_own(&ElementKind::diagram(d)),
             },
-            Self::Structogram => kind.can_own(&ElementKind::diagram(DiagramKind::Class)),
+            Self::ObjectDiagram | Self::Structogram => {
+                kind.can_own(&ElementKind::diagram(DiagramKind::Class))
+            }
         }
     }
 
@@ -1003,6 +1016,7 @@ impl NewItem {
             Self::Diagram(DiagramKind::StateMachine) => "diagram.stateMachine".into(),
             Self::Diagram(DiagramKind::Component) => "diagram.component".into(),
             Self::Diagram(DiagramKind::Deployment) => "diagram.deployment".into(),
+            Self::ObjectDiagram => "diagram.object".into(),
             Self::Structogram => "kind.structogram".into(),
         }
     }
@@ -1077,13 +1091,14 @@ impl Workspace {
     /// Creates `item` in `owner` as one undo step and selects it; returns the new element.
     pub fn add_item(&mut self, owner: Id, item: NewItem) -> Option<Id> {
         let keep_words = match item {
-            NewItem::Diagram(_) | NewItem::ExtensionPoint => true,
+            NewItem::Diagram(_) | NewItem::ObjectDiagram | NewItem::ExtensionPoint => true,
             NewItem::Structogram => false,
             NewItem::Element(tool) => keeps_words(tool),
             _ => false,
         };
         let base = name_base(&item.key(), keep_words);
         let label = t!("edit.create").to_string();
+        let keywords = self.keywords;
         let result = self.edit(label, |tx| {
             let name = palette::unique_name(tx.model(), owner, &base);
             match item {
@@ -1112,19 +1127,33 @@ impl Workspace {
                     let kind = ElementKind::TemplateParameter(TemplateParameterProps::default());
                     tx.create(owner, ElementData::new(name, kind))
                 }
-                NewItem::Diagram(kind) => edit::create_diagram(tx, owner, kind, &name),
+                // At the root, a diagram comes in a package of its own name, so that what is
+                // drawn on it has a place apart from other diagrams'.
+                NewItem::Diagram(_) | NewItem::ObjectDiagram => {
+                    let owner = if owner == tx.model().root() {
+                        let package = ElementData::new(name.clone(), ElementKind::Package);
+                        tx.create(owner, package)?
+                    } else {
+                        owner
+                    };
+                    match item {
+                        NewItem::Diagram(kind) => edit::create_diagram(tx, owner, kind, &name),
+                        _ => edit::create_object_diagram(tx, owner, &name),
+                    }
+                }
                 NewItem::Structogram => {
                     let text = free_structogram_text(tx.model(), owner, &base);
                     let made = umlcraft_nsd::Provenance { author: "", date: "", origin: "" };
                     let program = umlcraft_nsd::RootKind::Program;
-                    let structogram = umlcraft_nsd::Diagram::new(program, &[text], &made);
+                    let mut structogram = umlcraft_nsd::Diagram::new(program, &[text], &made);
+                    structogram.set_keywords(keywords);
                     let kind = ElementKind::Structogram(StructogramProps::new(&structogram));
                     tx.create(owner, ElementData::new("", kind))
                 }
             }
         });
         let id = self.report(result)?;
-        if matches!(item, NewItem::Diagram(_) | NewItem::Structogram) {
+        if matches!(item, NewItem::Diagram(_) | NewItem::ObjectDiagram | NewItem::Structogram) {
             self.open_diagram(id);
         }
         self.select_element(id);
@@ -1448,6 +1477,46 @@ mod tests {
         assert!(ws.doc.undo() && ws.doc.undo() && ws.doc.undo() && ws.doc.undo());
         let Shape::Edge { source_anchor, .. } = edge(&ws).shape else { unreachable!() };
         assert_eq!(source_anchor, Some(Point::new(0.2, 0.8)));
+    }
+
+    #[test]
+    fn a_diagram_at_the_root_comes_in_its_own_package() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        let root = ws.doc.model().root();
+        let diagram = ws.add_item(root, NewItem::Diagram(DiagramKind::Class)).unwrap();
+        let model = ws.doc.model();
+        let package = model.get(diagram).unwrap().owner().unwrap();
+        let package = model.get(package).unwrap();
+        assert!(matches!(package.kind(), ElementKind::Package));
+        assert_eq!(package.name(), model.get(diagram).unwrap().name());
+        assert_eq!(package.owner(), Some(root));
+        let package = package.id();
+        // In a package it stays there; one undo step takes both back.
+        let inside = ws.add_item(ids.domain, NewItem::Diagram(DiagramKind::Class)).unwrap();
+        assert_eq!(ws.doc.model().get(inside).unwrap().owner(), Some(ids.domain));
+        assert!(ws.doc.undo() && ws.doc.undo());
+        assert!(!ws.doc.model().contains(package));
+        // An object diagram is a class diagram that says so, in a package of its own too.
+        let objects = ws.add_item(root, NewItem::ObjectDiagram).unwrap();
+        let model = ws.doc.model();
+        let diagram = model.get(objects).unwrap();
+        assert!(matches!(diagram.kind(), ElementKind::Diagram(p) if p.objects));
+        assert_eq!(diagram.kind().as_diagram(), Some(DiagramKind::Class));
+        assert_eq!(model.get(diagram.owner().unwrap()).unwrap().name(), diagram.name());
+        assert_eq!(ws.active_diagram, Some(objects));
+    }
+
+    #[test]
+    fn new_structograms_take_the_keywords_of_the_setting() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None).with_keywords(umlcraft_nsd::Keywords::German);
+        let id = ws.add_item(ids.domain, NewItem::Structogram).unwrap();
+        let ElementKind::Structogram(p) = ws.doc.model().get(id).unwrap().kind() else {
+            panic!("not a structogram")
+        };
+        assert_eq!(umlcraft_nsd::Keywords::of(&p.structogram), umlcraft_nsd::Keywords::German);
+        assert_eq!(p.structogram.header("preReturn"), Some("gib"));
     }
 
     #[test]

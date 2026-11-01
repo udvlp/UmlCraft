@@ -15,7 +15,7 @@
       instruction
         | name := "Other"
   jump
-    | gib name
+    | return name
 
 == Switches.fallthrough (line 18)
 | fallthrough(a)
@@ -38,7 +38,7 @@
       instruction
         | r := -1
   jump
-    | gib r
+    | return r
 ! line 21: Fallthrough
 
 == Switches.defaultInMiddle (line 33)
@@ -58,7 +58,7 @@
       instruction
         | r := 0
   jump
-    | gib r
+    | return r
 
 == Switches.noDefault (line 49)
 | noDefault(a)

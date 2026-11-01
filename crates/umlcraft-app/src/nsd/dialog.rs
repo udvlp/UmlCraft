@@ -55,14 +55,16 @@ fn lines(value: &str) -> Vec<String> {
 }
 
 /// Opens the dialog for `target` (an element of `element_kind`, or the diagram for `None`)
-/// with the values it starts from. `focus` is the structogram's, which gets the focus back.
-/// Gives what the dialog holds, for closing and quitting while it is open; `None` when
-/// another dialog is open already.
+/// with the values it starts from; the hints name the structogram's `keywords`. `focus` is
+/// the structogram's, which gets the focus back. Gives what the dialog holds, for closing and
+/// quitting while it is open; `None` when another dialog is open already.
+#[allow(clippy::too_many_arguments)]
 pub fn open(
     view: WeakEntity<NsdView>,
     focus: &FocusHandle,
     target: Target,
     element_kind: Option<ElementKind>,
+    keywords: umlcraft_nsd::Keywords,
     start: Edited,
     window: &mut Window,
     cx: &mut App,
@@ -72,7 +74,7 @@ pub fn open(
     }
     let has_text = element_kind != Some(ElementKind::Forever);
     let text_value = start.text.join("\n");
-    // A new element's default text (ASCII) has its first gap selected, ready for typing.
+    // A new element's default text has its first gap selected, ready for typing.
     let question = matches!(target, Target::New(..)).then(|| text_value.find('?')).flatten();
     let text = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 12));
     let comment = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 8));
@@ -121,7 +123,13 @@ pub fn open(
         Some(ElementKind::Case) => (t!("nsd.text"), Some(t!("nsd.case_hint"))),
         Some(ElementKind::Parallel) => (t!("nsd.branches"), None),
         Some(ElementKind::Try) => (t!("nsd.exception"), None),
-        Some(ElementKind::For) => (t!("nsd.text"), Some(t!("nsd.for_hint"))),
+        Some(ElementKind::For) => {
+            let hint = match keywords {
+                umlcraft_nsd::Keywords::German => t!("nsd.for_hint_german"),
+                umlcraft_nsd::Keywords::English => t!("nsd.for_hint"),
+            };
+            (t!("nsd.text"), Some(hint))
+        }
         Some(_) => (t!("nsd.text"), None),
     };
 

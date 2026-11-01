@@ -7,16 +7,16 @@
     | default
     -
       jump
-        | gib 0
+        | return 0
     -
       alternative
         | value > 0?
         -
           jump
-            | gib 2
+            | return 2
         -
       jump
-        | gib 1
+        | return 1
     -
       jump
         | throw new IllegalArgumentException("day")
@@ -88,7 +88,7 @@
     |   .append("b")
     |   .append("c")
   jump
-    | gib sb.toString()
+    | return sb.toString()
 
 == Edge.reset (line 65)
 | reset()
@@ -98,7 +98,7 @@
 == Edge.compute (line 69)
 | compute(x)
   jump
-    | gib x
+    | return x
 
 == Edge.braced (line 74)
 | braced(a)
@@ -151,7 +151,7 @@
 == Edge.Nested.Mode.on (line 112)
 | on()
   jump
-    | gib this == ON
+    | return this == ON
 
 == Edge.Nested.Nested (line 117)
 | Nested()

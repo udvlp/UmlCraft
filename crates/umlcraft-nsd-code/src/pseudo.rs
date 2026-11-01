@@ -1,9 +1,11 @@
 //! Code in the notation of structograms: no types, assignments as `x := value`, no `;`,
-//! conditions as questions (`a > 0?`), values handed back as `gib x`, and loops as
-//! `for i := a to b by s` and `foreach x in c`. Java and C# share the shapes of the
+//! conditions as questions (`a > 0?`), values handed back as `return x`, and loops as
+//! `for i := a to b by s` and `foreach x in c`, or with the diagram's German keywords
+//! `gib x`, `für i := a bis b Schritt s` and `für jedes x in c`. Java and C# share the shapes of the
 //! nodes used here (assignments, binary expressions, for loops).
 
 use tree_sitter::Node;
+use umlcraft_nsd::Keywords;
 
 use crate::text::{lines_at, node_text, one_line};
 
@@ -17,13 +19,24 @@ pub fn question(mut text: Vec<String>) -> Vec<String> {
     text
 }
 
-/// A value handed back: `x` → `gib x`.
-pub fn give(mut value: Vec<String>) -> Vec<String> {
+/// A value handed back: `x` → `return x` (`gib x`).
+pub fn give(keywords: Keywords, mut value: Vec<String>) -> Vec<String> {
+    let keyword = keywords.word("preReturn");
     match value.first_mut() {
-        Some(first) => first.insert_str(0, "gib "),
-        None => value.push("return".to_owned()),
+        Some(first) => first.insert_str(0, &format!("{keyword} ")),
+        None => value.push(keyword.to_owned()),
     }
     value
+}
+
+/// The text of a counting loop: `for i := a to b by s` (`für i := a bis b Schritt s`), without
+/// the step when it is 1.
+pub fn counter(keywords: Keywords, var: &str, start: &str, end: &str, step: i64) -> String {
+    let [pre, post] = [keywords.word("preFor"), keywords.word("postFor")];
+    match step {
+        1 => format!("{pre} {var} := {start} {post} {end}"),
+        _ => format!("{pre} {var} := {start} {post} {end} {} {step}", keywords.word("stepFor")),
+    }
 }
 
 /// `name := value`, the value's further lines as they are.
@@ -74,7 +87,13 @@ pub fn assignment(expr: Node, src: &str) -> Option<Vec<String>> {
 
 /// `for i := a to b by s` for a loop that counts `var` from `start` by a constant step:
 /// `for (int i = 0; i < n; i++)` → `for i := 0 to n - 1`. Other for loops give `None`.
-pub fn counting(node: Node, var: Node, start: Node, src: &str) -> Option<String> {
+pub fn counting(
+    keywords: Keywords,
+    node: Node,
+    var: Node,
+    start: Node,
+    src: &str,
+) -> Option<String> {
     let var_node = var;
     let var = node_text(var, src);
 
@@ -107,10 +126,7 @@ pub fn counting(node: Node, var: Node, start: Node, src: &str) -> Option<String>
         _ => return None,
     };
     let start = one_line(node_text(start, src));
-    Some(match step {
-        1 => format!("for {var} := {start} to {end}"),
-        _ => format!("for {var} := {start} to {end} by {step}"),
-    })
+    Some(counter(keywords, var, &start, &end, step))
 }
 
 /// Whether an expression holds a number with a fraction (`2.5`, `1e3`, `0.5f`).
@@ -127,11 +143,12 @@ fn fraction(expr: Node, src: &str) -> bool {
     literal || expr.named_children(&mut cursor).any(|c| fraction(c, src))
 }
 
-/// `foreach v in values` for `for (T v : values)`.
-pub fn traversal(name: &str, mut value: Vec<String>) -> Vec<String> {
+/// `foreach v in values` (`für jedes v in values`) for `for (T v : values)`.
+pub fn traversal(keywords: Keywords, name: &str, mut value: Vec<String>) -> Vec<String> {
+    let head = format!("{} {name} {}", keywords.word("preForIn"), keywords.word("postForIn"));
     match value.first_mut() {
-        Some(first) => first.insert_str(0, &format!("foreach {name} in ")),
-        None => value.push(format!("foreach {name} in")),
+        Some(first) => first.insert_str(0, &format!("{head} ")),
+        None => value.push(head),
     }
     value
 }
@@ -241,14 +258,34 @@ mod tests {
 
     /// The first statement of `body` as the notation gives it.
     fn first(body: &str) -> Vec<String> {
-        let source = Source::parse(
-            SourceLanguage::Java,
-            format!("class A {{ void f(int n) {{ {body} }} }}"),
-        );
+        written(body, umlcraft_nsd::Keywords::English).children.elements[0].text()
+    }
+
+    /// The diagram of a method with `body`, its keywords in the language of `keywords`.
+    fn written(body: &str, keywords: umlcraft_nsd::Keywords) -> umlcraft_nsd::Diagram {
+        let source =
+            Source::parse(SourceLanguage::Java, format!("class A {{ int f(int n) {{ {body} }} }}"));
         let m = &source.methods()[0];
-        let made = crate::Made { author: "t", date: "2026-10-30", origin: "test" };
-        let (d, _) = source.diagram(m, &made).unwrap();
-        d.children.elements[0].text()
+        let made = crate::Made { author: "t", date: "2026-10-30", origin: "test", keywords };
+        source.diagram(m, &made).unwrap().0
+    }
+
+    #[test]
+    fn german_keywords_count_and_give_in_german() {
+        let german = umlcraft_nsd::Keywords::German;
+        let d = written(
+            "for (int i = 1; i <= n; i += 2) { } for (int v : values) { } return n;",
+            german,
+        );
+        assert_eq!(umlcraft_nsd::Keywords::of(&d), german);
+        let texts: Vec<Vec<String>> = d.children.elements.iter().map(|e| e.text()).collect();
+        assert_eq!(
+            texts,
+            [vec!["für i := 1 bis n Schritt 2"], vec!["für jedes v in values"], vec!["gib n"]]
+        );
+        let styles: Vec<_> = d.children.elements[..2].iter().map(|e| e.attr("style")).collect();
+        assert_eq!(styles, [Some("COUNTER"), Some("TRAVERSAL")]);
+        assert_eq!(first("return n;"), ["return n"]);
     }
 
     #[test]
@@ -305,7 +342,12 @@ mod tests {
             "class A { <T> int f(final java.util.List<T> xs, int[] a, String... rest) { return 0; }
                        void g(A this, int x) { } record P(int x) { P { } } }",
         );
-        let made = crate::Made { author: "t", date: "2026-10-30", origin: "test" };
+        let made = crate::Made {
+            author: "t",
+            date: "2026-10-30",
+            origin: "test",
+            keywords: umlcraft_nsd::Keywords::English,
+        };
         let texts: Vec<Vec<String>> =
             source.methods().iter().map(|m| source.diagram(m, &made).unwrap().0.text()).collect();
         assert_eq!(texts, [vec!["f(xs, a, rest)"], vec!["g(x)"], vec!["P"]]);

@@ -15,7 +15,7 @@
       instruction
         | name := "Other"
   jump
-    | gib name
+    | return name
 
 == Switches.noDefault (line 12)
 | noDefault(a)

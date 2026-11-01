@@ -101,9 +101,11 @@ impl MainView {
         if settings.dark == Some(true) {
             Theme::change(ThemeMode::Dark, Some(window), cx);
         }
-        let display = settings.display();
+        let (display, keywords) = (settings.display(), settings.keywords());
         let workspace = cx.new(|cx| {
-            Workspace::new(blank_document(), None).with_measure(AppMeasure::new(cx, display))
+            Workspace::new(blank_document(), None)
+                .with_measure(AppMeasure::new(cx, display))
+                .with_keywords(keywords)
         });
         let canvas = cx.new(|cx| {
             let mut canvas = DiagramCanvas::new(workspace.clone(), cx);
@@ -381,9 +383,11 @@ impl MainView {
     }
 
     fn replace_document(&mut self, doc: Document, path: Option<PathBuf>, cx: &mut Context<Self>) {
-        let display = self.settings.display();
+        let (display, keywords) = (self.settings.display(), self.settings.keywords());
         self.workspace.update(cx, |ws, cx| {
-            *ws = Workspace::new(doc, path).with_measure(AppMeasure::new(cx, display));
+            *ws = Workspace::new(doc, path)
+                .with_measure(AppMeasure::new(cx, display))
+                .with_keywords(keywords);
             cx.notify();
         });
         self.collapsed.clear();
@@ -864,13 +868,18 @@ impl MainView {
         cx.notify();
         let (author, date) = (crate::nsd::user_name(), crate::nsd::today());
         let origin = source::made_origin(found.language);
+        let keywords = self.settings.keywords();
         cx.spawn_in(window, async move |this, cx| {
             let job = found.clone();
             let built = cx
                 .background_executor()
                 .spawn(async move {
-                    let made =
-                        umlcraft_nsd_code::Made { author: &author, date: &date, origin: &origin };
+                    let made = umlcraft_nsd_code::Made {
+                        author: &author,
+                        date: &date,
+                        origin: &origin,
+                        keywords,
+                    };
                     source::build(&job, &picked, &made)
                 })
                 .await;
@@ -1320,7 +1329,10 @@ impl MainView {
     }
 
     fn new_diagram(&mut self, action: &NewDiagram, _: &mut Window, cx: &mut Context<Self>) {
-        let item = NewItem::Diagram(action.kind);
+        let item = match action.objects {
+            true => NewItem::ObjectDiagram,
+            false => NewItem::Diagram(action.kind),
+        };
         self.workspace.update(cx, |ws, cx| {
             let model = ws.doc.model();
             // A selected package takes the diagram; anything else (a class, say) does not.
@@ -1366,10 +1378,12 @@ impl MainView {
     /// The ribbon and the diagram card left of it.
     fn ribbon(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.read(cx);
-        let diagram = ws
-            .active_diagram
-            .and_then(|d| ws.doc.model().get(d))
-            .and_then(|e| e.kind().as_diagram());
+        let props =
+            ws.active_diagram.and_then(|d| ws.doc.model().get(d)).and_then(|e| match e.kind() {
+                ElementKind::Diagram(p) => Some(*p),
+                _ => None,
+            });
+        let diagram = props.map(|p| p.diagram);
         let structogram = self.active_structogram(cx).map(|view| view.read(cx).allowed());
         // A structogram's selection is its own; it pastes what the system's clipboard holds.
         let has_selection = match structogram {
@@ -1378,20 +1392,16 @@ impl MainView {
         };
         let state = ribbon::State {
             diagram,
+            objects: props.is_some_and(|p| p.objects),
             structogram,
             tool: ws.tool,
             has_selection,
             can_align: ws.selected_nodes().len() > 1,
             can_paste: structogram.is_some() || (self.clipboard.is_some() && diagram.is_some()),
             can_wrap: has_selection && diagram == Some(DiagramKind::Sequence),
-            numbering: ws.active_diagram.and_then(|d| ws.doc.model().get(d)).and_then(|e| match e
-                .kind()
-            {
-                ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => {
-                    Some((!p.hide_message_numbers, p.flat_message_numbers))
-                }
-                _ => None,
-            }),
+            numbering: props
+                .filter(|p| p.diagram == DiagramKind::Sequence)
+                .map(|p| (!p.hide_message_numbers, p.flat_message_numbers)),
             dark: cx.theme().is_dark(),
         };
         let tabs = ribbon::tabs(&state);
@@ -1463,6 +1473,7 @@ impl MainView {
         self.settings.language = language;
         rust_i18n::set_locale(&self.settings.ui_language());
         self.settings.save();
+        self.apply_keywords(cx);
         self.reload_menus(cx);
         self.sync_from_workspace(window, cx);
         // The fields' lists (Select items) take the new language too.
@@ -1471,6 +1482,18 @@ impl MainView {
             cx.notify();
         });
         window.refresh();
+    }
+
+    /// Writes new structograms in German or English (`de`, `en`), or as the user interface.
+    pub fn set_structogram_keywords(&mut self, language: Option<String>, cx: &mut Context<Self>) {
+        self.settings.structogram_keywords = language;
+        self.settings.save();
+        self.apply_keywords(cx);
+    }
+
+    fn apply_keywords(&mut self, cx: &mut Context<Self>) {
+        let keywords = self.settings.keywords();
+        self.workspace.update(cx, |ws, _| ws.keywords = keywords);
     }
 
     /// Turns UmlCraft's visibility column on or off, for drawing, sizing boxes and exporting.
@@ -1865,12 +1888,17 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         DiagramKind::Component,
         DiagramKind::Deployment,
     ] {
-        let item = NewItem::Diagram(kind);
-        if item.applies_to(&meta.kind) {
-            let key = item.key();
-            let label = format!("{} {}", t!("menu.new_prefix"), t!(key.as_str()));
-            menu = menu.menu(label, command(TreeCommandKind::New(item)));
-            any = true;
+        let mut items = vec![NewItem::Diagram(kind)];
+        if kind == DiagramKind::Class {
+            items.push(NewItem::ObjectDiagram);
+        }
+        for item in items {
+            if item.applies_to(&meta.kind) {
+                let key = item.key();
+                let label = format!("{} {}", t!("menu.new_prefix"), t!(key.as_str()));
+                menu = menu.menu(label, command(TreeCommandKind::New(item)));
+                any = true;
+            }
         }
     }
     if NewItem::Structogram.applies_to(&meta.kind) {
@@ -1897,8 +1925,10 @@ fn tree_item(
     let e = model.get(id).expect("tree only visits existing elements");
     let key = SharedString::from(id.to_string());
     meta.insert(key.clone(), TreeMeta { id, kind: e.kind().clone(), is_root: id == model.root() });
-    let children: Vec<TreeItem> =
-        e.children().iter().map(|&c| tree_item(model, c, collapsed, meta)).collect();
+    let children: Vec<TreeItem> = labels::tree_children(model, e)
+        .into_iter()
+        .map(|c| tree_item(model, c, collapsed, meta))
+        .collect();
     TreeItem::new(key.clone(), labels::tree_name(model, e))
         .expanded(!collapsed.contains(&key))
         .children(children)

@@ -2,7 +2,7 @@
 | area(width, height)
 # The area of a rectangle.
   jump
-    | gib width * height
+    | return width * height
 
 == .scale (line 11)
 | scale(points, factor, *args, **kwargs)
@@ -35,7 +35,7 @@
   instruction
     | assert factor > 0, "positive"
   jump
-    | gib a, b
+    | return a, b
 
 == Shop.__init__ (line 31)
 | __init__(name)
@@ -47,7 +47,7 @@
 == Shop.make (line 36)
 | make(name)
   jump
-    | gib Shop(name)
+    | return Shop(name)
 
 == Shop.load (line 40)
 | load(path)
@@ -59,7 +59,7 @@
   instruction
     | data := f.read()
   jump
-    | gib cls.make(data)
+    | return cls.make(data)
 ! line 41: With
 
 == Shop.add (line 45)
@@ -99,10 +99,10 @@
     | default
     -
       jump
-        | gib "axis"
+        | return "axis"
     -
       jump
-        | gib "list"
+        | return "list"
     -
       jump
         | raise ValueError("value") from None
@@ -179,7 +179,7 @@
   instruction
     | handler := lambda r: r.json()
   jump
-    | gib handler(response)
+    | return handler(response)
 ! line 94: NestedFunction
 ! line 97: LocalClass
 
@@ -188,7 +188,7 @@
   instruction color=ff0000 disabled
     | x = = 1
   jump
-    | gib x
+    | return x
 ! line 105: SyntaxError
 
 == .__main__ (line 109)

@@ -401,7 +401,12 @@ mod tests {
 
     use super::{METHOD_TAG, build, file_structograms, parse};
 
-    const MADE: Made = Made { author: "tester", date: "2026-10-30", origin: "test" };
+    const MADE: Made = Made {
+        author: "tester",
+        date: "2026-10-30",
+        origin: "test",
+        keywords: umlcraft_nsd::Keywords::English,
+    };
 
     /// A folder of its own for `name`'s files, emptied first.
     fn folder(name: &str) -> PathBuf {

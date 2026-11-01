@@ -18,7 +18,7 @@ between releases is in the [changelog](CHANGELOG.md).
 | Diagram | What it covers |
 | --- | --- |
 | Class | Classes, interfaces (also as a circle), enumerations, packages and subsystems; attributes, operations and template parameters with bounds and defaults; associations with roles, multiplicities, navigability, aggregation, qualifiers and static ends; generalization, realization, dependency; containment lines (⊕) to nested classes; bound templates such as `Box<Holder, 20>`, also drawn as bound classes with their «bind» line |
-| Object | Objects `name : Class` with a slot for every attribute of the class, inherited ones included; links with roles, navigability and aggregation, as instances of associations. They are drawn on class diagrams |
+| Object | Objects `name : Class` with a slot for every attribute of the class, inherited ones included; links with roles, navigability and aggregation, as instances of associations. They are drawn on class diagrams; an object diagram is a class diagram whose ribbon starts with Object and Link |
 | Use case | Actors, use cases with extension points, system boundary, include and extend with condition, notes on lines |
 | Sequence | Lifelines, synchronous, asynchronous, reply, create, destroy, self, found and lost messages, activation bars, message numbers, combined fragments (alt, opt, loop, par, …) with operands and guards, interaction uses |
 | Activity | Actions, initial and final nodes, decision, merge, fork and join, object nodes (also in a state, `Order [filled]`), flows with guards, partitions (also nested) |
@@ -51,8 +51,10 @@ Diagrams imported from `.asta` files keep their layout, sizes and colors.
   diagrams. Structorizer's `.nsd` files (3.32-35) are imported and exported with their content
   and changed parser keywords; opening one starts a new project with it. Methods of Java, C#,
   Python or C++ files become structograms without types, with assignments as `x := 42 + a`,
-  conditions as `a > 0?` and returns as `gib x`; what has no place in a structogram
-  (`continue`, labels …) is listed.
+  conditions as `a > 0?` and returns as `return x`; what has no place in a structogram
+  (`continue`, labels …) is listed. New structograms and imported methods use German keywords
+  (`solange ?`, `für i := 1 bis n`, `gib x`) or Structorizer's English ones, as chosen in the
+  settings; by default as the user interface.
 
 ## Importing source code
 
@@ -125,6 +127,8 @@ to make it longer, and an extend's context menu adds an extension point to the e
 case. Undo and redo for every change, copy,
 cut and paste (as a copy or as the same elements), rubber-band and multiple selection, alignment,
 waypoints, zoom to fit, drag and drop within the model tree and from the tree onto the canvas.
+The model tree lists the contents of packages sorted: packages, diagrams, then elements by
+kind and name. A new diagram at the top of the model comes in a package of its own name.
 Automatic layout: new lines are routed around the nodes at right angles and follow when their
 nodes move, until their route is edited by hand (on use case diagrams they start straight);
 Route lines (Ctrl+Shift+R) does that for the selected lines or the whole diagram. Arrange automatically (Ctrl+Shift+L) lays out class,
@@ -135,8 +139,8 @@ dashed or with arrowheads, their ends dragged one by one. Light and dark theme, 
 English. Members show their visibility right before the name (`- name`); UmlCraft's
 visibility column lines up all names of a compartment instead. Abstract classes show
 `{abstract}` below their italic name, or «abstract» above it; read-only attributes can end in
-`{readOnly}`. Theme, language, the column, how abstract classes are marked and `{readOnly}` are
-chosen in the settings (the gear in the title bar, or Ctrl+,).
+`{readOnly}`. Theme, language, the column, how abstract classes are marked, `{readOnly}` and
+the keywords of structograms are chosen in the settings (the gear in the title bar, or Ctrl+,).
 
 ## AI assistants (MCP)
 

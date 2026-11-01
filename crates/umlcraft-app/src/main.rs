@@ -164,6 +164,8 @@ pub struct SelectTool {
 #[action(namespace = umlcraft, no_json)]
 pub struct NewDiagram {
     pub kind: umlcraft_model::DiagramKind,
+    /// A class diagram drawn as an object diagram.
+    pub objects: bool,
 }
 
 /// Opens a tab of the ribbon.

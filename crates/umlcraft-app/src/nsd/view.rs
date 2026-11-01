@@ -581,8 +581,9 @@ impl NsdView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let keywords = umlcraft_nsd::Keywords::of(&self.diagram);
         let start = Edited {
-            text: edit::default_text(kind),
+            text: edit::default_text(kind, keywords),
             comment: Vec::new(),
             disabled: false,
             kind: self.diagram.kind(),
@@ -590,7 +591,7 @@ impl NsdView {
         let target = Target::New(slot, kind);
         let view = cx.entity().downgrade();
         if let Some(pending) =
-            dialog::open(view, &self.focus, target, Some(kind), start, window, cx)
+            dialog::open(view, &self.focus, target, Some(kind), keywords, start, window, cx)
         {
             self.dialog = Some(pending);
         }
@@ -617,7 +618,10 @@ impl NsdView {
             }
         };
         let view = cx.entity().downgrade();
-        if let Some(pending) = dialog::open(view, &self.focus, target, kind, start, window, cx) {
+        let keywords = umlcraft_nsd::Keywords::of(&self.diagram);
+        if let Some(pending) =
+            dialog::open(view, &self.focus, target, kind, keywords, start, window, cx)
+        {
             self.dialog = Some(pending);
         }
     }

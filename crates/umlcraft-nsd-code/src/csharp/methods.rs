@@ -372,7 +372,12 @@ namespace Shop
         let src = "namespace A;\nclass B {\n    /// <summary>\n    /// Adds.\n    /// </summary>\n    \
                    int Add(int a, int b) => a + b;\n    int this[int i] { set { } }\n}\n";
         let s = Source::parse(SourceLanguage::CSharp, src);
-        let made = crate::Made { author: "t", date: "2026-10-30", origin: "test" };
+        let made = crate::Made {
+            author: "t",
+            date: "2026-10-30",
+            origin: "test",
+            keywords: umlcraft_nsd::Keywords::English,
+        };
         let ms = s.methods();
         let (add, _) = s.diagram(&ms[0], &made).unwrap();
         assert_eq!(add.text(), ["Add(a, b)"]);

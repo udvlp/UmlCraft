@@ -7,7 +7,7 @@
         | a := 1
     -
   jump
-    | gib a
+    | return a
 
 == Branches.ifElse (line 7)
 | ifElse(a)
@@ -20,7 +20,7 @@
       instruction
         | a := -1
   jump
-    | gib a
+    | return a
 
 == Branches.elseIfChain (line 14)
 | elseIfChain(a)
@@ -28,22 +28,22 @@
     | a < 0?
     -
       jump
-        | gib "negative"
+        | return "negative"
     -
       alternative
         | a == 0?
         -
           jump
-            | gib "zero"
+            | return "zero"
         -
           alternative
             | a < 10?
             -
               jump
-                | gib "small"
+                | return "small"
             -
               jump
-                | gib "large"
+                | return "large"
 
 == Branches.nested (line 24)
 | nested(a, b)
@@ -54,13 +54,13 @@
         | b > 0?
         -
           jump
-            | gib 1
+            | return 1
         -
       jump
-        | gib 2
+        | return 2
     -
   jump
-    | gib 3
+    | return 3
 
 == Branches.logic (line 31)
 | logic(a, b)
@@ -68,15 +68,15 @@
     | a > 0 and b > 0 or a < -10?
     -
       jump
-        | gib True
+        | return True
     -
   jump
-    | gib False
+    | return False
 
 == Branches.ternary (line 36)
 | ternary(a)
   instruction
     | b := a if a > 0 else -a
   jump
-    | gib b
+    | return b
 

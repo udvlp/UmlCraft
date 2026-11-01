@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use tree_sitter::Node;
 use umlcraft_nsd::edit::new_element;
-use umlcraft_nsd::{Color, Diagram, Element, ElementKind, Sequence};
+use umlcraft_nsd::{Color, Diagram, Element, ElementKind, Keywords, Sequence};
 
 use crate::pseudo;
 use crate::text::{comment, condition, lines, lines_at, without_semicolon};
@@ -112,6 +112,11 @@ impl<'a, G: Grammar> Builder<'a, G> {
 
     pub fn note(&mut self, node: Node, kind: NoteKind) {
         self.notes.push(Note { line: node.start_position().row + 1, kind });
+    }
+
+    /// The language of the diagram's keywords.
+    pub fn keywords(&self) -> Keywords {
+        Keywords::of(&self.header)
     }
 
     pub fn element(&self, kind: ElementKind, text: &[String]) -> Element {
@@ -267,7 +272,8 @@ impl<'a, G: Grammar> Builder<'a, G> {
     /// `foreach name in value` around the loop's body.
     pub fn traversal(&mut self, node: Node, name: &str, value: Option<Node>) -> Element {
         let value = value.map(|v| lines(v, self.src)).unwrap_or_default();
-        let mut e = self.element(ElementKind::For, &pseudo::traversal(name, value));
+        let mut e =
+            self.element(ElementKind::For, &pseudo::traversal(self.keywords(), name, value));
         e.branches[0] = self.body(node);
         e
     }
@@ -303,18 +309,21 @@ impl<'a, G: Grammar> Builder<'a, G> {
             Some(Sink::Assign(name)) => {
                 self.element(ElementKind::Instruction, &pseudo::assign(&name, value))
             }
-            Some(Sink::Return) => self.element(ElementKind::Jump, &pseudo::give(value)),
+            Some(Sink::Return) => {
+                self.element(ElementKind::Jump, &pseudo::give(self.keywords(), value))
+            }
             None => self.instruction(node),
         }
     }
 
-    /// `return x;` as a jump `gib x`; `return;` stays `return` (the method is left).
+    /// `return x;` as a jump `return x` (`gib x`); `return;` stays `return` (`gib`): the method
+    /// is left.
     pub fn returned(&self, node: Node) -> Element {
         let mut cursor = node.walk();
         let value = node.named_children(&mut cursor).find(|c| !G::COMMENTS.contains(&c.kind()));
         let column = node.start_position().column;
         let value = value.map(|v| lines_at(v, self.src, column)).unwrap_or_default();
-        self.element(ElementKind::Jump, &pseudo::give(value))
+        self.element(ElementKind::Jump, &pseudo::give(self.keywords(), value))
     }
 
     /// A switch statement or expression as a case element: one branch per case (labels of a

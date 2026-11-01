@@ -3,6 +3,23 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Sorted model tree**: packages and models list packages first, then diagrams and
+  structograms, interactions, activities and state machines, then the other elements by kind
+  and name, relationships last. Members and the parts of an interaction keep their order.
+- **Diagrams at the top get a package**: a new diagram at the top of the model comes in a
+  package of the same name, so what is drawn on it has a place of its own.
+- **Object diagrams**: New diagram › Object diagram makes a class diagram whose ribbon starts
+  with Object and Link; its tab and model tree entry say Object diagram.
+- **Structogram keywords in German or English**: the settings choose the keywords of new
+  structograms, by default as the user interface. German ones start loops as `solange ?`,
+  `bis ?` and `für ? := ? bis ?` and put `solange`, `für`, `bis`, `Schritt`, `für jedes` and
+  `gib` into the header, so Structorizer reads them. Methods imported from source code follow
+  the setting: `für i := 0 bis n - 1` and `gib x`, or `for i := 0 to n - 1` and `return x`
+  (before, `gib x` in every language). New elements of a structogram take the keywords it is
+  written in.
+
 ## 0.14.0 – 2026-11-01
 
 - **New members without the properties panel**: a double click below the members of a

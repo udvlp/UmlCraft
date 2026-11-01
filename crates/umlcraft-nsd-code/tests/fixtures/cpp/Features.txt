@@ -22,7 +22,7 @@
 == shop::Cart.first (line 29)
 | first(xs)
   jump
-    | gib xs[0]
+    | return xs[0]
 
 == shop::Cart.op_AdditionAssignment (line 39)
 | operator +=(other)
@@ -30,7 +30,7 @@
   instruction
     | count_ := count_ + other.count_
   jump
-    | gib *this
+    | return *this
 
 == shop::Cart.run (line 46)
 | run(n, m)
@@ -146,7 +146,7 @@
   instruction color=ff0000 disabled
     | int broken = = 2;
   jump
-    | gib 0
+    | return 0
 ! line 102: Continue
 ! line 107: LocalClass
 ! line 108: SyntaxError
@@ -156,7 +156,7 @@
   instruction
     | co_yield id
   jump
-    | gib id * 2
+    | return id * 2
 ! line 113: Yield
 
 == .fractions (line 117)

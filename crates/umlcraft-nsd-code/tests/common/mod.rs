@@ -5,7 +5,12 @@ use std::fmt::Write;
 use umlcraft_nsd::{Diagram, Element, ElementKind, Sequence};
 use umlcraft_nsd_code::Made;
 
-pub const MADE: Made = Made { author: "tester", date: "2026-10-29", origin: "UmlCraft test" };
+pub const MADE: Made = Made {
+    author: "tester",
+    date: "2026-10-29",
+    origin: "UmlCraft test",
+    keywords: umlcraft_nsd::Keywords::English,
+};
 
 pub fn tree(d: &Diagram) -> String {
     fn element(out: &mut String, e: &Element, depth: usize) {

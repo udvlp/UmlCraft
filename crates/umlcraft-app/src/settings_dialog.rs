@@ -1,5 +1,6 @@
-//! The settings dialog (Tools › Settings …, Ctrl+,): language, theme and how classes show
-//! their members and that they are abstract, in one place. Every change applies at once and is saved, so the dialog
+//! The settings dialog (Tools › Settings …, Ctrl+,): language, theme, how classes show
+//! their members and that they are abstract, and the keywords of new structograms, in one
+//! place. Every change applies at once and is saved, so the dialog
 //! only has to be closed.
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -32,11 +33,17 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
         let column = settings.visibility_column;
         let stereotype = settings.abstract_stereotype;
         let read_only = settings.read_only_constraint;
+        // 0 follows the user interface, then those of `LANGUAGES`.
+        let keywords = settings
+            .structogram_keywords
+            .as_deref()
+            .and_then(|l| LANGUAGES.iter().position(|&(code, _)| code == l))
+            .map_or(0, |ix| ix + 1);
         let dark = cx.theme().is_dark();
         let muted = cx.theme().muted_foreground;
 
         let (v1, v2, v3, v4) = (view.clone(), view.clone(), view.clone(), view.clone());
-        let v5 = view.clone();
+        let (v5, v6) = (view.clone(), view.clone());
         let languages = RadioGroup::horizontal("settings-language")
             .child(t!("settings.system_language").to_string())
             .children(LANGUAGES.map(|(_, name)| name))
@@ -107,6 +114,28 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             });
         let classes =
             v_flex().gap_3().child(visibility_column).child(abstract_mark).child(read_only_mark);
+        let structograms = v_flex()
+            .gap_1()
+            .child(div().text_sm().child(t!("settings.keywords").to_string()))
+            .child(
+                RadioGroup::vertical("settings-keywords")
+                    .child(t!("settings.keywords_ui").to_string())
+                    .children([
+                        t!("settings.keywords_de").to_string(),
+                        t!("settings.keywords_en").to_string(),
+                    ])
+                    .selected_index(Some(keywords))
+                    .on_change(move |&ix, _, cx| {
+                        let chosen = ix.checked_sub(1).and_then(|i| LANGUAGES.get(i));
+                        let chosen = chosen.map(|&(code, _)| code.to_owned());
+                        v6.update(cx, |this, cx| {
+                            if this.settings().structogram_keywords != chosen {
+                                this.set_structogram_keywords(chosen, cx);
+                            }
+                        })
+                        .ok();
+                    }),
+            );
 
         dialog
             .title(t!("settings.title").to_string())
@@ -117,7 +146,8 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                     .pb_1()
                     .child(section(t!("settings.language").to_string(), languages))
                     .child(section(t!("settings.theme").to_string(), theme))
-                    .child(section(t!("settings.classes").to_string(), classes)),
+                    .child(section(t!("settings.classes").to_string(), classes))
+                    .child(section(t!("settings.structograms").to_string(), structograms)),
             )
             .footer(
                 DialogFooter::new().child(

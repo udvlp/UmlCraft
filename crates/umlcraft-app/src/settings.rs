@@ -28,6 +28,9 @@ pub struct Settings {
     pub abstract_stereotype: bool,
     /// End read-only attributes in UML's `{readOnly}`. Off by default.
     pub read_only_constraint: bool,
+    /// The language of new structograms' keywords (`de`, `en`); `None` follows the user
+    /// interface.
+    pub structogram_keywords: Option<String>,
     /// The ribbon shows only its tabs.
     pub ribbon_collapsed: bool,
 }
@@ -80,6 +83,7 @@ impl Settings {
             visibility_column: field(&fields, "visibilityColumn"),
             abstract_stereotype: field(&fields, "abstractStereotype"),
             read_only_constraint: field(&fields, "readOnlyConstraint"),
+            structogram_keywords: field(&fields, "structogramKeywords"),
             ribbon_collapsed: field(&fields, "ribbonCollapsed"),
         }
     }
@@ -120,6 +124,16 @@ impl Settings {
             visibility_column: self.visibility_column,
             abstract_stereotype: self.abstract_stereotype,
             read_only_constraint: self.read_only_constraint,
+        }
+    }
+
+    /// The keywords new structograms are written with: German or English as chosen, else as
+    /// the user interface.
+    pub fn keywords(&self) -> umlcraft_nsd::Keywords {
+        let language = self.structogram_keywords.clone().unwrap_or_else(|| self.ui_language());
+        match language.starts_with("de") {
+            true => umlcraft_nsd::Keywords::German,
+            false => umlcraft_nsd::Keywords::English,
         }
     }
 
@@ -178,6 +192,20 @@ mod tests {
         assert_eq!(Settings::from_json("not json"), Settings::default());
         let round = Settings::from_json(&serde_json::to_string(&s).unwrap());
         assert_eq!(round, s);
+    }
+
+    #[test]
+    fn structogram_keywords_follow_the_interface_unless_chosen() {
+        use umlcraft_nsd::Keywords;
+        let mut s = Settings { language: Some("de".into()), ..Settings::default() };
+        assert_eq!(s.keywords(), Keywords::German);
+        s.structogram_keywords = Some("en".into());
+        assert_eq!(s.keywords(), Keywords::English);
+        s.language = Some("en".into());
+        s.structogram_keywords = None;
+        assert_eq!(s.keywords(), Keywords::English);
+        let s = Settings::from_json(r#"{"language": "en", "structogramKeywords": "de"}"#);
+        assert_eq!(s.keywords(), Keywords::German);
     }
 
     #[test]

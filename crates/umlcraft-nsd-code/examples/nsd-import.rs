@@ -27,7 +27,12 @@ fn main() {
     let extensions: Vec<&str> =
         SourceLanguage::ALL.into_iter().flat_map(|l| l.extensions().iter().copied()).collect();
     let files = umlcraft_reverse::source::collect_sources(&paths, &extensions).expect("sources");
-    let made = Made { author: "smoke", date: "2026-10-29", origin: "UmlCraft smoke test" };
+    let made = Made {
+        author: "smoke",
+        date: "2026-10-29",
+        origin: "UmlCraft smoke test",
+        keywords: umlcraft_nsd::Keywords::English,
+    };
     let start = Instant::now();
     let (mut methods, mut elements, mut largest) = (0usize, 0usize, (0usize, String::new()));
     let mut notes: BTreeMap<String, usize> = BTreeMap::new();

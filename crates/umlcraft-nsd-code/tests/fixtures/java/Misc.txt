@@ -9,7 +9,7 @@
 == Misc.twice (line 16)
 | twice(a)
   jump
-    | gib 2 * a
+    | return 2 * a
 
 == Misc.localClass (line 20)
 | localClass()

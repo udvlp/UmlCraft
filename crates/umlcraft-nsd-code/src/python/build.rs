@@ -2,7 +2,7 @@
 //! languages agree (`docs/plan-nsd-python.md`).
 
 use tree_sitter::Node;
-use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind, Sequence};
+use umlcraft_nsd::{Diagram, Element, ElementKind, Keywords, Provenance, RootKind, Sequence};
 
 use super::Python;
 use super::methods::{Member, function_names};
@@ -14,6 +14,7 @@ use crate::{Made, NoteKind, Report};
 pub fn diagram(member: &Member, root: Node, src: &str, made: &Made) -> (Diagram, Report) {
     let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
     let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
+    d.set_keywords(made.keywords);
     if let Some(doc) = &member.doc {
         d.set_comment(doc);
     }
@@ -44,7 +45,7 @@ pub fn statement(b: &mut Builder<Python>, node: Node, out: &mut Vec<Element>) {
             let counting = left
                 .filter(|l| l.kind() == "identifier")
                 .zip(right)
-                .and_then(|(_, r)| range_counting(&name, r, src));
+                .and_then(|(_, r)| range_counting(b.keywords(), &name, r, src));
             out.push(match counting {
                 Some(text) => {
                     let mut e = b.element(ElementKind::For, &[text]);
@@ -116,7 +117,7 @@ fn alternatives(node: Node) -> Vec<Node> {
 
 /// `for i in range(…)` as a counting loop: `range(n)` → `for i := 0 to n - 1`,
 /// `range(a, b, s)` with a constant step `s` → `for i := a to b - 1 by s`.
-fn range_counting(var: &str, call: Node, src: &str) -> Option<String> {
+fn range_counting(keywords: Keywords, var: &str, call: Node, src: &str) -> Option<String> {
     if call.kind() != "call"
         || call.child_by_field_name("function").map(|f| node_text(f, src)) != Some("range")
     {
@@ -147,10 +148,7 @@ fn range_counting(var: &str, call: Node, src: &str) -> Option<String> {
         s if s > 0 => plus_one(bound, "+", src).unwrap_or_else(|| pseudo::offset(bound, src, -1)),
         _ => plus_one(bound, "-", src).unwrap_or_else(|| pseudo::offset(bound, src, 1)),
     };
-    Some(match step {
-        1 => format!("for {var} := {start} to {end}"),
-        _ => format!("for {var} := {start} to {end} by {step}"),
-    })
+    Some(pseudo::counter(keywords, var, &start, &end, step))
 }
 
 /// `n` for a bound `n + 1` (`op` `+`) or `n - 1` (`op` `-`), as written.

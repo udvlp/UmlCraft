@@ -15,6 +15,7 @@ const LOCAL_TYPES: [&str; 4] =
 pub fn diagram(method: Node, src: &str, made: &Made) -> (Diagram, Report) {
     let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
     let mut d = Diagram::new(RootKind::Sub, &[title(method, src)], &provenance);
+    d.set_keywords(made.keywords);
     if let Some(doc) = documentation(SourceLanguage::Java, method, src) {
         d.set_comment(&doc);
     }
@@ -42,8 +43,8 @@ pub fn statement(b: &mut Builder<Java>, node: Node, out: &mut Vec<Element>) {
         "switch_expression" => out.extend(b.switch(node, None)),
         "if_statement" => out.push(b.if_statement(node)),
         "for_statement" => {
-            let counting =
-                counted(node, src).and_then(|(var, start)| pseudo::counting(node, var, start, src));
+            let counting = counted(node, src)
+                .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
             b.for_loop(node, counting, out);
         }
         "enhanced_for_statement" => {

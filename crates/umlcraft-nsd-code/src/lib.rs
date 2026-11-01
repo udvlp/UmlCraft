@@ -6,7 +6,8 @@
 //! Texts are written as structograms write them: no types (the root is `name(a, b)`),
 //! assignments as `x := value` (`i++` as `i := i + 1`), no `;`, counting loops as
 //! `for i := 0 to n - 1` and `foreach x in c`, conditions as questions (`a > 0?`), returned
-//! values as `gib x`; expressions and conditions stay as in the code otherwise (without their
+//! values as `return x`, or with German keywords ([`Made::keywords`]) `für i := 0 bis n - 1`,
+//! `für jedes x in c` and `gib x`; expressions and conditions stay as in the code otherwise (without their
 //! outer parentheses). Calls of the class's own methods (`f(x);`, `this.f(x);`)
 //! become call elements, other statements instructions. What has no place in a structogram
 //! (`continue`, labels, local classes …) is named in the [`Report`]; nothing is left out
@@ -123,6 +124,8 @@ pub struct Made<'a> {
     pub date: &'a str,
     /// The `origin` attribute, e.g. `UmlCraft 0.9.0 / Java: Shop.java`.
     pub origin: &'a str,
+    /// The language of the keywords: of loops, of `return`, and in the header.
+    pub keywords: umlcraft_nsd::Keywords,
 }
 
 /// Something of the method that the diagram does not show as written.

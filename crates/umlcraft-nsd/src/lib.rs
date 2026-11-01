@@ -23,7 +23,7 @@ pub mod svg;
 pub mod text;
 pub mod write;
 
-pub use create::{ForLoop, Provenance, STRUCTORIZER_VERSION, lines};
+pub use create::{ForLoop, Keywords, Provenance, STRUCTORIZER_VERSION, lines};
 pub use edit::EditError;
 pub use history::Editor;
 pub use metrics::Metrics;

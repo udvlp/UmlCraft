@@ -31,7 +31,7 @@
       instruction
         | sum := sum + v
   jump
-    | gib sum
+    | return sum
 ! line 11: Continue
 
 == Jumps.work (line 17)

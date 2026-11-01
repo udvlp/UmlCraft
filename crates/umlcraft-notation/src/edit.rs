@@ -94,3 +94,9 @@ pub fn create_diagram(tx: &mut Tx<'_>, owner: Id, kind: DiagramKind, name: &str)
         None => tx.create(owner, diagram),
     }
 }
+
+/// Creates an object diagram named `name` under `owner`: a class diagram whose palette starts
+/// with Object and Link.
+pub fn create_object_diagram(tx: &mut Tx<'_>, owner: Id, name: &str) -> Result<Id> {
+    tx.create(owner, ElementData::new(name, ElementKind::object_diagram()))
+}

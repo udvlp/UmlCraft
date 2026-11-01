@@ -36,6 +36,8 @@ pub enum RibbonTab {
 /// What the buttons show, read once per render from the workspace.
 pub struct State {
     pub diagram: Option<DiagramKind>,
+    /// Whether the class diagram shown is an object diagram.
+    pub objects: bool,
     /// What the selection of the structogram shown allows, if one is shown.
     pub structogram: Option<crate::nsd::Allowed>,
     pub tool: Tool,
@@ -133,7 +135,11 @@ fn group(id: &'static str, items: Vec<Item>) -> Group {
 pub fn tabs(state: &State) -> Vec<(RibbonTab, String)> {
     let mut tabs = vec![(RibbonTab::Home, t!("ribbon.tab.home").to_string())];
     if let Some(kind) = state.diagram {
-        tabs.push((RibbonTab::Diagram, t!(diagram_key(kind)).to_string()));
+        let key = match state.objects {
+            true => crate::workspace::NewItem::ObjectDiagram.key(),
+            false => diagram_key(kind),
+        };
+        tabs.push((RibbonTab::Diagram, t!(key).to_string()));
     } else if state.structogram.is_some() {
         tabs.push((RibbonTab::Diagram, t!("kind.structogram").to_string()));
     }
@@ -160,7 +166,7 @@ pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
     match tab {
         RibbonTab::Home => home(state),
         RibbonTab::Diagram => match (state.diagram, state.structogram) {
-            (Some(kind), _) => diagram(kind, state.tool, state.numbering),
+            (Some(kind), _) => diagram(kind, state.objects, state.tool, state.numbering),
             (None, Some(allowed)) => structogram(allowed),
             (None, None) => Vec::new(),
         },
@@ -280,8 +286,16 @@ pub fn tool_label(tool: Tool) -> String {
     }
 }
 
-fn diagram(kind: DiagramKind, current: Tool, numbering: Option<(bool, bool)>) -> Vec<Group> {
-    let tools = palette::palette(kind);
+fn diagram(
+    kind: DiagramKind,
+    objects: bool,
+    current: Tool,
+    numbering: Option<(bool, bool)>,
+) -> Vec<Group> {
+    let tools = match objects {
+        true => palette::object_palette(),
+        false => palette::palette(kind),
+    };
     let items = |which: ToolGroup, size: Size| -> Vec<Item> {
         tools
             .iter()
@@ -787,8 +801,15 @@ pub fn new_diagram_card(collapsed: bool, focus: &FocusHandle, cx: &App) -> impl 
             menu = menu.menu_with_icon(
                 t!(diagram_key(kind)),
                 shell::icon(icons::diagram_icon(kind)),
-                Box::new(NewDiagram { kind }),
+                Box::new(NewDiagram { kind, objects: false }),
             );
+            if kind == DiagramKind::Class {
+                menu = menu.menu_with_icon(
+                    t!("diagram.object"),
+                    shell::icon(icons::object_diagram_icon()),
+                    Box::new(NewDiagram { kind, objects: true }),
+                );
+            }
         }
         menu.separator()
             .menu_with_icon(
@@ -826,7 +847,7 @@ mod tests {
     #[test]
     fn every_tool_of_every_diagram_kind_is_in_one_group() {
         for kind in DIAGRAM_KINDS {
-            let groups = diagram(kind, Tool::Select, None);
+            let groups = diagram(kind, false, Tool::Select, None);
             for tool in palette::palette(kind) {
                 let id = format!("tool-{}", tool.key());
                 let found = groups.iter().flat_map(|g| &g.items).filter(|i| i.id == id).count();
@@ -836,9 +857,18 @@ mod tests {
     }
 
     #[test]
+    fn an_object_diagram_starts_its_groups_with_object_and_link() {
+        let groups = diagram(DiagramKind::Class, true, Tool::Select, None);
+        let first = |id: &str| groups.iter().find(|g| g.id == id).map(|g| g.items[0].id.clone());
+        assert_eq!(first("elements").as_deref(), Some("tool-object"));
+        assert_eq!(first("relations").as_deref(), Some("tool-link"));
+    }
+
+    #[test]
     fn the_diagram_tab_is_there_only_with_a_diagram() {
         let mut state = State {
             diagram: None,
+            objects: false,
             structogram: None,
             tool: Tool::Select,
             has_selection: false,

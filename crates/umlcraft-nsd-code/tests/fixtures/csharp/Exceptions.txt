@@ -4,10 +4,10 @@
     | e
     -
       jump
-        | gib Integer.parseInt(s)
+        | return Integer.parseInt(s)
     -
       jump
-        | gib 0
+        | return 0
     -
 
 == Exceptions.multiCatch (line 18)

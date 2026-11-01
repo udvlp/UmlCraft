@@ -198,6 +198,7 @@ tool_tip:
   lostMessage: "Eine Nachricht, deren Empfänger das Diagramm nicht zeigt: auf die Lebenslinie klicken, die sie sendet"
 diagram:
   class: Klassendiagramm
+  object: Objektdiagramm
   useCase: Anwendungsfalldiagramm
   sequence: Sequenzdiagramm
   activity: Aktivitätsdiagramm
@@ -438,6 +439,11 @@ settings:
   abstract_stereotype: "«abstract» über dem Namen"
   read_only: "Schreibgeschützte Attribute mit {readOnly} kennzeichnen"
   visibility_column_detail: "Richtet die Namen aller Attribute und Operationen einer Klasse untereinander aus. Ausgeschaltet steht die Sichtbarkeit direkt vor dem Namen."
+  structograms: Struktogramme
+  keywords: Schlüsselwörter neuer Struktogramme
+  keywords_ui: Wie die Oberfläche
+  keywords_de: "Deutsch (solange, für, gib)"
+  keywords_en: "Englisch (while, for, return)"
   close: Schließen
 project:
   untitled: Neues Projekt
@@ -616,6 +622,7 @@ nsd:
   exception: Name der gefangenen Ausnahme
   case_hint: "Erste Zeile: was geprüft wird; dann je Fall eine Zeile; letzte Zeile: der Sonst-Fall (% für keinen)."
   for_hint: "for i <- 1 to 10 by 2 zählt, foreach x in liste geht eine Liste durch; alles andere bleibt freier Text."
+  for_hint_german: "für i := 1 bis 10 Schritt 2 zählt, für jedes x in liste geht eine Liste durch; alles andere bleibt freier Text."
   root_program: Programm
   root_sub: Unterprogramm
   root_includable: Includable

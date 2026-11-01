@@ -10,7 +10,7 @@
   instruction
     | total := total + x
   jump
-    | gib x
+    | return x
 
 == Statements.calls (line 14)
 | calls(list)

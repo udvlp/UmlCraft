@@ -14,6 +14,7 @@ use crate::{Made, NoteKind, Report};
 pub fn diagram(member: &Member, root: Node, src: &str, made: &Made) -> (Diagram, Report) {
     let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
     let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
+    d.set_keywords(made.keywords);
     if let Some(doc) = &member.doc {
         d.set_comment(doc);
     }
@@ -61,8 +62,8 @@ pub fn statement(b: &mut Builder<Cpp>, node: Node, out: &mut Vec<Element>) {
         }
         "do_statement" => out.push(b.do_statement(node)),
         "for_statement" => {
-            let counting =
-                counted(node, src).and_then(|(var, start)| pseudo::counting(node, var, start, src));
+            let counting = counted(node, src)
+                .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
             b.for_loop(node, counting, out);
         }
         "for_range_loop" => {

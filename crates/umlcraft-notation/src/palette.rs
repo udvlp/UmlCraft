@@ -3,8 +3,8 @@
 
 use umlcraft_model::{
     ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
-    DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps, InstanceKind,
-    InstanceProps, InteractionOperandProps, InteractionOperator, InteractionUseProps,
+    DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps,
+    InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator, InteractionUseProps,
     LifelineProps, MessageGate, MessageSort, Model, ModelError, Point, PseudostateKind, Rect,
     Result, Shape, Size, StateProps, Tx, TypeRef, View, Visibility,
 };
@@ -203,6 +203,22 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
         .chain(edges.iter().map(|&e| Tool::Edge(e)))
         .chain([Tool::Text, Tool::Line])
         .collect()
+}
+
+/// Tools offered for a diagram, in palette order.
+pub fn diagram_palette(props: &DiagramProps) -> Vec<Tool> {
+    match props.objects {
+        true => object_palette(),
+        false => palette(props.diagram),
+    }
+}
+
+/// Tools offered for an object diagram: a class diagram's, with Object and Link first.
+pub fn object_palette() -> Vec<Tool> {
+    let mut tools = palette(DiagramKind::Class);
+    let first = |t: &Tool| matches!(t, Tool::Node(NodeTool::Object) | Tool::Edge(EdgeTool::Link));
+    tools.sort_by_key(|t| (*t != Tool::Select, !first(t)));
+    tools
 }
 
 impl NodeTool {
@@ -1330,6 +1346,23 @@ mod tests {
         let use_case = palette(DiagramKind::UseCase);
         assert!(use_case.contains(&Tool::Edge(EdgeTool::Include)));
         assert!(palette(DiagramKind::Sequence).contains(&Tool::Node(NodeTool::Lifeline)));
+    }
+
+    #[test]
+    fn an_object_diagram_offers_objects_and_links_first() {
+        let (ElementKind::Diagram(class), ElementKind::Diagram(object)) =
+            (ElementKind::diagram(DiagramKind::Class), ElementKind::object_diagram())
+        else {
+            unreachable!()
+        };
+        assert_eq!(diagram_palette(&class), palette(DiagramKind::Class));
+        let objects = diagram_palette(&object);
+        assert_eq!(
+            objects[..3],
+            [Tool::Select, Tool::Node(NodeTool::Object), Tool::Edge(EdgeTool::Link)]
+        );
+        assert_eq!(objects[3], Tool::Node(NodeTool::Class));
+        assert_eq!(objects.len(), palette(DiagramKind::Class).len());
     }
 
     #[test]

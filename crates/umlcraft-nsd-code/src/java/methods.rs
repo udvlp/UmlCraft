@@ -141,7 +141,12 @@ public class Outer {
         let ms = s.methods();
         assert_eq!(ms[1].line, 1);
         assert_eq!(ms[1].file_name(), "A.g.nsd");
-        let made = crate::Made { author: "t", date: "2026-10-29", origin: "test" };
+        let made = crate::Made {
+            author: "t",
+            date: "2026-10-29",
+            origin: "test",
+            keywords: umlcraft_nsd::Keywords::English,
+        };
         let (d, _) = s.diagram(&ms[1], &made).unwrap();
         assert_eq!(d.text(), ["g()"]);
     }
@@ -150,7 +155,12 @@ public class Outer {
     fn documentation_is_the_block_comment_before_as_for_classes() {
         let src = "class A {\n  /* Plain. */\n  void f() { }\n  // Line.\n  void g() { }\n}";
         let s = Source::parse(SourceLanguage::Java, src);
-        let made = crate::Made { author: "t", date: "2026-10-30", origin: "test" };
+        let made = crate::Made {
+            author: "t",
+            date: "2026-10-30",
+            origin: "test",
+            keywords: umlcraft_nsd::Keywords::English,
+        };
         let comments: Vec<Vec<String>> =
             s.methods().iter().map(|m| s.diagram(m, &made).unwrap().0.comment().to_vec()).collect();
         assert_eq!(comments, [vec!["Plain.".to_owned()], vec![]]);

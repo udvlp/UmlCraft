@@ -15,7 +15,7 @@
       instruction
         | name := "Other"
   jump
-    | gib name
+    | return name
 
 == Switches.defaultInMiddle (line 22)
 | defaultInMiddle(a)
@@ -34,7 +34,7 @@
       instruction
         | r := 0
   jump
-    | gib r
+    | return r
 
 == Switches.noDefault (line 40)
 | noDefault(a)

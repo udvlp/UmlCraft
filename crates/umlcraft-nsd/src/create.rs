@@ -28,6 +28,58 @@ pub(crate) const DEFAULT_KEYWORDS: &[(&str, &str)] = &[
     ("stepFor", "by"),
 ];
 
+/// The same keywords in German, as taught in German schools: `solange ?`, `bis ?`,
+/// `für i := 1 bis 10 Schritt 2`, `für jedes x in liste`, `gib x`.
+const GERMAN_KEYWORDS: &[(&str, &str)] = &[
+    ("preRepeat", "bis "),
+    ("postFor", "bis"),
+    ("preReturn", "gib"),
+    ("postForIn", "in"),
+    ("preWhile", "solange "),
+    ("output", "AUSGABE"),
+    ("input", "EINGABE"),
+    ("preFor", "für"),
+    ("preExit", "verlasse"),
+    ("preLeave", "leave"),
+    ("ignoreCase", "true"),
+    ("preThrow", "throw"),
+    ("preForIn", "für jedes"),
+    ("stepFor", "Schritt"),
+];
+
+/// The language of the keywords a diagram is written with: those of its loops and of `return`
+/// in its header, and the texts new elements start with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Keywords {
+    /// Structorizer's own, as a fresh installation has them.
+    #[default]
+    English,
+    German,
+}
+
+impl Keywords {
+    /// The parser keywords of the header, as Structorizer saves them.
+    pub fn header(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::English => DEFAULT_KEYWORDS,
+            Self::German => GERMAN_KEYWORDS,
+        }
+    }
+
+    /// The language `d` is written in, told by its keyword for while loops.
+    pub fn of(d: &Diagram) -> Self {
+        match d.header("preWhile").map(str::trim) {
+            Some(k) if k.eq_ignore_ascii_case("solange") => Self::German,
+            _ => Self::English,
+        }
+    }
+
+    /// The keyword `name` (`preFor`, `postFor`, …) without the space some end in.
+    pub fn word(self, name: &str) -> &'static str {
+        self.header().iter().find(|(n, _)| *n == name).map_or("", |(_, v)| v.trim())
+    }
+}
+
 /// Who made a new diagram, when (`YYYY-MM-DD`) and with what (`origin`).
 pub struct Provenance<'a> {
     pub author: &'a str,
@@ -53,6 +105,13 @@ impl Diagram {
         attrs.set("type", kind.as_str(), ROOT_ORDER);
         attrs.set("style", "nice", ROOT_ORDER);
         Diagram { attrs, children: Sequence::new(Vec::new()) }
+    }
+
+    /// Gives the header the parser keywords of `keywords`.
+    pub fn set_keywords(&mut self, keywords: Keywords) {
+        for (name, value) in keywords.header() {
+            self.set_header(name, *value);
+        }
     }
 }
 

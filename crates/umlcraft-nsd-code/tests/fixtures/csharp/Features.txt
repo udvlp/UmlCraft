@@ -4,7 +4,7 @@
 # Adds two numbers.
 # </summary>
   jump
-    | gib a + b
+    | return a + b
 
 == Features.Log (line 18)
 | Log(message)
@@ -25,7 +25,7 @@
 | get_Count()
 # <summary>The number of items.</summary>
   jump
-    | gib count
+    | return count
 
 == Features.set_Count (line 33)
 | set_Count(value)
@@ -36,17 +36,17 @@
 == Features.get_Twice (line 38)
 | get_Twice()
   jump
-    | gib count * 2
+    | return count * 2
 
 == Features.get_Item (line 42)
 | get_Item(i)
   jump
-    | gib i * 2
+    | return i * 2
 
 == Features.op_Addition (line 45)
 | operator +(a, b)
   jump
-    | gib a
+    | return a
 
 == Features.~Features (line 50)
 | ~Features()
@@ -70,7 +70,7 @@
       instruction
         | name := "Other"
   jump
-    | gib name
+    | return name
 
 == Features.Size (line 66)
 | Size(n)
@@ -84,10 +84,10 @@
         | throw new ArgumentException("n")
     -
       jump
-        | gib "zero"
+        | return "zero"
     -
       jump
-        | gib "many"
+        | return "many"
 
 == Features.Patterns (line 73)
 | Patterns(o)
@@ -98,13 +98,13 @@
     | default
     -
       jump
-        | gib n
+        | return n
     -
       jump
-        | gib s.Length
+        | return s.Length
     -
       jump
-        | gib 0
+        | return 0
 
 == Features.Assignments (line 86)
 | Assignments(s)
@@ -234,7 +234,7 @@
   instruction
     | await Task.Delay(n)
   jump
-    | gib Square(n)
+    | return Square(n)
 ! line 174: LocalFunction
 
 == Features.Untyped (line 180)
@@ -260,13 +260,13 @@
   call
     | Log(path)
   jump
-    | gib null
+    | return null
 ! line 196: Conditional
 
 == Features.Pairs (line 203)
 | Pairs()
   jump
-    | gib null
+    | return null
 
 == Features.Trace (line 205)
 | Trace(path)
@@ -281,10 +281,10 @@
 == Features.Pair.Sum (line 225)
 | Sum()
   jump
-    | gib A + B
+    | return A + B
 
 == Features.IShape.Area (line 230)
 | Area()
   jump
-    | gib 0
+    | return 0
 

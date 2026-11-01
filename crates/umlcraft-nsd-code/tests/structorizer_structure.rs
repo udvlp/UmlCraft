@@ -44,7 +44,12 @@ fn structure_matches_structorizers_import() {
         eprintln!("UMLCRAFT_NSD_REFS not set; skipped");
         return;
     };
-    let made = Made { author: "t", date: "2026-10-29", origin: "t" };
+    let made = Made {
+        author: "t",
+        date: "2026-10-29",
+        origin: "t",
+        keywords: umlcraft_nsd::Keywords::English,
+    };
     let expected_deviations = deviations();
     let mut compared = 0;
     let mut differing = Vec::new();

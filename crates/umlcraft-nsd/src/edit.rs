@@ -4,6 +4,7 @@
 //! number of branches, a for loop's attributes follow its text. Each returns what to select
 //! afterwards.
 
+use crate::create::Keywords;
 use crate::model::{Diagram, Element, ElementKind, RootKind};
 use crate::path::{self, Path, Selection, Slot, Span};
 
@@ -24,12 +25,16 @@ type Result<T> = std::result::Result<T, EditError>;
 /// The texts new elements start with: Structorizer's (its "Structure Preferences" as
 /// installed), but conditions without the parentheses it puts around them, which a
 /// structogram does not need. Case lines: selector, two cases, default.
-pub fn default_text(kind: ElementKind) -> Vec<String> {
+pub fn default_text(kind: ElementKind, keywords: Keywords) -> Vec<String> {
+    let german = keywords == Keywords::German;
     let text: &[&str] = match kind {
         ElementKind::Alternative => &["?"],
         ElementKind::Case => &["?", "!", "!", "default"],
+        ElementKind::For if german => &["für ? := ? bis ?"],
         ElementKind::For => &["for ? <- ? to ?"],
+        ElementKind::While if german => &["solange ?"],
         ElementKind::While => &["while ?"],
+        ElementKind::Repeat if german => &["bis ?"],
         ElementKind::Repeat => &["until ?"],
         ElementKind::Parallel => &["2"],
         _ => &[""],
@@ -510,7 +515,8 @@ mod tests {
     #[test]
     fn case_text_brings_its_branches() {
         let mut d = sample();
-        let case = new_element(&d, ElementKind::Case, &default_text(ElementKind::Case));
+        let case =
+            new_element(&d, ElementKind::Case, &default_text(ElementKind::Case, Keywords::English));
         assert_eq!(case.branches.len(), 3);
         insert(&mut d, &Slot { seq: vec![], index: 0 }, vec![case]).unwrap();
         let x = Element::instruction(&lines(&["in default"]));
@@ -609,18 +615,45 @@ mod tests {
     fn new_elements_are_what_structorizer_starts_with() {
         let d = sample();
         for kind in ElementKind::ALL {
-            let e = new_element(&d, kind, &default_text(kind));
+            let e = new_element(&d, kind, &default_text(kind, Keywords::English));
             assert_eq!(e.kind, kind);
             if has_text(kind) {
                 assert!(e.attr("text").is_some());
             }
         }
         // Structorizer writes an empty text as none at all.
-        let empty =
-            new_element(&d, ElementKind::Instruction, &default_text(ElementKind::Instruction));
+        let empty = new_element(
+            &d,
+            ElementKind::Instruction,
+            &default_text(ElementKind::Instruction, Keywords::English),
+        );
         assert_eq!(empty.attr("text"), Some(""));
-        let f = new_element(&d, ElementKind::For, &default_text(ElementKind::For));
+        let f =
+            new_element(&d, ElementKind::For, &default_text(ElementKind::For, Keywords::English));
         assert_eq!(f.attr("style"), Some("COUNTER"));
         assert_eq!(f.attr("counterVar"), Some("?"));
+    }
+
+    #[test]
+    fn german_keywords_count_in_german() {
+        let made = crate::Provenance { author: "", date: "", origin: "" };
+        let mut d = Diagram::new(RootKind::Program, &lines(&["demo"]), &made);
+        assert_eq!(Keywords::of(&d), Keywords::English);
+        d.set_keywords(Keywords::German);
+        assert_eq!(Keywords::of(&d), Keywords::German);
+        assert_eq!(d.header("preWhile"), Some("solange "));
+        let german = |kind| default_text(kind, Keywords::German);
+        assert_eq!(german(ElementKind::While), ["solange ?"]);
+        assert_eq!(german(ElementKind::Repeat), ["bis ?"]);
+        let f = new_element(&d, ElementKind::For, &german(ElementKind::For));
+        assert_eq!(f.text(), ["für ? := ? bis ?"]);
+        assert_eq!(f.attr("style"), Some("COUNTER"));
+        assert_eq!((f.attr("startValue"), f.attr("endValue")), (Some("?"), Some("?")));
+        let mut each = Element::for_loop(&lines(&["für jedes x in liste"]), crate::ForLoop::Free);
+        fit_for(&d, &mut each);
+        assert_eq!((each.attr("style"), each.attr("counterVar")), (Some("TRAVERSAL"), Some("x")));
+        // The German keywords stay in the normal form of a project.
+        let normal = crate::content::normalize(&d);
+        assert_eq!(Keywords::of(&normal), Keywords::German);
     }
 }

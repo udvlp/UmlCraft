@@ -18,7 +18,7 @@
       instruction
         | sum := sum - i
   jump
-    | gib sum
+    | return sum
 
 == Loops.enhanced (line 12)
 | enhanced(values)
@@ -30,7 +30,7 @@
       instruction
         | sum := sum + v
   jump
-    | gib sum
+    | return sum
 
 == Loops.whileLoop (line 18)
 | whileLoop(n)
@@ -40,7 +40,7 @@
       instruction
         | n := n / 2
   jump
-    | gib n
+    | return n
 
 == Loops.endless (line 23)
 | endless()

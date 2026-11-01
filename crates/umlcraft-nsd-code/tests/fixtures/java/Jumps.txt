@@ -31,7 +31,7 @@
       instruction
         | sum := sum + v
   jump
-    | gib sum
+    | return sum
 ! line 13: Continue
 
 == Jumps.labels (line 23)
@@ -59,7 +59,7 @@
                 | continue outer;
             -
   jump
-    | gib found
+    | return found
 ! line 25: Label
 ! line 33: Continue
 

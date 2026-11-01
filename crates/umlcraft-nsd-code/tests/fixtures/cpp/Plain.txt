@@ -7,7 +7,7 @@
         | a := 1
     -
   jump
-    | gib a
+    | return a
 
 == .elseIfChain (line 13)
 | elseIfChain(a)
@@ -15,16 +15,16 @@
     | a < 0?
     -
       jump
-        | gib -1
+        | return -1
     -
       alternative
         | a == 0?
         -
           jump
-            | gib 0
+            | return 0
         -
           jump
-            | gib 1
+            | return 1
 
 == .counting (line 24)
 | counting(n)
@@ -41,7 +41,7 @@
       instruction
         | sum := sum - i
   jump
-    | gib sum
+    | return sum
 
 == .whileLoop (line 37)
 | whileLoop(n)
@@ -56,7 +56,7 @@
       instruction
         | n := n - 1
   jump
-    | gib n
+    | return n
 
 == .classic (line 48)
 | classic(day)
@@ -77,7 +77,7 @@
       instruction
         | r := 0
   jump
-    | gib r
+    | return r
 
 == .fallthrough (line 65)
 | fallthrough(a)
@@ -100,7 +100,7 @@
       instruction
         | r := -1
   jump
-    | gib r
+    | return r
 ! line 69: Fallthrough
 
 == .calls (line 81)
@@ -115,5 +115,5 @@
 == .helper (line 88)
 | helper(a, b)
   jump
-    | gib a + b
+    | return a + b
 

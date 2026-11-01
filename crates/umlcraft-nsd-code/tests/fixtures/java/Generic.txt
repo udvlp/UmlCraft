@@ -1,5 +1,5 @@
 == Generic.first (line 4)
 | first(list)
   jump
-    | gib list.get(0)
+    | return list.get(0)
 

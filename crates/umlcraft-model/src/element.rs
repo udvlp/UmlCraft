@@ -841,6 +841,9 @@ pub struct DiagramProps {
     /// Sequence diagrams: keep the frame for the layout but do not draw it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_frame: bool,
+    /// Class diagrams: an object diagram, whose palette starts with Object and Link.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub objects: bool,
 }
 
 /// Marks what a source import made and may change or delete on a new import: associations made
@@ -1096,7 +1099,16 @@ impl ElementKind {
             flat_message_numbers: false,
             hide_frame: false,
             hide_return_values: false,
+            objects: false,
         })
+    }
+
+    /// An object diagram: a class diagram whose palette starts with Object and Link.
+    pub fn object_diagram() -> Self {
+        match Self::diagram(DiagramKind::Class) {
+            Self::Diagram(props) => Self::Diagram(DiagramProps { objects: true, ..props }),
+            _ => unreachable!(),
+        }
     }
 
     /// Stable, lower camel case metaclass name, as used in files.
