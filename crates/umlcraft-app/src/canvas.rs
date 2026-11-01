@@ -991,7 +991,9 @@ impl DiagramCanvas {
                         self.workspace.update(cx, |ws, cx| {
                             if extend {
                                 ws.toggle(id);
-                            } else if !already {
+                            } else if !already || ws.selection.len() == 1 {
+                                // Selected alone already, it is selected again: a click beside
+                                // its members takes the properties panel back from a member.
                                 ws.select(vec![id]);
                             }
                             if let Some(member) = member.filter(|_| !extend) {
@@ -1414,7 +1416,9 @@ impl DiagramCanvas {
         self.right_member = member;
         self.update_workspace(cx, |ws| {
             match hit {
-                Some(id) if ws.selection.contains(&id) => {}
+                // Selected alone already, it is selected again, taking the panel back from a
+                // member.
+                Some(id) if ws.selection.contains(&id) && ws.selection.len() > 1 => {}
                 Some(id) => ws.select(vec![id]),
                 None => ws.clear_selection(),
             }
