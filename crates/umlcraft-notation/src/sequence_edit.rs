@@ -235,6 +235,18 @@ impl Geometry {
             .copied()
     }
 
+    /// Where `lane` ends in a cross, if a message destroys it: with the bar the destroy message
+    /// starts, which comes along, or else at the message.
+    fn cross(&self, lane: Id) -> Option<(Option<Id>, f32)> {
+        let m = self
+            .messages
+            .iter()
+            .filter(|m| m.target == lane && m.sort == MessageSort::Destroy)
+            .min_by(|a, b| a.end().total_cmp(&b.end()))?;
+        let bar = self.bars.iter().find(|b| b.lane == lane && (b.top - m.end()).abs() < 0.5);
+        Some(bar.map_or((None, m.end()), |b| (Some(b.id), b.bottom)))
+    }
+
     /// Where a call from `from` to `to` drawn at `y` goes: below the bars earlier calls between
     /// the two started on `to`, unless `to` called back in between (a nested call).
     fn clear_of_calls(&self, from: Id, to: Id, mut y: f32) -> f32 {
@@ -266,6 +278,53 @@ impl Geometry {
             }
         }
         y
+    }
+
+    /// Where a new message of `sort` from `source` to `target` may go, from and to: below the
+    /// heads of its lifelines and above their crosses. A create message stays above what the
+    /// lifeline it makes does, a destroy message goes below it.
+    fn room(&self, source: Id, target: Id, sort: MessageSort) -> (f32, f32) {
+        let (mut least, mut most) = (f32::MIN, f32::MAX);
+        for lane in [source, target] {
+            let Some(l) = self.lane(lane) else { continue };
+            let destroys = |m: &&Msg| m.sort == MessageSort::Destroy && m.target == lane;
+            if let Some(cross) =
+                self.messages.iter().filter(destroys).map(|m| m.end()).reduce(f32::min)
+            {
+                most = most.min(cross - MESSAGE_GAP);
+            }
+            if sort != MessageSort::Create || lane != target {
+                least = least.max(l.line_top() + MESSAGE_GAP);
+            }
+        }
+        let on_target = || {
+            let messages = self
+                .messages
+                .iter()
+                .filter(|m| {
+                    m.source == target || (m.target == target && m.sort != MessageSort::Create)
+                })
+                .map(|m| if m.source == target { m.y } else { m.end() });
+            let bars = self.bars.iter().filter(|b| b.lane == target);
+            messages.chain(bars.flat_map(|b| [b.top, b.bottom]))
+        };
+        match (sort, self.lane(target)) {
+            (MessageSort::Create, Some(l)) => {
+                // The head comes down to the message, its line starts below.
+                let below = l.line_top() - l.head.center().y;
+                let constructor = |y: &f32| (y - l.line_top()).abs() > 0.5;
+                if let Some(first) = on_target().filter(constructor).reduce(f32::min) {
+                    most = most.min(first - MESSAGE_GAP - below);
+                }
+            }
+            (MessageSort::Destroy, Some(_)) => {
+                if let Some(last) = on_target().reduce(f32::max) {
+                    least = least.max(last + MESSAGE_GAP);
+                }
+            }
+            _ => {}
+        }
+        (least, most)
     }
 
     /// The lowest point of what is drawn between the heads and the lifelines' ends.
@@ -405,6 +464,17 @@ pub fn add_message(
     } else {
         y
     };
+    // A lifeline is made once.
+    if sort == MessageSort::Create
+        && g.messages.iter().any(|m| m.sort == MessageSort::Create && m.target == to.id)
+    {
+        return Err(ModelError::Invalid("the lifeline is created already".into()));
+    }
+    let (least, most) = g.room(from.id, to.id, sort);
+    if least > most {
+        return Err(ModelError::Invalid("no room for the message on these lifelines".into()));
+    }
+    let y = y.clamp(least, most);
     let sender = |tx: &mut Tx<'_>, height: f32| sender_bar(tx, diagram, &g, from.id, y, height);
     // A reply leaves at the end of the bar it returns from: the one at `y`, else the closest
     // one above.
@@ -481,6 +551,12 @@ pub fn add_message(
             sender(tx, SENDER_BAR)?;
             add_bar(tx, diagram, to.id, y, RECEIVER_BAR)?;
         }
+    }
+    // A reply leaves where its bar ends, which may lie beyond the lifeline's cross.
+    if let Shape::Message { y, .. } = presentation.shape
+        && (y < least - 0.5 || y > most + 0.5)
+    {
+        return Err(ModelError::Invalid("no room for the message on these lifelines".into()));
     }
     let id = tx.add_presentation(diagram, presentation)?;
     tidy(tx, diagram)?;
@@ -749,17 +825,20 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     // The bar the message starts and, from the inside out, what lies within it.
     let mut bars: HashSet<Id> = HashSet::new();
     let mut messages: HashSet<Id> = HashSet::from([m.id]);
-    // A create message takes the head along, and with it the constructor's bar right below.
-    let below_head = |b: &Bar| {
-        m.sort == MessageSort::Create
-            && g.lane(m.target).is_some_and(|l| (b.top - l.line_top()).abs() < 0.5)
+    // The bars a message starts. A create message takes the head along, and with it the
+    // constructor's bar right below.
+    let started = |msg: &Msg| -> Vec<Bar> {
+        let below_head = |b: &Bar| {
+            msg.sort == MessageSort::Create
+                && g.lane(msg.target).is_some_and(|l| (b.top - l.line_top()).abs() < 0.5)
+        };
+        g.bars
+            .iter()
+            .filter(|b| b.lane == msg.target && ((b.top - msg.end()).abs() < 0.5 || below_head(b)))
+            .copied()
+            .collect()
     };
-    let mut queue: Vec<Bar> = g
-        .bars
-        .iter()
-        .filter(|b| b.lane == m.target && ((b.top - m.end()).abs() < 0.5 || below_head(b)))
-        .copied()
-        .collect();
+    let mut queue: Vec<Bar> = started(&m);
     while let Some(bar) = queue.pop() {
         if !bars.insert(bar.id) {
             continue;
@@ -780,16 +859,11 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
             let leaves =
                 other.source == bar.lane && bar.top - 0.5 <= other.y && other.y <= bar.bottom + 0.5;
             if leaves && messages.insert(other.id) {
-                queue.extend(
-                    g.bars
-                        .iter()
-                        .filter(|b| b.lane == other.target && (b.top - other.end()).abs() < 0.5)
-                        .copied(),
-                );
+                queue.extend(started(other));
             }
         }
     }
-    let dy = movable(&g, &m, &bars, &messages, y - m.y);
+    let dy = movable(&g, &bars, &messages, y - m.y);
     if dy.abs() < 0.01 {
         return Ok(());
     }
@@ -809,6 +883,13 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
             }
         })?;
     }
+    // Create messages that move take the heads they made along.
+    let made: Vec<Lane> = g
+        .messages
+        .iter()
+        .filter(|mm| messages.contains(&mm.id) && mm.sort == MessageSort::Create)
+        .filter_map(|mm| g.lane(mm.target).copied())
+        .collect();
     for id in messages {
         tx.update_presentation(diagram, id, |p| {
             if let Shape::Message { y, end_y, .. } = &mut p.shape {
@@ -817,9 +898,7 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
             }
         })?;
     }
-    if m.sort == MessageSort::Create
-        && let Some(to) = g.lane(m.target)
-    {
+    for to in made {
         let bottom = to.bottom();
         tx.update_presentation(diagram, to.id, |p| {
             if let Shape::Lifeline { head, length, .. } = &mut p.shape {
@@ -850,14 +929,16 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     tidy(tx, diagram)
 }
 
-/// How far of `dy` the message `m` can move with the `bars` and `messages` that go along: what
-/// moves stays below the heads of its lifelines and above the cross of a destroyed one, and a
-/// create message, which takes the head along, stays above whatever else happens on its
-/// lifeline. Where something lies out of bounds already, it may stay there.
-fn movable(g: &Geometry, m: &Msg, bars: &HashSet<Id>, messages: &HashSet<Id>, dy: f32) -> f32 {
+/// How far of `dy` the `bars` and `messages` that move can go: they stay below the heads of
+/// their lifelines and above the cross of a destroyed one, and a create message, which takes
+/// the head along, stays above whatever else happens on its lifeline. Where something lies out
+/// of bounds already, it may stay there.
+fn movable(g: &Geometry, bars: &HashSet<Id>, messages: &HashSet<Id>, dy: f32) -> f32 {
     let (mut least, mut most) = (f32::MIN, f32::MAX);
-    let made = (m.sort == MessageSort::Create).then_some(m.target);
-    for mm in g.messages.iter().filter(|mm| messages.contains(&mm.id)) {
+    let moving = || g.messages.iter().filter(|mm| messages.contains(&mm.id));
+    let made: Vec<Id> =
+        moving().filter(|mm| mm.sort == MessageSort::Create).map(|mm| mm.target).collect();
+    for mm in moving() {
         for (lane, y) in [(mm.source, mm.y), (mm.target, mm.end())] {
             let Some(l) = g.lane(lane) else { continue };
             if mm.sort == MessageSort::Create && lane == mm.target {
@@ -872,7 +953,24 @@ fn movable(g: &Geometry, m: &Msg, bars: &HashSet<Id>, messages: &HashSet<Id>, dy
             }
         }
     }
-    if let Some(l) = made.and_then(|lane| g.lane(lane)) {
+    // A destroy message stays below what else happens on the lifeline it ends.
+    for mm in moving().filter(|mm| mm.sort == MessageSort::Destroy) {
+        let lane = mm.target;
+        let others = g
+            .messages
+            .iter()
+            .filter(|o| !messages.contains(&o.id) && (o.source == lane || o.target == lane))
+            .map(|o| if o.source == lane { o.y } else { o.end() });
+        let tops = g
+            .bars
+            .iter()
+            .filter(|b| b.lane == lane && !bars.contains(&b.id) && (b.top - mm.end()).abs() > 0.5)
+            .map(|b| b.top);
+        if let Some(last) = others.chain(tops).reduce(f32::max) {
+            least = least.max(last + MESSAGE_GAP - mm.end());
+        }
+    }
+    for l in made.iter().filter_map(|&lane| g.lane(lane)) {
         let on_lane = |mm: &&Msg| {
             !messages.contains(&mm.id)
                 && (mm.source == l.id || (mm.target == l.id && mm.sort != MessageSort::Create))
@@ -1077,7 +1175,15 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                     need = need.max(called.bottom);
                 }
             }
-            if need > bar.bottom + 0.01 {
+            // Nothing lasts beyond a lifeline's cross: bars there end with the bar the destroy
+            // message starts, which holds the cross.
+            let need = match g.cross(bar.lane) {
+                Some((destroy_bar, cross)) if destroy_bar != Some(bar.id) && bar.top < cross => {
+                    need.min(cross)
+                }
+                _ => need,
+            };
+            if (need - bar.bottom).abs() > 0.01 {
                 grown.push((bar.id, need - bar.top));
             }
         }
@@ -1204,19 +1310,7 @@ fn fit_lifelines(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     }
     // A destroyed one ends with the bar its destroy message starts, wherever that has moved.
     for lane in g.lanes.iter().filter(|l| l.destroyed) {
-        let Some(m) = g
-            .messages
-            .iter()
-            .filter(|m| m.target == lane.id && m.sort == MessageSort::Destroy)
-            .min_by(|a, b| a.end().total_cmp(&b.end()))
-        else {
-            continue;
-        };
-        let end = g
-            .bars
-            .iter()
-            .find(|b| b.lane == lane.id && (b.top - m.end()).abs() < 0.5)
-            .map_or(m.end(), |b| b.bottom);
+        let Some((_, end)) = g.cross(lane.id) else { continue };
         // Above the head the lifeline keeps at least the bar's length, as `add_message` gives it.
         let length = (end - lane.line_top()).max(RECEIVER_BAR);
         if (lane.bottom() - lane.line_top() - length).abs() > 0.01 {
@@ -2234,6 +2328,110 @@ mod tests {
             .unwrap();
         assert!(!doc.model().contains(fragment));
         doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn new_messages_go_below_the_heads_and_a_destroy_below_what_happens() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let line_top = |doc: &Document, p: Id| match doc.model().view(d).unwrap().get(p) {
+            Some(umlcraft_model::Presentation { shape: Shape::Lifeline { head, .. }, .. }) => {
+                head.bottom()
+            }
+            other => panic!("{other:?}"),
+        };
+        let y_of = |doc: &Document, m: Id| match message(doc, d, m) {
+            Shape::Message { y, .. } => y,
+            other => panic!("{other:?}"),
+        };
+        // Drawn on a head, a call goes right below the heads.
+        let call = draw(&mut doc, d, EdgeTool::Message, a, b, 50.0);
+        let top = line_top(&doc, a).max(line_top(&doc, b));
+        assert_eq!(y_of(&doc, call), top + super::MESSAGE_GAP);
+        // Drawn above that call, a destroy message goes below its bar.
+        let destroy = draw(&mut doc, d, EdgeTool::DestroyMessage, a, b, 100.0);
+        let call_bar_end = y_of(&doc, call) + super::RECEIVER_BAR;
+        assert_eq!(y_of(&doc, destroy), call_bar_end + super::MESSAGE_GAP);
+        // Tidied in one go: the destroy message drawn before the call in the model goes after it.
+        assert!(
+            super::violations(doc.model(), d).is_empty(),
+            "{:?}",
+            super::violations(doc.model(), d)
+        );
+    }
+
+    #[test]
+    fn a_caller_destroyed_by_its_callee_waits_no_longer_than_its_cross() {
+        let (mut doc, d, a, b) = two_lifelines();
+        draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        // Sent right after the call, the destroy message continues the callee's bar, which the
+        // caller waits for; the caller's bar still ends at its cross.
+        draw(&mut doc, d, EdgeTool::DestroyMessage, b, a, 100.0);
+        let g = super::Geometry::read(doc.model(), d).unwrap();
+        let (_, cross) = g.cross(a).unwrap();
+        let waiting = g.bars.iter().filter(|bar| bar.lane == a).map(|bar| bar.bottom);
+        assert_eq!(waiting.reduce(f32::max), Some(cross));
+        assert!(
+            super::violations(doc.model(), d).is_empty(),
+            "{:?}",
+            super::violations(doc.model(), d)
+        );
+    }
+
+    #[test]
+    fn a_destroy_message_dragged_up_stays_below_what_happens() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let call = draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let destroy = draw(&mut doc, d, EdgeTool::DestroyMessage, a, b, 300.0);
+        doc.edit("move", |tx| super::move_item(tx, d, destroy, 60.0)).unwrap();
+        let y_of = |m: Id| match message(&doc, d, m) {
+            Shape::Message { y, .. } => y,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(y_of(destroy), y_of(call) + super::MESSAGE_GAP);
+        assert!(
+            super::violations(doc.model(), d).is_empty(),
+            "{:?}",
+            super::violations(doc.model(), d)
+        );
+    }
+
+    #[test]
+    fn a_lifeline_is_created_once() {
+        let (mut doc, d, a, b) = two_lifelines();
+        draw(&mut doc, d, EdgeTool::CreateMessage, a, b, 150.0);
+        let slot = Slot { y: 300.0, owner: doc.model().get(d).unwrap().owner().unwrap(), index: 0 };
+        let tool = EdgeTool::CreateMessage;
+        let again = doc.edit("again", |tx| palette::connect_message(tx, d, tool, a, b, Some(slot)));
+        assert!(again.is_err());
+    }
+
+    #[test]
+    fn a_create_message_moved_along_takes_its_head_along() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let own = draw(&mut doc, d, EdgeTool::Message, a, a, 150.0);
+        let create = draw(&mut doc, d, EdgeTool::CreateMessage, a, b, 180.0);
+        let at = |doc: &Document| {
+            let view = doc.model().view(d).unwrap();
+            let y = match view.presentations_of(create).next().unwrap().shape {
+                Shape::Message { y, .. } => y,
+                ref other => panic!("{other:?}"),
+            };
+            let Shape::Lifeline { head, .. } = view.get(b).unwrap().shape else { panic!() };
+            (y, head.center().y)
+        };
+        let (y, head) = at(&doc);
+        // The call to itself takes the create message sent from inside it along, and with it
+        // the head it made and the constructor's bar.
+        for to in [250.0, 120.0] {
+            doc.edit("move", |tx| super::move_item(tx, d, own, to)).unwrap();
+            let (moved, moved_head) = at(&doc);
+            assert_eq!(moved - y, moved_head - head);
+            assert!(
+                super::violations(doc.model(), d).is_empty(),
+                "{:?}",
+                super::violations(doc.model(), d)
+            );
+        }
     }
 
     #[test]

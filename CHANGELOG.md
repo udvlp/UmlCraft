@@ -5,9 +5,13 @@ today.
 
 ## Unreleased
 
-- **Messages stay on their lifelines**: a message dragged above the heads stops right below
-  them, together with the bar it is sent from; a create message dragged down stops above what
-  the lifeline it makes does next, and takes the constructor's bar along with the head.
+- **Messages stay on their lifelines**: a message drawn or dragged above the heads goes right
+  below them, together with the bar it is sent from, and never below a lifeline's cross; a
+  destroy message goes below what happens on its lifeline, also when dragged up, and a create
+  message stays above it. A create message takes the head and the constructor's bar along, also
+  when it moves with the call it is sent from, and a lifeline is created only once. No bar
+  reaches past a lifeline's cross, not even the one of a caller waiting for the object that
+  destroys it.
 - **Operands keep their room**: an alt or another fragment with several operands made smaller
   stops below its last dashed line instead of leaving it outside. A fragment dragged down into
   the one it held goes inside it right away.
