@@ -3,6 +3,12 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **New app icon**: a provided interface in its socket, the ball-and-socket notation of
+  components, which also forms a U. It replaces the state machine motif, which looked like any
+  flow icon in the taskbar.
+
 ## 0.15.2 – 2026-11-01
 
 - **See-through fragment tabs**: the tab of a loop, alt and the like no longer hides the
