@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.15.1 – 2026-11-01
 
 - **Constructor bars**: a create message gives the new lifeline an activation bar right below
   its head, where the constructor runs.
