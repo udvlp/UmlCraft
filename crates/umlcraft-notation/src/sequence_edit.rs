@@ -1572,6 +1572,100 @@ fn place(
     Ok(())
 }
 
+/// What should hold on a sequence diagram after every edit ([`crate::invariants`]): bars and
+/// messages on their lifelines, bars nested or apart, operand lines inside their fragment in
+/// order, and nothing left for [`tidy`] to do.
+pub(crate) fn violations(model: &Model, diagram: Id) -> Vec<String> {
+    let (Ok(g), Some(view)) = (Geometry::read(model, diagram), model.view(diagram)) else {
+        return Vec::new();
+    };
+    let what = |id: Id| crate::invariants::describe(model, view, id);
+    let mut found = Vec::new();
+    for bar in &g.bars {
+        let Some(lane) = g.lane(bar.lane) else {
+            found.push(format!("{} has no lifeline", what(bar.id)));
+            continue;
+        };
+        if bar.top < lane.line_top() - 0.5 || bar.bottom > lane.bottom() + 0.5 {
+            found.push(format!("{} runs off {}", what(bar.id), what(lane.id)));
+        }
+        for other in g.bars.iter().filter(|o| o.lane == bar.lane && o.id != bar.id) {
+            if bar.top + 0.5 < other.top
+                && other.top < bar.bottom - 0.5
+                && other.bottom > bar.bottom + 0.5
+            {
+                found.push(format!(
+                    "{} and {} overlap without nesting",
+                    what(bar.id),
+                    what(other.id)
+                ));
+            }
+        }
+    }
+    for m in &g.messages {
+        // A create message ends at the head it makes.
+        let ends = [(m.source, m.y, "starts"), (m.target, m.end(), "ends")];
+        for (lane, y, end) in
+            ends.into_iter().take(if m.sort == MessageSort::Create { 1 } else { 2 })
+        {
+            match g.lane(lane) {
+                Some(l) if y < l.line_top() - 0.5 || y > l.bottom() + 0.5 => {
+                    found.push(format!("{} {end} off {}", what(m.id), what(l.id)));
+                }
+                Some(_) => {}
+                None => found.push(format!("{} {end} on no lifeline", what(m.id))),
+            }
+        }
+    }
+    for f in &g.frames {
+        let mut above = f.rect.y;
+        for &s in &f.separators {
+            if s < above + 0.5 || s > f.rect.bottom() - 0.5 {
+                found.push(format!("{} has an operand line out of place", what(f.id)));
+                break;
+            }
+            above = s;
+        }
+    }
+    // Every edit ends tidied, so tidying again changes nothing.
+    let mut tidied = Document::new(model.clone());
+    match tidied.edit("check", |tx| tidy(tx, diagram)) {
+        Ok(()) => {
+            let after = tidied.model().view(diagram);
+            for p in view.presentations() {
+                match after.and_then(|v| v.get(p.id)) {
+                    Some(q) if q == p => {}
+                    Some(_) => found.push(format!("tidying would change {}", what(p.id))),
+                    None => found.push(format!("tidying would remove {}", what(p.id))),
+                }
+            }
+            if after.is_some_and(|v| v.presentations().len() > view.presentations().len()) {
+                found.push("tidying would add presentations".into());
+            }
+            let owner = model.get(diagram).and_then(|d| d.owner());
+            let order = |m: &Model| owner.map(|o| order_of(m, o)).unwrap_or_default();
+            if order(model) != order(tidied.model()) {
+                found.push("tidying would reorder the interaction".into());
+            }
+        }
+        Err(err) => found.push(format!("tidying fails: {err}")),
+    }
+    found
+}
+
+/// The elements under `owner`, depth first, with their owners: what [`sync_order`] arranges.
+fn order_of(model: &Model, owner: Id) -> Vec<(Id, Id)> {
+    let mut order = Vec::new();
+    let mut stack = vec![owner];
+    while let Some(o) = stack.pop() {
+        for &child in model.children(o) {
+            order.push((o, child));
+            stack.push(child);
+        }
+    }
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use umlcraft_model::sample::order_system;
@@ -2044,6 +2138,11 @@ mod tests {
             "{:?}",
             bars(&doc, d)
         );
+        assert!(
+            super::violations(doc.model(), d).is_empty(),
+            "{:?}",
+            super::violations(doc.model(), d)
+        );
         // Dragged below what the lifeline it makes does, a create message stops above that.
         let (mut doc, d, a, b) = two_lifelines();
         let create = draw(&mut doc, d, EdgeTool::CreateMessage, a, b, 250.0);
@@ -2056,6 +2155,11 @@ mod tests {
         doc.edit("down", |tx| super::move_item(tx, d, create, 600.0)).unwrap();
         assert_eq!(line_top(&doc, d, b), first - super::MESSAGE_GAP);
         assert_eq!(y_of(&doc, d, back), first);
+        assert!(
+            super::violations(doc.model(), d).is_empty(),
+            "{:?}",
+            super::violations(doc.model(), d)
+        );
     }
 
     #[test]

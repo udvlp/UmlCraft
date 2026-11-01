@@ -13,6 +13,7 @@ pub mod autoroute;
 pub mod clipboard;
 pub mod draw;
 pub mod edit;
+pub mod invariants;
 pub mod labels;
 pub mod layout;
 pub mod member;

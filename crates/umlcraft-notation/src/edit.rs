@@ -53,7 +53,11 @@ pub fn apply<R>(
         .collect();
     let routes = autoroute::snapshots(doc.model());
     let lifelines = sequence_edit::lifeline_centers(doc.model());
-    doc.edit(label, |tx| {
+    let label = label.into();
+    // Debug builds say what an edit broke, to catch it where it happens.
+    #[cfg(debug_assertions)]
+    let (rules, what) = (crate::invariants::check(doc.model(), measure), label.clone());
+    let result = doc.edit(label, |tx| {
         let result = f(tx)?;
         sequence_edit::follow_lifelines(tx, &lifelines)?;
         let close = |a: Size, b: Size| {
@@ -68,7 +72,15 @@ pub fn apply<R>(
         }
         autoroute::follow(tx, &routes)?;
         Ok(result)
-    })
+    });
+    #[cfg(debug_assertions)]
+    if result.is_ok() {
+        let broken = crate::invariants::check(doc.model(), measure);
+        for rule in crate::invariants::new_violations(&rules, &broken) {
+            eprintln!("edit {what:?} broke a rule: {rule}");
+        }
+    }
+    result
 }
 
 /// The behavior a diagram of `kind` belongs to, if any: sequence diagrams show an interaction,

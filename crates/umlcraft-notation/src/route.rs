@@ -41,7 +41,7 @@ fn relative(rect: Rect, p: Point) -> Point {
 
 /// Ends of a right-angled line closer than this across its direction are joined by a straight,
 /// slightly slanted line instead of a step (Astah: 1.8 apart straight, 2.21 a step).
-const NO_STEP: f32 = 2.0;
+pub(crate) const NO_STEP: f32 = 2.0;
 
 /// Corners of a right-angled line from `from` in `source` to `to` in `target` that has no
 /// waypoints of its own, as Astah makes them: none when the ends (nearly) line up; when the

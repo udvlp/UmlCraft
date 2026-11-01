@@ -44,6 +44,20 @@ everything is rolled back. `Tx` offers the composite edits:
 
 `Document::is_dirty` compares the topmost undo step with the save point.
 
+`umlcraft_notation::invariants::check` lists the rules a model breaks that every edit should keep:
+finite coordinates, lines that start and end at their nodes, right-angled lines without slanted
+segments (beyond Astah's 2 px), substates inside the state they belong to (and its region), and
+on sequence diagrams bars and messages on their lifelines,
+bars nested or apart, operand lines in order, and nothing left for `sequence_edit::tidy` to do.
+Astah's files do not always keep them, so what counts is what an edit adds
+(`invariants::new_violations`). Debug builds check before and after every `edit::apply` and print
+what an edit broke to stderr. The app's `fuzz` test makes random edits the way the mouse makes
+them (moving and resizing boxes, bending lines, dragging messages, gates, lifeline ends, labels
+and region lines, deleting, undo and redo) on the sample project, the order system and Astah's
+sample, and checks the rules and that undo and redo restore the model exactly.
+`UMLCRAFT_FUZZ_SEED`, `UMLCRAFT_FUZZ_STEPS` and `UMLCRAFT_FUZZ_DUMP` (a folder for the projects
+before and after a failing step) replay and widen a run.
+
 ## File format
 
 `.ucraft` is pretty-printed JSON. Elements are sorted by ID (UUIDv7, i.e. by creation time), so new

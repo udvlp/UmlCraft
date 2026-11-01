@@ -4,6 +4,8 @@ mod about_dialog;
 mod canvas;
 mod demo;
 mod errors;
+#[cfg(test)]
+mod fuzz;
 mod icons;
 mod labels;
 mod live;
