@@ -443,8 +443,9 @@ pub fn add_message(
         }
         (_, MessageSort::Create) => {
             sender(tx, CREATE_SENDER_BAR)?;
-            // The new lifeline's head comes down to the message; its line keeps its end. As in
-            // Astah, the new lifeline gets no bar: the message ends at its head.
+            // The new lifeline's head comes down to the message; its line keeps its end. The
+            // message ends at the head, and the constructor runs in a bar right below it
+            // (Astah draws none there).
             let head =
                 Rect::new(to.head.x, y - to.head.height / 2.0, to.head.width, to.head.height);
             let line_top = head.bottom() + if to.iconic { ICON_NAME } else { 0.0 };
@@ -454,6 +455,7 @@ pub fn add_message(
                     (*h, *l) = (head, length);
                 }
             })?;
+            add_bar(tx, diagram, to.id, line_top, RECEIVER_BAR)?;
         }
         (_, MessageSort::Destroy) => {
             sender(tx, SENDER_BAR)?;
@@ -819,19 +821,24 @@ pub fn tidy_all(tx: &mut Tx<'_>) -> Result<()> {
 }
 
 /// Removes bars that no message reaches any more, as Astah removes a bar with the message that
-/// started it.
+/// started it. A create message keeps the bar right below the head of the lifeline it made.
 fn drop_idle_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     let g = Geometry::read(tx.model(), diagram)?;
     let touches = |bar: &Bar, lane: Id, y: f32| {
         lane == bar.lane && bar.top - 0.5 <= y && y <= bar.bottom + 0.5
     };
+    let constructs = |bar: &Bar, m: &Msg| {
+        m.sort == MessageSort::Create
+            && m.target == bar.lane
+            && g.lanes.iter().any(|l| l.id == bar.lane && (bar.top - l.line_top()).abs() < 0.5)
+    };
     let idle: indexmap::IndexSet<Id> = g
         .bars
         .iter()
         .filter(|bar| {
-            !g.messages
-                .iter()
-                .any(|m| touches(bar, m.source, m.y) || touches(bar, m.target, m.end()))
+            !g.messages.iter().any(|m| {
+                touches(bar, m.source, m.y) || touches(bar, m.target, m.end()) || constructs(bar, m)
+            })
         })
         .map(|bar| bar.id)
         .collect();
@@ -1693,8 +1700,8 @@ mod tests {
         };
         let (head, _, _) = lane(&doc);
         assert_eq!(head.center().y, 150.0);
-        // Only the sender gets a bar.
-        assert_eq!(bars(&doc, d), vec![(150.0, 210.0)]);
+        // The sender gets a bar, and the new lifeline one below its head for the constructor.
+        assert_eq!(bars(&doc, d), vec![(150.0, 210.0), (head.bottom(), head.bottom() + 25.0)]);
         draw(&mut doc, d, EdgeTool::DestroyMessage, a, b, 260.0);
         let (head, length, destroyed) = lane(&doc);
         assert!(destroyed);

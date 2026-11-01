@@ -5,6 +5,8 @@ today.
 
 ## Unreleased
 
+- **Constructor bars**: a create message gives the new lifeline an activation bar right below
+  its head, where the constructor runs.
 - **Sample project**: no multiplicities at the ends that are not navigable; ada's activation
   bar in "Rent a bike" lasts until the end of the ride.
 
