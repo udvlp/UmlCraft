@@ -486,9 +486,13 @@ pub(crate) fn arrange(
         });
     }
     // Keep the drawing order of the presentations: bars come right after what precedes them.
+    // Combined fragments go on top, so that their tabs cover the lifelines and bars they cross.
     let order: HashMap<Id, usize> =
         view.presentations().iter().enumerate().map(|(i, p)| (p.id, i)).collect();
-    nodes.sort_by_key(|n| order.get(&n.id).copied().unwrap_or(usize::MAX));
+    nodes.sort_by_key(|n| {
+        let combined = matches!(n.figure, Figure::Fragment { filled: false, .. });
+        (combined, order.get(&n.id).copied().unwrap_or(usize::MAX))
+    });
 
     let frame =
         view.presentations().iter().find(|p| p.element == Some(diagram)).and_then(|p| p.bounds());

@@ -11,6 +11,8 @@ today.
   web site, the source code and the licence.
 - **Sample project**: no multiplicities at the ends that are not navigable; in "Rent a bike"
   the app's `scan` lasts until the end of the ride, so the tracking runs inside it.
+- **Fragments on top**: combined fragments (loop, alt, …) are drawn over lifelines and
+  activation bars, and their filled tab keeps the operator and condition readable.
 - **Callers wait**: the bar a synchronous call is sent from lasts at least until the bar the
   call started has ended, whether a reply is drawn or not.
 - **Handles by click**: a click on the arrow handle without dragging waits for a click on the

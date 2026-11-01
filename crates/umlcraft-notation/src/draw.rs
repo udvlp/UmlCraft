@@ -342,7 +342,19 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
         Figure::Frame { tab } => vec![frame(r, Paint::None), tab_line(*tab, 1.0)],
         Figure::Fragment { tab, separators, filled } => {
             let fill = if *filled { Paint::Fill } else { Paint::None };
-            let mut result = vec![frame(r, fill), tab_line(*tab, 0.0)];
+            // The tab, filled: it hides the lifelines and bars below it, so its text stays
+            // readable.
+            let tab = Primitive::Polygon {
+                points: vec![
+                    tab.origin(),
+                    Point::new(tab.right(), tab.y),
+                    Point::new(tab.right(), tab.bottom() - TAB_CUT),
+                    Point::new(tab.right() - TAB_CUT, tab.bottom()),
+                    Point::new(tab.x, tab.bottom()),
+                ],
+                fill: if *filled { Paint::Fill } else { Paint::Background },
+            };
+            let mut result = vec![frame(r, fill), tab];
             result.extend(separators.iter().map(|&y| {
                 line(vec![Point::new(r.x, y), Point::new(r.right(), y)], LineStyle::ShortDashed)
             }));
