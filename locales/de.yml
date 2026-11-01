@@ -98,6 +98,11 @@ menu:
   reset_labels: Beschriftungen zurücksetzen
   arrange_down: Von oben nach unten
   arrange_right: Von links nach rechts
+  type: Typ
+  change_kind: Art ändern
+  add_attribute: Attribut hinzufügen
+  add_operation: Operation hinzufügen
+  add_literal: Literal hinzufügen
   add_extension_point: Erweiterungspunkt hinzufügen
   navigability: Navigierbarkeit
   aggregation: Aggregation
@@ -274,6 +279,8 @@ prop:
   value_type: Typ des Werts
   object_type: Typ
   in_state: Zustand
+  return_type: Rückgabetyp
+  initial_value: Anfangswert
   type_bounds: Schranken
   binding: Bindet
   default: Vorgabe
@@ -432,6 +439,7 @@ project:
   untitled: Neues Projekt
 edit:
   create: Anlegen
+  change_kind: Art ändern
   connect: Verbinden
   move: Verschieben
   resize: Größe ändern

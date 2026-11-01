@@ -76,6 +76,7 @@ enum Field {
     ValueType,
     Bounds,
     Default,
+    MemberMultiplicity,
     Slots,
     InState,
     Binding,
@@ -110,8 +111,11 @@ pub struct PropertiesPanel {
     do_activity: Entity<InputState>,
     exit: Entity<InputState>,
     /// Template parameters: the type of a value parameter, the bounds and the default. Object
-    /// nodes: the type of their objects.
+    /// nodes: the type of their objects. Attributes: their type and initial value; operations:
+    /// their return type.
     value_type: Entity<InputState>,
+    /// An attribute's multiplicity.
+    member_multiplicity: Entity<InputState>,
     /// Object nodes: the states their objects are in, without brackets.
     in_state: Entity<InputState>,
     bounds: Entity<InputState>,
@@ -318,6 +322,7 @@ impl PropertiesPanel {
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("prop.in_state_placeholder")));
         let bounds = cx.new(|cx| InputState::new(window, cx).placeholder("Number, Comparable<T>"));
         let default = input(window, cx);
+        let member_multiplicity = cx.new(|cx| InputState::new(window, cx).placeholder("0..*"));
         let binding = cx.new(|cx| InputState::new(window, cx).placeholder("List<String>"));
         let parameter_kind =
             cx.new(|cx| SelectState::new(parameter_kind_items(), None, window, cx));
@@ -354,6 +359,7 @@ impl PropertiesPanel {
         watch(&in_state, Field::InState, cx);
         watch(&bounds, Field::Bounds, cx);
         watch(&default, Field::Default, cx);
+        watch(&member_multiplicity, Field::MemberMultiplicity, cx);
         watch(&binding, Field::Binding, cx);
         for (i, end) in ends.iter().enumerate() {
             watch(&end.role, Field::Role(i), cx);
@@ -524,6 +530,7 @@ impl PropertiesPanel {
             do_activity,
             exit,
             value_type,
+            member_multiplicity,
             in_state,
             bounds,
             default,
@@ -706,8 +713,32 @@ impl PropertiesPanel {
                     ElementKind::ActivityNode(p) if field == Field::ValueType => {
                         p.type_ref = single;
                     }
+                    ElementKind::Attribute(p) => match field {
+                        Field::ValueType => p.type_ref = single,
+                        Field::Default => p.default_value = text,
+                        _ => {}
+                    },
+                    ElementKind::Operation(p) if field == Field::ValueType => {
+                        p.return_type = single;
+                    }
                     _ => {}
                 });
+            }
+            Field::MemberMultiplicity => {
+                let text = Self::value(&self.member_multiplicity, cx);
+                let parsed =
+                    if text.is_empty() { Ok(None) } else { text.parse::<Multiplicity>().map(Some) };
+                match parsed {
+                    Ok(m) => self.apply(id, cx, move |data| {
+                        if let ElementKind::Attribute(p) = &mut data.kind {
+                            p.multiplicity = m;
+                        }
+                    }),
+                    Err(err) => self.workspace.update(cx, |ws, cx| {
+                        ws.complain(crate::errors::multiplicity_error(&err));
+                        cx.notify();
+                    }),
+                }
             }
             Field::Binding => {
                 // A template with its arguments, linked as a declaration links its types; text
@@ -859,6 +890,16 @@ impl PropertiesPanel {
                 let text = member::type_label(model, &p.type_ref).unwrap_or_default();
                 [text, String::new(), String::new()]
             }
+            // An attribute's type, multiplicity and initial value; an operation's return type.
+            ElementKind::Attribute(p) => [
+                member::type_label(model, &p.type_ref).unwrap_or_default(),
+                p.multiplicity.map(|m| m.to_string()).unwrap_or_default(),
+                p.default_value.clone(),
+            ],
+            ElementKind::Operation(p) => {
+                let text = member::type_label(model, &p.return_type).unwrap_or_default();
+                [text, String::new(), String::new()]
+            }
             _ => Default::default(),
         };
         let binding_text = match &data.kind {
@@ -1000,6 +1041,16 @@ impl PropertiesPanel {
                 set(&self.in_state, p.in_state.clone(), window, cx);
             }
             ElementKind::Class(_) => set(&self.binding, binding_text, window, cx),
+            ElementKind::Attribute(_) => {
+                let [type_text, multiplicity, default] = parameter_texts;
+                set(&self.value_type, type_text, window, cx);
+                set(&self.member_multiplicity, multiplicity, window, cx);
+                set(&self.default, default, window, cx);
+            }
+            ElementKind::Operation(_) => {
+                let [return_type, _, _] = parameter_texts;
+                set(&self.value_type, return_type, window, cx);
+            }
             ElementKind::TemplateParameter(p) => {
                 let [value_type, bounds, default] = parameter_texts;
                 set(&self.value_type, value_type, window, cx);
@@ -1340,6 +1391,22 @@ impl Render for PropertiesPanel {
             }
             ElementKind::Attribute(p) => {
                 body = body
+                    .child(field(
+                        t!("prop.name").into(),
+                        Input::new(&self.name).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.object_type").into(),
+                        Input::new(&self.value_type).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.multiplicity").into(),
+                        Input::new(&self.member_multiplicity).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.initial_value").into(),
+                        Input::new(&self.default).small().into_any_element(),
+                    ))
                     .child(flag(
                         "static",
                         t!("prop.static").into(),
@@ -1367,6 +1434,14 @@ impl Render for PropertiesPanel {
             }
             ElementKind::Operation(p) => {
                 body = body
+                    .child(field(
+                        t!("prop.name").into(),
+                        Input::new(&self.name).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.return_type").into(),
+                        Input::new(&self.value_type).small().into_any_element(),
+                    ))
                     .child(flag(
                         "static",
                         t!("prop.static").into(),

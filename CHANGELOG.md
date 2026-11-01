@@ -3,6 +3,27 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **New members without the properties panel**: a double click below the members of a
+  compartment opens an empty row; what is typed there becomes an attribute, operation or literal,
+  and Enter opens the next row. The class's context menu adds them too.
+- **Member types**: a right click on a member selects it and offers a Type submenu with basic
+  types and the model's classes, interfaces, enumerations and data types. The properties panel
+  shows an attribute's name, type, multiplicity and initial value as fields of their own, an
+  operation's name and return type.
+- **Association ends in place**: a double click on a role name or multiplicity edits it on the
+  diagram; near the end of the line it adds a role name that is not there yet.
+- **Change kind**: a relationship's context menu turns an association, generalization,
+  realization or dependency into another of these. The line's source becomes the specific end
+  or the client; kinds UML does not allow between the two elements are greyed out.
+- **Longer lifelines**: a selected lifeline shows a grip at its end that drags it longer, never
+  shorter than its messages.
+- **Extension points from an extend**: the extend's context menu adds an extension point to the
+  extended use case and lets the extend use it.
+- **New names selected**: when an inline editor opens for something just made, its default name
+  is selected, so typing replaces it.
+
 ## 0.13.0 – 2026-11-01
 
 - **Labels out of the way**: names, stereotypes, guards, role names and multiplicities of lines

@@ -211,7 +211,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
     let r = node.rect;
     let solid = LineStyle::Solid;
     match &node.figure {
-        Figure::Classifier { separators, template } => {
+        Figure::Classifier { separators, template, .. } => {
             // Astah draws classifier boxes with a 2 px border, compartment lines with 1 px.
             let mut result = vec![Primitive::Frame {
                 rect: r,

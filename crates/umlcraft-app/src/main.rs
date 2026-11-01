@@ -22,8 +22,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::*;
-use umlcraft_model::{Id, LineShape};
+use umlcraft_model::{Id, LineShape, TypeRef};
 use umlcraft_notation::layout::Direction;
+use umlcraft_notation::palette::EdgeTool;
 use umlcraft_reverse::SourceLanguage;
 
 use crate::workspace::{EndChange, NewItem};
@@ -79,6 +80,10 @@ actions!(
         ToggleMessageNumbers,
         ToggleFlatNumbers,
         AddExtensionPoint,
+        // An empty row at the end of the selected class's attributes, operations or literals.
+        AddAttribute,
+        AddOperation,
+        AddLiteral,
         // Folds the ribbon to its tabs, or unfolds it.
         ToggleRibbon,
     ]
@@ -98,6 +103,23 @@ pub struct SetAssociationEnd {
 #[action(namespace = umlcraft, no_json)]
 pub struct OpenRecent {
     pub index: usize,
+}
+
+/// Gives an attribute its type or an operation its return type, from the canvas's context
+/// menu.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct SetMemberType {
+    pub member: Id,
+    pub type_ref: TypeRef,
+}
+
+/// Turns the selected relationship into another kind, from the canvas's context menu.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct ChangeRelationship {
+    pub edge: Id,
+    pub tool: EdgeTool,
 }
 
 /// Gives the selected edges a line style.

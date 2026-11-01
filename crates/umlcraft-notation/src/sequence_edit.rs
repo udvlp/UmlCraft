@@ -628,6 +628,24 @@ pub fn place_label(
     })
 }
 
+/// Lets the lifeline `presentation` end at `bottom`, though not above the last message, bar or
+/// fragment it reaches, and tidies the diagram. A destroyed lifeline ends at its cross and
+/// stays as it is.
+pub fn set_lifeline_end(tx: &mut Tx<'_>, diagram: Id, presentation: Id, bottom: f32) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    let lane = g.lane(presentation).ok_or(ModelError::NotFound(presentation))?;
+    if lane.destroyed {
+        return Ok(());
+    }
+    let length = (bottom - lane.line_top()).max(RECEIVER_BAR);
+    tx.update_presentation(diagram, presentation, |p| {
+        if let Shape::Lifeline { length: l, .. } = &mut p.shape {
+            *l = length;
+        }
+    })?;
+    tidy(tx, diagram)
+}
+
 /// Moves a message, together with the bar it starts and everything sent from it, or a
 /// fragment's frame, so that it starts at height `y`.
 pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()> {
@@ -1579,6 +1597,22 @@ mod tests {
         let tops = bars(&doc, d).iter().filter(|(top, _)| *top == 200.0).count();
         assert_eq!(tops, 2, "{:?}", bars(&doc, d));
         doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn a_lifeline_is_dragged_longer_but_not_shorter_than_its_messages() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let bottom = |doc: &Document| match doc.model().view(d).unwrap().get(a).unwrap().shape {
+            Shape::Lifeline { head, length, .. } => head.bottom() + length,
+            _ => unreachable!(),
+        };
+        doc.edit("longer", |tx| super::set_lifeline_end(tx, d, a, 700.0)).unwrap();
+        assert_eq!(bottom(&doc), 700.0);
+        draw(&mut doc, d, EdgeTool::Message, a, b, 300.0);
+        // Above its message, it stops just below what it reaches.
+        doc.edit("shorter", |tx| super::set_lifeline_end(tx, d, a, 100.0)).unwrap();
+        let reach = bottom(&doc);
+        assert!((300.0..400.0).contains(&reach), "{reach}");
     }
 
     #[test]

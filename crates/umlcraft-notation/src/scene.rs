@@ -157,12 +157,78 @@ impl NodeShape {
     }
 }
 
+/// What a compartment of a classifier box lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compartment {
+    Attributes,
+    Operations,
+    Literals,
+    /// An object's slots, one per attribute of its class.
+    Slots,
+}
+
+/// A compartment of a classifier box under a point, for adding a member to it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompartmentHit {
+    /// The box's presentation and the element it shows.
+    pub node: Id,
+    pub element: Id,
+    pub compartment: Compartment,
+    /// The last member listed there, if any: a new one goes after it.
+    pub last: Option<Id>,
+    /// Where a row added at its end goes.
+    pub new_row: Rect,
+}
+
+/// The compartment of a classifier box at `p` that takes new members: attributes, operations
+/// or literals, not an object's slots.
+pub fn compartment_at(scene: &Scene, p: Point) -> Option<CompartmentHit> {
+    scene.nodes.iter().rev().filter(|n| n.rect.contains(p)).find_map(|n| {
+        let Figure::Classifier { separators, .. } = &n.figure else { return None };
+        compartment_hit(n, separators.iter().rposition(|&y| y <= p.y)?)
+    })
+}
+
+/// The compartment `compartment` of the box `node` shows, if it shows one.
+pub fn compartment_of(scene: &Scene, node: Id, compartment: Compartment) -> Option<CompartmentHit> {
+    let n = scene.node(node)?;
+    let Figure::Classifier { compartments, .. } = &n.figure else { return None };
+    compartment_hit(n, compartments.iter().position(|&c| c == compartment)?)
+}
+
+/// The `i`th compartment of the box `n`, unless it lists an object's slots.
+fn compartment_hit(n: &NodeShape, i: usize) -> Option<CompartmentHit> {
+    let Figure::Classifier { separators, compartments, .. } = &n.figure else { return None };
+    let compartment = *compartments.get(i)?;
+    if compartment == Compartment::Slots {
+        return None;
+    }
+    let top = *separators.get(i)?;
+    let bottom = separators.get(i + 1).copied().unwrap_or(n.rect.bottom());
+    let rows: Vec<&Row> = n
+        .rows
+        .iter()
+        .filter(|r| r.role == RowRole::Member && r.rect.y >= top && r.rect.y < bottom)
+        .collect();
+    let height = line_height(rows.first().map_or(FONT_SIZE, |r| r.size));
+    let y = rows.last().map_or(top + BOX_PAD_Y, |r| r.rect.bottom());
+    Some(CompartmentHit {
+        node: n.id,
+        element: n.element?,
+        compartment,
+        last: rows.last().and_then(|r| r.element),
+        new_row: Rect::new(n.rect.x + BOX_PAD_X, y, n.rect.width - 2.0 * BOX_PAD_X, height),
+    })
+}
+
 /// The outline of a node; its texts are in [`NodeShape::rows`].
 pub enum Figure {
-    /// Box with compartment separators at the given y positions; a template's parameters are
-    /// in a dashed box on its top right corner.
+    /// Box with compartment separators at the given y positions, each above the compartment of
+    /// the same index in `compartments`; a template's parameters are in a dashed box on its top
+    /// right corner.
     Classifier {
         separators: Vec<f32>,
+        compartments: Vec<Compartment>,
         template: Option<Rect>,
     },
     /// Interface drawn as a small circle.
@@ -419,6 +485,30 @@ pub struct EdgeShape {
     /// The labels not placed by hand, which [`labels::place`](crate::labels::place) moves to
     /// where they cover least.
     pub free_labels: Vec<FreeLabel>,
+    /// The line stands for an association; its role and multiplicity labels are in
+    /// `end_labels`.
+    pub association: bool,
+    pub end_labels: Vec<EndLabel>,
+}
+
+/// A role name or multiplicity among an edge's labels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndLabel {
+    /// Its index in [`EdgeShape::labels`].
+    pub index: usize,
+    /// The association end it belongs to: 0 for the source, 1 for the target.
+    pub end: usize,
+    pub multiplicity: bool,
+}
+
+/// A role name or multiplicity to edit in place, from [`end_label_at`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EndLabelHit {
+    pub edge: Id,
+    pub end: usize,
+    pub multiplicity: bool,
+    /// Where the label is, or would go for a role not given yet.
+    pub rect: Rect,
 }
 
 /// A grip on a selected edge: an existing waypoint, the middle of a segment where dragging
@@ -945,6 +1035,8 @@ fn free_line(p: &Presentation, preview: &Preview) -> Option<EdgeShape> {
         qualifiers: Vec::new(),
         node_tips: [from, to],
         free_labels: Vec::new(),
+        association: false,
+        end_labels: Vec::new(),
     })
 }
 
@@ -1532,7 +1624,11 @@ fn layout_object(
         y += h;
     }
     y += PAD_Y;
-    let separators = if style.hide_attributes { Vec::new() } else { vec![y] };
+    let (separators, compartments) = if style.hide_attributes {
+        (Vec::new(), Vec::new())
+    } else {
+        (vec![y], vec![Compartment::Slots])
+    };
     y += PAD_Y;
     for line in slots {
         let h = line_height(line.size);
@@ -1541,7 +1637,7 @@ fn layout_object(
         );
         y += h;
     }
-    (r, Figure::Classifier { separators, template: None }, rows)
+    (r, Figure::Classifier { separators, compartments, template: None }, rows)
 }
 
 /// States: the name, centered; below a line the internal activities (`entry / …`), or room for
@@ -1970,15 +2066,19 @@ fn layout_classifier(
     let attributes = members(|k| matches!(k, ElementKind::Attribute(_)));
     let operations = members(|k| matches!(k, ElementKind::Operation(_)));
     let mut compartments: Vec<Vec<Line>> = Vec::new();
+    let mut kinds = Vec::new();
     if !style.hide_attributes {
         compartments.push(attributes);
+        kinds.push(Compartment::Attributes);
     }
     if !style.hide_operations {
         compartments.push(operations);
+        kinds.push(Compartment::Operations);
     }
     // Astah lists an enumeration's literals in a compartment of their own at the bottom.
     if let ElementKind::Enumeration(_) = kind {
         compartments.push(members(|k| matches!(k, ElementKind::EnumerationLiteral)));
+        kinds.push(Compartment::Literals);
     }
 
     // A line needs its width as Astah measures it (Java's whole-pixel width or the exact one,
@@ -2057,7 +2157,7 @@ fn layout_classifier(
         y += PAD_Y;
     }
     let template = template_box(model, id, r, measure, &mut rows);
-    (r, Figure::Classifier { separators, template }, rows)
+    (r, Figure::Classifier { separators, compartments: kinds, template }, rows)
 }
 
 /// The dashed box with a template's parameters (`T>Number, N:int=10`), as Astah draws it: 4 px
@@ -2173,6 +2273,8 @@ fn edge_for(
         name_arrow: None,
         qualifiers: Vec::new(),
         free_labels: Vec::new(),
+        association: false,
+        end_labels: Vec::new(),
     };
     // Role, multiplicity and whether the role is underlined (static), per end.
     let mut ends: [(Option<String>, Option<String>, bool); 2] = Default::default();
@@ -2192,6 +2294,7 @@ fn edge_for(
     match kind {
         Some(ElementKind::Association(p)) => {
             let [a, b] = &p.ends;
+            edge.association = true;
             edge.source_marker = end_marker(a);
             edge.target_marker = end_marker(b);
             // Role names show their visibility, as Astah does: "- customer". Constraints follow
@@ -2368,6 +2471,10 @@ fn edge_for(
             LabelKind::Multiplicity { source: end.source }
         };
         note_free(&mut edge.free_labels, edge.labels.len(), offset.is_none(), kind, 1);
+        if edge.association {
+            let (index, end) = (edge.labels.len(), usize::from(!end.source));
+            edge.end_labels.push(EndLabel { index, end, multiplicity: !role });
+        }
         edge.labels.push(label);
     }
     edge
@@ -2659,6 +2766,53 @@ pub fn keyword_label_at(
         let (a, b) = route::middle_segment(&e.points, e.shape.is_curve());
         Some((e.id, label.anchor, middle(a, b)))
     })
+}
+
+/// The role name or multiplicity of an association end at `p`, for editing it in place: a label
+/// under `p`, else the role of the end whose tip lies near `p` on the line, even if it has none
+/// yet.
+pub fn end_label_at(
+    scene: &Scene,
+    p: Point,
+    tolerance: f32,
+    measure: &dyn TextMeasure,
+) -> Option<EndLabelHit> {
+    // How far from its tip a click on the line still means the end.
+    const REACH: f32 = 40.0;
+    let rect = |e: &EdgeShape, l: &EndLabel| {
+        let label = &e.labels[l.index];
+        let width = label_width(&label.text, measure);
+        Rect::new(label.anchor.x, label.anchor.y, width, LABEL_HEIGHT)
+    };
+    let hit = |e: &EdgeShape, l: &EndLabel, rect: Rect| EndLabelHit {
+        edge: e.id,
+        end: l.end,
+        multiplicity: l.multiplicity,
+        rect,
+    };
+    let associations = || scene.edges.iter().rev().filter(|e| e.association);
+    if let Some(found) = associations().find_map(|e| {
+        e.end_labels
+            .iter()
+            .map(|l| (l, rect(e, l)))
+            .find(|(_, r)| r.contains(p))
+            .map(|(l, r)| hit(e, l, r))
+    }) {
+        return Some(found);
+    }
+    let e = scene.edge(edge_at(scene, p, tolerance)?).filter(|e| e.association)?;
+    let n = e.points.len();
+    let ends = [
+        End { tip: e.points[0], next: e.points[1], source: true },
+        End { tip: e.points[n - 1], next: e.points[n - 2], source: false },
+    ];
+    let end = (0..2).find(|&i| ends[i].tip.distance(p) <= REACH)?;
+    if let Some(l) = e.end_labels.iter().find(|l| l.end == end && !l.multiplicity) {
+        return Some(hit(e, l, rect(e, l)));
+    }
+    let role = EndLabel { index: usize::MAX, end, multiplicity: false };
+    let label = end_label("role".into(), ends[end], true, measure);
+    Some(hit(e, &role, Rect::new(label.anchor.x, label.anchor.y, 80.0, LABEL_HEIGHT)))
 }
 
 /// Nodes lying completely inside `area`, e.g. a rubber band.
@@ -3159,6 +3313,85 @@ mod tests {
             header(&Stereotype),
             [("<<abstract>>".to_owned(), false), ("Shape1".to_owned(), true)]
         );
+    }
+
+    #[test]
+    fn association_ends_are_found_by_their_labels_and_near_their_tips() {
+        use crate::palette::{EdgeTool, NodeTool, connect, create_node};
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let (association, edge) = doc
+            .edit("association", |tx| {
+                let (_, a) = create_node(tx, d, NodeTool::Class, Point::new(100.0, 900.0), "A")?;
+                let (_, b) = create_node(tx, d, NodeTool::Class, Point::new(500.0, 900.0), "B")?;
+                let edge = connect(tx, d, EdgeTool::Association, a, b)?;
+                let view = tx.model().view(d).unwrap();
+                Ok((view.get(edge).unwrap().element.unwrap(), edge))
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let shape = scene.edge(edge).unwrap();
+        assert!(shape.association && shape.end_labels.is_empty());
+        // No role yet: near the target's tip, its role is offered where it would go.
+        let tip = *shape.points.last().unwrap();
+        let near = end_label_at(&scene, tip.offset(-20.0, 0.0), 3.0, &ApproxMeasure).unwrap();
+        assert_eq!((near.edge, near.end, near.multiplicity), (edge, 1, false));
+        let middle = middle(shape.points[0], tip);
+        assert_eq!(end_label_at(&scene, middle, 3.0, &ApproxMeasure), None);
+
+        doc.edit("ends", |tx| {
+            tx.update(association, |data| {
+                if let ElementKind::Association(p) = &mut data.kind {
+                    p.ends[0].role = "owner".into();
+                    p.ends[0].multiplicity = Some("1".parse().unwrap());
+                }
+            })
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let shape = scene.edge(edge).unwrap();
+        assert_eq!(shape.end_labels.len(), 2);
+        for l in &shape.end_labels {
+            let label = &shape.labels[l.index];
+            let inside = label.anchor.offset(2.0, LABEL_HEIGHT / 2.0);
+            let hit = end_label_at(&scene, inside, 3.0, &ApproxMeasure).unwrap();
+            assert_eq!((hit.end, hit.multiplicity), (0, l.multiplicity), "{}", label.text);
+            assert_eq!(label.text.contains("owner"), !l.multiplicity);
+        }
+    }
+
+    #[test]
+    fn a_new_member_goes_below_the_last_one_of_its_compartment() {
+        use crate::palette::{NodeTool, create_node};
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let (class, node) = doc
+            .edit("class", |tx| {
+                create_node(tx, d, NodeTool::Class, Point::new(600.0, 400.0), "Shape")
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let empty = compartment_of(&scene, node, Compartment::Attributes).unwrap();
+        assert_eq!((empty.element, empty.last), (class, None));
+        let inside = Point::new(empty.new_row.x + 5.0, empty.new_row.y + 2.0);
+        assert_eq!(compartment_at(&scene, inside), Some(empty));
+        let operations = compartment_of(&scene, node, Compartment::Operations).unwrap();
+        assert!(operations.new_row.y > empty.new_row.y);
+        assert_eq!(compartment_of(&scene, node, Compartment::Literals), None);
+
+        let attribute = doc
+            .edit("attribute", |tx| {
+                tx.create(class, ElementData::new("area", ElementKind::attribute(None)))
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let one = compartment_of(&scene, node, Compartment::Attributes).unwrap();
+        assert_eq!(one.last, Some(attribute));
+        assert!(one.new_row.y > empty.new_row.y);
+        // The class's name is no compartment for members.
+        let rect = scene.node(node).unwrap().rect;
+        let name = Point::new(rect.x + 10.0, rect.y + 5.0);
+        assert_eq!(compartment_at(&scene, name), None);
     }
 
     #[test]

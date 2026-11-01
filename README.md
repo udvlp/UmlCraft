@@ -112,7 +112,16 @@ tree, diagram and properties are cards beside each other. A double click on a ri
 the ribbon to its tabs; in a narrow window its buttons show icons only.
 
 Inline editing by double-click with a parser for `+ name : Type [0..*] = init` and
-`+ op(p : T) : R`; a properties panel for everything else. Undo and redo for every change, copy,
+`+ op(p : T) : R`; a properties panel for everything else. A double click below the members of
+a compartment, or Add attribute/operation/literal in the context menu, opens an empty row for a
+new member, and Enter opens the next one. A right click on a member selects it and offers its
+type (basic types and the model's classes); the properties panel splits an attribute into name,
+type, multiplicity and initial value. Role names and multiplicities are edited by double-click
+on their label or near the end of the association. Change kind in a relationship's context menu
+turns an association, generalization, realization or dependency into another of these, the
+line's source becoming the specific end or the client. A selected lifeline's end can be dragged
+to make it longer, and an extend's context menu adds an extension point to the extended use
+case. Undo and redo for every change, copy,
 cut and paste (as a copy or as the same elements), rubber-band and multiple selection, alignment,
 waypoints, zoom to fit, drag and drop within the model tree and from the tree onto the canvas.
 Automatic layout: new lines are routed around the nodes at right angles and follow when their

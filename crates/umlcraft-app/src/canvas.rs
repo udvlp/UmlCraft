@@ -13,23 +13,24 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
     Aggregation, AssociationEnd, ElementKind, Id, LineShape, Model, Multiplicity, Navigability,
-    Point as MPoint, Rect, Shape,
+    Point as MPoint, Rect, Shape, TypeRef,
 };
 use umlcraft_notation::draw::{self, Paint, Primitive};
-use umlcraft_notation::member::member_text;
+use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::route::{self, Route};
 use umlcraft_notation::scene::{
-    self, EdgeHandle, EdgeShape, FONT_SIZE, Figure, Handle, LabelAlign, LineStyle, NodeShape,
-    Preview, Row, RowRole, Scene, TextMeasure,
+    self, Compartment, CompartmentHit, EdgeHandle, EdgeShape, EndLabelHit, FONT_SIZE, Figure,
+    Handle, LabelAlign, LineStyle, NodeShape, Preview, Row, RowRole, Scene, TextMeasure,
 };
 use umlcraft_notation::sequence::SequenceLayout;
 
 use crate::workspace::{EndChange, NewItem, Workspace};
 use crate::{
-    AddExtensionPoint, Cancel, DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetLabels,
-    ResetLineEnds, ResetZoom, SelectAll, SetAssociationEnd, SetLineShape, ZoomToFit,
+    AddAttribute, AddExtensionPoint, AddLiteral, AddOperation, Cancel, ChangeRelationship,
+    DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetLabels, ResetLineEnds, ResetZoom,
+    SelectAll, SetAssociationEnd, SetLineShape, SetMemberType, ZoomToFit,
 };
 
 const MIN_ZOOM: f32 = 0.25;
@@ -196,6 +197,58 @@ fn association_menu(
     })
 }
 
+/// Where a lifeline's line runs: its x, top and bottom; `None` for other nodes.
+fn lifeline_end(node: &NodeShape) -> Option<(f32, f32, f32)> {
+    match node.figure {
+        Figure::Lifeline { head, line: (top, bottom), .. } => Some((head.center().x, top, bottom)),
+        _ => None,
+    }
+}
+
+/// Basic types offered for attributes and operations, before the model's own types.
+const BASIC_TYPES: [&str; 7] = ["int", "double", "boolean", "String", "char", "long", "float"];
+
+/// The types the "Type" submenu offers for an attribute or operation `member`: basic types,
+/// then the model's classes, interfaces, enumerations and data types by name (a `None` between
+/// them), each with whether the member has it.
+#[allow(clippy::type_complexity)]
+fn member_types(model: &Model, member: Id) -> Option<(Id, Vec<Option<(String, TypeRef, bool)>>)> {
+    let (current, operation) = match model.get(member)?.kind() {
+        ElementKind::Attribute(p) => (p.type_ref.clone(), false),
+        ElementKind::Operation(p) => (p.return_type.clone(), true),
+        _ => return None,
+    };
+    let entry = |label: String, type_ref: TypeRef| {
+        let checked = current.as_ref() == Some(&type_ref);
+        Some((label, type_ref, checked))
+    };
+    let basic = BASIC_TYPES.iter().copied().chain(operation.then_some("void"));
+    let mut types: Vec<_> = basic
+        .clone()
+        .map(|name| entry(name.to_owned(), member::resolve_type(model, name)))
+        .collect();
+    let mut own: Vec<(String, Id)> = model
+        .elements()
+        .filter(|e| {
+            matches!(
+                e.kind(),
+                ElementKind::Class(_)
+                    | ElementKind::Interface(_)
+                    | ElementKind::Enumeration(_)
+                    | ElementKind::DataType(_)
+            )
+        })
+        .filter(|e| !e.name().is_empty() && !basic.clone().any(|b| b == e.name()))
+        .map(|e| (e.name().to_owned(), e.id()))
+        .collect();
+    own.sort();
+    if !own.is_empty() {
+        types.push(None);
+        types.extend(own.into_iter().map(|(name, id)| entry(name, TypeRef::Element(id))));
+    }
+    Some((member, types))
+}
+
 /// An element dragged from the model tree.
 #[derive(Clone)]
 pub struct DraggedElement {
@@ -300,6 +353,13 @@ enum Drag {
         end: usize,
         current: MPoint,
     },
+    /// Dragging the end of the lifeline `presentation`, whose line runs down from `top` at `x`.
+    LifelineEnd {
+        presentation: Id,
+        x: f32,
+        top: f32,
+        current: MPoint,
+    },
 }
 
 enum Editor {
@@ -319,8 +379,24 @@ struct InlineEdit {
     rect: Rect,
     /// The text the editor opened with; committing it unchanged changes nothing.
     original: String,
+    /// A member not made yet: the text becomes one on committing.
+    new_member: Option<NewMember>,
+    /// An association end of `element`, by index, whose role (or, if true, multiplicity) is
+    /// edited.
+    end: Option<(usize, bool)>,
     editor: Editor,
     _subscription: Subscription,
+}
+
+/// Where a member typed into an empty row goes.
+#[derive(Clone, Copy)]
+struct NewMember {
+    /// The classifier's box and the classifier.
+    node: Id,
+    owner: Id,
+    compartment: Compartment,
+    /// The member it follows; none puts it at the end.
+    after: Option<Id>,
 }
 
 pub struct DiagramCanvas {
@@ -338,9 +414,16 @@ pub struct DiagramCanvas {
     drag: Option<Drag>,
     /// Where the last right click went, for the context menu.
     right_click: Option<MPoint>,
+    /// The member row the last right click hit, for the context menu.
+    right_member: Option<Id>,
     editing: Option<InlineEdit>,
     /// An element whose row is edited inline once the next scene shows it.
     edit_when_drawn: Option<Id>,
+    /// The next editor opens with its text selected.
+    select_when_drawn: bool,
+    /// A compartment of a box (its presentation) that gets an empty row for the next member
+    /// once the next scene shows the one just added.
+    new_member_when_drawn: Option<(Id, Compartment)>,
     /// How the diagram is drawn beyond what it stores (settings).
     pub display: Display,
     /// The corner radius of the card the canvas fills; background and grid keep inside the
@@ -478,8 +561,11 @@ impl DiagramCanvas {
             scene: Rc::new(Scene::empty()),
             drag: None,
             right_click: None,
+            right_member: None,
             editing: None,
             edit_when_drawn: None,
+            select_when_drawn: false,
+            new_member_when_drawn: None,
             display: Display::default(),
             corner_radius: 0.0,
             scene_key: None,
@@ -604,6 +690,39 @@ impl DiagramCanvas {
     }
 
     /// The use case of the one selected node, if it shows one.
+    /// The compartments that take members in the one selected box, with the box.
+    fn selected_compartments(&self, cx: &App) -> Option<(Id, Vec<Compartment>)> {
+        let ws = self.workspace.read(cx);
+        let [single] = ws.selection[..] else { return None };
+        let Figure::Classifier { compartments, .. } = &self.scene.node(single)?.figure else {
+            return None;
+        };
+        let takes = compartments.iter().copied().filter(|&c| c != Compartment::Slots).collect();
+        Some((single, takes))
+    }
+
+    /// Opens an empty row at the end of `compartment` of the selected box for a new member.
+    fn add_member_row(
+        &mut self,
+        compartment: Compartment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((node, _)) = self.selected_compartments(cx) else { return };
+        if let Some(hit) = scene::compartment_of(&self.scene, node, compartment) {
+            self.open_new_member(hit, window, cx);
+        }
+    }
+
+    /// The extend the one selected line stands for.
+    fn selected_extend(&self, cx: &App) -> Option<Id> {
+        let ws = self.workspace.read(cx);
+        let [single] = ws.selection[..] else { return None };
+        let view = ws.doc.model().view(ws.active_diagram?)?;
+        let element = view.get(single)?.element?;
+        matches!(ws.doc.model().get(element)?.kind(), ElementKind::Extend(_)).then_some(element)
+    }
+
     fn selected_use_case(&self, cx: &App) -> Option<Id> {
         let ws = self.workspace.read(cx);
         let [single] = ws.selection[..] else { return None };
@@ -709,7 +828,26 @@ impl DiagramCanvas {
                     cx.notify();
                     return;
                 }
+                // Role names and multiplicities lie over everything else.
+                if ev.click_count == 2
+                    && let Some(hit) = scene::end_label_at(
+                        &self.scene,
+                        p,
+                        self.hit_tolerance(),
+                        &FontMeasure::new(window, self.display),
+                    )
+                {
+                    self.open_end_editor(hit, window, cx);
+                    return;
+                }
                 if ev.click_count == 2 && self.start_edit_at(p, window, cx) {
+                    return;
+                }
+                // Below the members of a compartment, a double click starts a new one.
+                if ev.click_count == 2
+                    && let Some(hit) = scene::compartment_at(&self.scene, p)
+                {
+                    self.open_new_member(hit, window, cx);
                     return;
                 }
                 // The lines between the regions of a state can be moved.
@@ -809,6 +947,13 @@ impl DiagramCanvas {
     ) -> bool {
         let [single] = selection[..] else { return false };
         let tolerance = HANDLE_GRAB / self.zoom;
+        if let Some((x, top, bottom)) = self.scene.node(single).and_then(lifeline_end)
+            && (p.x - x).abs() <= tolerance
+            && (p.y - bottom).abs() <= tolerance
+        {
+            self.drag = Some(Drag::LifelineEnd { presentation: single, x, top, current: p });
+            return true;
+        }
         if let Some(node) = self.scene.node(single).filter(|n| n.resizable())
             && let Some(handle) = Handle::at(node.rect, p, tolerance)
         {
@@ -879,10 +1024,20 @@ impl DiagramCanvas {
         let p = self.to_logical(ev.position);
         self.right_click = Some(p);
         let hit = scene::hit_test(&self.scene, p, self.hit_tolerance());
-        self.update_workspace(cx, |ws| match hit {
-            Some(id) if ws.selection.contains(&id) => {}
-            Some(id) => ws.select(vec![id]),
-            None => ws.clear_selection(),
+        // On a member row, the member is selected too, for the properties panel and the menu.
+        let member = scene::row_at(&self.scene, p)
+            .filter(|(n, r)| Some(n.id) == hit && r.role == RowRole::Member)
+            .and_then(|(_, r)| r.element);
+        self.right_member = member;
+        self.update_workspace(cx, |ws| {
+            match hit {
+                Some(id) if ws.selection.contains(&id) => {}
+                Some(id) => ws.select(vec![id]),
+                None => ws.clear_selection(),
+            }
+            if member.is_some() {
+                ws.selected_element = member;
+            }
         });
     }
 
@@ -906,10 +1061,21 @@ impl DiagramCanvas {
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
-        let (current, labeled, association, use_case, nothing, focus) = {
+        let (current, labeled, association, use_case, compartments, typed, kinds, nothing, focus) = {
             let this = canvas.read(cx);
             let ws = this.workspace.read(cx);
-            let use_case = this.selected_use_case(cx).is_some();
+            let kinds = match (&ws.selection[..], ws.active_diagram) {
+                (&[single], Some(diagram)) => {
+                    palette::relationship_kinds(ws.doc.model(), diagram, single)
+                        .map(|kinds| (single, kinds))
+                }
+                _ => None,
+            };
+            let typed = this.right_member.and_then(|m| member_types(ws.doc.model(), m));
+            // A use case, or an extend for the use case it extends.
+            let use_case =
+                this.selected_use_case(cx).is_some() || this.selected_extend(cx).is_some();
+            let compartments = this.selected_compartments(cx).map(|(_, c)| c).unwrap_or_default();
             let current: Vec<LineShape> = this.selected_edges(cx).iter().map(|e| e.shape).collect();
             let labeled = ws.selection.iter().any(|&id| this.scene.edge(id).is_some());
             let association = match ws.selection[..] {
@@ -919,12 +1085,58 @@ impl DiagramCanvas {
                 _ => None,
             };
             let nothing = ws.selection.is_empty();
-            (current, labeled, association, use_case, nothing, this.focus_handle.clone())
+            let focus = this.focus_handle.clone();
+            (current, labeled, association, use_case, compartments, typed, kinds, nothing, focus)
         };
         let mut menu = menu.action_context(focus);
+        if let Some((member, types)) = typed {
+            menu = menu
+                .submenu(t!("menu.type"), window, cx, move |menu, _, _| {
+                    types.iter().fold(menu, |menu, choice| match choice {
+                        None => menu.separator(),
+                        Some((label, type_ref, checked)) => {
+                            let action = SetMemberType { member, type_ref: type_ref.clone() };
+                            menu.menu_with_check(label.clone(), *checked, Box::new(action))
+                        }
+                    })
+                })
+                .separator();
+        }
+        if !compartments.is_empty() {
+            for compartment in &compartments {
+                menu = match compartment {
+                    Compartment::Attributes => {
+                        menu.menu(t!("menu.add_attribute"), Box::new(AddAttribute))
+                    }
+                    Compartment::Operations => {
+                        menu.menu(t!("menu.add_operation"), Box::new(AddOperation))
+                    }
+                    Compartment::Literals => {
+                        menu.menu(t!("menu.add_literal"), Box::new(AddLiteral))
+                    }
+                    Compartment::Slots => menu,
+                };
+            }
+            menu = menu.separator();
+        }
         if use_case {
             menu =
                 menu.menu(t!("menu.add_extension_point"), Box::new(AddExtensionPoint)).separator();
+        }
+        if let Some((edge, (current, kinds))) = kinds {
+            menu = menu
+                .submenu(t!("menu.change_kind"), window, cx, move |menu, _, _| {
+                    kinds.iter().fold(menu, |menu, &(tool, allowed)| {
+                        let label = t!(format!("tool.{}", tool.key()));
+                        let action = Box::new(ChangeRelationship { edge, tool });
+                        if tool == current {
+                            menu.menu_with_check(label, true, action)
+                        } else {
+                            menu.menu_with_disabled(label, action, !allowed)
+                        }
+                    })
+                })
+                .separator();
         }
         if let Some((association, ends)) = association {
             menu = association_menu(menu, association, ends, window, cx).separator();
@@ -982,7 +1194,8 @@ impl DiagramCanvas {
             | Drag::KeywordLabel { current, .. } => *current = p,
             Drag::RegionLine { current, .. }
             | Drag::FreeLine { current, .. }
-            | Drag::LineEnd { current, .. } => *current = snap_point(p),
+            | Drag::LineEnd { current, .. }
+            | Drag::LifelineEnd { current, .. } => *current = snap_point(p),
             Drag::Pan { last } => {
                 let delta = position - *last;
                 *last = position;
@@ -1022,6 +1235,9 @@ impl DiagramCanvas {
             }
             Some(Drag::LineEnd { line, end, current }) => {
                 self.update_workspace(cx, |ws| ws.set_free_line_end(line, end, current));
+            }
+            Some(Drag::LifelineEnd { presentation, current, .. }) => {
+                self.update_workspace(cx, |ws| ws.set_lifeline_end(presentation, current.y));
             }
             Some(Drag::RubberBand { start, extend, .. }) => {
                 let area = Rect::from_corners(start, p);
@@ -1222,12 +1438,21 @@ impl DiagramCanvas {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Focus once the editor is on screen; the click itself still focuses the canvas.
+        // Focus once the editor is on screen; the click itself still focuses the canvas. The
+        // default name of something just made is selected, so typing replaces it.
         let original = text.clone();
+        let select = std::mem::take(&mut self.select_when_drawn);
         let editor = if multi_line {
             let state = cx.new(|cx| TextareaState::new(window, cx).default_value(text));
             let focus = state.clone();
-            window.on_next_frame(move |window, cx| focus.update(cx, |s, cx| s.focus(window, cx)));
+            window.on_next_frame(move |window, cx| {
+                focus.update(cx, |s, cx| {
+                    s.focus(window, cx);
+                    if select {
+                        s.select_all(window, cx);
+                    }
+                });
+            });
             let subscription =
                 cx.subscribe_in(&state, window, |this, _, ev: &InputEvent, _, cx| {
                     if matches!(ev, InputEvent::Blur) {
@@ -1238,12 +1463,19 @@ impl DiagramCanvas {
         } else {
             let state = cx.new(|cx| InputState::new(window, cx).default_value(text));
             let focus = state.clone();
-            window.on_next_frame(move |window, cx| focus.update(cx, |s, cx| s.focus(window, cx)));
-            let subscription =
-                cx.subscribe_in(&state, window, |this, _, ev: &InputEvent, _, cx| {
-                    if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                        this.commit_edit(cx);
+            window.on_next_frame(move |window, cx| {
+                focus.update(cx, |s, cx| {
+                    s.focus(window, cx);
+                    if select {
+                        s.select_all(window, cx);
                     }
+                });
+            });
+            let subscription =
+                cx.subscribe_in(&state, window, |this, _, ev: &InputEvent, _, cx| match ev {
+                    InputEvent::PressEnter { .. } => this.finish_edit(true, cx),
+                    InputEvent::Blur => this.commit_edit(cx),
+                    _ => {}
                 });
             (Editor::Line(state), subscription)
         };
@@ -1253,19 +1485,98 @@ impl DiagramCanvas {
             free_text,
             rect,
             original,
+            new_member: None,
+            end: None,
             editor: editor.0,
             _subscription: editor.1,
         });
         cx.notify();
     }
 
+    /// Opens an editor for the role or multiplicity of the association end `hit` names.
+    fn open_end_editor(&mut self, hit: EndLabelHit, window: &mut Window, cx: &mut Context<Self>) {
+        let ws = self.workspace.read(cx);
+        let model = ws.doc.model();
+        let Some(view) = ws.active_diagram.and_then(|d| model.view(d)) else { return };
+        let Some(association) = view.get(hit.edge).and_then(|p| p.element) else { return };
+        let Some(ElementKind::Association(p)) = model.get(association).map(|e| e.kind()) else {
+            return;
+        };
+        let Some(end) = p.ends.get(hit.end) else { return };
+        let text = if hit.multiplicity {
+            end.multiplicity.map(|m| m.to_string()).unwrap_or_default()
+        } else {
+            end.role.clone()
+        };
+        self.workspace.update(cx, |ws, cx| {
+            ws.select(vec![hit.edge]);
+            ws.selected_element = Some(association);
+            cx.notify();
+        });
+        let rect = Rect::new(hit.rect.x, hit.rect.y, hit.rect.width.max(80.0), hit.rect.height);
+        self.open_editor(association, None, false, rect, text, false, window, cx);
+        if let Some(edit) = &mut self.editing {
+            edit.end = Some((hit.end, hit.multiplicity));
+        }
+    }
+
+    /// Opens an empty row where `hit` says a new member goes; what is typed there becomes the
+    /// member on committing, nothing if the row stays empty.
+    fn open_new_member(
+        &mut self,
+        hit: CompartmentHit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.update(cx, |ws, cx| {
+            ws.select(vec![hit.node]);
+            cx.notify();
+        });
+        self.open_editor(hit.element, None, false, hit.new_row, String::new(), false, window, cx);
+        if let Some(edit) = &mut self.editing {
+            edit.new_member = Some(NewMember {
+                node: hit.node,
+                owner: hit.element,
+                compartment: hit.compartment,
+                after: hit.last,
+            });
+        }
+    }
+
     /// Writes the in-place edit back, if one is open.
     pub fn commit_edit(&mut self, cx: &mut Context<Self>) {
+        self.finish_edit(false, cx);
+    }
+
+    /// Writes the in-place edit back; with `enter`, a new member is followed by an empty row
+    /// for the next one, as long as rows are filled in.
+    fn finish_edit(&mut self, enter: bool, cx: &mut Context<Self>) {
         let Some(edit) = self.editing.take() else { return };
         let text = match &edit.editor {
             Editor::Line(s) => s.read(cx).value().to_string(),
             Editor::Area(s) => s.read(cx).value().to_string(),
         };
+        if let Some((end, multiplicity)) = edit.end {
+            if text != edit.original {
+                self.update_workspace(cx, |ws| {
+                    ws.set_end_text(edit.element, end, multiplicity, &text)
+                });
+            }
+            cx.notify();
+            return;
+        }
+        if let Some(new) = edit.new_member {
+            let added = self.workspace.update(cx, |ws, cx| {
+                let added = ws.add_member(new.owner, new.compartment, new.after, &text);
+                cx.notify();
+                added
+            });
+            if enter && added.is_some() {
+                self.new_member_when_drawn = Some((new.node, new.compartment));
+            }
+            cx.notify();
+            return;
+        }
         if text == edit.original {
             cx.notify();
             return;
@@ -1732,21 +2043,33 @@ impl Render for DiagramCanvas {
         // A scene with a drag preview is not the plain one of this key.
         self.scene_key = if self.drag.is_none() { key } else { None };
         self.scene = scene.clone();
+        // After a member typed into an empty row, the next empty row opens below it.
+        if let Some((node, compartment)) = self.new_member_when_drawn.take()
+            && let Some(hit) = scene::compartment_of(&scene, node, compartment)
+        {
+            cx.defer_in(window, move |this, window, cx| this.open_new_member(hit, window, cx));
+        }
         // A row just added from the context menu is edited as soon as it is drawn.
         if let Some(element) = self.edit_when_drawn.take() {
             let row = scene.nodes.iter().flat_map(|n| &n.rows).find(|r| r.element == Some(element));
             let text = scene.node(element).filter(|n| matches!(n.figure, Figure::Text));
             if let Some(at) = row.map(|r| r.rect.center()).or(text.map(|n| n.rect.center())) {
                 cx.defer_in(window, move |this, window, cx| {
+                    this.select_when_drawn = true;
                     this.start_edit_at(at, window, cx);
+                    this.select_when_drawn = false;
                 });
             }
         }
         let selection = self.workspace.read(cx).selection.clone();
-        // A single selected free line shows grips at its ends.
+        // A single selected free line shows grips at its ends, a lifeline one at its end.
         let line_ends = match selection[..] {
             [single] if self.is_free_line(single, cx) => {
                 scene.edge(single).map(|e| e.points.clone()).unwrap_or_default()
+            }
+            [single] => {
+                let end = scene.node(single).and_then(lifeline_end);
+                end.map(|(x, _, bottom)| MPoint::new(x, bottom)).into_iter().collect()
             }
             _ => Vec::new(),
         };
@@ -1769,7 +2092,9 @@ impl Render for DiagramCanvas {
         let (pan, zoom, drag) = (self.pan, self.zoom, self.drag.clone());
         let column = self.display.visibility_column;
         let corner = self.corner_radius;
-        let editing_element = self.editing.as_ref().map(|e| e.element);
+        // The row under the editor is hidden; a new member's empty row covers none.
+        let editing_element =
+            self.editing.as_ref().filter(|e| e.new_member.is_none()).map(|e| e.element);
         let bounds_cell = self.bounds.clone();
         let this = cx.entity();
         let menu_owner = this.clone();
@@ -1834,11 +2159,25 @@ impl Render for DiagramCanvas {
                 let edges: Vec<Id> = this.selected_edges(cx).iter().map(|e| e.id).collect();
                 this.update_workspace(cx, |ws| ws.reset_line_ends(&edges));
             }))
+            .on_action(cx.listener(|this, _: &AddAttribute, window, cx| {
+                this.add_member_row(Compartment::Attributes, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AddOperation, window, cx| {
+                this.add_member_row(Compartment::Operations, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AddLiteral, window, cx| {
+                this.add_member_row(Compartment::Literals, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &AddExtensionPoint, _, cx| {
-                let Some(use_case) = this.selected_use_case(cx) else { return };
-                let point = this
-                    .workspace
-                    .update(cx, |ws, _| ws.add_item(use_case, NewItem::ExtensionPoint));
+                let point = match (this.selected_use_case(cx), this.selected_extend(cx)) {
+                    (Some(use_case), _) => this
+                        .workspace
+                        .update(cx, |ws, _| ws.add_item(use_case, NewItem::ExtensionPoint)),
+                    (_, Some(extend)) => {
+                        this.workspace.update(cx, |ws, _| ws.add_extension_point_for(extend))
+                    }
+                    _ => return,
+                };
                 this.edit_when_drawn = point;
                 cx.notify();
             }))
@@ -1847,6 +2186,12 @@ impl Render for DiagramCanvas {
                 let edges: Vec<Id> =
                     selection.into_iter().filter(|&id| this.scene.edge(id).is_some()).collect();
                 this.update_workspace(cx, |ws| ws.reset_labels(&edges));
+            }))
+            .on_action(cx.listener(|this, a: &ChangeRelationship, _, cx| {
+                this.update_workspace(cx, |ws| ws.change_relationship(a.edge, a.tool));
+            }))
+            .on_action(cx.listener(|this, a: &SetMemberType, _, cx| {
+                this.update_workspace(cx, |ws| ws.set_member_type(a.member, a.type_ref.clone()));
             }))
             .on_action(cx.listener(|this, a: &SetAssociationEnd, _, cx| {
                 this.update_workspace(cx, |ws| {
@@ -1964,6 +2309,18 @@ impl Render for DiagramCanvas {
                                 Some(Drag::FreeLine { start, current }) => {
                                     let s = p.c.selection;
                                     p.line(&[*start, *current], 1.5, s, LineStyle::Solid);
+                                }
+                                Some(Drag::LifelineEnd { x, top, current, .. }) => {
+                                    // The line as long as it will be.
+                                    let end = MPoint::new(*x, current.y.max(*top));
+                                    let s = p.c.selection;
+                                    p.line(
+                                        &[MPoint::new(*x, *top), end],
+                                        1.5,
+                                        s,
+                                        LineStyle::Dashed,
+                                    );
+                                    p.grips(&[end]);
                                 }
                                 Some(Drag::Connect { source, current, .. }) => {
                                     if let Some(node) = scene.node(*source) {

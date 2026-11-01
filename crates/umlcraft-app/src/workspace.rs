@@ -620,6 +620,59 @@ impl Workspace {
         });
     }
 
+    /// Lets a lifeline of the active diagram end at `bottom`.
+    pub fn set_lifeline_end(&mut self, presentation: Id, bottom: f32) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.resize").to_string();
+        let result = self.edit(label, |tx| {
+            umlcraft_notation::sequence_edit::set_lifeline_end(tx, diagram, presentation, bottom)
+        });
+        self.report(result);
+    }
+
+    /// Turns the relationship the edge `edge` of the active diagram shows into one `tool`
+    /// makes, as one undo step.
+    pub fn change_relationship(&mut self, edge: Id, tool: EdgeTool) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.change_kind").to_string();
+        let result = self.edit(label, |tx| palette::change_relationship(tx, diagram, edge, tool));
+        if let Some(new) = self.report(result) {
+            // The panel shows the new element, which the line now stands for.
+            self.selected_element = Some(new);
+        }
+    }
+
+    /// Sets the role name or the multiplicity of an association end from text typed in place.
+    pub fn set_end_text(&mut self, association: Id, end: usize, multiplicity: bool, text: &str) {
+        let text = text.trim();
+        if multiplicity {
+            let parsed =
+                if text.is_empty() { Ok(None) } else { text.parse::<Multiplicity>().map(Some) };
+            match parsed {
+                Ok(m) => self.set_association_end(association, end, EndChange::Multiplicity(m)),
+                Err(err) => self.complain(crate::errors::multiplicity_error(&err)),
+            }
+            return;
+        }
+        let role = text.to_owned();
+        self.update_element(association, |data| {
+            if let ElementKind::Association(p) = &mut data.kind
+                && let Some(end) = p.ends.get_mut(end)
+            {
+                end.role = role;
+            }
+        });
+    }
+
+    /// Gives an attribute its type or an operation its return type.
+    pub fn set_member_type(&mut self, member: Id, type_ref: TypeRef) {
+        self.update_element(member, |data| match &mut data.kind {
+            ElementKind::Attribute(p) => p.type_ref = Some(type_ref),
+            ElementKind::Operation(p) => p.return_type = Some(type_ref),
+            _ => {}
+        });
+    }
+
     /// Gives edges of the active diagram a line style, each with its route for that style, as
     /// one undo step.
     pub fn set_line_shape(&mut self, shape: LineShape, edges: Vec<(Id, Route)>) {
@@ -953,6 +1006,69 @@ impl NewItem {
 }
 
 impl Workspace {
+    /// Adds a member written as `text` (`- name : String`, `+ total() : int`, a literal's name)
+    /// to `owner`'s `compartment`, right after `after` or else at the end, as one undo step,
+    /// and selects it. Returns the new member; nothing is added for an empty text.
+    pub fn add_member(
+        &mut self,
+        owner: Id,
+        compartment: scene::Compartment,
+        after: Option<Id>,
+        text: &str,
+    ) -> Option<Id> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let data = match compartment {
+            scene::Compartment::Attributes => ElementData::new("", ElementKind::attribute(None))
+                .with_visibility(Visibility::Private),
+            scene::Compartment::Operations => ElementData::new("", ElementKind::operation(None)),
+            scene::Compartment::Literals => ElementData::new(text, ElementKind::EnumerationLiteral),
+            scene::Compartment::Slots => return None,
+        };
+        let literal = compartment == scene::Compartment::Literals;
+        let label = t!("edit.create").to_string();
+        let result = self.edit(label, |tx| {
+            let index = after
+                .and_then(|a| tx.model().children(owner).iter().position(|&c| c == a))
+                .map(|i| i + 1);
+            let member = match index {
+                Some(index) => tx.create_at(owner, index, data)?,
+                None => tx.create(owner, data)?,
+            };
+            if !literal {
+                member::apply_member_text(tx, member, text)?;
+            }
+            Ok(member)
+        });
+        let member = self.report(result)?;
+        self.selected_element = Some(member);
+        Some(member)
+    }
+
+    /// Adds an extension point to the use case `extend` extends and lets `extend` use it, as one
+    /// undo step, and selects it. Returns the extension point.
+    pub fn add_extension_point_for(&mut self, extend: Id) -> Option<Id> {
+        let ElementKind::Extend(p) = self.doc.model().get(extend)?.kind() else { return None };
+        let use_case = p.extended;
+        let base = name_base(&NewItem::ExtensionPoint.key(), true);
+        let label = t!("edit.create").to_string();
+        let result = self.edit(label, |tx| {
+            let name = palette::unique_name(tx.model(), use_case, &base);
+            let point = tx.create(use_case, ElementData::new(name, ElementKind::ExtensionPoint))?;
+            tx.update(extend, |data| {
+                if let ElementKind::Extend(p) = &mut data.kind {
+                    p.extension_points.push(point);
+                }
+            })?;
+            Ok(point)
+        });
+        let point = self.report(result)?;
+        self.selected_element = Some(point);
+        Some(point)
+    }
+
     /// Adds a new element below `owner` (model only, no diagram) and selects it. Diagrams are
     /// opened right away.
     /// Creates `item` in `owner` as one undo step and selects it; returns the new element.
@@ -1329,5 +1445,62 @@ mod tests {
         assert!(ws.doc.undo() && ws.doc.undo() && ws.doc.undo() && ws.doc.undo());
         let Shape::Edge { source_anchor, .. } = edge(&ws).shape else { unreachable!() };
         assert_eq!(source_anchor, Some(Point::new(0.2, 0.8)));
+    }
+
+    #[test]
+    fn members_ends_and_extension_points_typed_on_the_diagram() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        ws.open_diagram(ids.class_diagram);
+        let text = |ws: &Workspace, id: Id| member::member_text(ws.doc.model(), id);
+        let attributes = scene::Compartment::Attributes;
+        let first = ws.add_member(ids.customer, attributes, None, " email : String ").unwrap();
+        assert_eq!(text(&ws, first), "- email : String");
+        // Right after the one it follows, which here is the first.
+        let second = ws.add_member(ids.customer, attributes, Some(first), "+ age : int").unwrap();
+        let children = ws.doc.model().children(ids.customer);
+        let at = |id| children.iter().position(|&c| c == id).unwrap();
+        assert_eq!(at(second), at(first) + 1);
+        assert_eq!(ws.selected_element, Some(second));
+        // An empty row adds nothing.
+        assert_eq!(ws.add_member(ids.customer, attributes, None, "  "), None);
+        let operations = scene::Compartment::Operations;
+        let total = ws.add_member(ids.customer, operations, None, "+ total() : int").unwrap();
+        assert_eq!(text(&ws, total), "+ total() : int");
+
+        ws.set_member_type(second, TypeRef::Element(ids.order));
+        assert_eq!(text(&ws, second), "+ age : Order");
+
+        ws.set_end_text(ids.order_customer, 0, false, " orders ");
+        ws.set_end_text(ids.order_customer, 0, true, "0..*");
+        let end = |ws: &Workspace| match ws.doc.model().get(ids.order_customer).unwrap().kind() {
+            ElementKind::Association(p) => p.ends[0].clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            (end(&ws).role.as_str(), end(&ws).multiplicity),
+            ("orders", "0..*".parse().ok())
+        );
+        // Text that is no multiplicity is refused with a message.
+        ws.set_end_text(ids.order_customer, 0, true, "many");
+        assert!(ws.message.is_some());
+        assert_eq!(end(&ws).multiplicity, "0..*".parse().ok());
+
+        let (extend, use_case) = ws
+            .doc
+            .edit("extend", |tx| {
+                let a = tx.create(ids.domain, ElementData::new("A", ElementKind::use_case()))?;
+                let b = tx.create(ids.domain, ElementData::new("B", ElementKind::use_case()))?;
+                let kind = palette::EdgeTool::Extend.element_kind(a, b).unwrap();
+                Ok((tx.create(ids.domain, ElementData::new("", kind))?, b))
+            })
+            .unwrap();
+        let point = ws.add_extension_point_for(extend).unwrap();
+        let model = ws.doc.model();
+        assert_eq!(model.get(point).unwrap().owner(), Some(use_case));
+        let ElementKind::Extend(p) = model.get(extend).unwrap().kind() else { unreachable!() };
+        assert_eq!(p.extension_points, [point]);
+        assert!(ws.doc.undo());
+        assert!(ws.doc.model().get(point).is_none());
     }
 }

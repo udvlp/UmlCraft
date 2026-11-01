@@ -878,6 +878,90 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
     }
 }
 
+/// The relationships "Change kind" turns into each other.
+pub const RELATIONSHIP_TOOLS: [EdgeTool; 4] =
+    [EdgeTool::Association, EdgeTool::Generalization, EdgeTool::Realization, EdgeTool::Dependency];
+
+/// Which of [`RELATIONSHIP_TOOLS`] makes an element of `kind`.
+pub fn relationship_tool(kind: &ElementKind) -> Option<EdgeTool> {
+    match kind {
+        ElementKind::Association(_) => Some(EdgeTool::Association),
+        ElementKind::Generalization(_) => Some(EdgeTool::Generalization),
+        ElementKind::Realization(_) => Some(EdgeTool::Realization),
+        ElementKind::Dependency(_) => Some(EdgeTool::Dependency),
+        _ => None,
+    }
+}
+
+/// Turns the relationship the edge `edge` of `diagram` shows into one made by `tool`, between
+/// the same elements: the line's source becomes the first end, the specific element or the
+/// client. The new element keeps the name and documentation and takes the old one's place on
+/// every diagram; the old one is deleted. Returns the new element.
+pub fn change_relationship(tx: &mut Tx<'_>, diagram: Id, edge: Id, tool: EdgeTool) -> Result<Id> {
+    let model = tx.model();
+    let (old, s, t) = relationship_ends(model, diagram, edge)?;
+    let element = model.element(old)?;
+    if relationship_tool(element.kind()) == Some(tool) {
+        return Ok(old);
+    }
+    let kind = tool.element_kind(s, t).filter(|_| may_become(model, s, t, tool));
+    let Some(kind) = kind else {
+        return Err(ModelError::Invalid(format!(
+            "{} cannot connect {} to {}",
+            tool.key(),
+            model.element(s)?.kind().type_name(),
+            model.element(t)?.kind().type_name()
+        )));
+    };
+    let start = model.element(s)?.owner().unwrap_or(model.root());
+    let owner = owner_for(model, start, &kind)
+        .ok_or_else(|| ModelError::Invalid(format!("no owner for {}", kind.type_name())))?;
+    let mut data = ElementData::new(element.name(), kind);
+    data.documentation = element.data().documentation.clone();
+    let shown = model.shown_on(old);
+    let new = tx.create(owner, data)?;
+    for (diagram, presentation) in shown {
+        tx.update_presentation(diagram, presentation, |p| p.element = Some(new))?;
+    }
+    tx.delete(old)?;
+    Ok(new)
+}
+
+/// What the edge `edge` of `diagram` is for "Change kind": the relationship it shows, and for
+/// each of [`RELATIONSHIP_TOOLS`] whether it may become one of those. `None` for other edges.
+pub fn relationship_kinds(
+    model: &Model,
+    diagram: Id,
+    edge: Id,
+) -> Option<(EdgeTool, Vec<(EdgeTool, bool)>)> {
+    let (element, s, t) = relationship_ends(model, diagram, edge).ok()?;
+    let current = relationship_tool(model.get(element)?.kind())?;
+    let kinds = RELATIONSHIP_TOOLS.iter().map(|&tool| (tool, may_become(model, s, t, tool)));
+    Some((current, kinds.collect()))
+}
+
+/// The element an edge shows, with the elements at its source and its target.
+fn relationship_ends(model: &Model, diagram: Id, edge: Id) -> Result<(Id, Id, Id)> {
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let presentation = view.get(edge).ok_or(ModelError::NotFound(edge))?;
+    let element = presentation.element.ok_or(ModelError::NotFound(edge))?;
+    let Shape::Edge { source, target, .. } = &presentation.shape else {
+        return Err(ModelError::Invalid(format!("{edge} is no edge")));
+    };
+    let element_of = |p: Id| view.get(p).and_then(|p| p.element).ok_or(ModelError::NotFound(p));
+    Ok((element, element_of(*source)?, element_of(*target)?))
+}
+
+/// Whether a relationship from `source` to `target` may be one that `tool` makes; only
+/// associations loop.
+fn may_become(model: &Model, source: Id, target: Id, tool: EdgeTool) -> bool {
+    let (Some(s), Some(t)) = (model.get(source), model.get(target)) else { return false };
+    let loops = source == target && tool != EdgeTool::Association;
+    RELATIONSHIP_TOOLS.contains(&tool)
+        && !loops
+        && tool.accepts(s.kind(), t.kind(), source == target)
+}
+
 /// Owner and index for something new in the sequence diagram's interaction: `slot`, or else
 /// after everything.
 fn slot_or_end(model: &Model, diagram: Id, slot: Option<Slot>) -> Result<(Id, usize)> {
@@ -1320,6 +1404,58 @@ mod tests {
         let (na, nb) = (doc.model().shown_on(a)[0].1, doc.model().shown_on(b)[0].1);
         assert!(doc.edit("bad", |tx| connect(tx, d, EdgeTool::Realization, nb, na)).is_err());
         assert_eq!(*doc.model(), before);
+    }
+
+    #[test]
+    fn a_relationship_changes_its_kind_in_place() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let (a, b, na, ni, edge) = doc
+            .edit("create", |tx| {
+                let (a, na) = create_node(tx, d, NodeTool::Class, Point::new(600.0, 80.0), "A")?;
+                let (b, nb) = create_node(tx, d, NodeTool::Class, Point::new(600.0, 300.0), "B")?;
+                let (_, ni) =
+                    create_node(tx, d, NodeTool::Interface, Point::new(900.0, 300.0), "I")?;
+                let edge = connect(tx, d, EdgeTool::Association, na, nb)?;
+                Ok((a, b, na, ni, edge))
+            })
+            .unwrap();
+        let association = doc.model().view(d).unwrap().get(edge).unwrap().element.unwrap();
+        doc.edit("name", |tx| tx.update(association, |data| data.name = "uses".into())).unwrap();
+
+        // The line's source becomes the specific end; the same line now shows the new element.
+        let general = doc
+            .edit("change", |tx| change_relationship(tx, d, edge, EdgeTool::Generalization))
+            .unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        assert!(model.get(association).is_none());
+        assert_eq!(model.view(d).unwrap().get(edge).unwrap().element, Some(general));
+        assert_eq!(model.get(general).unwrap().name(), "uses");
+        assert_eq!(model.generals_of(a), [b]);
+
+        let dependency =
+            doc.edit("again", |tx| change_relationship(tx, d, edge, EdgeTool::Dependency)).unwrap();
+        assert!(matches!(
+            doc.model().get(dependency).unwrap().kind(),
+            ElementKind::Dependency(DirectedProps { client, supplier }) if (*client, *supplier) == (a, b)
+        ));
+        // A class does not realize a class: not offered, and refused, nothing changes.
+        let (current, kinds) = relationship_kinds(doc.model(), d, edge).unwrap();
+        assert_eq!(current, EdgeTool::Dependency);
+        let offered: Vec<EdgeTool> = kinds.iter().filter(|k| k.1).map(|k| k.0).collect();
+        assert_eq!(
+            offered,
+            [EdgeTool::Association, EdgeTool::Generalization, EdgeTool::Dependency]
+        );
+        let before = doc.model().clone();
+        let refused = doc.edit("bad", |tx| change_relationship(tx, d, edge, EdgeTool::Realization));
+        assert!(refused.is_err());
+        assert_eq!(*doc.model(), before);
+        // To an interface it does.
+        let line = doc.edit("line", |tx| connect(tx, d, EdgeTool::Dependency, na, ni)).unwrap();
+        doc.edit("realize", |tx| change_relationship(tx, d, line, EdgeTool::Realization)).unwrap();
+        doc.model().check().unwrap();
     }
 
     #[test]

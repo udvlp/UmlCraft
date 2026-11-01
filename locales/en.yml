@@ -98,6 +98,11 @@ menu:
   reset_labels: Reset label positions
   arrange_down: Top to bottom
   arrange_right: Left to right
+  type: Type
+  change_kind: Change kind
+  add_attribute: Add attribute
+  add_operation: Add operation
+  add_literal: Add literal
   add_extension_point: Add extension point
   navigability: Navigability
   aggregation: Aggregation
@@ -274,6 +279,8 @@ prop:
   value_type: Type of the value
   object_type: Type
   in_state: State
+  return_type: Return type
+  initial_value: Initial value
   type_bounds: Bounds
   binding: Binds
   default: Default
@@ -432,6 +439,7 @@ project:
   untitled: New project
 edit:
   create: Create
+  change_kind: Change kind
   connect: Connect
   move: Move
   resize: Resize

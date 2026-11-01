@@ -964,6 +964,8 @@ fn message_edge(
         name_arrow: None,
         qualifiers: Vec::new(),
         free_labels: Vec::new(),
+        association: false,
+        end_labels: Vec::new(),
     }
 }
 
