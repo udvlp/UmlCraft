@@ -3,6 +3,20 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Labels out of the way**: names, stereotypes, guards, role names and multiplicities of lines
+  no longer cover nodes, lines or each other where there is room nearby. A label stays where it
+  always went while that place is free; otherwise it moves to the other side of its line,
+  further along it or just beside it. Labels placed by hand stay where they are.
+- **Window title**: the title bar shows the version.
+- **Diagram to the clipboard**: Edit › Copy diagram as image (Ctrl+Shift+C, or Tools › To
+  clipboard) copies the open diagram or structogram as SVG and PNG at once. Word and PowerPoint
+  paste it as a vector image that stays sharp at any size; other programs take the PNG.
+
+- **Sample project**: a station holds its docks in a plain composition, `docks` with `*`; the
+  qualifier `number` is gone from the domain model. UmlCraft still draws and edits qualifiers.
+
 ## 0.12.1 – 2026-10-31
 
 0.12.0 was tagged but never released; 0.12.1 is the first release with these changes.

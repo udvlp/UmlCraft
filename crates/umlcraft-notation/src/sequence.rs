@@ -963,6 +963,7 @@ fn message_edge(
         anchors: [None; 2],
         name_arrow: None,
         qualifiers: Vec::new(),
+        free_labels: Vec::new(),
     }
 }
 

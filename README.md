@@ -37,7 +37,9 @@ Diagrams imported from `.asta` files keep their layout, sizes and colors.
   the API cannot express is reported. See
   [docs/architecture.md](docs/architecture.md#asta-export).
 - **Images** (File › Export › Diagram as SVG … / Diagram as PNG …): the open diagram. SVG keeps
-  real text; PNG is rasterized at twice the canvas size.
+  real text; PNG is rasterized at twice the canvas size. Edit › Copy diagram as image
+  (Ctrl+Shift+C) puts both on the clipboard: Word and PowerPoint paste the SVG as a vector
+  image, other programs the PNG.
 - **Structograms** (File › New structogram, Import › Structogram (.nsd) …, Export ›
   Structogram as .nsd …, and the source import): Nassi-Shneiderman diagrams as
   [Structorizer](https://structorizer.fisch.lu) draws them are part of the project and saved in

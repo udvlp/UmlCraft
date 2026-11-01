@@ -97,7 +97,9 @@ that a diff shows which element changed.
   `assets/icons/` (`AppAssets`, falling back to gpui-kit's Lucide icons) and maps tools, diagram
   kinds and model elements to their icons.
 - `png.rs` rasterizes the SVG export (`umlcraft_notation::svg`) with `resvg` for PNG export, at
-  twice the canvas size and with the system's fonts, on a background thread.
+  twice the canvas size and with the system's fonts, on a background thread. `png::copy` puts
+  both on the clipboard in one item, as the formats `image/svg+xml` and `PNG` (on Windows):
+  Word and PowerPoint take the SVG as a vector image, other programs the PNG.
 - `settings.rs` stores recent files, language, theme and the visibility column
   (`visibilityColumn`) in `UmlCraft/settings.json` in the platform's settings folder (`%APPDATA%` on Windows,
   `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` elsewhere). The column reaches layout and
@@ -121,6 +123,12 @@ that a diff shows which element changed.
   resize handles, edge handles (waypoints), rubber-band selection and alignment. Containers (system
   boundaries, packages, states, components) graphically contain whatever lies fully inside them (`with_contents`);
   system boundaries are "hollow" and clickable only on their border and title.
+- `labels` places the edge labels that were not placed by hand (`EdgeShape::free_labels`). Each
+  starts where Astah's rule puts it; if that covers a node, a line or another label, it moves to
+  the spot nearby that covers least: the other side of its line, further along it, or far enough
+  off it not to cross it, with a small cost per step away from Astah's spot. Nodes with others
+  inside only count by their border and name. Two greedy rounds, the second among all labels.
+  Labels placed by hand, and so all labels from `.asta` files, stay and count as obstacles.
 - `route` runs edges in the line styles of `.asta` files (`Style::line_shape`): straight through the
   waypoints, at right angles with the waypoints as corners, or as one cubic Bézier curve whose
   control points are the first and the last waypoint. Right-angled lines are fitted when drawn,
@@ -496,7 +504,7 @@ through its official API (`astah-api.jar`):
   point (`getAllPoints()[0]`) tells which node comes first, `getSource()` does not always.
   Labels placed by hand are set as properties with their position on the diagram (`name.point.x`,
   `end_a.name.point.x`, `end_b.multiplicity.point.y` …); the sidecar turns UmlCraft's offsets into
-  those positions. `setProperty` silently ignores keys it does not know. Constraints of
+  those positions, and adds the labels the drawing moved out of the way (`FreeLabel::moved`). `setProperty` silently ignores keys it does not know. Constraints of
   association ends become constraints on the end.
 
 ## Nassi-Shneiderman diagrams

@@ -41,6 +41,8 @@ actions!(
         ExportAstah,
         ExportSvg,
         ExportPng,
+        // Puts the open diagram on the clipboard as SVG and PNG.
+        CopyImage,
         SaveProject,
         SaveProjectAs,
         Quit,
@@ -201,6 +203,7 @@ fn main() {
             key(cx, "secondary-delete", RemoveFromDiagram, Some("Canvas")),
             key(cx, "secondary-a", SelectAll, Some("Canvas")),
             key(cx, "secondary-c", Copy, Some("Canvas")),
+            key(cx, "secondary-shift-c", CopyImage, None),
             key(cx, "secondary-x", Cut, Some("Canvas")),
             key(cx, "secondary-v", Paste, Some("Canvas")),
             key(cx, "secondary-shift-v", PasteAsReference, Some("Canvas")),

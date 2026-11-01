@@ -10,8 +10,8 @@ use umlcraft_model::{
     ElementData, ElementKind, ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps,
     InteractionOperandProps, InteractionOperator, InternalTransitionProps, LifelineProps,
     LinkProps, MessageSort, Model, ModelError, Multiplicity, Navigability, OperationProps,
-    ParameterProps, Point, Presentation, PseudostateKind, Qualifier, Rect, Regions, Result, Shape,
-    SlotProps, StateProps, StructogramProps, TransitionProps, Tx, TypeRef, Visibility,
+    ParameterProps, Point, Presentation, PseudostateKind, Rect, Regions, Result, Shape, SlotProps,
+    StateProps, StructogramProps, TransitionProps, Tx, TypeRef, Visibility,
 };
 use umlcraft_notation::scene::{self, TextMeasure};
 use umlcraft_notation::sequence_edit;
@@ -367,9 +367,8 @@ impl Builder<'_, '_> {
         // Relationships, with the ends as the diagram reads them.
         let station_docks = self.association(fleet, station, dock, |p| {
             p.ends[0].aggregation = Aggregation::Composite;
-            p.ends[0].qualifiers = vec![Qualifier { name: "number".into(), type_ref: integer() }];
             p.ends[1].role = "docks".into();
-            p.ends[1].multiplicity = Some(Multiplicity::OPTIONAL);
+            p.ends[1].multiplicity = Some(Multiplicity::MANY);
             p.ends[1].navigability = Navigability::Navigable;
         })?;
         let dock_vehicle = self.association(fleet, dock, vehicle, |p| {

@@ -1,6 +1,8 @@
 //! Diagrams as PNG images: the SVG export, rasterized.
 
+use gpui_kit::*;
 use resvg::{tiny_skia, usvg};
+use rust_i18n::t;
 
 /// Pixels per logical unit. Twice the canvas at 100 %, so images stay sharp on high-resolution
 /// screens and in print.
@@ -22,6 +24,41 @@ pub fn from_svg(svg: &str, scale: f32) -> anyhow::Result<Vec<u8>> {
         .ok_or_else(|| anyhow::anyhow!(rust_i18n::t!("error.image_too_large").to_string()))?;
     resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
     Ok(pixmap.encode_png()?)
+}
+
+/// Puts an SVG export on the clipboard together with its PNG, rasterized at `scale` as
+/// [`from_svg`] takes it. Word and PowerPoint paste the SVG as a vector image, programs without
+/// SVG take the PNG.
+pub fn copy<V: 'static>(svg: String, scale: f32, window: &mut Window, cx: &mut Context<V>) {
+    cx.spawn_in(window, async move |_, cx| {
+        let (svg, png) = cx
+            .background_executor()
+            .spawn(async move {
+                let png = from_svg(&svg, scale);
+                (svg, png)
+            })
+            .await;
+        cx.update(|window, cx| match png {
+            Ok(png) => cx.write_to_clipboard(ClipboardItem {
+                entries: vec![
+                    ClipboardEntry::Image(Image::from_bytes(ImageFormat::Svg, svg.into_bytes())),
+                    ClipboardEntry::Image(Image::from_bytes(ImageFormat::Png, png)),
+                ],
+            }),
+            Err(err) => {
+                let rx = window.prompt(
+                    PromptLevel::Critical,
+                    &t!("dialog.copy_image_failed"),
+                    Some(&err.to_string()),
+                    &[t!("dialog.ok").as_ref()],
+                    cx,
+                );
+                cx.spawn(async move |_| rx.await.ok()).detach();
+            }
+        })
+        .ok();
+    })
+    .detach();
 }
 
 #[cfg(test)]

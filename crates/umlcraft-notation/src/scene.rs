@@ -11,6 +11,7 @@ use umlcraft_model::{
     StateProps, Style, TransitionProps,
 };
 
+use crate::labels::{self, FreeLabel, LabelKind};
 use crate::member::member_text;
 use crate::route::{self, Route, anchor_point};
 use crate::sequence::{self, SequenceLayout};
@@ -398,6 +399,9 @@ pub struct EdgeShape {
     /// Where the line meets the source and target node. A qualifier box moves the end of the
     /// line away from it; placed end labels stay relative to it, as in Astah's files.
     pub node_tips: [Point; 2],
+    /// The labels not placed by hand, which [`labels::place`](crate::labels::place) moves to
+    /// where they cover least.
+    pub free_labels: Vec<FreeLabel>,
 }
 
 /// A grip on a selected edge: an existing waypoint, the middle of a segment where dragging
@@ -887,6 +891,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
     for label in edges.iter_mut().flat_map(|e| &mut e.labels) {
         label.text = single_line(&label.text);
     }
+    labels::place(&nodes, &mut edges, measure);
     Scene { nodes, edges, sequence }
 }
 
@@ -916,6 +921,7 @@ fn free_line(p: &Presentation, preview: &Preview) -> Option<EdgeShape> {
         name_arrow: None,
         qualifiers: Vec::new(),
         node_tips: [from, to],
+        free_labels: Vec::new(),
     })
 }
 
@@ -2129,6 +2135,7 @@ fn edge_for(
         anchors,
         name_arrow: None,
         qualifiers: Vec::new(),
+        free_labels: Vec::new(),
     };
     // Role, multiplicity and whether the role is underlined (static), per end.
     let mut ends: [(Option<String>, Option<String>, bool); 2] = Default::default();
@@ -2270,7 +2277,11 @@ fn edge_for(
     });
     let across = (center.offset(-1.0, 0.0), center.offset(1.0, 0.0));
     let segment = if bind { across } else { (a, b) };
-    edge.labels.extend(keyword.map(|text| keyword_label(text, segment, placed.keyword, measure)));
+    if let Some(text) = keyword {
+        let index = edge.labels.len();
+        note_free(&mut edge.free_labels, index, placed.keyword.is_none(), LabelKind::Keyword, 1);
+        edge.labels.push(keyword_label(text, segment, placed.keyword, measure));
+    }
     // Astah shows which way an association's name reads, from its first end to its second,
     // with a small triangle next to the name.
     if association
@@ -2284,6 +2295,10 @@ fn edge_for(
         let anchor = first.anchor.offset(0.0, line_height(FONT_SIZE));
         EdgeLabel { text, anchor, ..first.clone() }
     });
+    if name.is_some() {
+        let (index, lines) = (edge.labels.len(), 1 + usize::from(below.is_some()));
+        note_free(&mut edge.free_labels, index, placed.name.is_none(), LabelKind::Name, lines);
+    }
     edge.labels.extend(name);
     edge.labels.extend(below);
     let [(source_role, source_mult, source_static), (target_role, target_mult, target_static)] =
@@ -2303,13 +2318,36 @@ fn edge_for(
     let source = End { tip: source_tip, next: source_from, source: true };
     let target = End { tip: target_tip, next: target_from, source: false };
     let labels = [
-        place(source_role, placed.source_role, source, true, source_static),
-        place(source_mult, placed.source_multiplicity, source, false, false),
-        place(target_role, placed.target_role, target, true, target_static),
-        place(target_mult, placed.target_multiplicity, target, false, false),
+        (source_role, placed.source_role, source, true, source_static),
+        (source_mult, placed.source_multiplicity, source, false, false),
+        (target_role, placed.target_role, target, true, target_static),
+        (target_mult, placed.target_multiplicity, target, false, false),
     ];
-    edge.labels.extend(labels.into_iter().flatten());
+    for (text, offset, end, role, underline) in labels {
+        let Some(label) = place(text, offset, end, role, underline) else { continue };
+        let kind = if role {
+            LabelKind::Role { source: end.source }
+        } else {
+            LabelKind::Multiplicity { source: end.source }
+        };
+        note_free(&mut edge.free_labels, edge.labels.len(), offset.is_none(), kind, 1);
+        edge.labels.push(label);
+    }
     edge
+}
+
+/// Notes the label at `index`, with the `lines - 1` after it that move along, as free if it
+/// was not placed by hand.
+fn note_free(
+    free_labels: &mut Vec<FreeLabel>,
+    index: usize,
+    free: bool,
+    kind: LabelKind,
+    lines: usize,
+) {
+    if free {
+        free_labels.push(FreeLabel { kind, index, lines, moved: false });
+    }
 }
 
 /// A qualifier as Astah shows it: `key : Key`, or just the name if it has no type.
@@ -2418,7 +2456,7 @@ fn association_name(text: String, middle: Point, measure: &dyn TextMeasure) -> E
 /// Astah's triangle that shows which way a name reads, next to the name's box (top left `at`,
 /// `width` wide): it points along the line `a`–`b`, horizontally or vertically, whichever is
 /// closer, and sits 4 to the right or left of the box, or below or above it.
-fn name_arrow(at: Point, width: f32, (a, b): (Point, Point)) -> [Point; 3] {
+pub(crate) fn name_arrow(at: Point, width: f32, (a, b): (Point, Point)) -> [Point; 3] {
     // The triangle is 10 long and 10 wide; beside the box its middle is 7.5 below the box's
     // top, below the box its base 15.5 below the top, above it 3.5 above.
     const GAP: f32 = 4.0;
@@ -3687,6 +3725,38 @@ mod tests {
         assert_eq!(e.source_marker, EndMarker::Cross);
         let role = e.labels.iter().find(|l| l.text == "+ customer").unwrap();
         assert_eq!((role.anchor, role.align), (Point::new(125.0, 176.0), LabelAlign::Left));
+    }
+
+    #[test]
+    fn free_labels_move_off_their_line_and_placed_ones_stay() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let edge = doc.model().shown_on(ids.order_customer)[0].1;
+        let order = doc.model().shown_on(ids.order)[0].1;
+        doc.edit("vertical", |tx| {
+            tx.set_bounds(d, order, Rect::new(80.0, 300.0, 160.0, 60.0))?;
+            tx.update_presentation(d, edge, |p| {
+                if let Shape::Edge { source_anchor, target_anchor, labels, .. } = &mut p.shape {
+                    *source_anchor = Some(Point::new(0.25, 0.5));
+                    *target_anchor = Some(Point::new(0.25, 0.5));
+                    labels.target_role = Some(Point::new(5.0, 6.0));
+                }
+            })?;
+            tx.update(ids.order_customer, |data| data.name = "places".into())
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let e = scene.edge(edge).unwrap();
+        // Astah centers the name on the line, which runs up at x = 120; it moves beside it.
+        let name = e.labels.iter().find(|l| l.text == "places").unwrap();
+        let width = label_width("places", &ApproxMeasure);
+        assert!(name.anchor.x > 120.0 || name.anchor.x + width < 120.0, "{name:?}");
+        let free = e.free_labels.iter().find(|f| f.kind == LabelKind::Name).unwrap();
+        assert!(free.moved);
+        // The role placed by hand is not free and stays.
+        assert!(!e.free_labels.iter().any(|f| f.kind == LabelKind::Role { source: false }));
+        let role = e.labels.iter().find(|l| l.text == "+ customer").unwrap();
+        assert_eq!(role.anchor, Point::new(125.0, 176.0));
     }
 
     #[test]

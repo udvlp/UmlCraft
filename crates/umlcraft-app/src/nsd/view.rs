@@ -955,6 +955,12 @@ impl NsdView {
         self.write_export(extension, "dialog.image_failed", bytes, window, cx);
     }
 
+    /// Puts the structogram on the clipboard as SVG and as PNG.
+    pub fn copy_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let scale = crate::png::SCALE * umlcraft_notation::svg::SCALE;
+        crate::png::copy(self.svg.clone(), scale, window, cx);
+    }
+
     fn export_svg(&mut self, _: &ExportSvg, window: &mut Window, cx: &mut Context<Self>) {
         self.export_image(false, window, cx);
     }

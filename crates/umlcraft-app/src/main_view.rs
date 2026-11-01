@@ -227,7 +227,8 @@ impl MainView {
             model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default()
         });
         let dirty = if ws.doc.is_dirty() { "*" } else { "" };
-        window.set_window_title(&format!("{name}{dirty} – UmlCraft"));
+        let version = env!("CARGO_PKG_VERSION");
+        window.set_window_title(&format!("{name}{dirty} – UmlCraft {version}"));
         cx.notify();
     }
 
@@ -1016,12 +1017,28 @@ impl MainView {
         }
     }
 
-    /// Writes the open diagram as an SVG image, or rasterized as PNG, drawn as on the canvas
-    /// in the light theme.
-    fn export_image(&mut self, png: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Puts the open diagram on the clipboard as SVG and as PNG, drawn as on the canvas in the
+    /// light theme.
+    fn copy_image(&mut self, _: &CopyImage, window: &mut Window, cx: &mut Context<Self>) {
+        match self.active_structogram(cx) {
+            Some(view) => view.update(cx, |view, cx| view.copy_image(window, cx)),
+            None => {
+                let Some((svg, _)) = self.diagram_svg(window, cx) else { return };
+                crate::png::copy(svg, crate::png::SCALE, window, cx);
+            }
+        }
+    }
+
+    /// The open diagram as an SVG image, drawn as on the canvas in the light theme, and the
+    /// diagram's name.
+    fn diagram_svg(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(String, String)> {
         self.flush_edits(window, cx);
         let ws = self.workspace.read(cx);
-        let Some(diagram) = ws.active_diagram else { return };
+        let diagram = ws.active_diagram?;
         let model = ws.doc.model();
         let measure = FontMeasure::new(window, self.settings.visibility_column);
         let scene = scene::build(model, diagram, &Preview::default(), &measure);
@@ -1031,10 +1048,18 @@ impl MainView {
             &measure,
             umlcraft_notation::svg::FINE_UNITS,
         );
-        let extension = if png { "png" } else { "svg" };
         let name = model.element(diagram).map(|e| e.name().to_owned()).unwrap_or_default();
+        Some((svg, name))
+    }
+
+    /// Writes the open diagram as an SVG image, or rasterized as PNG, drawn as on the canvas
+    /// in the light theme.
+    fn export_image(&mut self, png: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((svg, name)) = self.diagram_svg(window, cx) else { return };
+        let extension = if png { "png" } else { "svg" };
         let suggested = format!("{}.{extension}", sanitize_file_name(&name));
-        let rx = cx.prompt_for_new_path(&start_directory(ws.path.as_deref()), Some(&suggested));
+        let directory = start_directory(self.workspace.read(cx).path.as_deref());
+        let rx = cx.prompt_for_new_path(&directory, Some(&suggested));
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(path))) = rx.await else { return };
             let path = with_extension(path, extension);
@@ -1488,7 +1513,8 @@ impl MainView {
                 .flex_1()
                 .gap_1()
                 .child(img(icons::LOGO).size(px(18.0)).mr_1())
-                .child(div().text_sm().font_semibold().mr_2().child("UmlCraft"))
+                .child(div().text_sm().font_semibold().child("UmlCraft"))
+                .child(div().text_xs().text_color(muted).mr_2().child(env!("CARGO_PKG_VERSION")))
                 .child(
                     Button::new("file-menu").ghost().small().label(t!("menu.file")).dropdown_menu(
                         move |menu, window, cx| {
@@ -1935,6 +1961,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
             menu_item("menu.select_all", SelectAll),
             MenuItem::separator(),
             menu_item("menu.copy", Copy),
+            menu_item("menu.copy_image", CopyImage),
             menu_item("menu.cut", Cut),
             menu_item("menu.paste", Paste),
             menu_item("menu.paste_reference", PasteAsReference),
@@ -2172,6 +2199,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::import_source))
             .on_action(cx.listener(Self::export_svg))
             .on_action(cx.listener(Self::export_png))
+            .on_action(cx.listener(Self::copy_image))
             .on_action(cx.listener(Self::open_recent))
             .on_action(cx.listener(Self::open_sample))
             .on_action(cx.listener(Self::save_project))

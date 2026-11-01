@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 use umlcraft_model::{EdgeLabels, Id, Model, Point, Rect, Shape};
+use umlcraft_notation::labels::LabelKind;
 use umlcraft_notation::route;
 use umlcraft_notation::scene::{self, EdgeShape, Preview, TextMeasure};
 
@@ -21,7 +22,8 @@ struct DiagramLayout {
     nodes: BTreeMap<Id, Rect>,
     /// Edge presentations as drawn, from end to end.
     edges: BTreeMap<Id, Vec<Point>>,
-    /// Labels placed by hand, as the top left corner on the diagram.
+    /// Labels placed by hand or moved out of the way by the drawing, as the top left corner on
+    /// the diagram.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     labels: BTreeMap<Id, EdgeLabels>,
     /// Sequence messages whose label is placed by hand: where Astah puts the label by itself
@@ -46,8 +48,9 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
             match &p.shape {
                 Shape::Edge { labels: placed, .. } => {
                     let Some(edge) = scene.edge(p.id) else { continue };
-                    if !placed.is_empty() {
-                        labels.insert(p.id, absolute(placed, edge));
+                    let at = absolute(placed, edge);
+                    if !at.is_empty() {
+                        labels.insert(p.id, at);
                     }
                     if edge.shape.is_right_angle() {
                         corners.insert(p.id, edge.waypoints().to_vec());
@@ -87,12 +90,13 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
 
 /// Label offsets turned into positions: roles and multiplicities are relative to where the line
 /// meets their node, the name to the middle of its middle segment, as `scene` places them.
+/// Labels the drawing moved out of the way go where it drew them; Astah would put them back.
 fn absolute(placed: &EdgeLabels, edge: &EdgeShape) -> EdgeLabels {
     let (a, b) = route::middle_segment(&edge.points, edge.shape.is_curve());
     let middle = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
     let at = |base: Point, offset: Option<Point>| offset.map(|o| base.offset(o.x, o.y));
     let [source, target] = edge.node_tips;
-    EdgeLabels {
+    let mut labels = EdgeLabels {
         name: at(middle, placed.name),
         source_role: at(source, placed.source_role),
         source_multiplicity: at(source, placed.source_multiplicity),
@@ -100,5 +104,17 @@ fn absolute(placed: &EdgeLabels, edge: &EdgeShape) -> EdgeLabels {
         target_multiplicity: at(target, placed.target_multiplicity),
         // The API has no property for where «include» and «extend» go; Astah places them.
         keyword: None,
+    };
+    for free in edge.free_labels.iter().filter(|f| f.moved) {
+        let at = Some(edge.labels[free.index].anchor);
+        match free.kind {
+            LabelKind::Name => labels.name = at,
+            LabelKind::Keyword => {}
+            LabelKind::Role { source: true } => labels.source_role = at,
+            LabelKind::Role { source: false } => labels.target_role = at,
+            LabelKind::Multiplicity { source: true } => labels.source_multiplicity = at,
+            LabelKind::Multiplicity { source: false } => labels.target_multiplicity = at,
+        }
     }
+    labels
 }

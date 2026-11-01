@@ -428,6 +428,8 @@ fn tools() -> Vec<Group> {
             vec![
                 Item::new("export-svg", fluent("image_arrow_forward"), "SVG").action(ExportSvg),
                 Item::new("export-png", fluent("image_arrow_forward"), "PNG").action(ExportPng),
+                Item::new("copy-image", fluent("image_copy"), t!("ribbon.copy_image"))
+                    .action(CopyImage),
             ],
         ),
     ]

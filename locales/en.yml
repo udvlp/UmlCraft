@@ -49,6 +49,7 @@ ribbon:
   import: Import
   export: Export
   export_nsd: Export .nsd
+  copy_image: To clipboard
   new_diagram: New diagram
 menu:
   file: File
@@ -72,6 +73,7 @@ menu:
   remove_from_diagram: Remove from diagram
   select_all: Select all
   copy: Copy
+  copy_image: Copy diagram as image
   cut: Cut
   paste: Paste (as copy)
   paste_reference: Paste (same elements)
@@ -329,6 +331,7 @@ dialog:
   export_partial: "%{count} details of the project could not be carried over to the .asta format."
   export_partial_detail: "The interface to the .asta format cannot express these:\n%{items}"
   image_failed: The diagram could not be saved as an image.
+  copy_image_failed: The diagram could not be copied as an image.
   astah_missing: Exporting to the .asta format needs an application that is not installed.
   astah_missing_detail: "UmlCraft writes .asta projects through the programming interface of the application the format belongs to. It must be installed, or the environment variable ASTAH_HOME must point to its install folder; then restart UmlCraft."
   import_source_failed: The source code could not be imported.
