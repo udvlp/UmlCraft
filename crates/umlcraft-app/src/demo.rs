@@ -827,8 +827,8 @@ impl Builder<'_, '_> {
         let n_alt = sequence_edit::add_fragment(self.tx, d, alt, &covered, 320.0)?;
         self.tx.update_presentation(d, n_alt, |p| {
             if let Shape::Fragment { bounds, separators, .. } = &mut p.shape {
-                bounds.height = 240.0;
-                separators.push(175.0);
+                bounds.height = 255.0;
+                separators.push(190.0);
             }
         })?;
         let riding = [app, service];
@@ -852,7 +852,7 @@ impl Builder<'_, '_> {
             ("release", Synchronous, service, dock, "", 420.0),
             ("", Reply, dock, service, "true", 445.0),
             ("rentalStarted", Synchronous, service, app, "r", 475.0),
-            ("declined", Synchronous, service, app, "reason", 530.0),
+            ("declined", Synchronous, service, app, "reason", 545.0),
             ("track", Synchronous, app, service, "position", 650.0),
         ] {
             let mut kind = ElementKind::message(sort, from, to);
@@ -873,7 +873,7 @@ impl Builder<'_, '_> {
             // answers the app. What either sends meanwhile starts inside that bar.
             let bottom = match name {
                 "scan" => Some(700.0),
-                "startRental" => Some(545.0),
+                "startRental" => Some(560.0),
                 _ => None,
             };
             if let Some(bottom) = bottom {

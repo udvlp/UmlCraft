@@ -12,6 +12,9 @@ today.
   new versions on GitHub. If you agree, it checks at most once a day, and a new release shows
   as a button in the title bar that opens its page. About UmlCraft can check at any time. What
   the check sends is shown in the app, offline, and under [Privacy](README.md#privacy).
+- **Bars stay in their operand**: in an alt or another fragment with several operands, the
+  dashed line between two operands moves down below the activation bars of the one above, as
+  long as there is room before what comes next.
 
 ## 0.15.2 – 2026-11-01
 

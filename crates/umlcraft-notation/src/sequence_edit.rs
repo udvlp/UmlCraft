@@ -1051,13 +1051,15 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
 }
 
 /// Grows combined fragments to hold the bars, messages and frames that start inside them:
-/// Astah refuses a bar that reaches out of the fragment its message lies in.
+/// Astah refuses a bar that reaches out of the fragment its message lies in. Operand lines go
+/// down below the bars of the operand above where there is room.
 fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     // Inner fragments first, so that outer ones grow around them.
     for _ in 0..8 {
         let g = Geometry::read(tx.model(), diagram)?;
         let center = |lane: Id| g.lane(lane).map_or(f32::MIN, |l| l.center());
         let mut grown = Vec::new();
+        let mut moved = Vec::new();
         for f in &g.frames {
             if !matches!(
                 tx.model().get(f.element).map(|e| e.kind()),
@@ -1087,14 +1089,53 @@ fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             if need > r.bottom() + 0.01 {
                 grown.push((f.id, need - r.y));
             }
+            // A bar stays in its operand too: the line below goes down to clear it, as long as
+            // the next operand keeps room for what lies in it and for a message's label.
+            let mut separators = f.separators.clone();
+            for k in 0..separators.len() {
+                let above = if k == 0 { r.y } else { separators[k - 1] };
+                let below = separators.get(k + 1).copied().unwrap_or(r.bottom());
+                let s = separators[k];
+                let need = g
+                    .bars
+                    .iter()
+                    .filter(|b| inside(center(b.lane), b.top) && above < b.top && b.top < s)
+                    .map(|b| b.bottom + FRAGMENT_PADDING)
+                    .fold(s, f32::max);
+                if need <= s + 0.01 {
+                    continue;
+                }
+                let next = g
+                    .messages
+                    .iter()
+                    .filter(|m| inside(center(m.source), m.y) && inside(center(m.target), m.y))
+                    .map(|m| m.y - NEXT / 2.0)
+                    .chain(g.bars.iter().filter(|b| inside(center(b.lane), b.top)).map(|b| b.top))
+                    .chain(g.frames.iter().filter(|o| inside(o.rect.x, o.rect.y)).map(|o| o.rect.y))
+                    .filter(|&y| y >= s)
+                    .fold(below - NEXT / 2.0, f32::min);
+                if need <= next + 0.01 {
+                    separators[k] = need;
+                }
+            }
+            if separators != f.separators {
+                moved.push((f.id, separators.iter().map(|s| s - r.y).collect::<Vec<_>>()));
+            }
         }
-        if grown.is_empty() {
+        if grown.is_empty() && moved.is_empty() {
             return Ok(());
         }
         for (id, height) in grown {
             tx.update_presentation(diagram, id, |p| {
                 if let Shape::Fragment { bounds, .. } = &mut p.shape {
                     bounds.height = height;
+                }
+            })?;
+        }
+        for (id, lines) in moved {
+            tx.update_presentation(diagram, id, |p| {
+                if let Shape::Fragment { separators, .. } = &mut p.shape {
+                    *separators = lines;
                 }
             })?;
         }
@@ -1971,6 +2012,44 @@ mod tests {
         doc.edit("last", |tx| super::delete_operand(tx, operands[2]).and(super::tidy_all(tx)))
             .unwrap();
         assert!(!doc.model().contains(fragment));
+        doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn an_operand_line_clears_the_bars_above_it() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let call = draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let (fragment, node) =
+            doc.edit("wrap", |tx| palette::wrap_in_fragment(tx, d, &[call])).unwrap();
+        doc.edit("operand", |tx| palette::add_operand(tx, fragment)).unwrap();
+        let line = |doc: &Document| match &doc.model().view(d).unwrap().get(node).unwrap().shape {
+            Shape::Fragment { bounds, separators, .. } => bounds.y + separators[0],
+            other => panic!("{other:?}"),
+        };
+        let set_line = |doc: &mut Document, y: f32| {
+            doc.edit("line", |tx| {
+                tx.update_presentation(d, node, |p| {
+                    if let Shape::Fragment { bounds, separators, .. } = &mut p.shape {
+                        separators[0] = y - bounds.y;
+                    }
+                })?;
+                super::tidy(tx, d)
+            })
+            .unwrap();
+        };
+        // The caller's bar on a ends at 165, the called one on b at 145: a line across them
+        // goes down below both.
+        assert_eq!(bars(&doc, d), [(120.0, 145.0), (120.0, 165.0)]);
+        let clear = 165.0 + super::FRAGMENT_PADDING;
+        set_line(&mut doc, 135.0);
+        assert_eq!(line(&doc), clear);
+        // Not when the next operand would lose the room for a message's label.
+        let next = draw(&mut doc, d, EdgeTool::FoundMessage, b, b, clear + 10.0);
+        set_line(&mut doc, 135.0);
+        assert_eq!(line(&doc), 135.0);
+        doc.edit("move", |tx| super::move_item(tx, d, next, clear + super::NEXT / 2.0)).unwrap();
+        set_line(&mut doc, 135.0);
+        assert_eq!(line(&doc), clear);
         doc.model().check().unwrap();
     }
 
