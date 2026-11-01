@@ -79,9 +79,6 @@ fn check_diagram(
                 (w[0].x - w[1].x).abs() > route::NO_STEP && (w[0].y - w[1].y).abs() > route::NO_STEP
             })
         {
-            if std::env::var_os("UMLCRAFT_DEBUG_SLANT").is_some() {
-                eprintln!("SLANT {} {:?}", what(), edge.points);
-            }
             found.push(format!("{} has a slanted segment though it runs at right angles", what()));
         }
     }

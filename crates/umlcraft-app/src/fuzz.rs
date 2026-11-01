@@ -1,6 +1,7 @@
-//! Random edits as dragging with the mouse makes them (moving and resizing boxes, bending lines,
-//! moving messages, gates, lifeline ends, labels and region lines), with undo, redo and deletes
-//! in between, on the sample project, the order system and Astah's sample. After every edit the
+//! Random edits as the mouse makes them (moving, resizing and aligning boxes, bending and
+//! drawing lines, moving messages, gates, lifeline ends, labels and region lines, putting
+//! fragments around messages and adding operands), with undo, redo and deletes in between, on
+//! the sample project, the order system and Astah's sample. After every edit the
 //! rules of [`invariants`] must hold as far as they held before, and undo and redo must give
 //! back exactly the model before and after it.
 //!
@@ -11,7 +12,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use umlcraft_model::{DiagramKind, Document, Id, LineShape, Model, Rect, Shape};
 use umlcraft_notation::invariants;
-use umlcraft_notation::scene::{self, ApproxMeasure, Scene};
+use umlcraft_notation::palette::{self, EdgeTool, Tool};
+use umlcraft_notation::scene::{self, Alignment, ApproxMeasure, Scene};
 
 use crate::workspace::Workspace;
 
@@ -99,7 +101,7 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
     let lines: Vec<&scene::EdgeShape> = drawn.edges.iter().filter(|e| !e.fixed).collect();
     let messages: Vec<Id> = drawn.edges.iter().filter(|e| e.fixed).map(|e| e.id).collect();
 
-    match rng.below(14) {
+    match rng.below(18) {
         0..=3 => {
             let Some((node, _, _)) = rng.pick(&nodes) else { return "nothing".into() };
             let mut selection = vec![node];
@@ -239,6 +241,92 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
             ws.select(Vec::new());
             ws.route_lines();
             format!("route all lines {where_}")
+        }
+        // Drawing new lines: messages at a height between two lifelines (or one, for found and
+        // lost ones and calls to itself), other lines between two nodes.
+        14 | 15 => {
+            let Some(kind) = kind else { return "nothing".into() };
+            let tools: Vec<EdgeTool> = palette::palette(kind)
+                .into_iter()
+                .filter_map(|t| match t {
+                    Tool::Edge(e) => Some(e),
+                    _ => None,
+                })
+                .collect();
+            let Some(tool) = rng.pick(&tools) else { return "nothing".into() };
+            if let Some(layout) = drawn.sequence.as_ref() {
+                let lanes: Vec<Id> = layout.lanes.iter().map(|l| l.presentation).collect();
+                let (Some(from), Some(to)) = (rng.pick(&lanes), rng.pick(&lanes)) else {
+                    return "nothing".into();
+                };
+                let to = if matches!(tool, EdgeTool::FoundMessage | EdgeTool::LostMessage) {
+                    from
+                } else {
+                    to
+                };
+                let bottom = layout.slots.iter().map(|s| s.y).fold(100.0, f32::max);
+                let y = 60.0 + rng.below(((bottom - 20.0) / 5.0) as usize) as f32 * 5.0;
+                let slot = layout.slot_at(y);
+                let names = (name(from), name(to));
+                ws.connect_message(tool, from, to, slot);
+                return format!(
+                    "draw {tool:?} from {:?} to {:?} at y {y} {where_}",
+                    names.0, names.1
+                );
+            }
+            let (Some((from, _, _)), Some((to, _, _))) = (rng.pick(&nodes), rng.pick(&nodes))
+            else {
+                return "nothing".into();
+            };
+            let names = (name(from), name(to));
+            ws.connect(tool, from, to);
+            format!("draw {tool:?} from {:?} to {:?} {where_}", names.0, names.1)
+        }
+        16 if kind == Some(DiagramKind::Sequence) => {
+            if rng.chance(50) {
+                let mut selection: Vec<Id> = Vec::new();
+                for _ in 0..1 + rng.below(3) {
+                    if let Some(m) = rng.pick(&messages) {
+                        selection.push(m);
+                    }
+                }
+                selection.dedup();
+                let names: Vec<String> = selection.iter().map(|&m| name(m)).collect();
+                ws.select(selection);
+                ws.wrap_selection_in_fragment();
+                return format!("wrap {names:?} in a fragment {where_}");
+            }
+            let fragments: Vec<Id> = view
+                .presentations()
+                .iter()
+                .filter(|p| matches!(p.shape, Shape::Fragment { .. }))
+                .filter_map(|p| p.element)
+                .collect();
+            let Some(fragment) = rng.pick(&fragments) else { return "nothing".into() };
+            ws.add_operand(fragment);
+            format!("add an operand to {fragment} {where_}")
+        }
+        17 => {
+            let mut selection: Vec<Id> = Vec::new();
+            for _ in 0..2 + rng.below(2) {
+                if let Some((n, _, _)) = rng.pick(&nodes) {
+                    selection.push(n);
+                }
+            }
+            selection.dedup();
+            let alignments = [
+                Alignment::Left,
+                Alignment::HorizontalCenter,
+                Alignment::Right,
+                Alignment::Top,
+                Alignment::VerticalCenter,
+                Alignment::Bottom,
+            ];
+            let alignment = rng.pick(&alignments).expect("alignments");
+            let names: Vec<String> = selection.iter().map(|&n| name(n)).collect();
+            ws.select(selection);
+            ws.align_selection(alignment);
+            format!("align {names:?} {alignment:?} {where_}")
         }
         _ => "nothing".into(),
     }
