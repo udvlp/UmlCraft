@@ -12,6 +12,9 @@ today.
   when it moves with the call it is sent from, and a lifeline is created only once. No bar
   reaches past a lifeline's cross, not even the one of a caller waiting for the object that
   destroys it.
+- **Aligning follows the diagram's rules**: aligned lifelines only move sideways and the
+  sequence diagram is tidied after them; aligned containers take what lies inside along, and
+  aligned states go into the state they now lie in.
 - **Operands keep their room**: an alt or another fragment with several operands made smaller
   stops below its last dashed line instead of leaving it outside. A fragment dragged down into
   the one it held goes inside it right away.

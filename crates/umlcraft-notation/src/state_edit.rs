@@ -48,13 +48,12 @@ pub fn regions_of(model: &Model, state: Id) -> Vec<Id> {
 
 /// Gives the vertices shown by `presentations` on `diagram` the owner their place says: the
 /// state or region drawn around their center, else the state machine. Used after moving them.
+/// One after the other, so that two vertices dropped onto each other nest one way, not both.
 pub fn reparent_vertices(tx: &mut Tx<'_>, diagram: Id, presentations: &[Id]) -> Result<()> {
-    let model = tx.model();
-    let Some(view) = model.view(diagram) else { return Ok(()) };
-    let Some(machine) = model.element(diagram)?.owner() else { return Ok(()) };
-    let mut moves = Vec::new();
+    let Some(machine) = tx.model().element(diagram)?.owner() else { return Ok(()) };
     for &id in presentations {
-        let Some(p) = view.get(id) else { continue };
+        let model = tx.model();
+        let Some(p) = model.view(diagram).and_then(|v| v.get(id)) else { continue };
         let (Some(element), Some(bounds)) = (p.element, p.bounds()) else { continue };
         let Some(e) = model.get(element) else { continue };
         if !e.kind().is_vertex() {
@@ -65,17 +64,9 @@ pub fn reparent_vertices(tx: &mut Tx<'_>, diagram: Id, presentations: &[Id]) -> 
         let owner = vertex_owner_at(model, diagram, bounds.center(), &inside).unwrap_or(machine);
         if e.owner() != Some(owner) && model.get(owner).is_some_and(|o| o.kind().can_own(e.kind()))
         {
-            moves.push((element, owner));
+            let index = model.children(owner).len();
+            tx.move_element(element, owner, index)?;
         }
-    }
-    for (element, owner) in moves {
-        // An earlier move may have put the owner inside the element.
-        let model = tx.model();
-        if owner == element || model.is_ancestor(element, owner) {
-            continue;
-        }
-        let index = model.children(owner).len();
-        tx.move_element(element, owner, index)?;
     }
     Ok(())
 }
@@ -244,6 +235,25 @@ mod tests {
     fn owner_name(model: &Model, element: Id) -> String {
         let owner = model.get(element).and_then(|e| e.owner()).expect("owned");
         model.get(owner).map(|o| o.name().to_owned()).unwrap_or_default()
+    }
+
+    #[test]
+    fn two_states_dropped_onto_each_other_nest_one_way() {
+        let (mut doc, _) = order_system();
+        let (shipped, empty) = (named(doc.model(), "Shipped"), named(doc.model(), "Empty"));
+        let (diagram, shipped_node) = node_of(doc.model(), shipped);
+        let (_, empty_node) = node_of(doc.model(), empty);
+        let machine = doc.model().element(diagram).unwrap().owner().unwrap();
+        // "Empty" leaves "Open" for the very place of "Shipped", outside every other state.
+        let place = doc.model().view(diagram).unwrap().get(shipped_node).unwrap().bounds().unwrap();
+        doc.edit("drop", |tx| {
+            tx.set_bounds(diagram, empty_node, place)?;
+            reparent_vertices(tx, diagram, &[shipped_node, empty_node])
+        })
+        .unwrap();
+        let model = doc.model();
+        assert_eq!(owner_name(model, shipped), "Empty");
+        assert_eq!(model.get(empty).unwrap().owner(), Some(machine), "not left in Open");
     }
 
     #[test]

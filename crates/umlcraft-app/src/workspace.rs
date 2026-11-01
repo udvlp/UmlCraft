@@ -909,12 +909,41 @@ impl Workspace {
         let rects: Vec<Rect> =
             nodes.iter().map(|&(p, r)| drawn.node(p).map_or(r, |n| n.rect)).collect();
         let aligned = scene::align(&rects, alignment);
+        let model = self.doc.model();
+        let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+        let Some(view) = model.view(diagram) else { return };
+        // As when they are dragged: lifelines only move sideways, and containers take what is
+        // drawn inside them along.
+        let lifeline = |p: Id| {
+            let element = view.get(p).and_then(|pr| pr.element).and_then(|e| model.get(e));
+            matches!(element.map(|e| e.kind()), Some(ElementKind::Lifeline(_)))
+        };
+        let selected: HashSet<Id> = nodes.iter().map(|&(p, _)| p).collect();
+        let mut moves: Vec<(Id, Rect)> = Vec::new();
+        for (&(p, stored), (d, a)) in nodes.iter().zip(rects.iter().zip(aligned)) {
+            let (dx, dy) = (a.x - d.x, if lifeline(p) { 0.0 } else { a.y - d.y });
+            for q in scene::with_contents(model, &drawn, &[p]) {
+                let inner = q != p && !selected.contains(&q);
+                if q == p || (inner && !moves.iter().any(|&(m, _)| m == q)) {
+                    let bounds =
+                        if q == p { Some(stored) } else { view.get(q).and_then(|pr| pr.bounds()) };
+                    if let Some(b) = bounds {
+                        moves.push((q, b.translate(dx, dy)));
+                    }
+                }
+            }
+        }
+        let moved: Vec<Id> = moves.iter().map(|&(p, _)| p).collect();
         let label = t!("edit.align").to_string();
         let result = self.edit(label, |tx| {
-            nodes.iter().zip(rects.iter().zip(aligned)).try_for_each(|(&(p, stored), (d, a))| {
-                let moved = stored.translate(a.x - d.x, a.y - d.y);
-                tx.set_bounds(diagram, p, moved)
-            })
+            moves.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
+            match kind {
+                Some(DiagramKind::Sequence) => umlcraft_notation::sequence_edit::tidy(tx, diagram),
+                Some(DiagramKind::StateMachine) => {
+                    state_edit::reparent_vertices(tx, diagram, &moved)
+                }
+                _ => Ok(()),
+            }
         });
         self.report(result);
     }
@@ -1340,6 +1369,40 @@ mod tests {
     use umlcraft_model::sample::order_system;
 
     use super::*;
+
+    #[test]
+    fn aligned_lifelines_only_move_sideways() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        let d = ids.sequence_diagram;
+        ws.open_diagram(d);
+        let heads = |ws: &Workspace| -> Vec<(Id, Rect)> {
+            let view = ws.doc.model().view(d).unwrap();
+            view.presentations()
+                .iter()
+                .filter_map(|p| match p.shape {
+                    Shape::Lifeline { head, .. } => Some((p.id, head)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let before = heads(&ws);
+        let selection: Vec<Id> = before.iter().map(|&(p, _)| p).collect();
+        ws.select(selection);
+        ws.align_selection(Alignment::Bottom);
+        ws.align_selection(Alignment::Left);
+        let after = heads(&ws);
+        assert!(before.iter().zip(&after).all(|((_, a), (_, b))| a.y == b.y), "{after:?}");
+        assert!(after.windows(2).all(|w| w[0].1.x == w[1].1.x), "{after:?}");
+        // Nothing left for tidying: the frame and the fragments follow.
+        use umlcraft_notation::invariants::{check, new_violations};
+        let (fresh, _) = order_system();
+        let broken = new_violations(
+            &check(fresh.model(), &ApproxMeasure),
+            &check(ws.doc.model(), &ApproxMeasure),
+        );
+        assert!(broken.is_empty(), "{broken:?}");
+    }
 
     #[test]
     fn align_lines_up_the_boxes_as_drawn() {
