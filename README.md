@@ -194,6 +194,9 @@ cargo run -p umlcraft-app
 cargo test --workspace
 ```
 
+On Windows, `pwsh -File tools\install-local.ps1` builds a release and installs it for the
+current user with the installer (needs Inno Setup 7), so it starts from the Start menu.
+
 On Debian/Ubuntu, GPUI needs some system libraries first:
 `bash packaging/linux/install-build-deps.sh`.
 
