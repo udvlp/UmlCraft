@@ -486,7 +486,8 @@ pub(crate) fn arrange(
         });
     }
     // Keep the drawing order of the presentations: bars come right after what precedes them.
-    // Combined fragments go on top, so that their tabs cover the lifelines and bars they cross.
+    // Combined fragments go on top, see-through: their frame, tab and text stay visible where
+    // lifelines and bars cross them, and so do the lifelines and bars.
     let order: HashMap<Id, usize> =
         view.presentations().iter().enumerate().map(|(i, p)| (p.id, i)).collect();
     nodes.sort_by_key(|n| {
