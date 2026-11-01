@@ -389,7 +389,6 @@ impl Builder<'_, '_> {
             p.ends[1].navigability = Navigability::Navigable;
         })?;
         let rider_rentals = self.association(rental, rider, rental_class, |p| {
-            p.ends[0].multiplicity = Some(Multiplicity::ONE);
             p.ends[0].navigability = Navigability::NonNavigable;
             p.ends[1].role = "rentals".into();
             p.ends[1].multiplicity = Some(Multiplicity::MANY);
@@ -397,14 +396,12 @@ impl Builder<'_, '_> {
             p.ends[1].constraints = vec!["ordered".into()];
         })?;
         let rental_vehicle = self.association(rental, rental_class, vehicle, |p| {
-            p.ends[0].multiplicity = Some(Multiplicity::MANY);
             p.ends[0].navigability = Navigability::NonNavigable;
             p.ends[1].role = "vehicle".into();
             p.ends[1].multiplicity = Some(Multiplicity::ONE);
             p.ends[1].navigability = Navigability::Navigable;
         })?;
         let rental_policy = self.association(rental, rental_class, policy, |p| {
-            p.ends[0].multiplicity = Some(Multiplicity::MANY);
             p.ends[0].navigability = Navigability::NonNavigable;
             p.ends[1].role = "tariff".into();
             p.ends[1].multiplicity = Some(Multiplicity::ONE);
@@ -891,6 +888,20 @@ impl Builder<'_, '_> {
                     })?;
                 }
             }
+        }
+        // Ada is busy with the rental from the scan to the end of the ride: her bar runs down to
+        // the bottom of the loop.
+        let view = self.tx.model().view(d).ok_or(ModelError::NotADiagram(d))?;
+        let bar = view.presentations().iter().find_map(|p| match p.shape {
+            Shape::Activation { lifeline, .. } if lifeline == lane(ada) => Some(p.id),
+            _ => None,
+        });
+        if let Some(bar) = bar {
+            self.tx.update_presentation(d, bar, |p| {
+                if let Shape::Activation { top, height, .. } = &mut p.shape {
+                    *height = 680.0 - *top;
+                }
+            })?;
         }
         // All lifelines run down to the same height.
         let view = self.tx.model().view(d).ok_or(ModelError::NotADiagram(d))?;

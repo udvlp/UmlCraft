@@ -3,6 +3,11 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Sample project**: no multiplicities at the ends that are not navigable; ada's activation
+  bar in "Rent a bike" lasts until the end of the ride.
+
 ## 0.15.0 – 2026-11-01
 
 - **Handles beside the element under the mouse**: classes, interfaces, enumerations and data
