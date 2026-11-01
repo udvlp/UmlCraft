@@ -202,8 +202,8 @@ tool:
   foundMessage: Found message
   lostMessage: Lost message
 tool_tip:
-  foundMessage: "A message from outside the diagram, such as the first call of a sequence: click the lifeline that receives it"
-  lostMessage: "A message whose receiver the diagram does not show: click the lifeline that sends it"
+  foundMessage: "A message from outside the diagram, such as the first call of a sequence: click the lifeline that receives it. Drag the dot to change its length and side"
+  lostMessage: "A message whose receiver the diagram does not show, a reply at first: click the lifeline that sends it. Drag the dot to change its length and side"
 diagram:
   class: Class diagram
   object: Object diagram

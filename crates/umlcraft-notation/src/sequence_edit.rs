@@ -32,6 +32,8 @@ const BAR_MARGIN: f32 = 20.0;
 const LIFELINE_MARGIN: f32 = 30.0;
 /// How far the open end of a found or lost message is from its lifeline.
 const GATE_DISTANCE: f32 = 120.0;
+/// How close the open end of a found or lost message may come to its lifeline.
+const MIN_GATE_DISTANCE: f32 = 40.0;
 /// Length of a lifeline on an empty diagram.
 const LIFELINE_LENGTH: f32 = 300.0;
 /// Space between the frame and what it surrounds.
@@ -404,6 +406,18 @@ pub fn add_message(
         y
     };
     let sender = |tx: &mut Tx<'_>, height: f32| sender_bar(tx, diagram, &g, from.id, y, height);
+    // A reply leaves at the end of the bar it returns from: the one at `y`, else the closest
+    // one above.
+    let reply_at = || {
+        let above = || {
+            g.bars
+                .iter()
+                .filter(|b| b.lane == from.id && b.bottom <= y)
+                .max_by(|a, b| a.bottom.total_cmp(&b.bottom))
+                .copied()
+        };
+        g.bar_at(from.id, y).or_else(above).map(|bar| bar.bottom)
+    };
     let mut presentation = Presentation::message(message, source, target, y);
     match (gate, sort) {
         (MessageGate::Found, _) => {
@@ -413,25 +427,20 @@ pub fn add_message(
             }
         }
         (MessageGate::Lost, _) => {
-            sender(tx, LOST_SENDER_BAR)?;
-            if let Shape::Message { gate_x, .. } = &mut presentation.shape {
+            let at = if sort == MessageSort::Reply {
+                reply_at()
+            } else {
+                sender(tx, LOST_SENDER_BAR)?;
+                None
+            };
+            if let Shape::Message { y, gate_x, .. } = &mut presentation.shape {
+                *y = at.unwrap_or(*y);
                 *gate_x = Some(from.center() + GATE_DISTANCE);
             }
         }
         (_, MessageSort::Reply) => {
-            // A reply leaves at the end of the bar it returns from: the one at `y`, else the
-            // closest one above.
-            let above = || {
-                g.bars
-                    .iter()
-                    .filter(|b| b.lane == from.id && b.bottom <= y)
-                    .max_by(|a, b| a.bottom.total_cmp(&b.bottom))
-                    .copied()
-            };
-            if let (Some(bar), Shape::Message { y: at, .. }) =
-                (g.bar_at(from.id, y).or_else(above), &mut presentation.shape)
-            {
-                *at = bar.bottom;
+            if let (Some(at), Shape::Message { y, .. }) = (reply_at(), &mut presentation.shape) {
+                *y = at;
             }
         }
         _ if source == target => {
@@ -628,6 +637,78 @@ pub fn place_label(
             labels.name = Some(offset);
         }
     })
+}
+
+/// Puts the open end of the found or lost message `message` at `x`: farther from its lifeline
+/// or closer, on either side, though not closer than `MIN_GATE_DISTANCE`.
+pub fn set_gate(tx: &mut Tx<'_>, diagram: Id, message: Id, x: f32) -> Result<()> {
+    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let (lane, old) = match view.get(message).map(|p| &p.shape) {
+        Some(Shape::Message { source, gate_x: Some(old), .. }) => (*source, *old),
+        _ => return Ok(()),
+    };
+    let Some(Shape::Lifeline { head, .. }) = view.get(lane).map(|p| &p.shape) else {
+        return Ok(());
+    };
+    let center = head.center().x;
+    // Right on the lifeline, it keeps its side.
+    let side = if (x - center).abs() > 0.5 { x - center } else { old - center };
+    let x = center + side.signum() * (x - center).abs().max(MIN_GATE_DISTANCE);
+    tx.update_presentation(diagram, message, |p| {
+        if let Shape::Message { gate_x, .. } = &mut p.shape {
+            *gate_x = Some(x);
+        }
+    })?;
+    tidy(tx, diagram)
+}
+
+/// Where the lifelines of all sequence diagrams stand, by diagram and presentation: the x of
+/// their line, taken before an edit for [`follow_lifelines`].
+pub fn lifeline_centers(model: &Model) -> HashMap<(Id, Id), f32> {
+    model
+        .views()
+        .flat_map(|(diagram, view)| {
+            view.presentations().iter().filter_map(move |p| match p.shape {
+                Shape::Lifeline { head, .. } => Some(((diagram, p.id), head.center().x)),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+/// Moves the open ends of found and lost messages along with their lifelines, which stood
+/// where `before` says before the edit. An end on the diagram frame stays there.
+pub fn follow_lifelines(tx: &mut Tx<'_>, before: &HashMap<(Id, Id), f32>) -> Result<()> {
+    let mut moved = Vec::new();
+    for (diagram, view) in tx.model().views() {
+        let frame = view
+            .presentations()
+            .iter()
+            .find(|p| p.element == Some(diagram))
+            .and_then(|p| p.bounds());
+        for p in view.presentations() {
+            let Shape::Message { source, gate_x: Some(x), .. } = p.shape else { continue };
+            let (Some(&old), Some(Shape::Lifeline { head, .. })) =
+                (before.get(&(diagram, source)), view.get(source).map(|l| &l.shape))
+            else {
+                continue;
+            };
+            let dx = head.center().x - old;
+            let on_frame =
+                frame.is_some_and(|f| (x - f.x).abs() < 1.5 || (x - f.right()).abs() < 1.5);
+            if dx.abs() > 0.01 && !on_frame {
+                moved.push((diagram, p.id, x + dx));
+            }
+        }
+    }
+    for (diagram, id, x) in moved {
+        tx.update_presentation(diagram, id, |p| {
+            if let Shape::Message { gate_x, .. } = &mut p.shape {
+                *gate_x = Some(x);
+            }
+        })?;
+    }
+    Ok(())
 }
 
 /// Lets the lifeline `presentation` end at `bottom`, though not above the last message, bar or
@@ -907,8 +988,13 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                 {
                     need = need.max(m.y.max(m.end()) + BAR_MARGIN);
                 }
-                // A reply returns into the bar its call was sent from, however far below.
-                if m.sort == MessageSort::Reply && m.target == bar.lane && m.end() > bar.bottom {
+                // A reply returns into the bar its call was sent from, however far below. A lost
+                // one returns nowhere.
+                if m.sort == MessageSort::Reply
+                    && m.target == bar.lane
+                    && m.source != m.target
+                    && m.end() > bar.bottom
+                {
                     let call = g
                         .messages
                         .iter()
@@ -1968,6 +2054,58 @@ mod tests {
         let center = layout.lanes.iter().find(|l| l.presentation == a).unwrap().center;
         assert!(layout.gates.iter().any(|g| g.x < center));
         assert!(layout.gates.iter().any(|g| g.x > center));
+    }
+
+    #[test]
+    fn a_lost_message_answers_as_a_reply_from_the_end_of_its_bar() {
+        let (mut doc, d, a, _) = two_lifelines();
+        draw(&mut doc, d, EdgeTool::FoundMessage, a, a, 120.0);
+        let lost = draw(&mut doc, d, EdgeTool::LostMessage, a, a, 130.0);
+        let ElementKind::Message(props) = doc.model().element(lost).unwrap().kind() else {
+            unreachable!()
+        };
+        assert_eq!(props.sort, umlcraft_model::MessageSort::Reply);
+        assert!(matches!(message(&doc, d, lost), Shape::Message { y: 145.0, .. }));
+        assert_eq!(bars(&doc, d), [(120.0, 145.0)]);
+        // Moved down, it takes the end of the bar along, and back up it shortens it.
+        doc.edit("move", |tx| super::move_item(tx, d, lost, 250.0)).unwrap();
+        assert_eq!(bars(&doc, d), [(120.0, 250.0)]);
+        doc.edit("move", |tx| super::move_item(tx, d, lost, 180.0)).unwrap();
+        assert_eq!(bars(&doc, d), [(120.0, 180.0)]);
+        doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn the_open_end_of_a_lost_message_can_be_moved_and_follows_its_lifeline() {
+        let (mut doc, d, a, _) = two_lifelines();
+        let lost = draw(&mut doc, d, EdgeTool::LostMessage, a, a, 130.0);
+        let p = doc.model().view(d).unwrap().presentations_of(lost).next().unwrap().id;
+        let gate = |doc: &Document| match message(doc, d, lost) {
+            Shape::Message { gate_x, .. } => gate_x.unwrap(),
+            _ => unreachable!(),
+        };
+        let center = |doc: &Document| match &doc.model().view(d).unwrap().get(a).unwrap().shape {
+            Shape::Lifeline { head, .. } => head.center().x,
+            _ => unreachable!(),
+        };
+        let c = center(&doc);
+        // Longer, then over to the left, then too close: it keeps its least distance.
+        doc.edit("gate", |tx| super::set_gate(tx, d, p, c + 200.0)).unwrap();
+        assert_eq!(gate(&doc), c + 200.0);
+        doc.edit("gate", |tx| super::set_gate(tx, d, p, c - 90.0)).unwrap();
+        assert_eq!(gate(&doc), c - 90.0);
+        doc.edit("gate", |tx| super::set_gate(tx, d, p, c - 5.0)).unwrap();
+        assert_eq!(gate(&doc), c - super::MIN_GATE_DISTANCE);
+        // The lifeline moves, the message keeps its length.
+        crate::edit::apply(&mut doc, "move", &ApproxMeasure, |tx| {
+            let head = match &tx.model().view(d).unwrap().get(a).unwrap().shape {
+                Shape::Lifeline { head, .. } => *head,
+                _ => unreachable!(),
+            };
+            tx.set_bounds(d, a, head.translate(100.0, 0.0))
+        })
+        .unwrap();
+        assert_eq!(gate(&doc), c + 100.0 - super::MIN_GATE_DISTANCE);
     }
 
     #[test]

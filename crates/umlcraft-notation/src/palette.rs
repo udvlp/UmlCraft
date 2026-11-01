@@ -477,11 +477,10 @@ impl EdgeTool {
     /// The kind of message this tool draws, `None` for other tools.
     pub fn message_sort(self) -> Option<MessageSort> {
         match self {
-            Self::Message | Self::FoundMessage | Self::LostMessage => {
-                Some(MessageSort::Synchronous)
-            }
+            Self::Message | Self::FoundMessage => Some(MessageSort::Synchronous),
             Self::AsyncMessage => Some(MessageSort::Asynchronous),
-            Self::Reply => Some(MessageSort::Reply),
+            // A lost message mostly answers a found one: by default it is a reply.
+            Self::Reply | Self::LostMessage => Some(MessageSort::Reply),
             Self::CreateMessage => Some(MessageSort::Create),
             Self::DestroyMessage => Some(MessageSort::Destroy),
             _ => None,
@@ -595,7 +594,7 @@ impl EdgeTool {
                 Some(ElementKind::message(self.message_sort()?, source, target))
             }
             Self::FoundMessage | Self::LostMessage => {
-                let mut kind = ElementKind::message(MessageSort::Synchronous, source, target);
+                let mut kind = ElementKind::message(self.message_sort()?, source, target);
                 if let ElementKind::Message(p) = &mut kind {
                     p.gate = if self == Self::FoundMessage {
                         MessageGate::Found

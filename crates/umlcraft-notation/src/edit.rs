@@ -9,8 +9,8 @@ use umlcraft_model::{
     DiagramKind, Document, ElementData, ElementKind, Id, Model, Rect, Result, Size, Tx,
 };
 
-use crate::autoroute;
 use crate::scene::{self, TextMeasure};
+use crate::{autoroute, sequence_edit};
 
 /// An automatically sized box: where it is, its bounds, the size its content needs, and the
 /// content.
@@ -39,7 +39,8 @@ fn fitted_boxes(model: &Model, measure: &dyn TextMeasure) -> Vec<FittedBox> {
 /// Runs `f` as one undo step of `doc`. Afterwards, as in Astah, boxes sized to their content
 /// whose content the edit changed take the size it now needs (a new box always does); others
 /// keep their size, even if Astah stored one that does not fit. Then lines that the router
-/// keeps are routed again where their nodes moved or something moved into their way.
+/// keeps are routed again where their nodes moved or something moved into their way, and found
+/// and lost messages keep their length to lifelines that moved.
 pub fn apply<R>(
     doc: &mut Document,
     label: impl Into<String>,
@@ -51,8 +52,10 @@ pub fn apply<R>(
         .map(|b| (b.presentation, b.content))
         .collect();
     let routes = autoroute::snapshots(doc.model());
+    let lifelines = sequence_edit::lifeline_centers(doc.model());
     doc.edit(label, |tx| {
         let result = f(tx)?;
+        sequence_edit::follow_lifelines(tx, &lifelines)?;
         let close = |a: Size, b: Size| {
             (a.width - b.width).abs() < 0.01 && (a.height - b.height).abs() < 0.01
         };

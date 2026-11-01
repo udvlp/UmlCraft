@@ -370,6 +370,14 @@ enum Drag {
         end: usize,
         current: MPoint,
     },
+    /// Dragging the open end of the found or lost message `message`, at height `y` beside the
+    /// lifeline at `x`.
+    Gate {
+        message: Id,
+        x: f32,
+        y: f32,
+        current: MPoint,
+    },
     /// Dragging the end of the lifeline `presentation`, whose line runs down from `top` at `x`.
     LifelineEnd {
         presentation: Id,
@@ -890,6 +898,13 @@ impl DiagramCanvas {
                 let start = snap_point(p);
                 self.drag = Some(Drag::FreeLine { start, current: start });
             }
+            // Found and lost messages have one lifeline: a click on it draws them.
+            Tool::Edge(edge_tool @ (EdgeTool::FoundMessage | EdgeTool::LostMessage)) => {
+                self.drag = None;
+                if let Some(lifeline) = self.connect_target(edge_tool, p, cx) {
+                    self.finish_connect(edge_tool, lifeline, lifeline, p, cx);
+                }
+            }
             Tool::Edge(edge_tool) => {
                 match (self.drag.clone(), self.connect_target(edge_tool, p, cx)) {
                     // Second click of click-click mode; a second click on the source makes a loop.
@@ -1046,6 +1061,13 @@ impl DiagramCanvas {
             });
             return true;
         }
+        if let Some((gate, x)) = self.gate_of(single, cx)
+            && (p.x - gate.x).abs() <= tolerance
+            && (p.y - gate.y).abs() <= tolerance
+        {
+            self.drag = Some(Drag::Gate { message: single, x, y: gate.y, current: gate });
+            return true;
+        }
         let Some(edge) = self.scene.edge(single) else { return false };
         if self.is_free_line(single, cx) {
             let near =
@@ -1070,6 +1092,19 @@ impl DiagramCanvas {
             }
         }
         true
+    }
+
+    /// The open end of the found or lost message `presentation` on the active diagram, and the
+    /// x of its lifeline.
+    fn gate_of(&self, presentation: Id, cx: &App) -> Option<(MPoint, f32)> {
+        let ws = self.workspace.read(cx);
+        let view = ws.doc.model().view(ws.active_diagram?)?;
+        let Shape::Message { source, y, gate_x: Some(gx), .. } = view.get(presentation)?.shape
+        else {
+            return None;
+        };
+        let (x, _, _) = self.scene.node(source).and_then(lifeline_end)?;
+        Some((MPoint::new(gx, y), x))
     }
 
     // ----- Hover handles -------------------------------------------------------------------
@@ -1550,7 +1585,8 @@ impl DiagramCanvas {
             Drag::RegionLine { current, .. }
             | Drag::FreeLine { current, .. }
             | Drag::LineEnd { current, .. }
-            | Drag::LifelineEnd { current, .. } => *current = snap_point(p),
+            | Drag::LifelineEnd { current, .. }
+            | Drag::Gate { current, .. } => *current = snap_point(p),
             Drag::Pan { last } => {
                 let delta = position - *last;
                 *last = position;
@@ -1593,6 +1629,9 @@ impl DiagramCanvas {
             }
             Some(Drag::LifelineEnd { presentation, current, .. }) => {
                 self.update_workspace(cx, |ws| ws.set_lifeline_end(presentation, current.y));
+            }
+            Some(Drag::Gate { message, current, .. }) => {
+                self.update_workspace(cx, |ws| ws.set_gate(message, current.x));
             }
             Some(Drag::RubberBand { start, extend, .. }) => {
                 let area = Rect::from_corners(start, p);
@@ -2443,7 +2482,10 @@ impl Render for DiagramCanvas {
             }
             [single] => {
                 let end = scene.node(single).and_then(lifeline_end);
-                end.map(|(x, _, bottom)| MPoint::new(x, bottom)).into_iter().collect()
+                let end = end.map(|(x, _, bottom)| MPoint::new(x, bottom));
+                // The open end of a found or lost message can be dragged.
+                let gate = self.gate_of(single, cx).map(|(gate, _)| gate);
+                end.into_iter().chain(gate).collect()
             }
             _ => Vec::new(),
         };
@@ -2711,6 +2753,13 @@ impl Render for DiagramCanvas {
                                         s,
                                         LineStyle::Dashed,
                                     );
+                                    p.grips(&[end]);
+                                }
+                                Some(Drag::Gate { x, y, current, .. }) => {
+                                    // The message as long as it will be, on the side it goes.
+                                    let end = MPoint::new(current.x, *y);
+                                    let s = p.c.selection;
+                                    p.line(&[MPoint::new(*x, *y), end], 1.5, s, LineStyle::Dashed);
                                     p.grips(&[end]);
                                 }
                                 Some(Drag::HandleLine { source, start, current, message }) => {

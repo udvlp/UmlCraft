@@ -639,6 +639,15 @@ impl Workspace {
         self.report(result);
     }
 
+    /// Puts the open end of the found or lost message `message` of the active diagram at `x`.
+    pub fn set_gate(&mut self, message: Id, x: f32) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.resize").to_string();
+        let result = self
+            .edit(label, |tx| umlcraft_notation::sequence_edit::set_gate(tx, diagram, message, x));
+        self.report(result);
+    }
+
     /// Turns the relationship the edge `edge` of the active diagram shows into one `tool`
     /// makes, as one undo step.
     pub fn change_relationship(&mut self, edge: Id, tool: EdgeTool) {

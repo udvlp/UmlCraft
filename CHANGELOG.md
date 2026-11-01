@@ -7,6 +7,10 @@ today.
 
 - **See-through fragment tabs**: the tab of a loop, alt and the like no longer hides the
   lifelines and activation bars below it; the fragment stays on top, with nothing filled.
+- **Found and lost messages**: one click on the lifeline draws them, no second click any more.
+  Dragging the dot at their open end makes them longer or shorter and turns them to the other
+  side; they keep their length when the lifeline moves. A lost message starts as a reply,
+  leaving the bar at its end.
 
 ## 0.15.1 – 2026-11-01
 

@@ -202,8 +202,8 @@ tool:
   foundMessage: Gefundene Nachricht
   lostMessage: Verlorene Nachricht
 tool_tip:
-  foundMessage: "Eine Nachricht von außerhalb des Diagramms, etwa der erste Aufruf einer Sequenz: auf die Lebenslinie klicken, die sie empfängt"
-  lostMessage: "Eine Nachricht, deren Empfänger das Diagramm nicht zeigt: auf die Lebenslinie klicken, die sie sendet"
+  foundMessage: "Eine Nachricht von außerhalb des Diagramms, etwa der erste Aufruf einer Sequenz: auf die Lebenslinie klicken, die sie empfängt. Den Punkt ziehen ändert Länge und Seite"
+  lostMessage: "Eine Nachricht, deren Empfänger das Diagramm nicht zeigt, zunächst eine Antwort: auf die Lebenslinie klicken, die sie sendet. Den Punkt ziehen ändert Länge und Seite"
 diagram:
   class: Klassendiagramm
   object: Objektdiagramm
