@@ -404,6 +404,8 @@ mod tests {
         assert_eq!(&hex(&Sha256::digest(b"abc"))[..8], "ba7816bf");
     }
 
+    // Windows paths: elsewhere a backslash separates nothing.
+    #[cfg(windows)]
     #[test]
     fn the_install_folder_tells_for_whom() {
         let local = Path::new(r"C:\Users\u\AppData\Local");
