@@ -134,9 +134,9 @@ Free texts and lines on every diagram (Text and Line tools): texts edited in pla
 dashed or with arrowheads, their ends dragged one by one. Light and dark theme, German and
 English. Members show their visibility right before the name (`- name`); UmlCraft's
 visibility column lines up all names of a compartment instead. Abstract classes show
-`{abstract}` below their italic name, or «abstract» above it. Theme, language, the column and
-how abstract classes are marked are chosen in the settings (the gear in the title bar, or
-Ctrl+,).
+`{abstract}` below their italic name, or «abstract» above it; read-only attributes can end in
+`{readOnly}`. Theme, language, the column, how abstract classes are marked and `{readOnly}` are
+chosen in the settings (the gear in the title bar, or Ctrl+,).
 
 ## AI assistants (MCP)
 

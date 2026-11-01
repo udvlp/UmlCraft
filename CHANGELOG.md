@@ -27,6 +27,9 @@ today.
   extended use case and lets the extend use it.
 - **New names selected**: when an inline editor opens for something just made, its default name
   is selected, so typing replaces it.
+- **Diamonds and navigability**: an aggregation or composition end that is not navigable shows
+  its × right behind the diamond, a navigable one its arrow.
+- **`{readOnly}`**: in the settings, read-only attributes can end in `{readOnly}`.
 
 ## 0.13.0 – 2026-11-01
 

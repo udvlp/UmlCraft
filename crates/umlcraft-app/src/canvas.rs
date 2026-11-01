@@ -457,6 +457,8 @@ pub struct Display {
     pub visibility_column: bool,
     /// Abstract classes show «abstract» above their name instead of `{abstract}` below it.
     pub abstract_stereotype: bool,
+    /// Read-only attributes end in `{readOnly}`.
+    pub read_only_constraint: bool,
 }
 
 /// Measures text with the window's font system, at 100 % zoom.
@@ -513,6 +515,10 @@ impl TextMeasure for FontMeasure<'_> {
     fn abstract_stereotype(&self) -> bool {
         self.display.abstract_stereotype
     }
+
+    fn read_only_constraint(&self) -> bool {
+        self.display.read_only_constraint
+    }
 }
 
 /// Measures text with the app's font system by adding up the advances of the characters, as
@@ -548,6 +554,10 @@ impl TextMeasure for AppMeasure {
 
     fn abstract_stereotype(&self) -> bool {
         self.display.abstract_stereotype
+    }
+
+    fn read_only_constraint(&self) -> bool {
+        self.display.read_only_constraint
     }
 }
 

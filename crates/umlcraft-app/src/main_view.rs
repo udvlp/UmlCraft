@@ -1485,6 +1485,12 @@ impl MainView {
         self.apply_display(cx);
     }
 
+    /// Ends read-only attributes in `{readOnly}`, or not.
+    pub fn set_read_only_constraint(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.settings.read_only_constraint = on;
+        self.apply_display(cx);
+    }
+
     /// Saves the settings and draws, sizes and exports diagrams as they say from now on.
     fn apply_display(&mut self, cx: &mut Context<Self>) {
         self.settings.save();

@@ -46,6 +46,11 @@ pub trait TextMeasure {
     fn abstract_stereotype(&self) -> bool {
         false
     }
+
+    /// Whether read-only attributes end in UML's `{readOnly}`, a setting.
+    fn read_only_constraint(&self) -> bool {
+        false
+    }
 }
 
 pub struct ApproxMeasure;
@@ -452,6 +457,16 @@ pub enum EndMarker {
     HollowTriangle,
     HollowDiamond,
     FilledDiamond,
+    /// A diamond at an end that is not navigable either: the cross right behind it, as Astah
+    /// draws it.
+    DiamondCross {
+        filled: bool,
+    },
+    /// A diamond at a navigable end: an open arrow behind it. Astah draws only the arrow there,
+    /// which hides the aggregation.
+    DiamondArrow {
+        filled: bool,
+    },
     /// A small x across the line near the end: the end is not navigable.
     Cross,
     /// A circle with a cross inside at the end: the owner of a nested element.
@@ -2050,6 +2065,11 @@ fn layout_classifier(
                 {
                     text.insert_str(at + 1, &format!("{} ", stereotype_text(stereotypes)));
                 }
+                if matches!(c.kind(), ElementKind::Attribute(p) if p.is_read_only)
+                    && measure.read_only_constraint()
+                {
+                    text.push_str(" {readOnly}");
+                }
                 let mut line = Line::new(text, size, RowRole::Member, Some(c.id()));
                 match c.kind() {
                     ElementKind::Attribute(p) => line.underline = p.is_static,
@@ -2285,11 +2305,18 @@ fn edge_for(
     let bind = bind_keyword.is_some();
     let mut keyword = bind_keyword;
     let end_marker = |end: &AssociationEnd| match (end.aggregation, end.navigability) {
-        (Aggregation::Shared, _) => EndMarker::HollowDiamond,
-        (Aggregation::Composite, _) => EndMarker::FilledDiamond,
         (Aggregation::None, Navigability::Navigable) => EndMarker::OpenArrow,
         (Aggregation::None, Navigability::NonNavigable) => EndMarker::Cross,
         (Aggregation::None, Navigability::Unspecified) => EndMarker::None,
+        // A diamond keeps the navigability behind it.
+        (a, Navigability::Navigable) => {
+            EndMarker::DiamondArrow { filled: a == Aggregation::Composite }
+        }
+        (a, Navigability::NonNavigable) => {
+            EndMarker::DiamondCross { filled: a == Aggregation::Composite }
+        }
+        (Aggregation::Shared, Navigability::Unspecified) => EndMarker::HollowDiamond,
+        (Aggregation::Composite, Navigability::Unspecified) => EndMarker::FilledDiamond,
     };
     match kind {
         Some(ElementKind::Association(p)) => {
@@ -3316,6 +3343,43 @@ mod tests {
     }
 
     #[test]
+    fn read_only_attributes_say_so_when_asked() {
+        struct ReadOnly;
+        impl TextMeasure for ReadOnly {
+            fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+                ApproxMeasure.width(text, font_size, bold)
+            }
+            fn read_only_constraint(&self) -> bool {
+                true
+            }
+        }
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        let attribute = doc
+            .edit("cap", |tx| {
+                let kind = ElementKind::attribute(Some(TypeRef::Text("int".into())));
+                let id = tx.create(ids.customer, ElementData::new("CAP", kind))?;
+                tx.update(id, |data| {
+                    if let ElementKind::Attribute(p) = &mut data.kind {
+                        p.is_read_only = true;
+                    }
+                })?;
+                Ok(id)
+            })
+            .unwrap();
+        let row = |measure: &dyn TextMeasure| {
+            let scene = build(doc.model(), d, &Preview::default(), measure);
+            // A row too long for the box wraps at a space.
+            let rows = scene.nodes.iter().flat_map(|n| &n.rows);
+            let texts: Vec<&str> =
+                rows.filter(|r| r.element == Some(attribute)).map(|r| r.text.as_str()).collect();
+            texts.join(" ")
+        };
+        assert_eq!(row(&ApproxMeasure), "+ CAP : int");
+        assert_eq!(row(&ReadOnly), "+ CAP : int {readOnly}");
+    }
+
+    #[test]
     fn association_ends_are_found_by_their_labels_and_near_their_tips() {
         use crate::palette::{EdgeTool, NodeTool, connect, create_node};
         let (mut doc, ids) = order_system();
@@ -4059,6 +4123,43 @@ mod tests {
         assert_eq!(e.source_marker, EndMarker::Cross);
         let role = e.labels.iter().find(|l| l.text == "+ customer").unwrap();
         assert_eq!((role.anchor, role.align), (Point::new(125.0, 176.0), LabelAlign::Left));
+
+        // A diamond keeps the end's navigability behind it.
+        let marker = |doc: &mut umlcraft_model::Document, aggregation, navigability| {
+            doc.edit("end", |tx| {
+                tx.update(ids.order_customer, |data| {
+                    if let ElementKind::Association(p) = &mut data.kind {
+                        (p.ends[0].aggregation, p.ends[0].navigability) =
+                            (aggregation, navigability);
+                    }
+                })
+            })
+            .unwrap();
+            let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+            scene.edge(edge).unwrap().source_marker
+        };
+        let cases = [
+            (
+                Aggregation::Composite,
+                Navigability::NonNavigable,
+                EndMarker::DiamondCross { filled: true },
+            ),
+            (
+                Aggregation::Shared,
+                Navigability::NonNavigable,
+                EndMarker::DiamondCross { filled: false },
+            ),
+            (
+                Aggregation::Composite,
+                Navigability::Navigable,
+                EndMarker::DiamondArrow { filled: true },
+            ),
+            (Aggregation::Shared, Navigability::Unspecified, EndMarker::HollowDiamond),
+            (Aggregation::None, Navigability::Navigable, EndMarker::OpenArrow),
+        ];
+        for (aggregation, navigability, expected) in cases {
+            assert_eq!(marker(&mut doc, aggregation, navigability), expected, "{aggregation:?}");
+        }
     }
 
     #[test]

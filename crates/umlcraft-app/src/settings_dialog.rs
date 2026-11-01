@@ -31,10 +31,12 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             .map_or(0, |ix| ix + 1);
         let column = settings.visibility_column;
         let stereotype = settings.abstract_stereotype;
+        let read_only = settings.read_only_constraint;
         let dark = cx.theme().is_dark();
         let muted = cx.theme().muted_foreground;
 
         let (v1, v2, v3, v4) = (view.clone(), view.clone(), view.clone(), view.clone());
+        let v5 = view.clone();
         let languages = RadioGroup::horizontal("settings-language")
             .child(t!("settings.system_language").to_string())
             .children(LANGUAGES.map(|(_, name)| name))
@@ -97,7 +99,14 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                         .ok();
                     }),
             );
-        let classes = v_flex().gap_3().child(visibility_column).child(abstract_mark);
+        let read_only_mark = Switch::new("settings-read-only")
+            .checked(read_only)
+            .label(t!("settings.read_only").to_string())
+            .on_change(move |&on, _, cx| {
+                v5.update(cx, |this, cx| this.set_read_only_constraint(on, cx)).ok();
+            });
+        let classes =
+            v_flex().gap_3().child(visibility_column).child(abstract_mark).child(read_only_mark);
 
         dialog
             .title(t!("settings.title").to_string())

@@ -436,6 +436,7 @@ settings:
   abstract: Besides the italic name, abstract classes show
   abstract_keyword: "{abstract} below the name"
   abstract_stereotype: "«abstract» above the name"
+  read_only: "Mark read-only attributes with {readOnly}"
   visibility_column_detail: "Lines up the names of all attributes and operations of a class. Off, the visibility stands right before the name."
   close: Close
 project:

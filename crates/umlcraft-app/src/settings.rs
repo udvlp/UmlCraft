@@ -26,6 +26,8 @@ pub struct Settings {
     /// Mark abstract classes with the stereotype «abstract» above their name instead of UML's
     /// `{abstract}` below it.
     pub abstract_stereotype: bool,
+    /// End read-only attributes in UML's `{readOnly}`. Off by default.
+    pub read_only_constraint: bool,
     /// The ribbon shows only its tabs.
     pub ribbon_collapsed: bool,
 }
@@ -77,6 +79,7 @@ impl Settings {
             dark: field(&fields, "dark"),
             visibility_column: field(&fields, "visibilityColumn"),
             abstract_stereotype: field(&fields, "abstractStereotype"),
+            read_only_constraint: field(&fields, "readOnlyConstraint"),
             ribbon_collapsed: field(&fields, "ribbonCollapsed"),
         }
     }
@@ -116,6 +119,7 @@ impl Settings {
         crate::canvas::Display {
             visibility_column: self.visibility_column,
             abstract_stereotype: self.abstract_stereotype,
+            read_only_constraint: self.read_only_constraint,
         }
     }
 

@@ -621,6 +621,19 @@ fn marker(tip: Point, from: Point, marker: EndMarker) -> Vec<Primitive> {
                 fill,
             }]
         }
+        // The cross 19 from the end lies just behind the diamond, as in Astah.
+        EndMarker::DiamondCross { filled } => {
+            let mut result = self::marker(tip, from, diamond(filled));
+            result.extend(self::marker(tip, from, EndMarker::Cross));
+            result
+        }
+        // The arrow points at the diamond's far corner.
+        EndMarker::DiamondArrow { filled } => {
+            let mut result = self::marker(tip, from, diamond(filled));
+            let corner = at(14.0, 0.0);
+            result.push(line(vec![at(14.0 + back, side), corner, at(14.0 + back, -side)], solid));
+            result
+        }
         EndMarker::Containment => {
             // A circle of radius 5 touching the node, crossed along and across the line.
             let r = 5.0;
@@ -632,6 +645,10 @@ fn marker(tip: Point, from: Point, marker: EndMarker) -> Vec<Primitive> {
             ]
         }
     }
+}
+
+fn diamond(filled: bool) -> EndMarker {
+    if filled { EndMarker::FilledDiamond } else { EndMarker::HollowDiamond }
 }
 
 /// The dots of found and lost messages and the crosses of destroyed lifelines, 20 px wide.

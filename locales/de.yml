@@ -436,6 +436,7 @@ settings:
   abstract: Abstrakte Klassen zusätzlich zur Kursivschrift kennzeichnen mit
   abstract_keyword: "{abstract} unter dem Namen"
   abstract_stereotype: "«abstract» über dem Namen"
+  read_only: "Schreibgeschützte Attribute mit {readOnly} kennzeichnen"
   visibility_column_detail: "Richtet die Namen aller Attribute und Operationen einer Klasse untereinander aus. Ausgeschaltet steht die Sichtbarkeit direkt vor dem Namen."
   close: Schließen
 project:
