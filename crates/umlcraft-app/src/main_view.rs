@@ -45,6 +45,18 @@ enum Busy {
     ImportingSource,
 }
 
+/// The check for a new version the user asked for in the About dialog.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ManualUpdate {
+    Idle,
+    Checking,
+    UpToDate,
+    /// A newer release, e.g. `0.15.3`.
+    Found(String),
+    /// GitHub could not be reached.
+    Failed,
+}
+
 /// At most this many problem files are listed after a source import.
 const LISTED_PROBLEMS: usize = 20;
 
@@ -91,6 +103,8 @@ pub struct MainView {
     structogram_notes: HashMap<Id, Vec<String>>,
     /// The diagram or structogram shown last, to focus a structogram once it shows.
     shown: Option<Id>,
+    /// How the check for a new version asked for in the About dialog went.
+    manual_update: ManualUpdate,
     /// Where `umlcraft-cli mcp` reaches the open project; announced while it lives.
     _live: Option<umlcraft_mcp::live::LiveServer>,
     _subscriptions: Vec<Subscription>,
@@ -175,6 +189,7 @@ impl MainView {
             structograms: HashMap::new(),
             structogram_notes: HashMap::new(),
             shown: None,
+            manual_update: ManualUpdate::Idle,
             _live: live,
             _subscriptions: subscriptions,
         };
@@ -183,6 +198,7 @@ impl MainView {
             view.notice = Some((t!("status.no_diagram_font").to_string(), revision));
         }
         view.sync_from_workspace(window, cx);
+        view.check_for_update(false, window, cx);
         view
     }
 
@@ -1319,7 +1335,10 @@ impl MainView {
     }
 
     fn open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
-        crate::about_dialog::open(window, cx);
+        if self.manual_update != ManualUpdate::Checking {
+            self.manual_update = ManualUpdate::Idle;
+        }
+        crate::about_dialog::open(cx.entity().downgrade(), window, cx);
     }
 
     // ----- Settings --------------------------------------------------------------------------
@@ -1518,6 +1537,58 @@ impl MainView {
         self.apply_display(cx);
     }
 
+    /// Lets UmlCraft ask GitHub for new versions, or not; agreeing checks at once.
+    pub fn set_update_check(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.update_check = Some(on);
+        self.settings.save();
+        self.check_for_update(false, window, cx);
+        cx.notify();
+    }
+
+    pub fn manual_update(&self) -> &ManualUpdate {
+        &self.manual_update
+    }
+
+    /// Asks GitHub for the latest release in the background: when `asked` (the About dialog's
+    /// button), at once and reporting how it went, else only if the user agreed and the last
+    /// check is a day ago. A newer release shows in the title bar.
+    pub fn check_for_update(&mut self, asked: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if asked {
+            if self.manual_update == ManualUpdate::Checking {
+                return;
+            }
+            self.manual_update = ManualUpdate::Checking;
+            cx.notify();
+        } else if !self.settings.update_due(update::now()) {
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let latest = cx.background_executor().spawn(async { update::fetch_latest() }).await;
+            this.update(cx, |this, cx| {
+                match latest {
+                    Ok(tag) => {
+                        let version = tag.trim().trim_start_matches('v').to_owned();
+                        this.settings.latest_version = Some(version);
+                        this.settings.last_update_check = Some(update::now());
+                        this.settings.save();
+                        if asked {
+                            this.manual_update = match this.settings.available_update() {
+                                Some(version) => ManualUpdate::Found(version),
+                                None => ManualUpdate::UpToDate,
+                            };
+                        }
+                    }
+                    // Offline, the next start tries again; only the user's own check says so.
+                    Err(_) if asked => this.manual_update = ManualUpdate::Failed,
+                    Err(_) => {}
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Saves the settings and draws, sizes and exports diagrams as they say from now on.
     fn apply_display(&mut self, cx: &mut Context<Self>) {
         self.settings.save();
@@ -1607,6 +1678,17 @@ impl MainView {
                     this.child(div().text_sm().text_color(muted).child("•"))
                 })
                 .child(div().flex_1())
+                .when_some(self.settings.available_update(), |this, version| {
+                    let url = update::release_url(&version);
+                    this.child(shell::in_title_bar(
+                        Button::new("update")
+                            .primary()
+                            .small()
+                            .label(t!("toolbar.update", version = version).to_string())
+                            .tooltip(t!("toolbar.update_tip").to_string())
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    ))
+                })
                 .child(shell::in_title_bar(shell::icon_button(
                     "about",
                     icons::fluent("info"),
@@ -1623,6 +1705,47 @@ impl MainView {
                     .mr_1(),
                 ),
         )
+    }
+
+    /// Until the user answered: whether UmlCraft may ask GitHub for new versions, with a link
+    /// to what that tells GitHub.
+    fn update_question(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if self.settings.update_check.is_some() {
+            return None;
+        }
+        let answer = |on: bool| {
+            cx.listener(move |this: &mut Self, _: &ClickEvent, window, cx| {
+                this.set_update_check(on, window, cx);
+            })
+        };
+        let bar = h_flex()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .text_sm()
+            .child(div().flex_1().child(t!("update.question").to_string()))
+            .child(
+                Button::new("update-privacy")
+                    .link()
+                    .small()
+                    .label(t!("update.privacy").to_string())
+                    .on_click(|_, window, cx| crate::privacy_dialog::open(window, cx)),
+            )
+            .child(
+                Button::new("update-yes")
+                    .primary()
+                    .small()
+                    .label(t!("update.yes").to_string())
+                    .on_click(answer(true)),
+            )
+            .child(
+                Button::new("update-no")
+                    .ghost()
+                    .small()
+                    .label(t!("update.no").to_string())
+                    .on_click(answer(false)),
+            );
+        Some(div().px(shell::GAP).pt(shell::GAP / 2.0).child(shell::card(cx).child(bar)))
     }
 
     fn model_browser(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2366,6 +2489,7 @@ impl Render for MainView {
                 }
             }))
             .child(self.title_bar(cx))
+            .children(self.update_question(cx))
             .child(ribbon)
             .child(
                 div().flex_1().min_h_0().px(shell::GAP / 2.0).py(shell::GAP).child(

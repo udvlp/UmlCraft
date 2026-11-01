@@ -4,6 +4,30 @@ about:
   summary: Draw UML diagrams and structograms, import source code and exchange .asta files.
   license: "Licence: MIT or Apache-2.0"
   close: Close
+  check: Check for updates
+  checking: Asking GitHub …
+  up_to_date: This is the latest version.
+  check_failed: GitHub cannot be reached right now.
+  new_version: "Version %{version} is out"
+update:
+  question: "Should UmlCraft look for new versions on GitHub when it starts? GitHub learns your IP address doing so."
+  privacy: Privacy
+  "yes": Yes, look
+  "no": "No"
+privacy:
+  title: Privacy
+  intro: "UmlCraft works offline and sends nothing anywhere, with one exception that you choose: the check for new versions."
+  when_title: When
+  when: "At its first start UmlCraft asks whether it may look for new versions. Only if you agree does it ask GitHub, at start and at most once a day. You can change your answer in Settings › Updates. \"Check for updates\" in About UmlCraft asks once, whenever you click it."
+  what_title: What is sent
+  what: "A request to api.github.com for the latest release of UmlCraft. Like any connection, it shows GitHub your IP address and the time. The request names UmlCraft and its version. Nothing about you, your computer or your projects is sent. UmlCraft keeps only the date of the last check and the version found, in its settings file on your computer."
+  who_title: Who receives it
+  who: "GitHub, Inc. (USA), certified under the EU-US Data Privacy Framework. What GitHub does with the data is described in the GitHub General Privacy Statement on docs.github.com."
+  basis_title: Why and on what basis
+  basis: "To tell you about new versions, with your consent (Art. 6(1)(a) GDPR). You can withdraw it at any time in the settings; requests made before stay lawful."
+  responsible_title: Responsible
+  responsible: "Ulf Haueisen, c/o Heinrich-Kleyer-Schule, Kühhornshofweg 27, 60320 Frankfurt am Main, Germany, app@umlcraft.com. You have the rights of the GDPR, among them access, erasure and complaint to a supervisory authority. UmlCraft itself stores nothing about you; for what GitHub stores, ask GitHub."
+  close: Close
 toolbar:
   save: Save
   undo: Undo
@@ -14,6 +38,8 @@ toolbar:
   language: Deutsch
   settings: Settings
   about: About UmlCraft
+  update: "Update %{version}"
+  update_tip: A new version is out on GitHub; opens its page in the browser
   zoom_reset: "Reset zoom to 100 % (Ctrl+0)"
   zoom_fit: Fit
 ribbon:
@@ -454,6 +480,9 @@ settings:
   keywords_ui: As the user interface
   keywords_de: "German (solange, für, gib)"
   keywords_en: "English (while, for, return)"
+  updates: Updates
+  update_check: Look for new versions on GitHub at start
+  update_check_detail: "At most once a day. GitHub learns your IP address and UmlCraft's version, nothing else."
   close: Close
 project:
   untitled: New project

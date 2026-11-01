@@ -10,11 +10,13 @@ mod live;
 mod main_view;
 mod nsd;
 mod png;
+mod privacy_dialog;
 mod properties;
 mod ribbon;
 mod settings;
 mod settings_dialog;
 mod shell;
+mod update;
 mod workspace;
 
 use std::cell::RefCell;

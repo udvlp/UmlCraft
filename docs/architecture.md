@@ -109,6 +109,12 @@ that a diff shows which element changed.
   from `canvas::Display`). `settings_dialog.rs` shows language, theme and both in a dialog
   (`gpui-component`'s `Dialog`), which applies each change at once through `MainView`; for the
   column it sets the canvas's flag and gives the workspace a new measure.
+- `update.rs` asks GitHub's API for the latest release (`ureq` over rustls with the platform's
+  certificates, on a background thread). It is UmlCraft's only network access: the automatic
+  check runs only after the user agreed (`updateCheck` in the settings, asked once in a bar
+  below the title bar) and at most once a day; About UmlCraft checks on request. A newer
+  version found (`latestVersion`) shows as a button in the title bar. `privacy_dialog.rs` shows
+  what the check sends from the locales, so reading it stays offline.
 - Texts come from `locales/{de,en}.yml` (rust-i18n). Without a setting, the system language is used.
 - Shortcuts are bound through `key` in `main.rs`, which resolves `secondary-` (Cmd on macOS,
   Ctrl elsewhere) with `KeyBinding::load`; since `gpui-pre` 0.3.10 `KeyBinding::new` no longer

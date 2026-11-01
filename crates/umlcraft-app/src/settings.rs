@@ -33,6 +33,12 @@ pub struct Settings {
     pub structogram_keywords: Option<String>,
     /// The ribbon shows only its tabs.
     pub ribbon_collapsed: bool,
+    /// Whether UmlCraft may ask GitHub for new versions; `None` until the user answered.
+    pub update_check: Option<bool>,
+    /// When it last asked, in seconds since the Unix epoch.
+    pub last_update_check: Option<u64>,
+    /// The latest release it found, e.g. `0.15.3`.
+    pub latest_version: Option<String>,
 }
 
 impl Settings {
@@ -85,6 +91,9 @@ impl Settings {
             read_only_constraint: field(&fields, "readOnlyConstraint"),
             structogram_keywords: field(&fields, "structogramKeywords"),
             ribbon_collapsed: field(&fields, "ribbonCollapsed"),
+            update_check: field(&fields, "updateCheck"),
+            last_update_check: field(&fields, "lastUpdateCheck"),
+            latest_version: field(&fields, "latestVersion"),
         }
     }
 
@@ -140,6 +149,20 @@ impl Settings {
     /// The language to show: the chosen one, else the system's.
     pub fn ui_language(&self) -> String {
         self.language.clone().unwrap_or_else(|| system_language().to_owned())
+    }
+
+    /// Whether to ask GitHub for new versions now (`now` in seconds since the Unix epoch): if
+    /// the user agreed and the last check is a day ago.
+    pub fn update_due(&self, now: u64) -> bool {
+        let interval = crate::update::INTERVAL.as_secs();
+        self.update_check == Some(true)
+            && self.last_update_check.is_none_or(|last| now >= last.saturating_add(interval))
+    }
+
+    /// The release found last, if it is newer than the version running.
+    pub fn available_update(&self) -> Option<String> {
+        let latest = self.latest_version.as_deref()?;
+        crate::update::newer(latest, &crate::update::current_version()).map(|v| v.to_string())
     }
 
     pub fn add_recent(&mut self, path: &Path) {
@@ -206,6 +229,21 @@ mod tests {
         assert_eq!(s.keywords(), Keywords::English);
         let s = Settings::from_json(r#"{"language": "en", "structogramKeywords": "de"}"#);
         assert_eq!(s.keywords(), Keywords::German);
+    }
+
+    #[test]
+    fn updates_are_checked_once_a_day_and_only_when_agreed() {
+        let day = crate::update::INTERVAL.as_secs();
+        let s = Settings::from_json(r#"{"updateCheck": true, "lastUpdateCheck": 1000}"#);
+        assert!(!s.update_due(1000 + day - 1));
+        assert!(s.update_due(1000 + day));
+        assert!(Settings { update_check: Some(true), ..Settings::default() }.update_due(5));
+        assert!(!Settings { update_check: Some(false), ..Settings::default() }.update_due(5));
+        assert!(!Settings::default().update_due(5));
+        let found = |v: &str| Settings { latest_version: Some(v.into()), ..Settings::default() };
+        assert_eq!(found("999.0.0").available_update().as_deref(), Some("999.0.0"));
+        assert_eq!(found("0.1.0").available_update(), None);
+        assert_eq!(Settings::default().available_update(), None);
     }
 
     #[test]

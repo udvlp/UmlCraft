@@ -46,6 +46,11 @@ resvg = { version = "0.49", default-features = false, features = ["text", "syste
 rust-embed = { version = "8", features = ["interpolate-folder-path", "include-exclude"] }
 # The app icon in umlcraft.exe.
 embed-resource = "3"
+# The optional update check asks GitHub for the latest release, over rustls with the platform's
+# certificates (no bundled root list).
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+semver = "1"
 # Font metrics for comparing SVG exports with Astah's outside the app.
 ttf-parser = "0.25"
 # Source import parses declarations with tree-sitter grammars (built from C by `cc`).

@@ -1,6 +1,6 @@
 //! The settings dialog (Tools › Settings …, Ctrl+,): language, theme, how classes show
-//! their members and that they are abstract, and the keywords of new structograms, in one
-//! place. Every change applies at once and is saved, so the dialog
+//! their members and that they are abstract, the keywords of new structograms, and whether to
+//! look for new versions, in one place. Every change applies at once and is saved, so the dialog
 //! only has to be closed.
 
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -39,11 +39,12 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             .as_deref()
             .and_then(|l| LANGUAGES.iter().position(|&(code, _)| code == l))
             .map_or(0, |ix| ix + 1);
+        let update_check = settings.update_check == Some(true);
         let dark = cx.theme().is_dark();
         let muted = cx.theme().muted_foreground;
 
         let (v1, v2, v3, v4) = (view.clone(), view.clone(), view.clone(), view.clone());
-        let (v5, v6) = (view.clone(), view.clone());
+        let (v5, v6, v7) = (view.clone(), view.clone(), view.clone());
         let languages = RadioGroup::horizontal("settings-language")
             .child(t!("settings.system_language").to_string())
             .children(LANGUAGES.map(|(_, name)| name))
@@ -136,6 +137,28 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                         .ok();
                     }),
             );
+        let updates = v_flex()
+            .gap_1()
+            .child(
+                Switch::new("settings-update-check")
+                    .checked(update_check)
+                    .label(t!("settings.update_check").to_string())
+                    .on_change(move |&on, window, cx| {
+                        v7.update(cx, |this, cx| this.set_update_check(on, window, cx)).ok();
+                    }),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(t!("settings.update_check_detail").to_string()),
+            )
+            .child(
+                Button::new("settings-privacy")
+                    .link()
+                    .label(t!("update.privacy").to_string())
+                    .on_click(|_, window, cx| crate::privacy_dialog::open(window, cx)),
+            );
 
         dialog
             .title(t!("settings.title").to_string())
@@ -147,7 +170,8 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                     .child(section(t!("settings.language").to_string(), languages))
                     .child(section(t!("settings.theme").to_string(), theme))
                     .child(section(t!("settings.classes").to_string(), classes))
-                    .child(section(t!("settings.structograms").to_string(), structograms)),
+                    .child(section(t!("settings.structograms").to_string(), structograms))
+                    .child(section(t!("settings.updates").to_string(), updates)),
             )
             .footer(
                 DialogFooter::new().child(

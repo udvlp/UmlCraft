@@ -8,6 +8,10 @@ today.
 - **New app icon**: a provided interface in its socket, the ball-and-socket notation of
   components, which also forms a U. It replaces the state machine motif, which looked like any
   flow icon in the taskbar.
+- **New versions in the title bar**: at its first start UmlCraft asks whether it may look for
+  new versions on GitHub. If you agree, it checks at most once a day, and a new release shows
+  as a button in the title bar that opens its page. About UmlCraft can check at any time. What
+  the check sends is shown in the app, offline, and under [Privacy](README.md#privacy).
 
 ## 0.15.2 – 2026-11-01
 

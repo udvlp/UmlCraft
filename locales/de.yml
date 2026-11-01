@@ -4,6 +4,30 @@ about:
   summary: UML-Diagramme und Struktogramme zeichnen, Quellcode importieren und mit .asta-Dateien austauschen.
   license: "Lizenz: MIT oder Apache-2.0"
   close: Schließen
+  check: Nach Updates suchen
+  checking: Frage GitHub …
+  up_to_date: Das ist die neueste Version.
+  check_failed: GitHub ist gerade nicht erreichbar.
+  new_version: "Version %{version} ist erschienen"
+update:
+  question: "Soll UmlCraft beim Start bei GitHub nach neuen Versionen suchen? GitHub erfährt dabei deine IP-Adresse."
+  privacy: Datenschutz
+  "yes": Ja, suchen
+  "no": Nein
+privacy:
+  title: Datenschutz
+  intro: "UmlCraft arbeitet offline und sendet nichts – mit einer Ausnahme, über die du entscheidest: der Suche nach neuen Versionen."
+  when_title: Wann
+  when: "Beim ersten Start fragt UmlCraft, ob es suchen darf. Nur wenn du zustimmst, fragt es beim Start bei GitHub nach, höchstens einmal am Tag. Deine Antwort kannst du unter Einstellungen › Updates ändern. „Nach Updates suchen“ in „Über UmlCraft“ fragt einmal, wenn du darauf klickst."
+  what_title: Was gesendet wird
+  what: "Eine Anfrage an api.github.com nach dem neuesten Release von UmlCraft. Wie jede Verbindung zeigt sie GitHub deine IP-Adresse und die Uhrzeit. Die Anfrage nennt UmlCraft und seine Version. Nichts über dich, deinen Rechner oder deine Projekte wird gesendet. UmlCraft speichert nur das Datum der letzten Suche und die gefundene Version, in seiner Einstellungsdatei auf deinem Rechner."
+  who_title: Wer es erhält
+  who: "GitHub, Inc. (USA), zertifiziert nach dem EU-US Data Privacy Framework. Was GitHub mit den Daten macht, beschreibt die GitHub General Privacy Statement auf docs.github.com."
+  basis_title: Wozu und auf welcher Grundlage
+  basis: "Um dir neue Versionen zu zeigen, mit deiner Einwilligung (Art. 6 Abs. 1 lit. a DSGVO). Du kannst sie jederzeit in den Einstellungen widerrufen; Anfragen davor bleiben rechtmäßig."
+  responsible_title: Verantwortlich
+  responsible: "Ulf Haueisen, c/o Heinrich-Kleyer-Schule, Kühhornshofweg 27, 60320 Frankfurt am Main, app@umlcraft.com. Du hast die Rechte der DSGVO, darunter Auskunft, Löschung und Beschwerde bei einer Aufsichtsbehörde. UmlCraft selbst speichert nichts über dich; zu dem, was GitHub speichert, wende dich an GitHub."
+  close: Schließen
 toolbar:
   save: Speichern
   undo: Rückgängig
@@ -14,6 +38,8 @@ toolbar:
   language: English
   settings: Einstellungen
   about: Über UmlCraft
+  update: "Update %{version}"
+  update_tip: Eine neue Version ist auf GitHub erschienen; öffnet ihre Seite im Browser
   zoom_reset: "Zoom auf 100 % zurücksetzen (Strg+0)"
   zoom_fit: Einpassen
 ribbon:
@@ -454,6 +480,9 @@ settings:
   keywords_ui: Wie die Oberfläche
   keywords_de: "Deutsch (solange, für, gib)"
   keywords_en: "Englisch (while, for, return)"
+  updates: Updates
+  update_check: Beim Start bei GitHub nach neuen Versionen suchen
+  update_check_detail: "Höchstens einmal am Tag. GitHub erfährt dabei deine IP-Adresse und die Version von UmlCraft, sonst nichts."
   close: Schließen
 project:
   untitled: Neues Projekt

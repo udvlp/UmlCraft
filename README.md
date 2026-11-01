@@ -186,6 +186,30 @@ can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
 - Code generation
 - Signed builds
 
+## Privacy
+
+UmlCraft works offline and sends nothing anywhere, with one exception that you choose: the
+check for new versions.
+
+- **When:** at its first start UmlCraft asks whether it may look for new versions. Only if you
+  agree does it ask GitHub, at start and at most once a day. You can change your answer in
+  Settings › Updates. The button "Check for updates" in About UmlCraft asks once, whenever you
+  click it.
+- **What is sent:** a request to `api.github.com` for the latest release of UmlCraft. Like any
+  connection, it shows GitHub your IP address and the time. The request names UmlCraft and its
+  version (`User-Agent: UmlCraft/0.15.2`). Nothing about you, your computer or your projects is
+  sent. UmlCraft keeps only the date of the last check and the version found, in its settings
+  file on your computer.
+- **Who receives it:** GitHub, Inc. (USA), certified under the EU-US Data Privacy Framework.
+  What GitHub does with the data is described in the
+  [GitHub General Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+- **Why and on what basis:** to tell you about new versions, with your consent (Art. 6(1)(a)
+  GDPR). You can withdraw it at any time in the settings. Requests made before stay lawful.
+- **Responsible:** Ulf Haueisen, c/o Heinrich-Kleyer-Schule, Kühhornshofweg 27, 60320 Frankfurt
+  am Main, Germany, <app@umlcraft.com>. You have the rights of the GDPR, among them access,
+  erasure and complaint to a supervisory authority. UmlCraft's side stores nothing about you
+  that could be accessed or erased; for what GitHub stores, ask GitHub.
+
 ## Build and run
 
 ```bash
