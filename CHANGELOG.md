@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.16.0 – 2026-11-01
 
 - **Messages stay on their lifelines**: a message drawn or dragged above the heads goes right
   below them, together with the bar it is sent from, and never below a lifeline's cross; a

@@ -6812,7 +6812,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-app"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -6843,7 +6843,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-asta"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "thiserror 2.0.21",
  "ttf-parser",
@@ -6855,7 +6855,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-asta-export"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -6870,7 +6870,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-cli"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "serde_json",
  "umlcraft-mcp",
@@ -6878,7 +6878,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-format"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -6890,7 +6890,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-mcp"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "resvg 0.49.0",
  "serde_json",
@@ -6902,7 +6902,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-model"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "indexmap",
  "pretty_assertions",
@@ -6914,7 +6914,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-notation"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "indexmap",
  "pretty_assertions",
@@ -6923,7 +6923,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-nsd"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "indexmap",
  "pretty_assertions",
@@ -6936,7 +6936,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-nsd-code"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "pretty_assertions",
  "tree-sitter",
@@ -6947,7 +6947,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-reverse"
-version = "0.15.2"
+version = "0.16.0"
 dependencies = [
  "encoding_rs",
  "pretty_assertions",
