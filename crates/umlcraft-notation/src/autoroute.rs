@@ -149,11 +149,17 @@ fn grid_lines(mut values: Vec<(f32, bool)>) -> (Vec<f32>, Vec<bool>) {
     with_middles.into_iter().unzip()
 }
 
-/// The index of the grid line at `v`, which must be one.
+/// The index of the grid line at `v`, which must be one: the nearest, as two lines may lie just
+/// `SAME` apart.
 fn line_index(lines: &[f32], v: f32) -> usize {
-    let i = lines.partition_point(|&l| l < v - SAME);
+    let i = lines.partition_point(|&l| l < v);
+    let i = if i == lines.len() || (i > 0 && v - lines[i - 1] < lines[i] - v) {
+        i.saturating_sub(1)
+    } else {
+        i
+    };
     debug_assert!(i < lines.len() && (lines[i] - v).abs() < SAME, "{v} is no grid line");
-    i.min(lines.len() - 1)
+    i
 }
 
 struct Grid {
@@ -770,6 +776,16 @@ pub fn snapshot(model: &umlcraft_model::Model, diagram: Id) -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_lines_half_a_unit_apart_are_told_apart() {
+        assert_eq!(line_index(&[72.5, 73.0], 73.0), 1);
+        assert_eq!(line_index(&[72.5, 73.0], 72.5), 0);
+        // The margin of one box runs at 72.5, the middle of the other at 73.
+        let boxes = [Rect::new(84.5, 0.0, 40.0, 30.0), Rect::new(63.0, 100.0, 20.0, 30.0)];
+        let routes = route(&boxes, &[Request { source: 0, target: 1, facing: false }]);
+        assert!(routes[0].is_some());
+    }
 
     /// Whether every segment is horizontal or vertical and stays outside every box but the
     /// ends (by at least half the margin).
