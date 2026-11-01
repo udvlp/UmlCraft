@@ -9,6 +9,9 @@ today.
   its head, where the constructor runs.
 - **Sample project**: no multiplicities at the ends that are not navigable; ada's activation
   bar in "Rent a bike" lasts until the end of the ride.
+- **Handles by click**: a click on the arrow handle without dragging waits for a click on the
+  element to connect to, as the tools do; before, on a lifeline it always offered messages to
+  itself.
 - **Replies keep to their bar**: a reply moved below the bar it returns from takes the end of
   that bar along, so it never starts outside an activation.
 

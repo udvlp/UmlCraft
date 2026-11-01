@@ -66,6 +66,8 @@ const HANDLE_GAP: f32 = 3.0;
 /// How wide the column of handles right of a box is taken to be: the mouse keeps the handles
 /// while it moves onto them.
 const HANDLE_COLUMN: f32 = 120.0;
+/// How far, in screen pixels, the mouse may move between press and release for a click.
+const CLICK_SLOP: f32 = 6.0;
 /// A top left corner (x, y) and an area (left, top, right, bottom), in canvas-local pixels.
 type Corner = (f32, f32);
 type Area = (f32, f32, f32, f32);
@@ -834,6 +836,17 @@ impl DiagramCanvas {
         self.commit_edit(cx);
         self.focus_handle.focus(window, cx);
         let p = self.to_logical(ev.position);
+        // The second click of a line started from a handle: on an element it connects (on the
+        // source itself, a loop or a message to self), elsewhere it gives up.
+        if let Some(Drag::HandleLine { source, start, message, .. }) = self.drag.clone() {
+            self.drag = None;
+            let tool = if message { EdgeTool::Message } else { EdgeTool::Association };
+            if let Some(target) = self.connect_target(tool, p, cx) {
+                self.offer_connections(source, target, start, ev.position, cx);
+            }
+            cx.notify();
+            return;
+        }
         let (tool, selection) = {
             let ws = self.workspace.read(cx);
             (ws.tool, ws.selection.clone())
@@ -1621,10 +1634,21 @@ impl DiagramCanvas {
                     _ => {}
                 }
             }
-            Some(Drag::HandleLine { source, start, message, .. }) => {
+            Some(Drag::HandleLine { source, start, current, message }) => {
                 let tool = if message { EdgeTool::Message } else { EdgeTool::Association };
-                if let Some(target) = self.connect_target(tool, p, cx) {
-                    self.offer_connections(source, target, start, position, cx);
+                match self.connect_target(tool, p, cx) {
+                    Some(target) if target != source => {
+                        self.offer_connections(source, target, start, position, cx);
+                    }
+                    // Released on its own element, or clicked without dragging: the next click
+                    // picks the target, as with the tools.
+                    Some(_) => {
+                        self.drag = Some(Drag::HandleLine { source, start, current, message });
+                    }
+                    None if start.distance(p) * self.zoom < CLICK_SLOP => {
+                        self.drag = Some(Drag::HandleLine { source, start, current, message });
+                    }
+                    None => {}
                 }
             }
             Some(Drag::Reorder { element, start, current })
