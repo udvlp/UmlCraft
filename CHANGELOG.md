@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.15.2 – 2026-11-01
 
 - **See-through fragment tabs**: the tab of a loop, alt and the like no longer hides the
   lifelines and activation bars below it; the fragment stays on top, with nothing filled.
