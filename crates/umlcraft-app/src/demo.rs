@@ -868,40 +868,17 @@ impl Builder<'_, '_> {
             }
             let message = self.create(interaction, name, kind)?;
             sequence_edit::add_message(self.tx, d, message, lane(from), lane(to), y)?;
-            // The service works on the rental until it answers the app, in one activation:
-            // what it sends meanwhile starts inside that bar.
-            if name == "startRental" {
-                let view = self.tx.model().view(d).ok_or(ModelError::NotADiagram(d))?;
-                let bar = view.presentations().iter().find_map(|p| match p.shape {
-                    Shape::Activation { lifeline, top, .. }
-                        if lifeline == lane(service) && (top - y).abs() < 0.5 =>
-                    {
-                        Some(p.id)
-                    }
-                    _ => None,
-                });
-                if let Some(bar) = bar {
-                    self.tx.update_presentation(d, bar, |p| {
-                        if let Shape::Activation { height, .. } = &mut p.shape {
-                            *height = 545.0 - y;
-                        }
-                    })?;
-                }
+            // Calls that last: the app runs `scan` until the ride is over, so the rental's news
+            // and the tracking happen inside it; the service works on the rental until it
+            // answers the app. What either sends meanwhile starts inside that bar.
+            let bottom = match name {
+                "scan" => Some(700.0),
+                "startRental" => Some(545.0),
+                _ => None,
+            };
+            if let Some(bottom) = bottom {
+                self.lengthen_bar(d, lane(to), y, bottom)?;
             }
-        }
-        // Ada is busy with the rental from the scan to the end of the ride: her bar runs down to
-        // the bottom of the loop.
-        let view = self.tx.model().view(d).ok_or(ModelError::NotADiagram(d))?;
-        let bar = view.presentations().iter().find_map(|p| match p.shape {
-            Shape::Activation { lifeline, .. } if lifeline == lane(ada) => Some(p.id),
-            _ => None,
-        });
-        if let Some(bar) = bar {
-            self.tx.update_presentation(d, bar, |p| {
-                if let Shape::Activation { top, height, .. } = &mut p.shape {
-                    *height = 680.0 - *top;
-                }
-            })?;
         }
         // All lifelines run down to the same height.
         let view = self.tx.model().view(d).ok_or(ModelError::NotADiagram(d))?;
@@ -921,6 +898,25 @@ impl Builder<'_, '_> {
             })?;
         }
         sequence_edit::tidy(self.tx, d)
+    }
+
+    /// Lets the bar on `lane` that starts at `top` run down to `bottom`.
+    fn lengthen_bar(&mut self, d: Id, lane: Id, top: f32, bottom: f32) -> Result<()> {
+        let view = self.tx.model().view(d).ok_or(ModelError::NotADiagram(d))?;
+        let bar = view.presentations().iter().find_map(|p| match p.shape {
+            Shape::Activation { lifeline, top: t, .. }
+                if lifeline == lane && (t - top).abs() < 0.5 =>
+            {
+                Some(p.id)
+            }
+            _ => None,
+        });
+        let Some(bar) = bar else { return Ok(()) };
+        self.tx.update_presentation(d, bar, |p| {
+            if let Shape::Activation { height, .. } = &mut p.shape {
+                *height = bottom - top;
+            }
+        })
     }
 
     /// Bringing a bike back: the dock locks it, the backend closes the rental.

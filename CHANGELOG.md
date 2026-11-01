@@ -9,8 +9,8 @@ today.
   its head, where the constructor runs.
 - **About UmlCraft**: the i in the title bar (and File › About UmlCraft) shows the version, the
   web site, the source code and the licence.
-- **Sample project**: no multiplicities at the ends that are not navigable; ada's activation
-  bar in "Rent a bike" lasts until the end of the ride.
+- **Sample project**: no multiplicities at the ends that are not navigable; in "Rent a bike"
+  the app's `scan` lasts until the end of the ride, so the tracking runs inside it.
 - **Callers wait**: the bar a synchronous call is sent from lasts at least until the bar the
   call started has ended, whether a reply is drawn or not.
 - **Handles by click**: a click on the arrow handle without dragging waits for a click on the
