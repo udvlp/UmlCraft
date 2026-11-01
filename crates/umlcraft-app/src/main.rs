@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about_dialog;
 mod canvas;
 mod demo;
 mod errors;
@@ -67,6 +68,7 @@ actions!(
         ToggleLanguage,
         OpenSettings,
         OpenSample,
+        OpenAbout,
         Copy,
         Cut,
         Paste,

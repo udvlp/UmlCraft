@@ -1,3 +1,9 @@
+about:
+  title: About UmlCraft
+  version: "Version %{version}"
+  summary: Draw UML diagrams and structograms, import source code and exchange .asta files.
+  license: "Licence: MIT or Apache-2.0"
+  close: Close
 toolbar:
   save: Save
   undo: Undo
@@ -7,6 +13,7 @@ toolbar:
   theme: Light/Dark
   language: Deutsch
   settings: Settings
+  about: About UmlCraft
   zoom_reset: "Reset zoom to 100 % (Ctrl+0)"
   zoom_fit: Fit
 ribbon:
@@ -132,6 +139,7 @@ menu:
   settings: Settings …
   help: Help
   open_sample: Open sample project
+  about: About UmlCraft …
   open_diagram: Open diagram
   new_prefix: "New:"
   rename: Rename

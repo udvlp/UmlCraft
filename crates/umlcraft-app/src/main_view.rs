@@ -1318,6 +1318,10 @@ impl MainView {
         crate::settings_dialog::open(cx.entity().downgrade(), window, cx);
     }
 
+    fn open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
+        crate::about_dialog::open(window, cx);
+    }
+
     // ----- Settings --------------------------------------------------------------------------
 
     fn select_tool(&mut self, action: &SelectTool, _: &mut Window, cx: &mut Context<Self>) {
@@ -1603,6 +1607,12 @@ impl MainView {
                     this.child(div().text_sm().text_color(muted).child("•"))
                 })
                 .child(div().flex_1())
+                .child(shell::in_title_bar(shell::icon_button(
+                    "about",
+                    icons::fluent("info"),
+                    t!("toolbar.about"),
+                    Box::new(OpenAbout),
+                )))
                 .child(
                     shell::in_title_bar(shell::icon_button(
                         "settings",
@@ -2089,7 +2099,8 @@ fn menus(settings: &Settings) -> Vec<Menu> {
             MenuItem::separator(),
             menu_item("menu.settings", OpenSettings),
         ]),
-        Menu::new(t!("menu.help").to_string()).items([menu_item("menu.open_sample", OpenSample)]),
+        Menu::new(t!("menu.help").to_string())
+            .items([menu_item("menu.open_sample", OpenSample), menu_item("menu.about", OpenAbout)]),
     ]
 }
 
@@ -2137,7 +2148,8 @@ fn file_menu(
     });
     menu = item(menu.separator(), "menu.save", Box::new(SaveProject));
     menu = item(menu, "menu.save_as", Box::new(SaveProjectAs));
-    item(menu.separator(), "menu.quit", Box::new(Quit))
+    menu = item(menu.separator(), "menu.about", Box::new(OpenAbout));
+    item(menu, "menu.quit", Box::new(Quit))
 }
 
 /// A new project with one empty class diagram.
@@ -2269,6 +2281,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::toggle_theme))
             .on_action(cx.listener(Self::toggle_language))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::select_tool))
             .on_action(cx.listener(Self::new_diagram))
             .on_action(cx.listener(Self::select_ribbon_tab))

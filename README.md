@@ -106,8 +106,8 @@ whole CPython standard library imports in one go.
 
 ## Editing
 
-The window has its own title bar (File menu, Save, Undo, Redo, Settings) and a ribbon with the
-tabs Home (clipboard, delete, align, line style, layout), the open diagram's kind (its tools; for a
+The window has its own title bar (File menu, Save, Undo, Redo, About, Settings) and a ribbon
+with the tabs Home (clipboard, delete, align, line style, layout), the open diagram's kind (its tools; for a
 structogram its elements and the `.nsd` export), View
 (zoom, theme, language) and Tools (source import, exchange with `.asta` files, images). Model
 tree, diagram and properties are cards beside each other. A double click on a ribbon tab folds

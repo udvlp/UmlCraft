@@ -1,3 +1,9 @@
+about:
+  title: Über UmlCraft
+  version: "Version %{version}"
+  summary: UML-Diagramme und Struktogramme zeichnen, Quellcode importieren und mit .asta-Dateien austauschen.
+  license: "Lizenz: MIT oder Apache-2.0"
+  close: Schließen
 toolbar:
   save: Speichern
   undo: Rückgängig
@@ -7,6 +13,7 @@ toolbar:
   theme: Hell/Dunkel
   language: English
   settings: Einstellungen
+  about: Über UmlCraft
   zoom_reset: "Zoom auf 100 % zurücksetzen (Strg+0)"
   zoom_fit: Einpassen
 ribbon:
@@ -132,6 +139,7 @@ menu:
   settings: Einstellungen …
   help: Hilfe
   open_sample: Beispielprojekt öffnen
+  about: Über UmlCraft …
   open_diagram: Diagramm öffnen
   new_prefix: "Neu:"
   rename: Umbenennen
