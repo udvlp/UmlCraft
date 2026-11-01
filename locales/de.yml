@@ -53,6 +53,7 @@ ribbon:
     view: Ansicht
     tools: Werkzeuge
   group:
+    new: Neu
     clipboard: Zwischenablage
     edit: Bearbeiten
     arrange: Anordnen

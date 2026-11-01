@@ -60,6 +60,25 @@ pub enum Size {
     Icon,
 }
 
+/// A line of a button's menu.
+pub enum MenuEntry {
+    Command { label: String, icon: Option<SharedString>, action: Box<dyn Action> },
+    Separator,
+}
+
+impl Clone for MenuEntry {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Command { label, icon, action } => Self::Command {
+                label: label.clone(),
+                icon: icon.clone(),
+                action: action.boxed_clone(),
+            },
+            Self::Separator => Self::Separator,
+        }
+    }
+}
+
 pub struct Item {
     pub id: SharedString,
     pub icon: SharedString,
@@ -70,7 +89,7 @@ pub struct Item {
     /// What a click does; without one, a click opens `menu`.
     pub action: Option<Box<dyn Action>>,
     /// More commands; with an action as well, the button is split in two.
-    pub menu: Vec<(String, Box<dyn Action>)>,
+    pub menu: Vec<MenuEntry>,
     pub enabled: bool,
     pub selected: bool,
 }
@@ -106,7 +125,30 @@ impl Item {
     }
 
     fn menu_entry(mut self, label: impl Into<String>, action: impl Action) -> Self {
-        self.menu.push((label.into(), Box::new(action)));
+        self.menu.push(MenuEntry::Command {
+            label: label.into(),
+            icon: None,
+            action: Box::new(action),
+        });
+        self
+    }
+
+    fn menu_icon_entry(
+        mut self,
+        label: impl Into<String>,
+        icon: SharedString,
+        action: impl Action,
+    ) -> Self {
+        self.menu.push(MenuEntry::Command {
+            label: label.into(),
+            icon: Some(icon),
+            action: Box::new(action),
+        });
+        self
+    }
+
+    fn menu_separator(mut self) -> Self {
+        self.menu.push(MenuEntry::Separator);
         self
     }
 
@@ -196,6 +238,7 @@ fn home(state: &State) -> Vec<Group> {
         line_style = line_style.menu_entry(t!(key), SetLineShape { shape });
     }
     vec![
+        group("new", vec![new_diagram()]),
         group(
             "clipboard",
             vec![
@@ -257,6 +300,30 @@ fn home(state: &State) -> Vec<Group> {
             ],
         ),
     ]
+}
+
+/// A button whose menu creates a diagram of the chosen kind, or a structogram.
+fn new_diagram() -> Item {
+    let mut item = Item::new("new-diagram", fluent("document_add"), t!("ribbon.new_diagram"));
+    for kind in DIAGRAM_KINDS {
+        item = item.menu_icon_entry(
+            t!(diagram_key(kind)),
+            icons::diagram_icon(kind),
+            NewDiagram { kind, objects: false },
+        );
+        if kind == DiagramKind::Class {
+            item = item.menu_icon_entry(
+                t!("diagram.object"),
+                icons::object_diagram_icon(),
+                NewDiagram { kind, objects: true },
+            );
+        }
+    }
+    item.menu_separator().menu_icon_entry(
+        t!("kind.structogram"),
+        icons::structogram_icon(),
+        NewStructogram,
+    )
 }
 
 /// Which group of the diagram tab a tool belongs to.
@@ -546,7 +613,7 @@ pub fn width(groups: &[Group]) -> f32 {
 // ----- Drawing ------------------------------------------------------------------------------
 
 const HEIGHT: Pixels = px(68.0);
-/// The tab strip; the card left of the ribbon starts its button below this height.
+/// The tab strip.
 const STRIP: Pixels = px(34.0);
 
 /// Sends `action` to the view shown (`focus`), wherever the keyboard focus is, as the menus do:
@@ -560,15 +627,25 @@ fn dispatch(
     move |_, window, cx| focus.dispatch_action(action.as_ref(), window, cx)
 }
 
-type Entries = Rc<Vec<(String, Box<dyn Action>)>>;
+type Entries = Rc<Vec<MenuEntry>>;
 
 fn entries_menu(
     entries: Entries,
     focus: FocusHandle,
 ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
     move |mut menu, _, _| {
-        for (label, action) in entries.iter() {
-            menu = menu.menu(label.clone(), action.boxed_clone());
+        for entry in entries.iter() {
+            menu = match entry {
+                MenuEntry::Command { label, icon: Some(icon), action } => menu.menu_with_icon(
+                    label.clone(),
+                    shell::icon(icon.clone()),
+                    action.boxed_clone(),
+                ),
+                MenuEntry::Command { label, icon: None, action } => {
+                    menu.menu(label.clone(), action.boxed_clone())
+                }
+                MenuEntry::Separator => menu.separator(),
+            };
         }
         menu.action_context(focus.clone())
     }
@@ -582,7 +659,9 @@ fn group_menu(
     move |mut menu, window, cx| {
         for (label, commands) in entries.iter() {
             menu = match commands.as_slice() {
-                [(_, action)] => menu.menu(label.clone(), action.boxed_clone()),
+                [MenuEntry::Command { action, .. }] => {
+                    menu.menu(label.clone(), action.boxed_clone())
+                }
                 _ => menu.submenu(
                     label.clone(),
                     window,
@@ -597,8 +676,7 @@ fn group_menu(
 
 fn large_button(item: &Item, compact: bool, focus: &FocusHandle) -> AnyElement {
     let icon = shell::icon(item.icon.clone()).size(px(if compact { 20.0 } else { 24.0 }));
-    let menu: Entries =
-        Rc::new(item.menu.iter().map(|(l, a)| (l.clone(), a.boxed_clone())).collect());
+    let menu: Entries = Rc::new(item.menu.clone());
     let content = |label: bool| {
         v_flex()
             .items_center()
@@ -660,8 +738,7 @@ fn small_button(item: &Item, compact: bool, focus: &FocusHandle) -> AnyElement {
     match &item.action {
         Some(action) => button.on_click(dispatch(action.as_ref(), focus)).into_any_element(),
         None => {
-            let menu: Entries =
-                Rc::new(item.menu.iter().map(|(l, a)| (l.clone(), a.boxed_clone())).collect());
+            let menu: Entries = Rc::new(item.menu.clone());
             button
                 .dropdown_caret(true)
                 .dropdown_menu(entries_menu(menu, focus.clone()))
@@ -705,9 +782,16 @@ fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> im
         .filter(|i| i.enabled)
         .filter_map(|item| {
             let commands: Vec<_> = if item.menu.is_empty() {
-                item.action.iter().map(|a| (item.label.clone(), a.boxed_clone())).collect()
+                item.action
+                    .iter()
+                    .map(|a| MenuEntry::Command {
+                        label: item.label.clone(),
+                        icon: None,
+                        action: a.boxed_clone(),
+                    })
+                    .collect()
             } else {
-                item.menu.iter().map(|(l, a)| (l.clone(), a.boxed_clone())).collect()
+                item.menu.clone()
             };
             (!commands.is_empty()).then(|| (item.label.clone(), Rc::new(commands)))
         })
@@ -791,50 +875,6 @@ pub fn render(
                 .children(groups.iter().map(|g| group_view(g, compact, focus, cx))),
         )
     })
-}
-
-/// The card left of the ribbon: a button whose menu creates a diagram of the chosen kind.
-pub fn new_diagram_card(collapsed: bool, focus: &FocusHandle, cx: &App) -> impl IntoElement {
-    let focus = focus.clone();
-    let menu = move |mut menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
-        for kind in DIAGRAM_KINDS {
-            menu = menu.menu_with_icon(
-                t!(diagram_key(kind)),
-                shell::icon(icons::diagram_icon(kind)),
-                Box::new(NewDiagram { kind, objects: false }),
-            );
-            if kind == DiagramKind::Class {
-                menu = menu.menu_with_icon(
-                    t!("diagram.object"),
-                    shell::icon(icons::object_diagram_icon()),
-                    Box::new(NewDiagram { kind, objects: true }),
-                );
-            }
-        }
-        menu.separator()
-            .menu_with_icon(
-                t!("kind.structogram"),
-                shell::icon(icons::structogram_icon()),
-                Box::new(NewStructogram),
-            )
-            .action_context(focus.clone())
-    };
-    let label = t!("ribbon.new_diagram").to_string();
-    let button = Button::new("new-diagram").ghost().dropdown_caret(true);
-    let card = shell::card(cx).flex_shrink_0().w(px(124.0)).px_1();
-    if collapsed {
-        let button = button.xsmall().icon(shell::icon(fluent("document_add"))).label(label);
-        return card.h(STRIP).flex().items_center().child(button.dropdown_menu(menu));
-    }
-    // As high as the ribbon's large buttons and level with them, below the height of its tabs.
-    let button = button.w_full().px_1().h(HEIGHT - px(8.0)).child(
-        v_flex()
-            .items_center()
-            .gap_1()
-            .child(shell::icon(fluent("document_add")).size(px(24.0)))
-            .child(div().text_xs().text_center().child(label)),
-    );
-    card.pt(STRIP + px(4.0)).child(button.dropdown_menu(menu))
 }
 
 #[cfg(test)]

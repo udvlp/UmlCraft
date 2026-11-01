@@ -27,6 +27,8 @@ today.
   long as there is room before what comes next.
 - **Destroy messages take their cross along**: dragged up or down, a destroy message moves the
   end of the lifeline it destroys with it.
+- **New diagram in the Home tab**: the button that creates diagrams moves from its own box left
+  of the ribbon into the Home tab, as its first group.
 
 ## 0.15.2 – 2026-11-01
 

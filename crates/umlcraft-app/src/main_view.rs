@@ -1446,8 +1446,8 @@ impl MainView {
             RibbonTab::Home
         };
         let groups = ribbon::groups(active, &state);
-        // The diagram card, the gaps and the window's edges take about 140 px.
-        let room = f32::from(window.viewport_size().width) - 140.0;
+        // The gaps and the window's edges take about 40 px.
+        let room = f32::from(window.viewport_size().width) - 40.0;
         let compact = ribbon::width(&groups) > room;
         let collapsed = self.settings.ribbon_collapsed;
         let focus = self.view_focus(cx);
@@ -1484,7 +1484,6 @@ impl MainView {
                 }
                 cx.stop_propagation();
             }))
-            .child(ribbon::new_diagram_card(collapsed, &focus, cx))
             .child(ribbon::render(&tabs, active, &groups, compact, collapsed, &focus, cx))
     }
 

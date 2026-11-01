@@ -53,6 +53,7 @@ ribbon:
     view: View
     tools: Tools
   group:
+    new: New
     clipboard: Clipboard
     edit: Edit
     arrange: Arrange
