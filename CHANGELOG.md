@@ -11,6 +11,8 @@ today.
   web site, the source code and the licence.
 - **Sample project**: no multiplicities at the ends that are not navigable; ada's activation
   bar in "Rent a bike" lasts until the end of the ride.
+- **Callers wait**: the bar a synchronous call is sent from lasts at least until the bar the
+  call started has ended, whether a reply is drawn or not.
 - **Handles by click**: a click on the arrow handle without dragging waits for a click on the
   element to connect to, as the tools do; before, on a lifeline it always offered messages to
   itself.

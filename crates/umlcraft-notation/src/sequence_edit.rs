@@ -934,6 +934,17 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                         need = need.max(m.y);
                     }
                 }
+                // A caller waits for its call, reply drawn or not: its bar lasts until the bar
+                // the call started has ended. A call to itself nests, as above.
+                if m.sort == MessageSort::Synchronous
+                    && m.source == bar.lane
+                    && m.target != bar.lane
+                    && g.bar_at(bar.lane, m.y).is_some_and(|b| b.id == bar.id)
+                    && let Some(called) =
+                        g.bars.iter().find(|b| b.lane == m.target && (b.top - m.end()).abs() < 0.5)
+                {
+                    need = need.max(called.bottom);
+                }
             }
             if need > bar.bottom + 0.01 {
                 grown.push((bar.id, need - bar.top));
@@ -1638,6 +1649,38 @@ mod tests {
     }
 
     #[test]
+    fn a_caller_waits_until_its_call_has_ended() {
+        let (mut doc, d, a, b) = two_lifelines();
+        draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let bottom = |doc: &Document, lane: Id| {
+            doc.model().view(d).unwrap().presentations().iter().find_map(|p| match p.shape {
+                Shape::Activation { lifeline, top, height, .. } if lifeline == lane => {
+                    Some(top + height)
+                }
+                _ => None,
+            })
+        };
+        doc.edit("longer", |tx| {
+            let view = tx.model().view(d).unwrap();
+            let called = view
+                .presentations()
+                .iter()
+                .find(|p| matches!(p.shape, Shape::Activation { lifeline, .. } if lifeline == b))
+                .unwrap()
+                .id;
+            tx.update_presentation(d, called, |p| {
+                if let Shape::Activation { height, .. } = &mut p.shape {
+                    *height = 180.0;
+                }
+            })?;
+            super::tidy(tx, d)
+        })
+        .unwrap();
+        assert_eq!(bottom(&doc, b), Some(300.0));
+        assert_eq!(bottom(&doc, a), Some(300.0));
+    }
+
+    #[test]
     fn a_reply_moved_up_shortens_its_bar() {
         let (mut doc, d, a, b) = two_lifelines();
         draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
@@ -1737,16 +1780,16 @@ mod tests {
         let second = draw(&mut doc, d, EdgeTool::Message, a, b, 130.0);
         assert!(matches!(message(&doc, d, second), Shape::Message { y: 165.0, .. }));
         assert_eq!(on(&doc, b), [(120.0, 145.0), (165.0, 190.0)]);
-        assert_eq!(on(&doc, a), [(120.0, 185.0)]);
+        assert_eq!(on(&doc, a), [(120.0, 190.0)]);
         // Dragged far down, it leaves the first bar as short as before and starts its own.
         doc.edit("move", |tx| super::move_item(tx, d, second, 300.0)).unwrap();
         assert_eq!(on(&doc, a), [(120.0, 165.0), (300.0, 345.0)]);
         // Back just below the first bar, it continues that one; no second bar is left over.
         doc.edit("move", |tx| super::move_item(tx, d, second, 190.0)).unwrap();
-        assert_eq!(on(&doc, a), [(120.0, 210.0)]);
+        assert_eq!(on(&doc, a), [(120.0, 215.0)]);
         // A call drawn just below the sender's bar continues it as well.
         draw(&mut doc, d, EdgeTool::Message, a, b, 240.0);
-        assert_eq!(on(&doc, a), [(120.0, 260.0)]);
+        assert_eq!(on(&doc, a), [(120.0, 265.0)]);
         doc.model().check().unwrap();
     }
 
