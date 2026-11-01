@@ -5,6 +5,9 @@ today.
 
 ## Unreleased
 
+- **Messages stay on their lifelines**: a message dragged above the heads stops right below
+  them, together with the bar it is sent from; a create message dragged down stops above what
+  the lifeline it makes does next, and takes the constructor's bar along with the head.
 - **New app icon**: a provided interface in its socket, the ball-and-socket notation of
   components, which also forms a U. It replaces the state machine motif, which looked like any
   flow icon in the taskbar.

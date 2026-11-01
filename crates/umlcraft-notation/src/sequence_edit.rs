@@ -746,17 +746,18 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     let Some(m) = g.messages.iter().find(|m| m.element == Some(element)).copied() else {
         return Ok(());
     };
-    let dy = y - m.y;
-    if dy.abs() < 0.01 {
-        return Ok(());
-    }
     // The bar the message starts and, from the inside out, what lies within it.
     let mut bars: HashSet<Id> = HashSet::new();
     let mut messages: HashSet<Id> = HashSet::from([m.id]);
+    // A create message takes the head along, and with it the constructor's bar right below.
+    let below_head = |b: &Bar| {
+        m.sort == MessageSort::Create
+            && g.lane(m.target).is_some_and(|l| (b.top - l.line_top()).abs() < 0.5)
+    };
     let mut queue: Vec<Bar> = g
         .bars
         .iter()
-        .filter(|b| b.lane == m.target && (b.top - m.end()).abs() < 0.5)
+        .filter(|b| b.lane == m.target && ((b.top - m.end()).abs() < 0.5 || below_head(b)))
         .copied()
         .collect();
     while let Some(bar) = queue.pop() {
@@ -787,6 +788,10 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
                 );
             }
         }
+    }
+    let dy = movable(&g, &m, &bars, &messages, y - m.y);
+    if dy.abs() < 0.01 {
+        return Ok(());
     }
     // The bar the message was sent from, unless it moves along.
     let gate = match tx.model().get(element).map(|e| e.kind()) {
@@ -840,9 +845,49 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
             (_, MessageSort::Create) => CREATE_SENDER_BAR,
             _ => SENDER_BAR,
         };
-        sender_bar(tx, diagram, &moved, m.source, y, height)?;
+        sender_bar(tx, diagram, &moved, m.source, m.y + dy, height)?;
     }
     tidy(tx, diagram)
+}
+
+/// How far of `dy` the message `m` can move with the `bars` and `messages` that go along: what
+/// moves stays below the heads of its lifelines and above the cross of a destroyed one, and a
+/// create message, which takes the head along, stays above whatever else happens on its
+/// lifeline. Where something lies out of bounds already, it may stay there.
+fn movable(g: &Geometry, m: &Msg, bars: &HashSet<Id>, messages: &HashSet<Id>, dy: f32) -> f32 {
+    let (mut least, mut most) = (f32::MIN, f32::MAX);
+    let made = (m.sort == MessageSort::Create).then_some(m.target);
+    for mm in g.messages.iter().filter(|mm| messages.contains(&mm.id)) {
+        for (lane, y) in [(mm.source, mm.y), (mm.target, mm.end())] {
+            let Some(l) = g.lane(lane) else { continue };
+            if mm.sort == MessageSort::Create && lane == mm.target {
+                continue;
+            }
+            least = least.max(l.line_top() + MESSAGE_GAP - y);
+            let cross = g.messages.iter().find(|d| {
+                d.sort == MessageSort::Destroy && d.target == lane && !messages.contains(&d.id)
+            });
+            if let Some(d) = cross {
+                most = most.min(d.end() - MESSAGE_GAP - y);
+            }
+        }
+    }
+    if let Some(l) = made.and_then(|lane| g.lane(lane)) {
+        let on_lane = |mm: &&Msg| {
+            !messages.contains(&mm.id)
+                && (mm.source == l.id || (mm.target == l.id && mm.sort != MessageSort::Create))
+        };
+        let others = g
+            .messages
+            .iter()
+            .filter(on_lane)
+            .map(|mm| if mm.source == l.id { mm.y } else { mm.end() });
+        let bars = g.bars.iter().filter(|b| b.lane == l.id && !bars.contains(&b.id));
+        if let Some(first) = others.chain(bars.map(|b| b.top)).reduce(f32::min) {
+            most = most.min(first - MESSAGE_GAP - l.line_top());
+        }
+    }
+    dy.max(least.min(0.0)).min(most.max(0.0))
 }
 
 /// Shortens `bar` (as it was before an edit) to what still lies in it: down to the height a new
@@ -1973,6 +2018,44 @@ mod tests {
         let slot = Slot { y: 150.0, owner: interaction, index: 0 };
         doc.edit("move", |tx| palette::move_to_slot(tx, call, slot)).unwrap();
         assert_eq!(label(&doc), Point::new(150.0, 90.0));
+    }
+
+    #[test]
+    fn messages_stay_below_the_heads_and_a_create_above_what_follows() {
+        let line_top = |doc: &Document, d: Id, p: Id| match doc.model().view(d).unwrap().get(p) {
+            Some(umlcraft_model::Presentation { shape: Shape::Lifeline { head, .. }, .. }) => {
+                head.bottom()
+            }
+            other => panic!("{other:?}"),
+        };
+        let y_of = |doc: &Document, d: Id, m: Id| match message(doc, d, m) {
+            Shape::Message { y, .. } => y,
+            other => panic!("{other:?}"),
+        };
+        // Dragged above the heads, a message stops below them.
+        let (mut doc, d, a, b) = two_lifelines();
+        let call = draw(&mut doc, d, EdgeTool::Message, a, b, 150.0);
+        doc.edit("up", |tx| super::move_item(tx, d, call, 0.0)).unwrap();
+        let top = line_top(&doc, d, a).max(line_top(&doc, d, b));
+        assert_eq!(y_of(&doc, d, call), top + super::MESSAGE_GAP);
+        // The sender's bar starts there too, not where the message was dragged to.
+        assert!(
+            bars(&doc, d).iter().all(|&(t, _)| t == top + super::MESSAGE_GAP),
+            "{:?}",
+            bars(&doc, d)
+        );
+        // Dragged below what the lifeline it makes does, a create message stops above that.
+        let (mut doc, d, a, b) = two_lifelines();
+        let create = draw(&mut doc, d, EdgeTool::CreateMessage, a, b, 250.0);
+        // The constructor's bar goes along with the head.
+        doc.edit("down", |tx| super::move_item(tx, d, create, 280.0)).unwrap();
+        let top = line_top(&doc, d, b);
+        assert!(bars(&doc, d).contains(&(top, top + super::RECEIVER_BAR)), "{:?}", bars(&doc, d));
+        let back = draw(&mut doc, d, EdgeTool::Message, b, a, 400.0);
+        let first = y_of(&doc, d, back);
+        doc.edit("down", |tx| super::move_item(tx, d, create, 600.0)).unwrap();
+        assert_eq!(line_top(&doc, d, b), first - super::MESSAGE_GAP);
+        assert_eq!(y_of(&doc, d, back), first);
     }
 
     #[test]
