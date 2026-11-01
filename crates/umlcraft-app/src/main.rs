@@ -114,6 +114,13 @@ pub struct SetMemberType {
     pub type_ref: TypeRef,
 }
 
+/// Deletes the member right-clicked on the canvas.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct DeleteMember {
+    pub member: Id,
+}
+
 /// Turns the selected relationship into another kind, from the canvas's context menu.
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = umlcraft, no_json)]

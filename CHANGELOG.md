@@ -8,15 +8,19 @@ today.
 - **New members without the properties panel**: a double click below the members of a
   compartment opens an empty row; what is typed there becomes an attribute, operation or literal,
   and Enter opens the next row. The class's context menu adds them too.
-- **Member types**: a right click on a member selects it and offers a Type submenu with basic
-  types and the model's classes, interfaces, enumerations and data types. The properties panel
-  shows an attribute's name, type, multiplicity and initial value as fields of their own, an
-  operation's name and return type.
+- **Member types**: a right click on a member selects it and offers a Type submenu and an entry
+  that deletes just that member. The submenu lists the types the model already writes as text,
+  most used first (`string` and `bool` in a C# model), filled up with Java's basic types, then
+  the model's classes, interfaces, enumerations and data types. The properties panel shows an
+  attribute's name, type, multiplicity and initial value as fields of their own, an operation's
+  name and return type.
 - **Association ends in place**: a double click on a role name or multiplicity edits it on the
-  diagram; near the end of the line it adds a role name that is not there yet.
+  diagram; near the end of the line it adds a role name that is not there yet. A role is typed
+  as it reads, `# buyer {ordered}`, with visibility and constraints.
 - **Change kind**: a relationship's context menu turns an association, generalization,
   realization or dependency into another of these. The line's source becomes the specific end
-  or the client; kinds UML does not allow between the two elements are greyed out.
+  or the client; kinds UML does not allow between the two elements are greyed out. Name,
+  stereotypes and documentation stay, and so do the line's route and labels.
 - **Longer lifelines**: a selected lifeline shows a grip at its end that drags it longer, never
   shorter than its messages.
 - **Extension points from an extend**: the extend's context menu adds an extension point to the

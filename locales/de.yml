@@ -100,6 +100,9 @@ menu:
   arrange_right: Von links nach rechts
   type: Typ
   change_kind: Art ändern
+  delete_attribute: Attribut löschen
+  delete_operation: Operation löschen
+  delete_literal: Literal löschen
   add_attribute: Attribut hinzufügen
   add_operation: Operation hinzufügen
   add_literal: Literal hinzufügen

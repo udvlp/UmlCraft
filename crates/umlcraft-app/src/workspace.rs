@@ -654,12 +654,15 @@ impl Workspace {
             }
             return;
         }
-        let role = text.to_owned();
+        // As the label shows it: `- buyer {ordered}`; without a sign the visibility stays.
+        let (visibility, role, constraints) = member::parse_role(text);
         self.update_element(association, |data| {
             if let ElementKind::Association(p) = &mut data.kind
                 && let Some(end) = p.ends.get_mut(end)
             {
                 end.role = role;
+                end.constraints = constraints;
+                end.visibility = visibility.unwrap_or(end.visibility);
             }
         });
     }
@@ -1471,7 +1474,14 @@ mod tests {
         ws.set_member_type(second, TypeRef::Element(ids.order));
         assert_eq!(text(&ws, second), "+ age : Order");
 
+        ws.set_end_text(ids.order_customer, 0, false, "# orders {ordered}");
+        let role = |ws: &Workspace| match ws.doc.model().get(ids.order_customer).unwrap().kind() {
+            ElementKind::Association(p) => member::role_text(&p.ends[0]),
+            _ => unreachable!(),
+        };
+        assert_eq!(role(&ws), "# orders {ordered}");
         ws.set_end_text(ids.order_customer, 0, false, " orders ");
+        assert_eq!(role(&ws), "# orders");
         ws.set_end_text(ids.order_customer, 0, true, "0..*");
         let end = |ws: &Workspace| match ws.doc.model().get(ids.order_customer).unwrap().kind() {
             ElementKind::Association(p) => p.ends[0].clone(),

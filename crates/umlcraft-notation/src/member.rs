@@ -1,12 +1,13 @@
 //! Text form of class members, as shown in compartments and typed when editing:
 //! `- name : Type [0..*] = init` for attributes, `+ op(in p : T = 1) : R` for operations.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use umlcraft_model::{
-    ElementData, ElementKind, Id, Model, ModelError, Multiplicity, ParameterDirection,
-    ParameterProps, Result, TemplateParameterKind, TemplateParameterProps, Tx, TypeExpr, TypeRef,
-    Visibility,
+    AssociationEnd, ElementData, ElementKind, Id, Model, ModelError, Multiplicity,
+    ParameterDirection, ParameterProps, Result, TemplateParameterKind, TemplateParameterProps, Tx,
+    TypeExpr, TypeRef, Visibility,
 };
 
 pub fn type_label(model: &Model, type_ref: &Option<TypeRef>) -> Option<String> {
@@ -290,6 +291,65 @@ fn split_top(s: &str, sep: char) -> (&str, Option<&str>) {
         Some(i) => (&s[..i], Some(&s[i + sep.len_utf8()..])),
         None => (s, None),
     }
+}
+
+/// Basic types to offer for an attribute, or with `void` for an operation's result: the types
+/// the model already uses as text, most used first (a C# model says `string` and `bool`), then
+/// Java's, leaving out those the model spells its own way.
+pub fn basic_types(model: &Model, operation: bool) -> Vec<String> {
+    const DEFAULTS: [&str; 7] = ["int", "double", "boolean", "String", "char", "long", "float"];
+    // At most this many, besides `void`.
+    const MAX: usize = 8;
+    // Spellings of the same type in different languages.
+    const SAME: [&[&str]; 2] = [&["boolean", "bool"], &["String", "string", "str"]];
+    let mut used: HashMap<String, usize> = HashMap::new();
+    for e in model.elements() {
+        e.kind().visit_type_refs(&mut |t| {
+            if let TypeRef::Text(text) = t {
+                let simple = text.chars().all(|c| c.is_alphanumeric() || "_:.".contains(c));
+                if simple && !text.is_empty() && text != "void" {
+                    *used.entry(text.clone()).or_default() += 1;
+                }
+            }
+        });
+    }
+    let mut types: Vec<(String, usize)> = used.into_iter().collect();
+    types.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut types: Vec<String> = types.into_iter().map(|(t, _)| t).take(MAX).collect();
+    let alike = |a: &str, b: &str| {
+        a.eq_ignore_ascii_case(b) || SAME.iter().any(|same| same.contains(&a) && same.contains(&b))
+    };
+    for default in DEFAULTS {
+        if types.len() < MAX && !types.iter().any(|t| alike(t, default)) {
+            types.push(default.to_owned());
+        }
+    }
+    if operation {
+        types.push("void".to_owned());
+    }
+    types
+}
+
+/// An association end's role as its label shows it and as it is edited in place: visibility,
+/// name and constraints, `- buyer {ordered}`; only the constraints without a name.
+pub fn role_text(end: &AssociationEnd) -> String {
+    let role = (!end.role.is_empty()).then(|| format!("{} {}", end.visibility.symbol(), end.role));
+    let constraints = end.constraints.iter().map(|c| format!("{{{c}}}"));
+    role.into_iter().chain(constraints).collect::<Vec<_>>().join(" ")
+}
+
+/// A role typed as [`role_text`] shows it: the visibility if one is given, the name and the
+/// constraints, which may also share braces (`{ordered, unique}`).
+pub fn parse_role(text: &str) -> (Option<Visibility>, String, Vec<String>) {
+    let (visibility, rest) = split_visibility(text);
+    let (name, constraints) = rest.split_at(rest.find('{').unwrap_or(rest.len()));
+    let constraints = constraints
+        .split(['{', '}', ','])
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(str::to_owned)
+        .collect();
+    (visibility, name.trim().to_owned(), constraints)
 }
 
 fn split_visibility(s: &str) -> (Option<Visibility>, &str) {
@@ -769,6 +829,49 @@ mod tests {
     use pretty_assertions::assert_eq;
     use umlcraft_model::sample::order_system;
     use umlcraft_model::{Document, Model};
+
+    #[test]
+    fn basic_types_follow_what_the_model_uses() {
+        let (mut doc, ids) = order_system();
+        let java = basic_types(doc.model(), false);
+        // The sample's own text types first (`Money` is not modeled), then Java's.
+        assert_eq!(java[..4], ["Money", "String", "int", "double"].map(String::from));
+        assert!(java.contains(&"boolean".to_owned()));
+        assert!(!java.contains(&"void".to_owned()) && java.len() <= 8);
+        assert_eq!(basic_types(doc.model(), true).last().map(String::as_str), Some("void"));
+        // A model that writes C# offers its spelling, and not Java's beside it.
+        doc.edit("c#", |tx| {
+            for (name, ty) in [("a", "string"), ("b", "string"), ("c", "bool"), ("d", "decimal")] {
+                let kind = ElementKind::attribute(Some(TypeRef::Text(ty.into())));
+                tx.create(ids.customer, ElementData::new(name, kind))?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let types = basic_types(doc.model(), false);
+        assert_eq!(types[0], "string");
+        assert!(types.contains(&"bool".to_owned()) && types.contains(&"decimal".to_owned()));
+        // `boolean` came only from Java's list; `String` the sample writes itself.
+        assert!(!types.contains(&"boolean".to_owned()));
+    }
+
+    #[test]
+    fn roles_read_back_as_shown() {
+        let end = AssociationEnd {
+            role: "buyer".into(),
+            visibility: Visibility::Private,
+            constraints: vec!["ordered".into(), "unique".into()],
+            ..AssociationEnd::new(Id::generate())
+        };
+        assert_eq!(role_text(&end), "- buyer {ordered} {unique}");
+        let parsed = parse_role(&role_text(&end));
+        assert_eq!(parsed, (Some(Visibility::Private), "buyer".into(), end.constraints.clone()));
+        assert_eq!(parse_role("# owner {ordered, unique}").2, end.constraints);
+        assert_eq!(parse_role(" owner "), (None, "owner".into(), Vec::new()));
+        assert_eq!(parse_role(""), (None, String::new(), Vec::new()));
+        let unnamed = AssociationEnd { role: String::new(), ..end };
+        assert_eq!(role_text(&unnamed), "{ordered} {unique}");
+    }
 
     #[test]
     fn parses_attributes() {

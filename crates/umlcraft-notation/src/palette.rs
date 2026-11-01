@@ -895,8 +895,9 @@ pub fn relationship_tool(kind: &ElementKind) -> Option<EdgeTool> {
 
 /// Turns the relationship the edge `edge` of `diagram` shows into one made by `tool`, between
 /// the same elements: the line's source becomes the first end, the specific element or the
-/// client. The new element keeps the name and documentation and takes the old one's place on
-/// every diagram; the old one is deleted. Returns the new element.
+/// client. The new element keeps what the old one says besides its kind and takes its place on
+/// every diagram, where the line keeps its route and labels; the old one is deleted. Returns
+/// the new element.
 pub fn change_relationship(tx: &mut Tx<'_>, diagram: Id, edge: Id, tool: EdgeTool) -> Result<Id> {
     let model = tx.model();
     let (old, s, t) = relationship_ends(model, diagram, edge)?;
@@ -916,8 +917,11 @@ pub fn change_relationship(tx: &mut Tx<'_>, diagram: Id, edge: Id, tool: EdgeToo
     let start = model.element(s)?.owner().unwrap_or(model.root());
     let owner = owner_for(model, start, &kind)
         .ok_or_else(|| ModelError::Invalid(format!("no owner for {}", kind.type_name())))?;
-    let mut data = ElementData::new(element.name(), kind);
-    data.documentation = element.data().documentation.clone();
+    // Name, documentation, stereotypes and tagged values stay; «bind» belongs to a dependency.
+    let mut data = ElementData { kind, ..element.data().clone() };
+    if tool != EdgeTool::Dependency {
+        data.stereotypes.retain(|s| s != "bind");
+    }
     let shown = model.shown_on(old);
     let new = tx.create(owner, data)?;
     for (diagram, presentation) in shown {
@@ -1421,7 +1425,13 @@ mod tests {
             })
             .unwrap();
         let association = doc.model().view(d).unwrap().get(edge).unwrap().element.unwrap();
-        doc.edit("name", |tx| tx.update(association, |data| data.name = "uses".into())).unwrap();
+        doc.edit("name", |tx| {
+            tx.update(association, |data| {
+                data.name = "uses".into();
+                data.stereotypes = vec!["weak".into()];
+            })
+        })
+        .unwrap();
 
         // The line's source becomes the specific end; the same line now shows the new element.
         let general = doc
@@ -1432,6 +1442,7 @@ mod tests {
         assert!(model.get(association).is_none());
         assert_eq!(model.view(d).unwrap().get(edge).unwrap().element, Some(general));
         assert_eq!(model.get(general).unwrap().name(), "uses");
+        assert_eq!(model.get(general).unwrap().data().stereotypes, ["weak"]);
         assert_eq!(model.generals_of(a), [b]);
 
         let dependency =

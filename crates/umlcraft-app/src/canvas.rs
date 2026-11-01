@@ -29,8 +29,8 @@ use umlcraft_notation::sequence::SequenceLayout;
 use crate::workspace::{EndChange, NewItem, Workspace};
 use crate::{
     AddAttribute, AddExtensionPoint, AddLiteral, AddOperation, Cancel, ChangeRelationship,
-    DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetLabels, ResetLineEnds, ResetZoom,
-    SelectAll, SetAssociationEnd, SetLineShape, SetMemberType, ZoomToFit,
+    DeleteMember, DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetLabels, ResetLineEnds,
+    ResetZoom, SelectAll, SetAssociationEnd, SetLineShape, SetMemberType, ZoomToFit,
 };
 
 const MIN_ZOOM: f32 = 0.25;
@@ -205,14 +205,10 @@ fn lifeline_end(node: &NodeShape) -> Option<(f32, f32, f32)> {
     }
 }
 
-/// Basic types offered for attributes and operations, before the model's own types.
-const BASIC_TYPES: [&str; 7] = ["int", "double", "boolean", "String", "char", "long", "float"];
-
 /// The types the "Type" submenu offers for an attribute or operation `member`: basic types,
 /// then the model's classes, interfaces, enumerations and data types by name (a `None` between
 /// them), each with whether the member has it.
-#[allow(clippy::type_complexity)]
-fn member_types(model: &Model, member: Id) -> Option<(Id, Vec<Option<(String, TypeRef, bool)>>)> {
+fn member_types(model: &Model, member: Id) -> Option<Vec<Option<(String, TypeRef, bool)>>> {
     let (current, operation) = match model.get(member)?.kind() {
         ElementKind::Attribute(p) => (p.type_ref.clone(), false),
         ElementKind::Operation(p) => (p.return_type.clone(), true),
@@ -222,11 +218,9 @@ fn member_types(model: &Model, member: Id) -> Option<(Id, Vec<Option<(String, Ty
         let checked = current.as_ref() == Some(&type_ref);
         Some((label, type_ref, checked))
     };
-    let basic = BASIC_TYPES.iter().copied().chain(operation.then_some("void"));
-    let mut types: Vec<_> = basic
-        .clone()
-        .map(|name| entry(name.to_owned(), member::resolve_type(model, name)))
-        .collect();
+    let basic = member::basic_types(model, operation);
+    let mut types: Vec<_> =
+        basic.iter().map(|name| entry(name.clone(), member::resolve_type(model, name))).collect();
     let mut own: Vec<(String, Id)> = model
         .elements()
         .filter(|e| {
@@ -238,7 +232,7 @@ fn member_types(model: &Model, member: Id) -> Option<(Id, Vec<Option<(String, Ty
                     | ElementKind::DataType(_)
             )
         })
-        .filter(|e| !e.name().is_empty() && !basic.clone().any(|b| b == e.name()))
+        .filter(|e| !e.name().is_empty() && !basic.iter().any(|b| b == e.name()))
         .map(|e| (e.name().to_owned(), e.id()))
         .collect();
     own.sort();
@@ -246,7 +240,17 @@ fn member_types(model: &Model, member: Id) -> Option<(Id, Vec<Option<(String, Ty
         types.push(None);
         types.extend(own.into_iter().map(|(name, id)| entry(name, TypeRef::Element(id))));
     }
-    Some((member, types))
+    Some(types)
+}
+
+/// The context menu's entry that deletes a member of kind `kind`, if it is one.
+fn delete_member_key(kind: &ElementKind) -> Option<&'static str> {
+    match kind {
+        ElementKind::Attribute(_) => Some("menu.delete_attribute"),
+        ElementKind::Operation(_) => Some("menu.delete_operation"),
+        ElementKind::EnumerationLiteral => Some("menu.delete_literal"),
+        _ => None,
+    }
 }
 
 /// An element dragged from the model tree.
@@ -1061,7 +1065,7 @@ impl DiagramCanvas {
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
-        let (current, labeled, association, use_case, compartments, typed, kinds, nothing, focus) = {
+        let (current, labeled, association, use_case, compartments, member, kinds, nothing, focus) = {
             let this = canvas.read(cx);
             let ws = this.workspace.read(cx);
             let kinds = match (&ws.selection[..], ws.active_diagram) {
@@ -1071,7 +1075,12 @@ impl DiagramCanvas {
                 }
                 _ => None,
             };
-            let typed = this.right_member.and_then(|m| member_types(ws.doc.model(), m));
+            // The member right-clicked: its types and how deleting it is labeled.
+            let model = ws.doc.model();
+            let member = this.right_member.and_then(|m| {
+                let delete = delete_member_key(model.get(m)?.kind())?;
+                Some((m, member_types(model, m), delete))
+            });
             // A use case, or an extend for the use case it extends.
             let use_case =
                 this.selected_use_case(cx).is_some() || this.selected_extend(cx).is_some();
@@ -1086,12 +1095,12 @@ impl DiagramCanvas {
             };
             let nothing = ws.selection.is_empty();
             let focus = this.focus_handle.clone();
-            (current, labeled, association, use_case, compartments, typed, kinds, nothing, focus)
+            (current, labeled, association, use_case, compartments, member, kinds, nothing, focus)
         };
         let mut menu = menu.action_context(focus);
-        if let Some((member, types)) = typed {
-            menu = menu
-                .submenu(t!("menu.type"), window, cx, move |menu, _, _| {
+        if let Some((member, types, delete)) = member {
+            if let Some(types) = types {
+                menu = menu.submenu(t!("menu.type"), window, cx, move |menu, _, _| {
                     types.iter().fold(menu, |menu, choice| match choice {
                         None => menu.separator(),
                         Some((label, type_ref, checked)) => {
@@ -1099,8 +1108,9 @@ impl DiagramCanvas {
                             menu.menu_with_check(label.clone(), *checked, Box::new(action))
                         }
                     })
-                })
-                .separator();
+                });
+            }
+            menu = menu.menu(t!(delete), Box::new(DeleteMember { member })).separator();
         }
         if !compartments.is_empty() {
             for compartment in &compartments {
@@ -1506,7 +1516,7 @@ impl DiagramCanvas {
         let text = if hit.multiplicity {
             end.multiplicity.map(|m| m.to_string()).unwrap_or_default()
         } else {
-            end.role.clone()
+            member::role_text(end)
         };
         self.workspace.update(cx, |ws, cx| {
             ws.select(vec![hit.edge]);
@@ -2189,6 +2199,9 @@ impl Render for DiagramCanvas {
             }))
             .on_action(cx.listener(|this, a: &ChangeRelationship, _, cx| {
                 this.update_workspace(cx, |ws| ws.change_relationship(a.edge, a.tool));
+            }))
+            .on_action(cx.listener(|this, a: &DeleteMember, _, cx| {
+                this.update_workspace(cx, |ws| ws.delete_element(a.member));
             }))
             .on_action(cx.listener(|this, a: &SetMemberType, _, cx| {
                 this.update_workspace(cx, |ws| ws.set_member_type(a.member, a.type_ref.clone()));
