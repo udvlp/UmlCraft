@@ -15,6 +15,8 @@ today.
 - **Bars stay in their operand**: in an alt or another fragment with several operands, the
   dashed line between two operands moves down below the activation bars of the one above, as
   long as there is room before what comes next.
+- **Destroy messages take their cross along**: dragged up or down, a destroy message moves the
+  end of the lifeline it destroys with it.
 
 ## 0.15.2 – 2026-11-01
 

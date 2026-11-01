@@ -1155,6 +1155,31 @@ fn fit_lifelines(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             }
         })?;
     }
+    // A destroyed one ends with the bar its destroy message starts, wherever that has moved.
+    for lane in g.lanes.iter().filter(|l| l.destroyed) {
+        let Some(m) = g
+            .messages
+            .iter()
+            .filter(|m| m.target == lane.id && m.sort == MessageSort::Destroy)
+            .min_by(|a, b| a.end().total_cmp(&b.end()))
+        else {
+            continue;
+        };
+        let end = g
+            .bars
+            .iter()
+            .find(|b| b.lane == lane.id && (b.top - m.end()).abs() < 0.5)
+            .map_or(m.end(), |b| b.bottom);
+        // Above the head the lifeline keeps at least the bar's length, as `add_message` gives it.
+        let length = (end - lane.line_top()).max(RECEIVER_BAR);
+        if (lane.bottom() - lane.line_top() - length).abs() > 0.01 {
+            tx.update_presentation(diagram, lane.id, |p| {
+                if let Shape::Lifeline { length: l, .. } = &mut p.shape {
+                    *l = length;
+                }
+            })?;
+        }
+    }
     for lane in g.lanes.iter().filter(|l| !l.destroyed || !destroying(l.id)) {
         let bars = g.bars.iter().filter(|b| b.lane == lane.id).map(|b| b.bottom);
         let messages = g
@@ -1970,12 +1995,18 @@ mod tests {
         assert!(destroyed);
         assert_eq!(head.bottom() + length, 285.0);
         assert_eq!(scene_of(&doc, d).sequence.unwrap().destructions.len(), 1);
-        // Without its destroy message the lifeline runs on.
         let destroy =
             doc.model().view(d).unwrap().presentations().iter().find_map(|p| match p.shape {
                 Shape::Message { y: 260.0, .. } => p.element,
                 _ => None,
             });
+        // Moved, the destroy message takes the cross along, down and up.
+        for y in [340.0, 230.0] {
+            doc.edit("move", |tx| super::move_item(tx, d, destroy.unwrap(), y)).unwrap();
+            let (head, length, _) = lane(&doc);
+            assert_eq!(head.bottom() + length, y + 25.0);
+        }
+        // Without its destroy message the lifeline runs on.
         doc.edit("undestroy", |tx| {
             tx.delete(destroy.unwrap())?;
             super::tidy_all(tx)
