@@ -8,6 +8,9 @@ today.
 - **Messages stay on their lifelines**: a message dragged above the heads stops right below
   them, together with the bar it is sent from; a create message dragged down stops above what
   the lifeline it makes does next, and takes the constructor's bar along with the head.
+- **Operands keep their room**: an alt or another fragment with several operands made smaller
+  stops below its last dashed line instead of leaving it outside. A fragment dragged down into
+  the one it held goes inside it right away.
 - **Substates go along**: moving a state takes its substates along, also those that reach out
   of it; resizing a state puts it and its substates into the state or region they now lie in,
   as moving them does.

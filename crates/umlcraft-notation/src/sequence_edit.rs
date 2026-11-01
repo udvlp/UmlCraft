@@ -1131,6 +1131,8 @@ fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                 .chain(messages)
                 .chain(frames)
                 .fold(r.bottom(), |n, b| n.max(b + FRAGMENT_PADDING));
+            // The last operand keeps room below its line, e.g. when the frame is made smaller.
+            let need = f.separators.last().map_or(need, |s| need.max(s + NEXT / 2.0));
             if need > r.bottom() + 0.01 {
                 grown.push((f.id, need - r.y));
             }
@@ -1313,16 +1315,6 @@ pub fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
         let (left, right) = (f.rect.x, f.rect.right());
         items.push(Item { element: f.element, y: f.rect.y, left, right, own: Some(f.id) });
     }
-    let descends = |item: Id, from: Id| {
-        let mut current = model.get(item).and_then(|e| e.owner());
-        while let Some(id) = current {
-            if id == from {
-                return true;
-            }
-            current = model.get(id).and_then(|e| e.owner());
-        }
-        false
-    };
     let mut wanted: HashMap<Id, Vec<(f32, Id)>> = HashMap::new();
     for &Item { element, y, left, right, own } in &items {
         let around = g
@@ -1341,8 +1333,6 @@ pub fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                     Some(ElementKind::CombinedFragment(_))
                 )
             })
-            // A fragment never goes into its own operands.
-            .filter(|f| !descends(f.element, element))
             .min_by(|a, b| {
                 (a.rect.width * a.rect.height).total_cmp(&(b.rect.width * b.rect.height))
             });
@@ -1379,31 +1369,44 @@ pub fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
         }
     }
     let shown: HashSet<Id> = items.iter().map(|i| i.element).collect();
-    let mut moves = Vec::new();
+    // Each owner's children as they should be: what is not shown here first, in its order,
+    // then the shown items as drawn.
+    let mut orders: Vec<(Id, Vec<Id>)> = Vec::new();
     for owner in owners {
         let mut list = wanted.remove(&owner).unwrap_or_default();
         list.sort_by(|a, b| a.0.total_cmp(&b.0));
-        // What is not shown here keeps its place before the shown items.
-        let kept = model.children(owner).iter().filter(|c| !shown.contains(c)).count();
-        for (i, (_, element)) in list.into_iter().enumerate() {
-            moves.push((element, owner, kept + i));
-        }
+        let kept = model.children(owner).iter().copied().filter(|c| !shown.contains(c));
+        orders.push((owner, kept.chain(list.into_iter().map(|(_, e)| e)).collect()));
     }
-    // Into place from the first index on, so that later moves do not disturb earlier ones.
-    moves.sort_by_key(|m| m.2);
-    for (element, owner, index) in moves {
-        let model = tx.model();
-        let current = model.get(element).and_then(|e| e.owner());
-        let position = model.children(owner).iter().position(|&c| c == element);
-        if current == Some(owner) && position == Some(index) {
-            continue;
+    // Into place from the first index on, so that later moves do not disturb earlier ones. A
+    // frame drawn inside one it holds in the model waits for a later round, after which the
+    // other one has moved out: frames only hold tops lying lower, so the nesting wanted has no
+    // cycle.
+    for _ in 0..8 {
+        let mut waiting = false;
+        for (owner, order) in &orders {
+            let owner = *owner;
+            let mut index = 0;
+            for &element in order {
+                let model = tx.model();
+                if model.children(owner).get(index) == Some(&element) {
+                    index += 1;
+                    continue;
+                }
+                if owner == element || model.is_ancestor(element, owner) {
+                    waiting = true;
+                    continue;
+                }
+                let current = model.get(element).and_then(|e| e.owner());
+                let at =
+                    index.min(model.children(owner).len() - usize::from(current == Some(owner)));
+                tx.move_element(element, owner, at)?;
+                index += 1;
+            }
         }
-        // An earlier move may have put the owner inside the element.
-        if owner == element || model.is_ancestor(element, owner) {
-            continue;
+        if !waiting {
+            break;
         }
-        let index = index.min(model.children(owner).len() - usize::from(current == Some(owner)));
-        tx.move_element(element, owner, index)?;
     }
     Ok(())
 }
@@ -2231,6 +2234,50 @@ mod tests {
             .unwrap();
         assert!(!doc.model().contains(fragment));
         doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn a_fragment_dragged_into_the_one_it_holds_goes_inside_in_one_go() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let call = draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let (inner, inner_node) =
+            doc.edit("wrap", |tx| palette::wrap_in_fragment(tx, d, &[call])).unwrap();
+        let (outer, outer_node) =
+            doc.edit("wrap", |tx| palette::wrap_in_fragment(tx, d, &[inner])).unwrap();
+        let bounds = |doc: &Document, node: Id| {
+            doc.model().view(d).unwrap().get(node).unwrap().bounds().unwrap()
+        };
+        // Its top dragged below the inner one's, the outer frame now lies inside that.
+        let dy = bounds(&doc, inner_node).y - bounds(&doc, outer_node).y + 5.0;
+        let moved = bounds(&doc, outer_node).translate(0.0, dy);
+        doc.edit("move", |tx| tx.set_bounds(d, outer_node, moved).and(super::tidy(tx, d))).unwrap();
+        assert!(doc.model().is_ancestor(inner, outer));
+        assert!(
+            super::violations(doc.model(), d).is_empty(),
+            "{:?}",
+            super::violations(doc.model(), d)
+        );
+    }
+
+    #[test]
+    fn a_fragment_made_smaller_keeps_its_last_operand() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let call = draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let (fragment, node) =
+            doc.edit("wrap", |tx| palette::wrap_in_fragment(tx, d, &[call])).unwrap();
+        doc.edit("operand", |tx| palette::add_operand(tx, fragment)).unwrap();
+        let shape = |doc: &Document| doc.model().view(d).unwrap().get(node).unwrap().shape.clone();
+        let Shape::Fragment { bounds, separators, .. } = shape(&doc) else { unreachable!() };
+        // Dragged up to above its operand line, the bottom stops below it.
+        let smaller = Rect { height: separators[0] - 10.0, ..bounds };
+        doc.edit("resize", |tx| tx.set_bounds(d, node, smaller).and(super::tidy(tx, d))).unwrap();
+        let Shape::Fragment { bounds, separators, .. } = shape(&doc) else { unreachable!() };
+        assert_eq!(bounds.height, separators[0] + super::NEXT / 2.0);
+        assert!(
+            super::violations(doc.model(), d).is_empty(),
+            "{:?}",
+            super::violations(doc.model(), d)
+        );
     }
 
     #[test]
