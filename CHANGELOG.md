@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.14.0 – 2026-11-01
 
 - **New members without the properties panel**: a double click below the members of a
   compartment opens an empty row; what is typed there becomes an attribute, operation or literal,
