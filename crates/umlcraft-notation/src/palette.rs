@@ -1045,6 +1045,11 @@ pub fn connect_message(
         })?;
     let y = slot.map_or_else(|| sequence_edit::next_y(model, diagram), |s| s.y);
     let (owner, index) = slot_or_end(model, diagram, slot)?;
+    // Added below everything: sent from the call the sender is busy with, if any.
+    let sends = !matches!(tool, EdgeTool::Reply | EdgeTool::FoundMessage);
+    if slot.is_none() && sends {
+        sequence_edit::continue_open_bar(tx, diagram, source, y)?;
+    }
     let message = tx.create_at(owner, index, ElementData::new("", kind))?;
     sequence_edit::add_message(tx, diagram, message, source, target, y)
 }
@@ -1235,7 +1240,31 @@ pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(I
     // The frame goes around what the items span on the diagram; the order then puts them into
     // its operand.
     let (top, bottom, lifelines) = sequence_edit::extent(tx.model(), diagram, &moved);
-    let slot = Slot { y: top - sequence::TAB_HEIGHT - 10.0, owner, index: first };
+    // A message at the top keeps its label below the tab.
+    let topmost = tx.model().view(diagram).and_then(|view| {
+        view.presentations()
+            .iter()
+            .find_map(|p| match p.shape {
+                Shape::Message { y, .. } if moved.iter().any(|&m| p.element == Some(m)) => Some(y),
+                _ => None,
+            })
+            .filter(|&y| (y - top).abs() < 0.5)
+    });
+    let label = if topmost.is_some() { sequence::LABEL_ABOVE } else { 0.0 };
+    // ...as far as the item before it leaves room: a frame reaching into that would take it in.
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let bottom_of = |item: Id| {
+        view.presentations_of(item).find_map(|p| match p.shape {
+            Shape::Message { y, end_y, .. } => Some(y.max(end_y.unwrap_or(y))),
+            Shape::Fragment { bounds, .. } | Shape::Node { bounds, .. } => Some(bounds.bottom()),
+            _ => None,
+        })
+    };
+    let floor = model.children(owner)[..first].iter().rev().find_map(|&c| bottom_of(c));
+    let lowest = top - sequence::TAB_HEIGHT - 10.0;
+    let y = floor.map_or(lowest - label, |f| (lowest - label).max(f + 10.0)).min(lowest);
+    let slot = Slot { y, owner, index: first };
     let (fragment, node) =
         create_fragment(tx, diagram, NodeTool::CombinedFragment, Some(slot), lifelines, None)?;
     tx.update_presentation(diagram, node, |p| {

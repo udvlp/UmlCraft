@@ -249,7 +249,10 @@ at the end of the bar it returns from; a message to self comes back 20 lower int
 own; a create message brings the new lifeline's head down to it; a destroy message ends the
 lifeline in a cross below its bar. UmlCraft's own rules on top: a message sent at most 45 below
 a sender's bar continues that bar instead of starting one, and a further call to the same
-receiver goes 20 below the bar the last one started there (`clear_of_calls`). Dragging a
+receiver goes 20 below the bar the last one started there (`clear_of_calls`). A message drawn
+below everything from a lifeline whose call is not answered yet continues that call's bar
+(`continue_open_bar`), and a new operand moves what lies below its fragment down
+(`make_room`). Dragging a
 message moves it with the bar it starts and everything sent from that bar (`move_item`); the
 sender's bar it leaves shrinks to what is still in it (`shrink_bar`), the only time a bar gets
 shorter. A message's label can be dragged on its own

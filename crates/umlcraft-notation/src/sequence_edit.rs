@@ -222,17 +222,19 @@ impl Geometry {
     /// The bar on `lane` that a message sent at `y` continues: one ending at most
     /// `CONTINUE_BAR` above, the lowest of them, unless a reply has ended it.
     fn bar_ending_above(&self, lane: Id, y: f32) -> Option<Bar> {
-        let replied = |bar: &Bar| {
-            self.messages.iter().any(|m| {
-                m.sort == MessageSort::Reply && m.source == lane && (m.y - bar.bottom).abs() < 0.5
-            })
-        };
         self.bars
             .iter()
             .filter(|b| b.lane == lane && b.bottom < y && y - b.bottom <= CONTINUE_BAR)
-            .filter(|b| !replied(b))
+            .filter(|b| !self.replied(b))
             .max_by(|a, b| a.bottom.total_cmp(&b.bottom))
             .copied()
+    }
+
+    /// Whether a reply leaves at the end of `bar`, so that the call it holds has returned.
+    fn replied(&self, bar: &Bar) -> bool {
+        self.messages.iter().any(|m| {
+            m.sort == MessageSort::Reply && m.source == bar.lane && (m.y - bar.bottom).abs() < 0.5
+        })
     }
 
     /// Where `lane` ends in a cross, if a message destroys it: with the bar the destroy message
@@ -413,6 +415,36 @@ pub fn add_lifeline(tx: &mut Tx<'_>, diagram: Id, lifeline: Id, x: f32, y: f32) 
 
 fn add_bar(tx: &mut Tx<'_>, diagram: Id, lane: Id, top: f32, height: f32) -> Result<Id> {
     tx.add_presentation(diagram, Presentation::activation(lane, top, height))
+}
+
+/// Lets the outermost bar on `lane` that no reply has ended reach down to a message sent from
+/// `lane` at `y`, however far below it: what a lifeline does after it was called belongs to
+/// that call until it answers. For messages added below everything without a place given (the
+/// MCP server); a message drawn at a height keeps the bars found there.
+pub fn continue_open_bar(tx: &mut Tx<'_>, diagram: Id, lane: Id, y: f32) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    if g.bar_at(lane, y).is_some() {
+        return Ok(());
+    }
+    let on_lane = |b: &&Bar| b.lane == lane;
+    let inside = |b: &Bar| {
+        g.bars
+            .iter()
+            .filter(on_lane)
+            .any(|o| o.id != b.id && o.top <= b.top && o.bottom >= b.bottom)
+    };
+    let open = g
+        .bars
+        .iter()
+        .filter(on_lane)
+        .filter(|b| b.bottom < y && !inside(b) && !g.replied(b))
+        .max_by(|a, b| a.bottom.total_cmp(&b.bottom));
+    let Some(bar) = open.copied() else { return Ok(()) };
+    tx.update_presentation(diagram, bar.id, |p| {
+        if let Shape::Activation { height, .. } = &mut p.shape {
+            *height = y - bar.top + BAR_MARGIN;
+        }
+    })
 }
 
 /// Gives a message sent from `lane` at `y` a bar there: the bar ending just above goes on to
@@ -646,6 +678,11 @@ pub fn add_operand_space(tx: &mut Tx<'_>, fragment: Id) -> Result<()> {
         .flat_map(|(diagram, view)| view.presentations_of(fragment).map(move |p| (diagram, p.id)))
         .collect();
     for (diagram, id) in shown {
+        // What follows the fragment goes down, so that the new operand does not take it in.
+        let bottom = tx.model().view(diagram).and_then(|v| v.get(id)).and_then(|p| p.bounds());
+        if let Some(bounds) = bottom {
+            make_room(tx, diagram, bounds.bottom(), OPERAND_HEIGHT)?;
+        }
         tx.update_presentation(diagram, id, |p| {
             if let Shape::Fragment { bounds, separators, .. } = &mut p.shape {
                 separators.push(bounds.height);
@@ -653,6 +690,46 @@ pub fn add_operand_space(tx: &mut Tx<'_>, fragment: Id) -> Result<()> {
             }
         })?;
         tidy(tx, diagram)?;
+    }
+    Ok(())
+}
+
+/// Moves what starts at or below `at` on `diagram` down by `dy`: messages (with their labels),
+/// bars, frames, interaction uses, notes and free texts. Bars and frames that reach across
+/// `at` grow by `dy`, and the operand lines of such a frame below `at` go down with the rest.
+pub fn make_room(tx: &mut Tx<'_>, diagram: Id, at: f32, dy: f32) -> Result<()> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let below = |y: f32| y >= at - 0.01;
+    let mut changed: Vec<(Id, Shape)> = Vec::new();
+    for p in view.presentations() {
+        let mut shape = p.shape.clone();
+        match &mut shape {
+            Shape::Message { y, end_y, .. } if below(*y) => {
+                *y += dy;
+                *end_y = end_y.map(|e| e + dy);
+            }
+            Shape::Activation { top, height, .. } if below(*top) => *top += dy,
+            Shape::Activation { top, height, .. } if *top + *height > at => *height += dy,
+            Shape::Fragment { bounds, .. } if below(bounds.y) => bounds.y += dy,
+            Shape::Fragment { bounds, separators, .. } if bounds.bottom() > at => {
+                for s in separators.iter_mut().filter(|s| below(bounds.y + **s)) {
+                    *s += dy;
+                }
+                bounds.height += dy;
+            }
+            // Lifeline heads and the diagram's frame stay where they are.
+            Shape::Node { bounds, .. } | Shape::Text { bounds, .. }
+                if below(bounds.y) && p.element != Some(diagram) =>
+            {
+                bounds.y += dy;
+            }
+            _ => continue,
+        }
+        changed.push((p.id, shape));
+    }
+    for (id, shape) in changed {
+        tx.update_presentation(diagram, id, |p| p.shape = shape)?;
     }
     Ok(())
 }
