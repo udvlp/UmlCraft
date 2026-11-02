@@ -1,5 +1,5 @@
 //! The info dialog (the i in the title bar, File › About UmlCraft): the version and a check for
-//! a newer one, where UmlCraft is at home on the web, and its licence.
+//! a newer one, where UmlCraft is at home on the web, its authors and its licence.
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
@@ -17,6 +17,8 @@ use crate::update;
 pub const WEBSITE: &str = "https://umlcraft.com/";
 /// Its source code and issues.
 pub const REPOSITORY: &str = "https://github.com/udvlp/UmlCraft";
+/// The years of the copyright line, from the first release to the latest ("2026–2027").
+const COPYRIGHT_YEARS: &str = "2026";
 
 /// Opens the dialog for the window of `view`, unless a dialog is open already.
 pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
@@ -137,7 +139,18 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                             ),
                     )
                     .child(
-                        div().text_xs().text_color(muted).child(t!("about.license").to_string()),
+                        v_flex()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(
+                                t!(
+                                    "about.copyright",
+                                    years = COPYRIGHT_YEARS,
+                                    authors = env!("CARGO_PKG_AUTHORS").replace(':', ", ")
+                                )
+                                .to_string(),
+                            )
+                            .child(t!("about.license").to_string()),
                     ),
             )
             .footer(

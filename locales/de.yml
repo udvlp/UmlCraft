@@ -2,6 +2,7 @@ about:
   title: Über UmlCraft
   version: "Version %{version}"
   summary: UML-Diagramme und Struktogramme zeichnen, Quellcode importieren und mit .asta-Dateien austauschen.
+  copyright: "© %{years} %{authors}"
   license: "Lizenz: MIT oder Apache-2.0"
   close: Schließen
   check: Nach Updates suchen

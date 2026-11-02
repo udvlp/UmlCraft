@@ -5,6 +5,8 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.16.0"
 edition = "2024"
+# Named in the About dialog; the copyright holders behind "The UmlCraft authors" in LICENSE-MIT.
+authors = ["Ulf Haueisen", "Steven Gast"]
 # The dependencies need 1.92 (oo7); UmlCraft itself needs let chains (1.88).
 rust-version = "1.92"
 license = "MIT OR Apache-2.0"
