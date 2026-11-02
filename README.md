@@ -25,7 +25,10 @@ between releases is in the [changelog](CHANGELOG.md).
 | State machine | States with entry, do, exit and internal transitions, composite states, orthogonal states with regions one below the other or side by side, final states, initial, choice, junction, fork, join and history pseudostates, transitions labeled `trigger [guard] / effect`. A state dragged into another state or region becomes part of it |
 | Component and deployment | Components, artifacts and nodes with their icons, objects and instances, deployments |
 
-Diagrams imported from `.asta` files keep their layout, sizes and colors.
+Diagrams imported from `.asta` files keep their layout, sizes and colors. The properties panel
+sets per class box what it shows of its members (stereotypes, visibility, types, initial
+values, parameters and their directions, the members of chosen visibilities), and per box or
+line the color of its name and of the line.
 
 ## Files
 

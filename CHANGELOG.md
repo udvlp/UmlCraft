@@ -6,11 +6,13 @@ today.
 ## Unreleased
 
 - **What a class box shows of its members**: per box, the properties can hide stereotypes,
-  the members' visibility, attribute types, initial values, parameters, parameter types and
-  return types. Astah projects keep these options, and also which visibilities a box leaves out
-  and whether it shows parameter directions, in both directions of the import and export.
+  the members' visibility, attribute types, initial values, parameters, parameter types,
+  return types and the stereotypes of attributes and operations, choose which parameter
+  directions the operations show and which visibilities of attributes and operations the box
+  shows. Astah projects keep these options in both directions of the import and export.
 - **Colored names and lines**: names in their own font color and lines in their own color, as
-  in Astah projects, are drawn and exported that way.
+  in Astah projects, are drawn and exported that way. The properties panel picks both colors
+  for the selected box or line, or resets them to the default.
 - **Arrange automatically for more diagrams**: activity, state machine and use case diagrams
   can be arranged too. Activities run top to bottom along their flows, partitions stay columns
   with every step in its own, and fork and join bars span what they join. State machines run

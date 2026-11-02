@@ -2069,7 +2069,7 @@ struct Painter<'a> {
     column: bool,
 }
 
-fn hsla(c: Color) -> Hsla {
+pub(crate) fn hsla(c: Color) -> Hsla {
     Hsla::from(Rgba {
         r: f32::from(c.r) / 255.0,
         g: f32::from(c.g) / 255.0,

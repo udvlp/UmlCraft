@@ -280,6 +280,18 @@ prop:
   hide_parameters: Hide parameters
   hide_parameter_types: Hide parameter types
   hide_return_types: Hide return types
+  hide_attribute_stereotypes: Hide attribute stereotypes
+  hide_operation_stereotypes: Hide operation stereotypes
+  parameter_directions: Parameter directions
+  parameter_directions_explicit: out and inout
+  parameter_directions_hidden: None
+  parameter_directions_all: All, in as well
+  shown_attributes: Show attributes
+  shown_operations: Show operations
+  font_color: Font color
+  line_color: Line color
+  default_color: Default
+  reset_color: Reset
   hide_instance_name: Hide name
   hide_instance_type: Hide classifier
   dashed: Dashed

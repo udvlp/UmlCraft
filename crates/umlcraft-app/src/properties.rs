@@ -7,16 +7,18 @@ use std::collections::HashMap;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState, ColorSelect};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
-use gpui_kit::component::{ActiveTheme, IndexPath, Sizable, StyledExt, v_flex};
+use gpui_kit::component::{ActiveTheme, IndexPath, Sizable, StyledExt, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, DiagramKind, ElementData,
-    ElementKind, Id, InstanceKind, InstanceProps, InteractionOperator, LifelineProps, LinkEnd,
-    LinkProps, MessageSort, Model, Multiplicity, Navigability, Shape, Style, TemplateParameterKind,
-    TypeRef,
+    ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Color, DiagramKind,
+    ElementData, ElementKind, Id, InstanceKind, InstanceProps, InteractionOperator, LifelineProps,
+    LinkEnd, LinkProps, MessageSort, Model, Multiplicity, Navigability, ParameterDirections,
+    Presentation, Shape, Style, TemplateParameterKind, TypeRef, Visibility,
 };
 use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
@@ -54,6 +56,23 @@ const OPERATORS: [InteractionOperator; 12] = [
 ];
 const PARAMETER_KINDS: [TemplateParameterKind; 2] =
     [TemplateParameterKind::Type, TemplateParameterKind::Value];
+const DIRECTIONS: [ParameterDirections; 3] =
+    [ParameterDirections::Explicit, ParameterDirections::Hidden, ParameterDirections::All];
+/// Colors offered first for names and lines: black, grays and the plain colors of diagrams.
+const FEATURED_COLORS: [Color; 12] = [
+    Color::rgb(0x00, 0x00, 0x00),
+    Color::rgb(0x80, 0x80, 0x80),
+    Color::rgb(0xc0, 0xc0, 0xc0),
+    Color::rgb(0xff, 0x00, 0x00),
+    Color::rgb(0x80, 0x00, 0x00),
+    Color::rgb(0xff, 0x80, 0x00),
+    Color::rgb(0x00, 0x80, 0x00),
+    Color::rgb(0x00, 0x80, 0x80),
+    Color::rgb(0x00, 0x00, 0xff),
+    Color::rgb(0x00, 0x00, 0x80),
+    Color::rgb(0x80, 0x00, 0x80),
+    Color::rgb(0xff, 0x00, 0xff),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Field {
@@ -134,8 +153,16 @@ pub struct PropertiesPanel {
     /// Associations a link can be an instance of, with their ids (`None` for "none").
     association: Entity<Choice>,
     association_ids: Vec<Option<Id>>,
-    /// Element, document revision and locale the fields currently show.
-    shown: Option<(Id, u64, String)>,
+    /// Classifier boxes: which parameter directions the operations show.
+    directions: Entity<Choice>,
+    /// The name's color of the selected node or line, and the line's color.
+    font_color: Entity<ColorPickerState>,
+    line_color: Entity<ColorPickerState>,
+    /// Undo depth before a color was picked and after its last change: while the picker stays
+    /// open, its further changes (dragging a slider) join that one undo step.
+    color_step: Option<(usize, usize)>,
+    /// Element, selected presentation, document revision and locale the fields currently show.
+    shown: Option<(Id, Option<Id>, u64, String)>,
     /// Text fields the user has typed into, each with the element shown at the first keystroke.
     /// An edit always goes back to that element, even if the selection has changed by the time
     /// the field loses focus; fields nobody typed into are never written back.
@@ -167,6 +194,27 @@ fn sort_items() -> Vec<SharedString> {
 
 fn parameter_kind_items() -> Vec<SharedString> {
     ["template_kind.type", "template_kind.value"].map(|k| t!(k).to_string().into()).to_vec()
+}
+
+fn direction_items() -> Vec<SharedString> {
+    ["explicit", "hidden", "all"]
+        .map(|k| t!(format!("prop.parameter_directions_{k}")).to_string().into())
+        .to_vec()
+}
+
+/// A picked color as the model keeps it.
+fn model_color(color: Hsla) -> Color {
+    let c = Rgba::from(color);
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color { r: byte(c.r), g: byte(c.g), b: byte(c.b), a: byte(c.a) }
+}
+
+/// The one node or line selected on the diagram shown.
+fn selected_presentation(ws: &Workspace) -> Option<&Presentation> {
+    match (ws.active_diagram, ws.selection.as_slice()) {
+        (Some(d), [p]) => ws.doc.model().view(d)?.get(*p),
+        _ => None,
+    }
 }
 
 /// Splits `text` at the commas that are not inside `<…>`: "A, Map<K, V>" is two types.
@@ -331,6 +379,9 @@ impl PropertiesPanel {
         let operation = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
         let represents = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
         let association = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
+        let directions = cx.new(|cx| SelectState::new(direction_items(), None, window, cx));
+        let font_color = cx.new(|cx| ColorPickerState::new(window, cx));
+        let line_color = cx.new(|cx| ColorPickerState::new(window, cx));
 
         let mut subscriptions =
             vec![cx.observe_in(&workspace, window, |this, _, window, cx| this.sync(window, cx))];
@@ -477,6 +528,31 @@ impl PropertiesPanel {
                 });
             },
         ));
+        subscriptions.push(cx.subscribe_in(
+            &directions,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(d) = selected(state, cx).and_then(|ix| DIRECTIONS.get(ix).copied()) else {
+                    return;
+                };
+                this.update_style(cx, move |s| s.parameter_directions = d);
+            },
+        ));
+        for (state, line) in [(&font_color, false), (&line_color, true)] {
+            subscriptions.push(cx.subscribe_in(
+                state,
+                window,
+                move |this, _, ColorPickerEvent::Change(color), _, cx| {
+                    this.set_color(line, color.map(model_color), cx);
+                },
+            ));
+            // Closing the picker ends its undo step.
+            subscriptions.push(cx.observe(state, |this, state, cx| {
+                if !state.read(cx).is_open() {
+                    this.color_step = None;
+                }
+            }));
+        }
         for (i, end) in ends.iter().enumerate() {
             subscriptions.push(cx.subscribe_in(
                 &end.navigability,
@@ -544,6 +620,10 @@ impl PropertiesPanel {
             represents_ids: Vec::new(),
             association,
             association_ids: Vec::new(),
+            directions,
+            font_color,
+            line_color,
+            color_step: None,
             shown: None,
             editing: HashMap::new(),
             _subscriptions: subscriptions,
@@ -562,7 +642,34 @@ impl PropertiesPanel {
     }
 
     fn shown_id(&self) -> Option<Id> {
-        self.shown.as_ref().map(|(id, _, _)| *id)
+        self.shown.as_ref().map(|(id, ..)| *id)
+    }
+
+    /// Changes the display options of the selected node or line as one undo step.
+    fn update_style(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Style)) {
+        self.workspace.update(cx, |ws, cx| {
+            let Some(p) = selected_presentation(ws).map(|p| p.id) else { return };
+            ws.update_style(p, f);
+            cx.notify();
+        });
+    }
+
+    /// Sets the name's color (or with `line` the line's) of the selected node or line; `None`
+    /// goes back to the theme's. What one opened picker changes is one undo step.
+    fn set_color(&mut self, line: bool, color: Option<Color>, cx: &mut Context<Self>) {
+        let step = self.color_step;
+        self.color_step = self.workspace.update(cx, |ws, cx| {
+            let p = selected_presentation(ws)?.id;
+            let depth = ws.doc.undo_depth();
+            let start = match step {
+                Some((start, end)) if end == depth => start,
+                _ => depth,
+            };
+            ws.update_style(p, |s| *if line { &mut s.stroke } else { &mut s.font_color } = color);
+            ws.doc.squash_since(start, t!("edit.properties"));
+            cx.notify();
+            Some((start, ws.doc.undo_depth()))
+        });
     }
 
     fn on_input(&mut self, field: Field, ev: &InputEvent, cx: &mut Context<Self>) {
@@ -847,10 +954,12 @@ impl PropertiesPanel {
     pub fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected = |this: &Self, cx: &App| {
             let ws = this.workspace.read(cx);
-            (ws.selected_element.filter(|&id| ws.doc.model().contains(id)), ws.doc.revision())
+            let presentation = selected_presentation(ws).map(|p| p.id);
+            let element = ws.selected_element.filter(|&id| ws.doc.model().contains(id));
+            (element, presentation, ws.doc.revision())
         };
         // The selection moved away while a field was being edited: save that edit first.
-        let (before, _) = selected(self, cx);
+        let (before, ..) = selected(self, cx);
         let pending: Vec<(Field, Id)> = self
             .editing
             .iter()
@@ -862,21 +971,22 @@ impl PropertiesPanel {
             self.commit(field, id, cx);
         }
         // Those commits may have deleted the selection, e.g. a «bind» dependency.
-        let (selected, revision) = selected(self, cx);
+        let (selected, presentation, revision) = selected(self, cx);
         let Some(id) = selected else {
             self.shown = None;
             cx.notify();
             return;
         };
         let locale = rust_i18n::locale().to_string();
-        let key = (id, revision, locale.clone());
+        let key = (id, presentation, revision, locale.clone());
         if self.shown.as_ref() == Some(&key) {
             return;
         }
-        let locale_changed = self.shown.as_ref().is_none_or(|(_, _, l)| *l != locale);
+        let locale_changed = self.shown.as_ref().is_none_or(|(.., l)| *l != locale);
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
         let data = model.get(id).expect("checked above").data().clone();
+        let style = selected_presentation(ws).map(|p| p.style.clone()).unwrap_or_default();
         let declaration = member_text(model, id);
         // A template parameter's value type, bounds and default as text.
         let parameter_texts = match &data.kind {
@@ -977,6 +1087,21 @@ impl PropertiesPanel {
         };
         let vis = VISIBILITIES.iter().position(|&v| v == data.visibility);
         choose(&self.visibility, vis, locale_changed.then(visibility_items), window, cx);
+        let d = DIRECTIONS.iter().position(|&d| d == style.parameter_directions);
+        choose(&self.directions, d, locale_changed.then(direction_items), window, cx);
+        // Only a color that differs: writing back the one just picked would fight a slider drag.
+        for (state, color) in
+            [(&self.font_color, style.font_color), (&self.line_color, style.stroke)]
+        {
+            state.update(cx, |s, cx| {
+                if s.value().map(model_color) != color {
+                    match color {
+                        Some(c) => s.set_value(crate::canvas::hsla(c), window, cx),
+                        None => s.clear_value(window, cx),
+                    }
+                }
+            });
+        }
         match &data.kind {
             ElementKind::Message(p) => {
                 set(&self.arguments, p.arguments.clone(), window, cx);
@@ -1886,17 +2011,55 @@ impl Render for PropertiesPanel {
                 .and_then(|e| model.get(e))
                 .is_some_and(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)))
         };
-        let presentation = match (ws.active_diagram, ws.selection.as_slice()) {
-            (Some(d), [p]) => model
-                .view(d)
-                .and_then(|v| v.get(*p))
-                .filter(|p| !p.is_edge() && !is_fragment(p))
-                .cloned(),
-            _ => None,
+        let presentation = selected_presentation(ws).filter(|p| !is_fragment(p)).cloned();
+        // The color of the name and of the line, unset the theme's; one picker per color.
+        let panel = cx.entity();
+        let featured = FEATURED_COLORS.map(crate::canvas::hsla).to_vec();
+        let color = |state: &Entity<ColorPickerState>, set: bool, line: bool| {
+            let panel = panel.clone();
+            h_flex()
+                .gap_1()
+                .child(
+                    ColorSelect::new(state)
+                        .small()
+                        .featured_colors(featured.clone())
+                        .placeholder(t!("prop.default_color"))
+                        .flex_1(),
+                )
+                .when(set, |row| {
+                    row.child(
+                        Button::new(("reset-color", usize::from(line)))
+                            .ghost()
+                            .small()
+                            .label(t!("prop.reset_color"))
+                            .on_click(move |_, _, cx| {
+                                panel.update(cx, |this, cx| this.set_color(line, None, cx));
+                            }),
+                    )
+                })
+                .into_any_element()
         };
-        if let Some(p) = presentation {
+        if let Some(p) = presentation.as_ref().filter(|p| matches!(p.shape, Shape::Edge { .. })) {
+            body = body
+                .child(heading(t!("prop.display").to_string()))
+                .child(field(
+                    t!("prop.font_color").into(),
+                    color(&self.font_color, p.style.font_color.is_some(), false),
+                ))
+                .child(field(
+                    t!("prop.line_color").into(),
+                    color(&self.line_color, p.style.stroke.is_some(), true),
+                ));
+        }
+        if let Some(p) = presentation.filter(|p| !p.is_edge()) {
             let shown = p.element.and_then(|e| model.get(e)).map(|e| e.kind().clone());
             body = body.child(heading(t!("prop.display").to_string()));
+            if matches!(p.shape, Shape::Node { .. }) {
+                body = body.child(field(
+                    t!("prop.font_color").into(),
+                    color(&self.font_color, p.style.font_color.is_some(), false),
+                ));
+            }
             let boxed = matches!(
                 shown,
                 Some(
@@ -1926,7 +2089,7 @@ impl Render for PropertiesPanel {
                     ));
                 // What the box leaves out of its members, as Astah offers it per box.
                 type Flag = (&'static str, &'static str, fn(&Style) -> bool, fn(&mut Style, bool));
-                const MEMBERS: [Flag; 7] = [
+                const MEMBERS: [Flag; 9] = [
                     (
                         "hide-stereotypes",
                         "prop.hide_stereotypes",
@@ -1969,6 +2132,18 @@ impl Render for PropertiesPanel {
                         |s| s.hide_return_types,
                         |s, v| s.hide_return_types = v,
                     ),
+                    (
+                        "hide-attribute-stereotypes",
+                        "prop.hide_attribute_stereotypes",
+                        |s| s.hide_attribute_stereotypes,
+                        |s, v| s.hide_attribute_stereotypes = v,
+                    ),
+                    (
+                        "hide-operation-stereotypes",
+                        "prop.hide_operation_stereotypes",
+                        |s| s.hide_operation_stereotypes,
+                        |s, v| s.hide_operation_stereotypes = v,
+                    ),
                 ];
                 for (id, key, get, set) in MEMBERS {
                     body = body.child(style_flag(
@@ -1978,6 +2153,55 @@ impl Render for PropertiesPanel {
                         workspace.clone(),
                         p.id,
                         set,
+                    ));
+                }
+                body = body.child(field(
+                    t!("prop.parameter_directions").into(),
+                    Select::new(&self.directions).small().into_any_element(),
+                ));
+                // The members shown by visibility; the box leaves out those not ticked.
+                type Hidden = fn(&mut Style) -> &mut Vec<Visibility>;
+                let filters: [(&str, &str, &[Visibility], Hidden); 2] = [
+                    (
+                        "shown-attributes",
+                        "prop.shown_attributes",
+                        &p.style.hidden_attributes,
+                        |s| &mut s.hidden_attributes,
+                    ),
+                    (
+                        "shown-operations",
+                        "prop.shown_operations",
+                        &p.style.hidden_operations,
+                        |s| &mut s.hidden_operations,
+                    ),
+                ];
+                for (id, key, hidden, list) in filters {
+                    let boxes = VISIBILITIES.iter().map(|&v| {
+                        let workspace = workspace.clone();
+                        let presentation = p.id;
+                        Checkbox::new(SharedString::from(format!("{id}-{}", v.symbol())))
+                            .label(labels::visibility_label(v))
+                            .checked(!hidden.contains(&v))
+                            .on_click(move |checked: &bool, _, cx| {
+                                let shown = *checked;
+                                workspace.update(cx, |ws, cx| {
+                                    ws.update_style(presentation, |s| {
+                                        let hidden = list(s);
+                                        hidden.retain(|&h| h != v);
+                                        if !shown {
+                                            hidden.push(v);
+                                            hidden.sort_by_key(|h| {
+                                                VISIBILITIES.iter().position(|x| x == h)
+                                            });
+                                        }
+                                    });
+                                    cx.notify();
+                                });
+                            })
+                    });
+                    body = body.child(field(
+                        t!(key).into(),
+                        h_flex().flex_wrap().gap_x_3().gap_y_1().children(boxes).into_any_element(),
                     ));
                 }
             }
