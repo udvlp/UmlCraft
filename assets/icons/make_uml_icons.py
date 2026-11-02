@@ -76,6 +76,14 @@ DIAMOND = 'M9.5 9.5L13.5 6.5L17.5 9.5L13.5 12.5Z'
 NSD_ALTERNATIVE = [rect(2.5, 3.5, 15, 13), path('M2.5 3.5L10 9.5L17.5 3.5M2.5 9.5H17.5'),
                    path('M10 9.5V16.5')]
 NSD_LOOP = [path('M2.5 3.5H17.5V7.5H6.5V16.5H2.5Z'), rect(6.5, 7.5, 11, 9)]
+BOX = rect(2.5, 3.5, 15, 13, 2)
+
+
+def band(top):
+    """The lower part of a box with rounded bottom corners, from `top` down, filled: the
+    compartment a member lives in."""
+    return path(f'M2.5 {top}H17.5V14.5C17.5 15.6 16.6 16.5 15.5 16.5H4.5'
+                f'C3.4 16.5 2.5 15.6 2.5 14.5Z', FILL)
 
 ICONS = {
     # Nodes
@@ -124,6 +132,26 @@ ICONS = {
     'componentInstance': COMPONENT + [path('M8 10.5H14')],
     'nodeInstance': NODE + [path('M5.5 11.5H11.5')],
     'object': [rect(2.5, 3.5, 15, 13, 2), path('M6.5 7.5H13.5M2.5 10.5H17.5')],
+    # Elements without a tool, for the model tree. The model: a package with a triangle.
+    'model': PACKAGE + [path('M10 8.5L13.5 14H6.5Z')],
+    # Members: the compartment of a box they are shown in, filled.
+    'attribute': [BOX, path('M2.5 7.5H17.5'), rect(2.5, 7.5, 15, 4.5, extra=FILL)],
+    'operation': [BOX, path('M2.5 7.5H17.5M2.5 12H17.5'), band(12)],
+    'enumerationLiteral': [BOX, path('M2.5 7.5H17.5'), rect(5, 9.5, 10, 2.5, 1, FILL),
+                           path('M5.5 14H11.5')],
+    'slot': [BOX, path('M6.5 7.5H13.5'), band(10.5)],
+    'parameter': [path('M7 3.5C4.3 6.5 4.3 13.5 7 16.5M13 3.5C15.7 6.5 15.7 13.5 13 16.5'),
+                  dot(10, 10, 2)],
+    # A class with the dashed box of its template parameters on its corner.
+    'templateParameter': [path('M10.5 5.5H2.5V16.5H14.5V8.5M2.5 9.5H10.5'),
+                          dashed('M10.5 2.5H17.5V8.5H10.5Z')],
+    'extensionPoint': [ellipse(10, 10, 7.5, 5.5), path('M2.5 10H17.5M6.5 12.75H13.5')],
+    # Behaviors: a diagram frame with what they are made of.
+    'interaction': FRAGMENT + [path('M5.5 12H13'), path('M12 9.5L15.5 12L12 14.5Z', FILL)],
+    'activity': FRAGMENT + [dot(6, 12, 2), path('M8.5 12H15M12.5 9.5L15 12L12.5 14.5')],
+    'stateMachine': FRAGMENT + [rect(6.5, 9.5, 8, 4.5, 2)],
+    'interactionOperand': FRAGMENT + [dashed('M3 9.5H17'), band(11.5)],
+    'region': [rect(2.5, 4.5, 15, 11, 3), path('M2.5 8.5H17.5'), dashed('M10 9V15')],
     # A structogram: an instruction above an alternative with its two branches.
     'structogram': [rect(2.5, 2.5, 15, 15, 1), path('M2.5 6.5H17.5M2.5 11.5H17.5'),
                     path('M2.5 6.5L10 11.5L17.5 6.5M10 11.5V17.5')],

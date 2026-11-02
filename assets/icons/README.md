@@ -39,7 +39,11 @@ UmlCraft's own icons for the diagram tools, named after the palette's tool keys
 `line` and whose icon is `freeLine.svg`; select and text have none here. A few have no tool yet:
 `navigableAssociation`, `aggregation`, `composition`, `associationClass`, `containment` and
 `requiredInterface`. `structogram.svg` stands for structograms in the model tree and on their
-tabs. `messageNumbers.svg` and `flatMessageNumbers.svg` are the sequence diagram's switches for
+tabs. Elements that no tool draws have icons of their own for the model tree: `model` (the
+project), `attribute`, `operation`, `enumerationLiteral` and `slot` (the compartment of a box
+they live in, filled), `parameter`, `templateParameter`, `extensionPoint`, `interaction`,
+`activity` and `stateMachine` (a diagram frame with what they are made of),
+`interactionOperand` and `region`. `messageNumbers.svg` and `flatMessageNumbers.svg` are the sequence diagram's switches for
 message numbers and for numbering them 1, 2, 3.
 
 `make_uml_icons.py` writes them; change the shapes there rather than in the SVGs. The shapes

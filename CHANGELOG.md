@@ -59,6 +59,12 @@ today.
   lifeline still busy with a call it has not answered continues that call's bar instead of
   starting a new one. A fragment put around a message keeps the message's label clear of its
   tab, and a new operand makes room below the fragment instead of taking in what follows it.
+- **Project tree with chevrons**: as in the Windows Explorer, a chevron in front of an item shows
+  whether it can be opened (pointing right) or is open (pointing down).
+- **An icon for every item in the project tree**: the project, attributes, operations,
+  parameters, enumeration literals, slots, template parameters, extension points, interactions,
+  activities, state machines, operands and regions have icons of their own, so the tree reads
+  evenly.
 
 ## 0.16.0 – 2026-11-01
 

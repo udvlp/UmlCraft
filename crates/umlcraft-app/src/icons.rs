@@ -164,19 +164,20 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
         ElementKind::Diagram(p) if p.objects => Some(object_diagram_icon()),
         ElementKind::Diagram(p) => Some(diagram_icon(p.diagram)),
         ElementKind::Structogram(_) => Some(structogram_icon()),
-        ElementKind::Model
-        | ElementKind::EnumerationLiteral
-        | ElementKind::Attribute(_)
-        | ElementKind::Operation(_)
-        | ElementKind::Parameter(_)
-        | ElementKind::TemplateParameter(_)
-        | ElementKind::ExtensionPoint
-        | ElementKind::Interaction
-        | ElementKind::InteractionOperand(_)
-        | ElementKind::Activity
-        | ElementKind::StateMachine
-        | ElementKind::Region
-        | ElementKind::Slot(_) => None,
+        // Elements no tool draws, with icons of their own.
+        ElementKind::Model => Some(uml("model")),
+        ElementKind::EnumerationLiteral => Some(uml("enumerationLiteral")),
+        ElementKind::Attribute(_) => Some(uml("attribute")),
+        ElementKind::Operation(_) => Some(uml("operation")),
+        ElementKind::Parameter(_) => Some(uml("parameter")),
+        ElementKind::TemplateParameter(_) => Some(uml("templateParameter")),
+        ElementKind::ExtensionPoint => Some(uml("extensionPoint")),
+        ElementKind::Interaction => Some(uml("interaction")),
+        ElementKind::InteractionOperand(_) => Some(uml("interactionOperand")),
+        ElementKind::Activity => Some(uml("activity")),
+        ElementKind::StateMachine => Some(uml("stateMachine")),
+        ElementKind::Region => Some(uml("region")),
+        ElementKind::Slot(_) => Some(uml("slot")),
     }
 }
 
@@ -205,6 +206,25 @@ mod tests {
             }
         }
         assert!(Embedded::get(&structogram_icon()).is_some());
+        // The model tree's own icons for elements no tool draws.
+        let own = [
+            "model",
+            "enumerationLiteral",
+            "attribute",
+            "operation",
+            "parameter",
+            "templateParameter",
+            "extensionPoint",
+            "interaction",
+            "interactionOperand",
+            "activity",
+            "stateMachine",
+            "region",
+            "slot",
+        ];
+        for name in own {
+            assert!(Embedded::get(&uml(name)).is_some(), "{name}");
+        }
         for kind in umlcraft_nsd::ElementKind::ALL {
             let icon = nsd_kind_icon(kind);
             assert!(Embedded::get(&icon).is_some(), "{icon}");

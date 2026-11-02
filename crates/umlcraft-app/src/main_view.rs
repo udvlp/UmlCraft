@@ -12,8 +12,8 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tree::{TreeEvent, TreeItem, TreeState, tree};
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Sizable, StyledExt, Theme, ThemeMode, TitleBar, WindowExt, h_flex,
-    v_flex,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, StyledExt, Theme, ThemeMode, TitleBar,
+    WindowExt, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -1897,11 +1897,24 @@ impl MainView {
                         Some(icon) => shell::icon(icon).size_4().into_any_element(),
                         None => div().size_4().into_any_element(),
                     };
+                    // A chevron says whether the item opens (right) or is open (down), as in
+                    // the Explorer; items without children keep its room empty.
+                    let chevron = match (entry.is_folder(), entry.is_expanded()) {
+                        (false, _) => div().size_4().into_any_element(),
+                        (true, expanded) => {
+                            let name = if expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            };
+                            Icon::new(name).size_4().text_color(muted).into_any_element()
+                        }
+                    };
                     let mut row = div().id(("tree-row", ix)).w_full().child(
                         h_flex()
                             .gap_2()
                             .overflow_hidden()
-                            .child(icon)
+                            .child(h_flex().flex_none().gap_1().child(chevron).child(icon))
                             .child(div().text_sm().child(item.label.clone()))
                             .child(
                                 div()
@@ -1932,7 +1945,9 @@ impl MainView {
                     }
                     ListItem::new(ix)
                         .selected(selected)
-                        .pl(px(8.0 + 14.0 * entry.depth() as f32))
+                        // One level in is a chevron and its gap: a child's chevron sits below
+                        // its parent's icon.
+                        .pl(px(4.0 + 20.0 * entry.depth() as f32))
                         .child(row)
                 })
                 .context_menu(move |_, entry, menu, _, _| {
