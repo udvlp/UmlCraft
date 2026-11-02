@@ -10,6 +10,11 @@ and writes `.asta` project files and imports Java, C#, C++ and Python source cod
 Releases for Windows (x64: installer and `.zip`), macOS (universal) and Linux (x64: `.deb`,
 `.rpm`, AppImage, Flatpak, Snap and `.tar.gz`) are on the
 [releases page](https://github.com/udvlp/UmlCraft/releases).
+On NixOS, the flake builds UmlCraft from source: `nix run github:udvlp/UmlCraft`, or
+`nix profile install github:udvlp/UmlCraft`; a NixOS configuration adds the flake's
+`overlays.default` and then `pkgs.umlcraft`. It needs a Vulkan driver
+(`hardware.graphics.enable = true`). With Nix on another distribution, the app does not see
+that system's drivers and needs Nix's own, for example through nixGL.
 The builds are not signed yet; the release notes explain how to start them anyway. What changed
 between releases is in the [changelog](CHANGELOG.md).
 
@@ -242,7 +247,8 @@ On Windows, `pwsh -File tools\install-local.ps1` builds a release and installs i
 current user with the installer (needs Inno Setup 7), so it starts from the Start menu.
 
 On Debian/Ubuntu, GPUI needs some system libraries first:
-`bash packaging/linux/install-build-deps.sh`.
+`bash packaging/linux/install-build-deps.sh`. On NixOS, `nix develop` opens a shell with Rust
+and those libraries.
 
 ## Releasing
 

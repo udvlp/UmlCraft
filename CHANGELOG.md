@@ -5,6 +5,8 @@ today.
 
 ## Unreleased
 
+- **NixOS**: a Nix flake builds UmlCraft from source, with its launcher, icon and file types
+  (`nix run github:udvlp/UmlCraft`).
 - **The diagram fills the window**: ribbon, model tree, properties and zoom float over the
   diagram as light grey cards, so the diagram uses the whole window. Drag a card's inner edge
   to make it wider or narrower. Zoom to fit, 100 % and paste use the part of the diagram the

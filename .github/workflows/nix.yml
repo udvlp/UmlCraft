@@ -1,0 +1,50 @@
+# Builds the Nix package (`flake.nix`, `packaging/nix`), the way NixOS users install UmlCraft.
+# A build takes GPUI and everything else from scratch, so it runs only when the dependencies or
+# the packaging change, and for every release tag.
+
+name: Nix
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - flake.nix
+      - flake.lock
+      - packaging/nix/**
+      - packaging/linux/**
+      - .github/workflows/nix.yml
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - flake.nix
+      - flake.lock
+      - packaging/nix/**
+      - packaging/linux/**
+      - .github/workflows/nix.yml
+  workflow_dispatch:
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Nix package (x86_64-linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+      - run: nix flake check --no-build
+      - run: nix build --print-build-logs .#umlcraft
+      - name: The binaries start
+        run: |
+          ./result/bin/umlcraft-cli --version
+          test -x ./result/bin/umlcraft
+          test -f ./result/share/applications/com.umlcraft.app.desktop
