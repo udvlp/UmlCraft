@@ -12,7 +12,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{ActiveTheme, Theme, WindowExt, v_flex};
 use gpui_kit::*;
 use resvg::{tiny_skia, usvg};
@@ -66,6 +66,9 @@ struct Raster {
 enum Drag {
     /// Panning: where it started, in window coordinates, and the pan then.
     Pan { start: Point<Pixels>, pan: Point<Pixels> },
+    /// The right button held since `start`: moving it pans, releasing it where it was pressed
+    /// opens the context menu there.
+    RightPan { start: Point<Pixels>, pan: Point<Pixels>, panning: bool },
     /// Pressed on selected elements: where, whether the mouse has gone far enough to drag
     /// them, and the place they would drop to. `pressed` is what was hit inside a selection
     /// that stays for dragging; a click without dragging selects it after all.
@@ -119,7 +122,13 @@ pub struct NsdView {
     rasterizing: bool,
     /// The drawing area, as painted last.
     area: Rc<Cell<Bounds<Pixels>>>,
+    /// What floating panels leave free of the area.
+    pub clear: crate::shell::ClearArea,
+    /// The pan waits for the layout to know where the clear area is.
+    home_pending: bool,
     drag: Option<Drag>,
+    /// The context menu, from the release of a right click until it closes.
+    menu_at: Option<crate::shell::MenuAt>,
     /// What the open element dialog holds, taken over when the project is saved or closed.
     dialog: Option<dialog::Pending>,
     /// Where a selection extended with Shift began; that end stays put.
@@ -176,7 +185,10 @@ impl NsdView {
             raster: None,
             rasterizing: false,
             area: Rc::default(),
+            clear: Rc::default(),
+            home_pending: true,
             drag: None,
+            menu_at: None,
             dialog: None,
             anchor: None,
             focus: cx.focus_handle(),
@@ -360,9 +372,18 @@ impl NsdView {
         cx.notify();
     }
 
+    /// The part of the area no floating panel covers, relative to the area.
+    fn clear_area(&self) -> Bounds<Pixels> {
+        crate::shell::clear_in(&self.clear, self.area.get())
+    }
+
     fn centre(&self) -> Point<Pixels> {
-        let area = self.area.get();
-        point(area.size.width / 2.0, area.size.height / 2.0)
+        self.clear_area().center()
+    }
+
+    /// The pan at 100 %: the diagram a margin into the clear area.
+    fn home(&self) -> Point<Pixels> {
+        self.clear_area().origin + point(px(MARGIN), px(MARGIN))
     }
 
     /// Zooms about the middle of the area; the main window's zoom commands end up here too.
@@ -380,7 +401,7 @@ impl NsdView {
 
     pub fn reset_zoom(&mut self, cx: &mut Context<Self>) {
         self.zoom = 1.0;
-        self.pan = point(px(MARGIN), px(MARGIN));
+        self.pan = self.home();
         cx.notify();
     }
 
@@ -393,14 +414,16 @@ impl NsdView {
     }
 
     pub fn zoom_to_fit(&mut self, cx: &mut Context<Self>) {
-        let area = self.area.get().size;
+        let clear = self.clear_area();
+        let area = clear.size;
         let fit_w = (f32::from(area.width) - 2.0 * MARGIN) / self.size.0;
         let fit_h = (f32::from(area.height) - 2.0 * MARGIN) / self.size.1;
         self.zoom = fit_w.min(fit_h).clamp(MIN_ZOOM, MAX_ZOOM);
-        self.pan = point(
-            (area.width - px(self.size.0 * self.zoom)) / 2.0,
-            (area.height - px(self.size.1 * self.zoom)) / 2.0,
-        );
+        self.pan = clear.origin
+            + point(
+                (area.width - px(self.size.0 * self.zoom)) / 2.0,
+                (area.height - px(self.size.1 * self.zoom)) / 2.0,
+            );
         cx.notify();
     }
 
@@ -414,6 +437,15 @@ impl NsdView {
         } else {
             self.pan = point(self.pan.x + delta.x, self.pan.y + delta.y);
             cx.notify();
+        }
+    }
+
+    /// Two fingers spread or pinched on a touchpad zoom about the point between them.
+    fn on_pinch(&mut self, ev: &PinchEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if ev.delta != 0.0 {
+            let origin = self.area.get().origin;
+            let anchor = point(ev.position.x - origin.x, ev.position.y - origin.y);
+            self.set_zoom(self.zoom * (1.0 + ev.delta).clamp(0.5, 2.0), anchor, cx);
         }
     }
 
@@ -482,11 +514,24 @@ impl NsdView {
         self.select(selection, cx);
     }
 
-    /// A right click selects what it hits, unless that is selected already, so that the
-    /// context menu acts on it.
+    /// The right button pans while it is held and moved; released where it was pressed, it
+    /// opens the context menu (`on_right_up`).
     fn on_right_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
-        let (x, y) = self.to_diagram(ev.position);
+        self.drag = Some(Drag::RightPan { start: ev.position, pan: self.pan, panning: false });
+    }
+
+    fn on_right_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(Drag::RightPan { start, panning: false, .. }) = self.drag.take() {
+            self.open_context_menu(start, cx);
+        }
+        cx.notify();
+    }
+
+    /// A right click selects what it hits, unless that is selected already, so that the
+    /// context menu acts on it, and opens the menu at `position`.
+    fn open_context_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let (x, y) = self.to_diagram(position);
         let hit = self.layout.hit(x, y).unwrap_or_default();
         let inside = match (&self.selection, &hit) {
             (Selection::Elements(span), Selection::Elements(h)) => span.covers(&h.first()),
@@ -495,6 +540,36 @@ impl NsdView {
         if !inside {
             self.select(hit, cx);
         }
+        self.menu_at = Some(crate::shell::MenuAt::new(position));
+    }
+
+    /// The context menu while it is open, built when it opens (`context_menu`).
+    fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let at = self.menu_at.as_mut()?;
+        if at.menu.is_none() && !at.building {
+            // Built after the frame: the builder reads the view, which is being updated now.
+            at.building = true;
+            let owner = cx.entity();
+            window.defer(cx, move |window, cx| {
+                let builder = owner.clone();
+                let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
+                    Self::context_menu(&builder, menu, window, cx)
+                });
+                owner.update(cx, |this, cx| {
+                    let Some(at) = this.menu_at.as_mut() else { return };
+                    let subscription =
+                        cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, window, cx| {
+                            this.menu_at = None;
+                            window.focus(&this.focus, cx);
+                            cx.notify();
+                        });
+                    menu.focus_handle(cx).focus(window, cx);
+                    at.menu = Some((menu, subscription));
+                    cx.notify();
+                });
+            });
+        }
+        at.overlay()
     }
 
     fn on_middle_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -515,6 +590,15 @@ impl NsdView {
             Some(Drag::Pan { start, pan }) => {
                 self.pan = point(pan.x + ev.position.x - start.x, pan.y + ev.position.y - start.y);
                 cx.notify();
+            }
+            Some(Drag::RightPan { start, pan, panning }) => {
+                let moved = ev.position - *start;
+                // A hand that shakes a little while clicking does not pan yet.
+                *panning |= f32::from(moved.x.abs().max(moved.y.abs())) >= DRAG_START;
+                if *panning {
+                    self.pan = point(pan.x + moved.x, pan.y + moved.y);
+                    cx.notify();
+                }
             }
             Some(Drag::Elements { span, start, moving, slot, .. }) => {
                 let moved = ev.position - *start;
@@ -1181,18 +1265,18 @@ fn rasterize(tree: &usvg::Tree, scale: f32) -> Option<(Arc<RenderImage>, (u32, u
 }
 
 impl Render for NsdView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity();
-        let menu_owner = cx.entity();
+        let context_menu = self.open_menu(window, cx);
         let area = self.area.clone();
         let surround = cx.theme().muted;
         let accent = cx.theme().blue;
-        // The view fills a card of the main window: its backgrounds keep inside the card's
-        // rounded corners (inside its 1 px border), as the diagram canvas does.
-        let corner = crate::shell::RADIUS - px(1.0);
+        if self.home_pending && self.clear.get().is_some() && !self.area.get().is_empty() {
+            self.home_pending = false;
+            self.pan = self.home();
+        }
         v_flex()
             .size_full()
-            .rounded(corner)
             .bg(cx.theme().background)
             .track_focus(&self.focus)
             .key_context("NsdView")
@@ -1228,14 +1312,15 @@ impl Render for NsdView {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .rounded(corner)
                     .bg(surround)
                     .on_scroll(cx.listener(Self::on_scroll))
+                    .on_pinch(cx.listener(Self::on_pinch))
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
                     .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_down))
                     .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
                     .on_mouse_move(cx.listener(Self::on_mouse_move))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_up(MouseButton::Right, cx.listener(Self::on_right_up))
                     .on_mouse_up(
                         MouseButton::Middle,
                         cx.listener(|this, _: &MouseUpEvent, _, _| this.drag = None),
@@ -1296,12 +1381,10 @@ impl Render for NsdView {
                             },
                         )
                         .size_full(),
-                    )
-                    .context_menu(move |menu, window, cx| {
-                        Self::context_menu(&menu_owner, menu, window, cx)
-                    }),
+                    ),
             )
             .children(self.notes_bar(cx))
+            .children(context_menu)
     }
 }
 

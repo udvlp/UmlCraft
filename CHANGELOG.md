@@ -5,6 +5,18 @@ today.
 
 ## Unreleased
 
+- **The diagram fills the window**: ribbon, model tree, properties and zoom float over the
+  diagram as light grey cards, so the diagram uses the whole window. Drag a card's inner edge
+  to make it wider or narrower. Zoom to fit, 100 % and paste use the part of the diagram the
+  cards leave free.
+- **A calmer ribbon**: larger icons and labels, more room between buttons, short lines
+  between groups, and the open tab and the selected tool in a pale blue.
+- **Pan with the right button, zoom with two fingers**: holding the right button and moving
+  the mouse pans diagrams and structograms; the context menu opens when the button is
+  released without moving. Spreading or pinching two fingers on a touchpad zooms.
+- **No status line**: errors and notices appear as toasts at the bottom right; opening,
+  importing and exporting show what is running above the zoom.
+- **New projects start empty**: no class diagram of their own, on the Home tab.
 - **What a class box shows of its members**: per box, the properties can hide stereotypes,
   the members' visibility, attribute types, initial values, parameters, parameter types,
   return types and the stereotypes of attributes and operations, choose which parameter

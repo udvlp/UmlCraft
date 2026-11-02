@@ -372,10 +372,6 @@ visibility:
   package: package
   private: private
 status:
-  modified: Modified
-  saved: Unchanged
-  selected: selected
-  unsaved_file: Not saved
   exporting: Exporting to .asta …
   importing: Importing source code …
   importing_astah: Importing the .asta project …
@@ -384,10 +380,6 @@ status:
   cancel: Cancel
   imported: "Imported %{files} files: %{created} new types, %{updated} updated, %{associations} associations."
   imported_structograms: "%{count} structograms made or renewed."
-  hint: "Wheel: scroll · Ctrl+wheel: zoom · middle button: pan"
-  hint_node: "Click to place the element · Esc: cancel"
-  hint_edge: "Drag from source to target or click both · Esc: cancel"
-  hint_line: "Drag from start to end · Esc: cancel"
 canvas:
   no_diagram: No diagram open. Double-click one or use the model tree's context menu.
   handle_connect: Drag to draw a line to another element

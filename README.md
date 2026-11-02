@@ -112,9 +112,15 @@ whole CPython standard library imports in one go.
 The window has its own title bar (File menu, Save, Undo, Redo, About, Settings) and a ribbon
 with the tabs Home (clipboard, delete, align, line style, layout), the open diagram's kind (its tools; for a
 structogram its elements and the `.nsd` export), View
-(zoom, theme, language) and Tools (source import, exchange with `.asta` files, images). Model
-tree, diagram and properties are cards beside each other. A double click on a ribbon tab folds
-the ribbon to its tabs; in a narrow window its buttons show icons only.
+(zoom, theme, language) and Tools (source import, exchange with `.asta` files, images). The
+diagram fills the window; ribbon, model tree and properties float over it as cards whose
+inner edge can be dragged to resize them. A double click on a ribbon tab folds
+the ribbon to its tabs; in a narrow window its buttons show icons only. Errors and notices
+show as toasts at the bottom right. A new project starts empty, without a diagram.
+
+The wheel scrolls the diagram, Ctrl+wheel and two fingers on a touchpad zoom, and the middle
+or the right button held down pans it; the right button released without moving opens the
+context menu.
 
 Inline editing by double-click with a parser for `+ name : Type [0..*] = init` and
 `+ op(p : T) : R`; a properties panel for everything else. A double click below the members of

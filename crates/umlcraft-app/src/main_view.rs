@@ -9,10 +9,11 @@ use std::sync::Arc;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tree::{TreeEvent, TreeItem, TreeState, tree};
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Sizable, StyledExt, Theme, ThemeMode, TitleBar, h_flex, h_resizable,
-    resizable_panel, v_flex,
+    ActiveTheme, Disableable, Sizable, StyledExt, Theme, ThemeMode, TitleBar, WindowExt, h_flex,
+    v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -20,7 +21,7 @@ use rust_i18n::t;
 use umlcraft_format::FILE_EXTENSION;
 use umlcraft_model::{DiagramKind, Document, ElementData, ElementKind, Id, Model};
 use umlcraft_notation::clipboard::Clip;
-use umlcraft_notation::palette::{NodeTool, Tool};
+use umlcraft_notation::palette::NodeTool;
 use umlcraft_notation::scene::{self, Alignment, Preview};
 use umlcraft_reverse::{Problem, SourceLanguage};
 
@@ -36,7 +37,7 @@ use crate::*;
 /// Something to do once the user has dealt with unsaved changes.
 type Continuation = Box<dyn FnOnce(&mut MainView, &mut Window, &mut Context<MainView>)>;
 
-/// Work running in the background, shown in the status bar.
+/// Work running in the background, shown over the diagram (`busy_card`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Busy {
     Opening,
@@ -98,8 +99,8 @@ pub struct MainView {
     /// Counts replaced documents, so background work can tell whether its document is still
     /// the open one.
     generation: u64,
-    /// A message for the status bar, shown while the document stays at the given revision.
-    notice: Option<(String, u64)>,
+    /// Takes commands while no diagram is shown and the canvas is not drawn.
+    focus: FocusHandle,
     ribbon_tab: RibbonTab,
     /// The diagram the ribbon last saw active; opening another one shows its tools.
     ribbon_diagram: Option<Id>,
@@ -107,6 +108,11 @@ pub struct MainView {
     ribbon_unfolded_by_click: bool,
     /// Pixels a touchpad scrolled over the ribbon that did not yet make a tab.
     ribbon_wheel: f32,
+    /// What the floating panels leave free of the diagram, for the diagram views.
+    clear: shell::ClearArea,
+    /// The widths of the model tree and the properties while they float.
+    tree_width: Pixels,
+    properties_width: Pixels,
     /// The views of the structograms opened so far, kept while they exist.
     structograms: HashMap<Id, Entity<NsdView>>,
     /// What the import of a structogram from code could not show, for its view.
@@ -132,11 +138,11 @@ impl MainView {
                 .with_measure(AppMeasure::new(cx, display))
                 .with_keywords(keywords)
         });
+        let clear = shell::ClearArea::default();
         let canvas = cx.new(|cx| {
             let mut canvas = DiagramCanvas::new(workspace.clone(), cx);
             canvas.display = display;
-            // Inside the card's 1 px border.
-            canvas.corner_radius = f32::from(shell::RADIUS) - 1.0;
+            canvas.clear = clear.clone();
             canvas
         });
         let properties = cx.new(|cx| PropertiesPanel::new(workspace.clone(), window, cx));
@@ -144,6 +150,13 @@ impl MainView {
         install_menus(&settings, cx);
 
         let subscriptions = vec![
+            // What went wrong in an edit shows as a toast, once; the next failure, even the
+            // same one, shows again.
+            cx.observe_in(&workspace, window, |_, workspace, window, cx| {
+                if let Some(message) = workspace.update(cx, |ws, _| ws.message.take()) {
+                    toast(Notification::error(message), window, cx);
+                }
+            }),
             cx.subscribe(&tree, |this, _, event: &TreeEvent, _| match event {
                 TreeEvent::Expanded(id) => {
                     this.collapsed.remove(id);
@@ -192,13 +205,16 @@ impl MainView {
             busy: None,
             cancel_export: None,
             generation: 0,
-            notice: None,
             clipboard: None,
             paste_count: 0,
+            focus: cx.focus_handle(),
             ribbon_tab: RibbonTab::Home,
             ribbon_diagram: None,
             ribbon_unfolded_by_click: false,
             ribbon_wheel: 0.0,
+            clear,
+            tree_width: TREE_WIDTH,
+            properties_width: PROPERTIES_WIDTH,
             structograms: HashMap::new(),
             structogram_notes: HashMap::new(),
             shown: None,
@@ -208,8 +224,7 @@ impl MainView {
             _subscriptions: subscriptions,
         };
         if !crate::canvas::choose_diagram_font(cx) {
-            let revision = view.workspace.read(cx).doc.revision();
-            view.notice = Some((t!("status.no_diagram_font").to_string(), revision));
+            toast(Notification::warning(t!("status.no_diagram_font").to_string()), window, cx);
         }
         view.sync_from_workspace(window, cx);
         view.check_for_update(false, window, cx);
@@ -277,7 +292,12 @@ impl MainView {
         {
             let notes = self.structogram_notes.remove(&id).unwrap_or_default();
             let workspace = self.workspace.clone();
-            let view = cx.new(|cx| NsdView::new(workspace, id, notes, cx));
+            let clear = self.clear.clone();
+            let view = cx.new(|cx| {
+                let mut view = NsdView::new(workspace, id, notes, cx);
+                view.clear = clear;
+                view
+            });
             self.structograms.insert(id, view);
         }
         if active != self.shown {
@@ -294,8 +314,12 @@ impl MainView {
     }
 
     /// Where commands from the ribbon, the menus and shortcuts go: the structogram shown, else
-    /// the canvas.
+    /// the canvas, and with no diagram shown this view itself (the canvas is not drawn then,
+    /// and an action sent to it reaches nobody).
     fn view_focus(&self, cx: &App) -> FocusHandle {
+        if self.workspace.read(cx).active_diagram.is_none() {
+            return self.focus.clone();
+        }
         match self.active_structogram(cx) {
             Some(view) => view.focus_handle(cx),
             None => self.canvas.focus_handle(cx),
@@ -433,10 +457,11 @@ impl MainView {
         self.collapsed.clear();
         self.tree_revision = None;
         self.generation += 1;
-        // Neither belongs to the new document: a notice keyed by revision would come back, and
-        // what was copied refers to elements that are gone.
-        self.notice = None;
+        // What was copied refers to elements that are gone.
         self.clipboard = None;
+        // A project starts on Home; one with a diagram shown moves on to that diagram's tab.
+        self.ribbon_tab = RibbonTab::Home;
+        self.ribbon_diagram = None;
         self.structograms.clear();
         self.structogram_notes.clear();
     }
@@ -989,9 +1014,7 @@ impl MainView {
             summary.push_str(&t!("status.imported_structograms", count = structograms));
         }
         if !report.has_problems() {
-            let revision = self.workspace.read(cx).doc.revision();
-            self.notice = Some((summary, revision));
-            cx.notify();
+            toast(Notification::success(summary), window, cx);
             return;
         }
         let name = |path: &Path| {
@@ -1464,12 +1487,7 @@ impl MainView {
         let collapsed = self.settings.ribbon_collapsed;
         let focus = self.view_focus(cx);
         let order: Vec<RibbonTab> = tabs.iter().map(|(t, _)| *t).collect();
-        h_flex()
-            .id("ribbon-area")
-            .items_stretch()
-            .gap(shell::GAP)
-            .px(shell::GAP)
-            .pt(shell::GAP)
+        let card = ribbon::render(&tabs, active, &groups, compact, collapsed, &focus, cx)
             // As in Word: the wheel over the ribbon steps through its tabs, down to the right.
             .on_scroll(cx.listener(move |this, event: &ScrollEvent, window, cx| {
                 if collapsed || !window.is_window_active() {
@@ -1495,8 +1513,8 @@ impl MainView {
                     cx.notify();
                 }
                 cx.stop_propagation();
-            }))
-            .child(ribbon::render(&tabs, active, &groups, compact, collapsed, &focus, cx))
+            }));
+        h_flex().items_stretch().gap(shell::GAP).px(shell::GAP).pt(shell::GAP).child(card)
     }
 
     pub fn settings(&self) -> &Settings {
@@ -1734,8 +1752,8 @@ impl MainView {
         let structogram = self.active_structogram(cx).is_some();
         let muted = cx.theme().muted_foreground;
         let divider = || div().w(px(1.0)).h(px(16.0)).mx_1().bg(cx.theme().border);
-        // On the window's backdrop, like the cards, with no line of its own.
-        TitleBar::new().bg(transparent_black()).border_b_0().child(
+        // A grey strip of its own above the diagram, with no line.
+        TitleBar::new().bg(shell::title_bar_background(cx)).border_b_0().child(
             h_flex()
                 .flex_1()
                 .gap_1()
@@ -1927,40 +1945,33 @@ impl MainView {
         )
     }
 
+    /// The zoom of the diagram or structogram shown, if one is shown.
+    fn shown_zoom(&self, cx: &App) -> Option<f32> {
+        self.workspace.read(cx).active_diagram?;
+        Some(match self.active_structogram(cx) {
+            Some(view) => view.read(cx).zoom(),
+            None => self.canvas.read(cx).zoom(),
+        })
+    }
+
+    /// The diagram or structogram shown; the zoom over it is the main view's.
     fn diagram_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.read(cx);
         let structogram = self.active_structogram(cx);
         let body = if ws.active_diagram.is_some() {
-            let zoom = match &structogram {
-                Some(view) => view.read(cx).zoom(),
-                None => self.canvas.read(cx).zoom(),
-            };
             let content = match structogram {
                 Some(view) => view.into_any_element(),
                 None => self.canvas.clone().into_any_element(),
             };
-            div()
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .child(content)
-                .child(
-                    div()
-                        .absolute()
-                        .bottom_3()
-                        .left_0()
-                        .right_0()
-                        .flex()
-                        .justify_center()
-                        .child(self.zoom_pill(zoom, cx)),
-                )
-                .into_any_element()
+            div().relative().flex_1().min_h_0().child(content).into_any_element()
         } else {
+            // The same white as a diagram's, under the floating panels.
             div()
                 .flex_1()
                 .flex()
                 .items_center()
                 .justify_center()
+                .bg(cx.theme().background)
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(t!("canvas.no_diagram").to_string())
@@ -1996,7 +2007,7 @@ impl MainView {
     /// Zoom out, the zoom (resets it), zoom in and zoom to fit, floating over the canvas.
     fn zoom_pill(&self, zoom: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let zoom = (zoom * 100.0).round();
-        shell::card(cx)
+        shell::floating_card(cx)
             .rounded_full()
             .flex()
             .items_center()
@@ -2031,58 +2042,39 @@ impl MainView {
             ))
     }
 
-    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let ws = self.workspace.read(cx);
-        let state = if ws.doc.is_dirty() { t!("status.modified") } else { t!("status.saved") };
-        let selection = match ws.selection.len() {
-            0 => String::new(),
-            n => format!("{n} {}", t!("status.selected")),
+    /// While a file is opened, imported or exported: what is happening, floating over the
+    /// diagram above the zoom; an export to Astah can be cancelled there.
+    fn busy_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text = match self.busy? {
+            Busy::Opening => t!("status.opening"),
+            Busy::ExportingAstah => t!("status.exporting"),
+            Busy::ImportingSource => t!("status.importing"),
+            Busy::ImportingAstah => t!("status.importing_astah"),
         };
-        let notice = self.notice.as_ref().filter(|(_, r)| *r == ws.doc.revision());
-        let right = match &ws.message {
-            _ if self.busy == Some(Busy::Opening) => div().child(t!("status.opening").to_string()),
-            _ if self.busy == Some(Busy::ExportingAstah) => {
-                let cancel = self.cancel_export.clone();
-                h_flex().gap_2().child(t!("status.exporting").to_string()).child(
-                    Button::new("cancel-export")
-                        .ghost()
-                        .xsmall()
-                        .label(t!("status.cancel").to_string())
-                        .on_click(move |_, _, _| {
-                            if let Some(cancel) = &cancel {
-                                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                            }
-                        }),
-                )
-            }
-            _ if self.busy == Some(Busy::ImportingSource) => {
-                div().child(t!("status.importing").to_string())
-            }
-            _ if self.busy == Some(Busy::ImportingAstah) => {
-                div().child(t!("status.importing_astah").to_string())
-            }
-            Some(message) => div().text_color(cx.theme().danger).child(message.clone()),
-            None if notice.is_some() => {
-                div().child(notice.map(|(n, _)| n.clone()).unwrap_or_default())
-            }
-            None => div().child(match ws.tool {
-                Tool::Select => t!("status.hint").to_string(),
-                Tool::Node(_) | Tool::Text => t!("status.hint_node").to_string(),
-                Tool::Line => t!("status.hint_line").to_string(),
-                Tool::Edge(_) => t!("status.hint_edge").to_string(),
-            }),
-        };
-        h_flex()
-            .gap_4()
-            .px(shell::GAP + px(4.0))
-            .pb_1()
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .child(ws.file_name().unwrap_or_else(|| t!("status.unsaved_file").to_string()))
-            .child(state.to_string())
-            .child(selection)
-            .child(div().flex_1())
-            .child(right)
+        let cancel = (self.busy == Some(Busy::ExportingAstah)).then(|| {
+            let cancel = self.cancel_export.clone();
+            Button::new("cancel-export")
+                .ghost()
+                .xsmall()
+                .label(t!("status.cancel").to_string())
+                .on_click(move |_, _, _| {
+                    if let Some(cancel) = &cancel {
+                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                })
+        });
+        Some(
+            shell::floating_card(cx)
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1p5()
+                .text_sm()
+                .child(text.to_string())
+                .children(cancel)
+                .into_any_element(),
+        )
     }
 }
 
@@ -2179,14 +2171,9 @@ fn tree_item(
         .children(children)
 }
 
-/// One of the three panels as a card, inset from the panel's edges so that the cards keep a gap
-/// between them where the split handles are.
-fn panel_card(content: impl IntoElement, cx: &App) -> impl IntoElement {
-    div()
-        .size_full()
-        .px(shell::GAP / 2.0)
-        .child(shell::card(cx).size_full().overflow_hidden().child(content))
-}
+/// The widths the model tree and the properties start with.
+const TREE_WIDTH: Pixels = px(260.0);
+const PROPERTIES_WIDTH: Pixels = px(300.0);
 
 /// A card's heading: an optional icon, the title and, muted, a detail such as a count.
 fn panel_header(
@@ -2387,17 +2374,9 @@ fn file_menu(
     item(menu, "menu.quit", Box::new(Quit))
 }
 
-/// A new project with one empty class diagram.
+/// A new project: only the model, no diagram yet.
 fn blank_document() -> Document {
-    let mut doc = Document::new(Model::new(t!("project.untitled").to_string()));
-    let root = doc.model().root();
-    let name = format!("{}1", crate::workspace::name_base("diagram.class", true));
-    doc.edit("", |tx| {
-        tx.create(root, ElementData::new(name, ElementKind::diagram(DiagramKind::Class)))
-    })
-    .expect("a model can always own a class diagram");
-    doc.clear_history();
-    doc
+    Document::new(Model::new(t!("project.untitled").to_string()))
 }
 
 fn with_project_extension(path: PathBuf) -> PathBuf {
@@ -2475,21 +2454,83 @@ pub(crate) fn documents_dir() -> Option<PathBuf> {
 impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Actions start at the focused element; with nothing focused (at start, or after a
-        // menu or dialog closed) the toolbar and shortcuts would not reach this view.
-        if window.focused(cx).is_none() {
-            self.view_focus(cx).focus(window, cx);
+        // menu or dialog closed) the toolbar and shortcuts would not reach this view. Held by
+        // this view while no diagram was shown, the focus goes to a diagram once one shows.
+        let view_focus = self.view_focus(cx);
+        if window.focused(cx).is_none()
+            || (self.focus.is_focused(window) && view_focus != self.focus)
+        {
+            view_focus.focus(window, cx);
         }
         let backdrop = shell::backdrop(cx);
         let model_browser = self.model_browser(cx).into_any_element();
         let diagram_area = self.diagram_area(cx).into_any_element();
         let properties_area = self.properties_area(cx).into_any_element();
         let ribbon = self.ribbon(window, cx).into_any_element();
+        // The diagram fills the window below the title bar; ribbon, tree and properties float
+        // over it, and so do the zoom and what is running in the room between.
+        let busy = self.busy_card(cx);
+        let pill = self.shown_zoom(cx).map(|zoom| self.zoom_pill(zoom, cx));
+        let bottom = v_flex()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .items_center()
+            .gap_2()
+            .children(busy)
+            .children(pill);
+        let clear =
+            div().relative().flex_1().min_w_0().child(measure(self.clear.clone())).child(bottom);
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(div().absolute().inset_0().child(diagram_area))
+            .child(
+                v_flex().absolute().inset_0().child(ribbon).child(
+                    h_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .items_stretch()
+                        .gap(shell::GAP)
+                        .p(shell::GAP)
+                        .child(floating_panel(
+                            model_browser,
+                            self.tree_width,
+                            PanelResize::Tree,
+                            cx,
+                        ))
+                        .child(clear)
+                        .child(floating_panel(
+                            properties_area,
+                            self.properties_width,
+                            PanelResize::Properties,
+                            cx,
+                        )),
+                ),
+            )
+            .on_drag_move(cx.listener(|this, e: &DragMoveEvent<PanelResize>, window, cx| {
+                let x = e.event.position.x;
+                let window_width = window.viewport_size().width;
+                match e.drag(cx) {
+                    PanelResize::Tree => {
+                        this.tree_width = (x - shell::GAP * 1.5).clamp(px(160.0), px(520.0));
+                    }
+                    PanelResize::Properties => {
+                        this.properties_width =
+                            (window_width - x - shell::GAP * 1.5).clamp(px(180.0), px(560.0));
+                    }
+                }
+                cx.notify();
+            }));
         let theme = cx.theme();
         let canvas = self.canvas.clone();
         let (c1, c2, c3, c4) = (canvas.clone(), canvas.clone(), canvas.clone(), canvas.clone());
         v_flex()
             .id("main")
             .key_context("UmlCraft")
+            .track_focus(&self.focus)
             .size_full()
             .bg(backdrop)
             .text_color(theme.foreground)
@@ -2602,27 +2643,73 @@ impl Render for MainView {
             }))
             .child(self.title_bar(cx))
             .children(self.update_question(cx))
-            .child(ribbon)
-            .child(
-                div().flex_1().min_h_0().px(shell::GAP / 2.0).py(shell::GAP).child(
-                    h_resizable("main-split")
-                        .child(
-                            resizable_panel()
-                                .size(px(260.0))
-                                .size_range(px(160.0)..px(520.0))
-                                .child(panel_card(model_browser, cx)),
-                        )
-                        .child(resizable_panel().child(panel_card(diagram_area, cx)))
-                        .child(
-                            resizable_panel()
-                                .size(px(300.0))
-                                .size_range(px(180.0)..px(560.0))
-                                .child(panel_card(properties_area, cx)),
-                        ),
-                ),
-            )
-            .child(self.status_bar(cx))
+            .child(body)
     }
+}
+
+/// Shows `note` as a toast at the bottom right. Deferred, so that it also works while the
+/// window is being built and from inside observers.
+fn toast(note: Notification, window: &mut Window, cx: &mut Context<MainView>) {
+    let note = note.placement(Anchor::BottomRight);
+    cx.defer_in(window, move |_, window, cx| window.push_notification(note, cx));
+}
+
+/// The floating panel whose inner edge is being dragged.
+#[derive(Clone, Copy)]
+enum PanelResize {
+    Tree,
+    Properties,
+}
+
+impl Render for PanelResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
+/// Writes where it is laid out to `clear`; if that moved, the views draw once more with it.
+fn measure(clear: shell::ClearArea) -> impl IntoElement {
+    canvas(
+        move |bounds, window, _| {
+            if clear.replace(Some(bounds)) != Some(bounds) {
+                window.request_animation_frame();
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .size_full()
+}
+
+/// A floating panel of width `width` with a grip in the gap at its inner edge.
+fn floating_panel(
+    content: AnyElement,
+    width: Pixels,
+    side: PanelResize,
+    cx: &App,
+) -> impl IntoElement {
+    let grip = div()
+        .id(match side {
+            PanelResize::Tree => "tree-grip",
+            PanelResize::Properties => "properties-grip",
+        })
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .w(shell::GAP)
+        .occlude()
+        .cursor_col_resize()
+        .on_drag(side, |side, _, _, cx| cx.new(|_| *side));
+    let grip = match side {
+        PanelResize::Tree => grip.right(-shell::GAP),
+        PanelResize::Properties => grip.left(-shell::GAP),
+    };
+    div()
+        .relative()
+        .flex_none()
+        .w(width)
+        .child(shell::floating_card(cx).size_full().overflow_hidden().child(content))
+        .child(grip)
 }
 
 #[cfg(test)]

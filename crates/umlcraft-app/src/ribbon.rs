@@ -570,10 +570,12 @@ fn tools() -> Vec<Group> {
 
 // ----- Width --------------------------------------------------------------------------------
 
-const CHAR: f32 = 6.5;
-const LARGE_MIN: f32 = 52.0;
-const SMALL_ICON: f32 = 28.0;
-const GROUP_PADDING: f32 = 18.0;
+/// About the mean width of a character of a button's label ([`LABEL`]).
+const CHAR: f32 = 7.0;
+const LARGE_MIN: f32 = 56.0;
+const SMALL_ICON: f32 = 34.0;
+/// A group's padding on both sides and the line after it.
+const GROUP_PADDING: f32 = 25.0;
 const CARET: f32 = 14.0;
 
 fn label_width(label: &str) -> f32 {
@@ -610,7 +612,7 @@ pub fn width(groups: &[Group]) -> f32 {
                         let (first, second) = label_lines(&item.label);
                         let caret = if item.menu.is_empty() { 0.0 } else { CARET };
                         let label = label_width(first).max(label_width(second) + caret);
-                        width += (label + 16.0).max(LARGE_MIN);
+                        width += (label + 20.0).max(LARGE_MIN);
                     }
                     Size::Small | Size::Icon => {
                         let w = match item.size {
@@ -633,13 +635,31 @@ pub fn width(groups: &[Group]) -> f32 {
 // ----- Drawing ------------------------------------------------------------------------------
 
 /// Room for a large button: its icon and two lines of label.
-const HEIGHT: Pixels = px(76.0);
+const HEIGHT: Pixels = px(84.0);
 /// The tab strip.
-const STRIP: Pixels = px(34.0);
+const STRIP: Pixels = px(40.0);
+/// The size of the buttons' labels, between the tabs' and the captions'.
+const LABEL: Pixels = px(13.0);
 /// A line of a large button's label.
-const LABEL_LINE: Pixels = px(15.0);
+const LABEL_LINE: Pixels = px(16.0);
 /// The lower part of a split button, with the label.
-const SPLIT_LOWER: Pixels = px(34.0);
+const SPLIT_LOWER: Pixels = px(36.0);
+/// A large button's icon; with icons only, a smaller one.
+const LARGE_ICON: Pixels = px(28.0);
+const COMPACT_ICON: Pixels = px(22.0);
+/// A small button's icon.
+const SMALL_ICON_SIZE: Pixels = px(20.0);
+
+/// Background and text of the open tab and of a selected button: navy on a pale blue in the
+/// light theme, pale blue on a dark blue in the dark one (the theme's own blue is too loud).
+fn selected_colors(cx: &App) -> (Hsla, Hsla) {
+    let hue = 213.0 / 360.0;
+    if cx.theme().is_dark() {
+        (hsla(hue, 0.45, 0.27, 1.0), hsla(hue, 0.85, 0.86, 1.0))
+    } else {
+        (hsla(hue, 0.80, 0.91, 1.0), hsla(hue, 0.62, 0.30, 1.0))
+    }
+}
 
 /// Sends `action` to the view shown (`focus`), wherever the keyboard focus is, as the menus do:
 /// after a click in the tree a structogram's commands still reach the structogram.
@@ -700,7 +720,7 @@ fn group_menu(
 }
 
 fn large_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> AnyElement {
-    let icon = shell::icon(item.icon.clone()).size(px(if compact { 20.0 } else { 24.0 }));
+    let icon = shell::icon(item.icon.clone()).size(if compact { COMPACT_ICON } else { LARGE_ICON });
     let menu: Entries = Rc::new(item.menu.clone());
     let caret = (!menu.is_empty())
         .then(|| Icon::new(IconName::ChevronDown).size_3().text_color(cx.theme().muted_foreground));
@@ -712,19 +732,21 @@ fn large_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> An
         let (first, second) = label_lines(&item.label);
         v_flex()
             .items_center()
-            .text_xs()
+            .text_size(LABEL)
             .line_height(LABEL_LINE)
             .child(div().h(LABEL_LINE).child(first.to_string()))
             .child(h_flex().h(LABEL_LINE).gap_0p5().child(second.to_string()).children(caret))
     };
     let content = |label: Div| v_flex().items_center().gap_1().child(icon.clone()).child(label);
+    let (selected_bg, selected_text) = selected_colors(cx);
     let base = |id: SharedString| {
         Button::new(id)
             .ghost()
-            .min_w(px(if compact { 36.0 } else { LARGE_MIN }))
-            .px_1()
+            .min_w(px(if compact { 38.0 } else { LARGE_MIN }))
+            .px_1p5()
             .disabled(!item.enabled)
             .selected(item.selected)
+            .when(item.selected, |b| b.bg(selected_bg).text_color(selected_text))
             .tooltip(item.tooltip.clone().unwrap_or_else(|| item.label.clone()))
     };
     match &item.action {
@@ -756,17 +778,27 @@ fn large_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> An
     }
 }
 
-fn small_button(item: &Item, compact: bool, focus: &FocusHandle) -> AnyElement {
+fn small_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> AnyElement {
     let label = item.size == Size::Small && !compact;
+    let (selected_bg, selected_text) = selected_colors(cx);
     let button = Button::new(item.id.clone())
         .ghost()
         .xsmall()
-        .h(px(20.0))
-        .icon(shell::icon(item.icon.clone()).size_4())
-        .when(label, |this| this.label(item.label.clone()))
+        .h(px(24.0))
+        .px_1p5()
+        .text_size(LABEL)
+        // The icon as large as fits the row of 24 px, for the fine UML line ends. A child, not
+        // `Button::icon`, which sizes it after the button.
+        .child(
+            h_flex()
+                .gap_1p5()
+                .child(shell::icon(item.icon.clone()).size(SMALL_ICON_SIZE))
+                .when(label, |this| this.child(item.label.clone())),
+        )
         .tooltip(item.tooltip.clone().unwrap_or_else(|| item.label.clone()))
         .disabled(!item.enabled)
-        .selected(item.selected);
+        .selected(item.selected)
+        .when(item.selected, |b| b.bg(selected_bg).text_color(selected_text));
     match &item.action {
         Some(action) => button.on_click(dispatch(action.as_ref(), focus)).into_any_element(),
         None => {
@@ -780,7 +812,7 @@ fn small_button(item: &Item, compact: bool, focus: &FocusHandle) -> AnyElement {
 }
 
 fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> impl IntoElement {
-    let mut row = h_flex().gap_0p5().items_start().h(HEIGHT - px(8.0));
+    let mut row = h_flex().gap_1().items_start().h(HEIGHT - px(8.0));
     let mut column: Vec<AnyElement> = Vec::new();
     let flush = |row: Div, column: &mut Vec<AnyElement>| {
         if column.is_empty() {
@@ -804,7 +836,7 @@ fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> im
                 row = row.child(large_button(item, compact, focus, cx));
             }
             Size::Small | Size::Icon => {
-                column.push(small_button(item, compact, focus));
+                column.push(small_button(item, compact, focus, cx));
                 if column.len() == 3 {
                     row = flush(row, &mut column);
                 }
@@ -842,14 +874,7 @@ fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> im
         .text_color(cx.theme().muted_foreground)
         .dropdown_caret(true)
         .dropdown_menu(group_menu(Rc::new(entries), focus.clone()));
-    v_flex()
-        .flex_shrink_0()
-        .items_center()
-        .px_2()
-        .border_r_1()
-        .border_color(cx.theme().border)
-        .child(row)
-        .child(caption)
+    v_flex().flex_shrink_0().items_center().px_3().child(row).child(caption)
 }
 
 /// The ribbon card: the tab strip and, unless collapsed, the open tab's groups.
@@ -861,8 +886,9 @@ pub fn render(
     collapsed: bool,
     focus: &FocusHandle,
     cx: &App,
-) -> impl IntoElement {
+) -> Stateful<Div> {
     let theme = cx.theme();
+    let (tab_bg, tab_text) = selected_colors(cx);
     let strip =
         h_flex().h(STRIP).gap_1().px_2().pt_1().children(tabs.iter().map(|(tab, label)| {
             let tab = *tab;
@@ -874,7 +900,7 @@ pub fn render(
                 .rounded_md()
                 .text_sm()
                 .cursor_pointer()
-                .when(selected, |this| this.bg(theme.primary.opacity(0.12)))
+                .when(selected, |this| this.bg(tab_bg).text_color(tab_text))
                 .when(!selected, |this| this.hover(|s| s.bg(theme.secondary_hover)))
                 // Every tab is as wide as its label in bold, an invisible copy holding the
                 // place, so that selecting one does not shift the others.
@@ -905,15 +931,24 @@ pub fn render(
                     }
                 })
         }));
-    shell::card(cx).flex_1().min_w_0().overflow_hidden().child(strip).when(!collapsed, |this| {
-        this.child(
-            h_flex()
-                .px_1()
-                .py_1()
-                .items_start()
-                .children(groups.iter().map(|g| group_view(g, compact, focus, cx))),
-        )
-    })
+    // A short line between groups, from the buttons' top to the captions' bottom.
+    let line = || div().flex_none().w(px(1.0)).my_1().bg(theme.border);
+    let mut row = h_flex().px_1().pt_1().pb_0p5().items_stretch();
+    for (i, group) in groups.iter().enumerate() {
+        if i > 0 {
+            row = row.child(line());
+        }
+        row = row.child(group_view(group, compact, focus, cx));
+    }
+    // The card keeps the mouse from the diagram below, and with it from the elements around
+    // it: whoever handles the wheel over the ribbon attaches it to this card.
+    shell::floating_card(cx)
+        .id("ribbon")
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .child(strip)
+        .when(!collapsed, |this| this.child(row))
 }
 
 #[cfg(test)]

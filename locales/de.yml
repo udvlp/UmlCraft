@@ -372,10 +372,6 @@ visibility:
   package: Paket
   private: privat
 status:
-  modified: Geändert
-  saved: Unverändert
-  selected: ausgewählt
-  unsaved_file: Nicht gespeichert
   exporting: Export ins .asta-Format läuft …
   importing: Quellcode wird importiert …
   opening: Projekt wird geöffnet …
@@ -384,10 +380,6 @@ status:
   importing_astah: .asta-Projekt wird importiert …
   imported: "%{files} Dateien importiert: %{created} neue Typen, %{updated} aktualisiert, %{associations} Assoziationen."
   imported_structograms: "%{count} Struktogramme erstellt oder erneuert."
-  hint: "Mausrad: verschieben · Strg+Mausrad: zoomen · mittlere Taste: Ansicht ziehen"
-  hint_node: "Klicken, um das Element zu platzieren · Esc: abbrechen"
-  hint_edge: "Vom Quell- zum Zielelement ziehen oder nacheinander klicken · Esc: abbrechen"
-  hint_line: "Vom Anfang zum Ende ziehen · Esc: abbrechen"
 canvas:
   no_diagram: Kein Diagramm geöffnet. Doppelklick oder Kontextmenü im Modellbaum.
   handle_connect: Ziehen, um eine Linie zu einem anderen Element zu zeichnen

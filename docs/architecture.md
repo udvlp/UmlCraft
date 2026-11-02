@@ -95,15 +95,23 @@ that a diff shows which element changed.
   that was shown when the field got focus.
 - `main_view.rs` lays out the window and holds the file operations: the title bar (gpui-component's
   `TitleBar` with the File menu, save, undo and redo; the window draws its own title bar), the
-  ribbon above three cards for model tree, canvas and properties, and a status
-  line. The platform menu bar (`cx.set_menus`) stays for macOS.
+  ribbon, model tree and properties. The diagram view fills the window below the title bar and
+  the others float over it as cards; the empty middle between them is measured into a
+  `shell::ClearArea` that the diagram views use to zoom, center and paste. There is no status
+  line: `Workspace::message` (what went wrong in an edit) is taken by an observer and shown as
+  a toast (`toast`, gpui-component's notifications), and running work as a card above the zoom
+  (`busy_card`). The platform menu bar (`cx.set_menus`) stays for macOS.
+- The diagram views open their context menu themselves (`shell::MenuAt`) on releasing the
+  right button without moving; held and moved, it pans. gpui-component's `context_menu`
+  opens on the press and so cannot tell a click from a drag.
 - `ribbon.rs` describes the ribbon as data (tabs, groups, large and small buttons, each with an
   action) built on every render from a `ribbon::State` read once from the workspace, and draws
   it. The diagram tab holds the palette of the active diagram's kind, or for a structogram its
   elements and commands, and opens by itself when another diagram becomes active. Buttons send
   their action to the view shown (canvas or structogram), wherever the keyboard focus is. Where the estimated width does not fit, buttons drop their
   labels; a double click on a tab folds the ribbon (`ribbonCollapsed` in the settings).
-- `shell.rs` has the opaque backdrop the cards float on, the card style and icon buttons
+- `shell.rs` has the opaque backdrop the cards float on, the card styles (the floating one
+  over the diagram is light grey and catches the mouse with `occlude()`) and icon buttons
   (`in_title_bar` keeps a press on a title bar button from moving the window on Windows). A
   system backdrop (Mica, macOS blur) was tried and dropped: with a non-opaque window GPUI
   renders text without subpixel antialiasing, and on Windows its antialiased edges come out

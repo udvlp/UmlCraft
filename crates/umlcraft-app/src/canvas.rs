@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::prelude::FluentBuilder;
@@ -359,6 +359,13 @@ enum Drag {
     Pan {
         last: Point<Pixels>,
     },
+    /// The right button held since `start`: moving it pans, releasing it where it was pressed
+    /// opens the context menu there.
+    RightPan {
+        start: Point<Pixels>,
+        last: Point<Pixels>,
+        panning: bool,
+    },
     /// Drawing a free line from `start`.
     FreeLine {
         start: MPoint,
@@ -460,6 +467,10 @@ struct Offer {
     menu: Option<(Entity<PopupMenu>, Subscription)>,
 }
 
+/// How far the pointer may move with the right button down before it pans instead of
+/// opening the context menu on release.
+const RIGHT_PAN_SLOP: f32 = 4.0;
+
 pub struct DiagramCanvas {
     workspace: Entity<Workspace>,
     focus_handle: FocusHandle,
@@ -470,11 +481,17 @@ pub struct DiagramCanvas {
     viewports: HashMap<Id, (f32, MPoint)>,
     shown_diagram: Option<Id>,
     bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// What floating panels leave free of the canvas.
+    pub clear: crate::shell::ClearArea,
+    /// A diagram shown for the first time waits for the layout to know where its origin goes.
+    home_pending: bool,
     /// The scene as last painted; mouse handling works on what the user sees.
     scene: Rc<Scene>,
     drag: Option<Drag>,
     /// Where the last right click went, for the context menu.
     right_click: Option<MPoint>,
+    /// The context menu, from the release of a right click until it closes.
+    menu_at: Option<crate::shell::MenuAt>,
     /// The member row the last right click hit, for the context menu.
     right_member: Option<Id>,
     editing: Option<InlineEdit>,
@@ -487,9 +504,6 @@ pub struct DiagramCanvas {
     new_member_when_drawn: Option<(Id, Compartment)>,
     /// How the diagram is drawn beyond what it stores (settings).
     pub display: Display,
-    /// The corner radius of the card the canvas fills; background and grid keep inside the
-    /// corners.
-    pub corner_radius: f32,
     /// What the scene was built from: revision, diagram, display settings and locale. Without a
     /// drag the scene is only built again when one of them changes, not on every pan, zoom or
     /// caret blink.
@@ -633,16 +647,18 @@ impl DiagramCanvas {
             viewports: HashMap::new(),
             shown_diagram: None,
             bounds: Rc::new(Cell::new(Bounds::default())),
+            clear: Rc::default(),
+            home_pending: false,
             scene: Rc::new(Scene::empty()),
             drag: None,
             right_click: None,
+            menu_at: None,
             right_member: None,
             editing: None,
             edit_when_drawn: None,
             select_when_drawn: false,
             new_member_when_drawn: None,
             display: Display::default(),
-            corner_radius: 0.0,
             scene_key: None,
             hover: None,
             offer: None,
@@ -653,31 +669,45 @@ impl DiagramCanvas {
         self.zoom
     }
 
+    /// The part of the canvas no floating panel covers, relative to the canvas.
+    fn clear_area(&self) -> Bounds<Pixels> {
+        crate::shell::clear_in(&self.clear, self.bounds.get())
+    }
+
+    /// The pan at 100 %: the diagram's origin at the top left of the clear area.
+    fn home(&self) -> MPoint {
+        let origin = self.clear_area().origin;
+        MPoint::new(f32::from(origin.x), f32::from(origin.y))
+    }
+
     pub fn reset_zoom(&mut self, cx: &mut Context<Self>) {
         self.zoom = 1.0;
-        self.pan = MPoint::new(0.0, 0.0);
+        self.pan = self.home();
         cx.notify();
     }
 
-    /// Zooms by `factor`, keeping the canvas center fixed.
+    /// Zooms by `factor`, keeping the center of the clear area fixed.
     pub fn zoom_by(&mut self, factor: f32, cx: &mut Context<Self>) {
-        let b = self.bounds.get();
-        let center = point(b.size.width / 2.0, b.size.height / 2.0) + b.origin;
+        let center = self.clear_area().center() + self.bounds.get().origin;
         self.zoom_at(center, factor);
         cx.notify();
     }
 
-    /// Fits the whole diagram into the visible area (at most 150 %).
+    /// Fits the whole diagram into the clear area (at most 150 %).
     pub fn zoom_to_fit(&mut self, cx: &mut Context<Self>) {
-        let b = self.bounds.get();
-        let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
+        let area = self.clear_area();
+        let (w, h) = (f32::from(area.size.width), f32::from(area.size.height));
         let Some(content) = self.scene.bounds().filter(|_| w > 0.0 && h > 0.0) else { return };
         let margin = 40.0;
         let fit_w = (w - 2.0 * margin) / content.width.max(1.0);
         let fit_h = (h - 2.0 * margin) / content.height.max(1.0);
         self.zoom = fit_w.min(fit_h).clamp(MIN_ZOOM, 1.5);
         let c = content.center();
-        self.pan = MPoint::new(w / 2.0 - c.x * self.zoom, h / 2.0 - c.y * self.zoom);
+        let center = area.center();
+        self.pan = MPoint::new(
+            f32::from(center.x) - c.x * self.zoom,
+            f32::from(center.y) - c.y * self.zoom,
+        );
         cx.notify();
     }
 
@@ -687,8 +717,7 @@ impl DiagramCanvas {
         if self.bounds.get().contains(&mouse) {
             return snap_point(self.to_logical(mouse));
         }
-        let b = self.bounds.get();
-        snap_point(self.to_logical(point(b.size.width / 2.0, b.size.height / 2.0) + b.origin))
+        snap_point(self.to_logical(self.clear_area().center() + self.bounds.get().origin))
     }
 
     fn zoom_at(&mut self, screen: Point<Pixels>, factor: f32) {
@@ -721,9 +750,9 @@ impl DiagramCanvas {
         if let Some(old) = self.shown_diagram {
             self.viewports.insert(old, (self.zoom, self.pan));
         }
-        (self.zoom, self.pan) = diagram
-            .and_then(|d| self.viewports.get(&d).copied())
-            .unwrap_or((1.0, MPoint::new(0.0, 0.0)));
+        let stored = diagram.and_then(|d| self.viewports.get(&d).copied());
+        self.home_pending = stored.is_none();
+        (self.zoom, self.pan) = stored.unwrap_or((1.0, self.home()));
         self.shown_diagram = diagram;
         self.drag = None;
         self.editing = None;
@@ -1399,15 +1428,22 @@ impl DiagramCanvas {
         });
     }
 
-    /// A right click selects what it hits (unless that is selected already), so the context
-    /// menu acts on it.
+    /// The right button pans while it is held and moved; released where it was pressed, it
+    /// opens the context menu (`end_drag`).
     fn on_right_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_edit(cx);
         self.focus_handle.focus(window, cx);
         if self.drag.is_some() {
             return;
         }
-        let p = self.to_logical(ev.position);
+        let start = ev.position;
+        self.drag = Some(Drag::RightPan { start, last: start, panning: false });
+    }
+
+    /// A right click selects what it hits (unless that is selected already), so that the
+    /// context menu acts on it, and opens the menu at `position`.
+    fn open_context_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let p = self.to_logical(position);
         self.right_click = Some(p);
         let hit = scene::hit_test(&self.scene, p, self.hit_tolerance());
         // On a member row, the member is selected too, for the properties panel and the menu.
@@ -1427,6 +1463,36 @@ impl DiagramCanvas {
                 ws.selected_element = member;
             }
         });
+        self.menu_at = Some(crate::shell::MenuAt::new(position));
+    }
+
+    /// The context menu while it is open. It is built (`context_menu`) after the frame that
+    /// asks for it: the builder reads the canvas, which is being updated during its render.
+    fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let at = self.menu_at.as_mut()?;
+        if at.menu.is_none() && !at.building {
+            at.building = true;
+            let owner = cx.entity();
+            window.defer(cx, move |window, cx| {
+                let builder = owner.clone();
+                let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
+                    Self::context_menu(&builder, menu, window, cx)
+                });
+                owner.update(cx, |this, cx| {
+                    let Some(at) = this.menu_at.as_mut() else { return };
+                    let subscription =
+                        cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, window, cx| {
+                            this.menu_at = None;
+                            this.focus_handle.focus(window, cx);
+                            cx.notify();
+                        });
+                    menu.focus_handle(cx).focus(window, cx);
+                    at.menu = Some((menu, subscription));
+                    cx.notify();
+                });
+            });
+        }
+        at.overlay()
     }
 
     /// The selected edges that can be routed by hand (not sequence messages).
@@ -1597,6 +1663,16 @@ impl DiagramCanvas {
                 *last = position;
                 self.pan = self.pan.offset(f32::from(delta.x), f32::from(delta.y));
             }
+            Drag::RightPan { start, last, panning } => {
+                // A hand that shakes a little while clicking does not pan yet.
+                let moved = position - *start;
+                *panning |= f32::from(moved.x).hypot(f32::from(moved.y)) > RIGHT_PAN_SLOP;
+                if *panning {
+                    let delta = position - *last;
+                    self.pan = self.pan.offset(f32::from(delta.x), f32::from(delta.y));
+                }
+                *last = position;
+            }
         }
         cx.notify();
     }
@@ -1722,6 +1798,7 @@ impl DiagramCanvas {
                 let offset = if vertical { current.x - state.x } else { current.y - state.y };
                 self.update_workspace(cx, |ws| ws.move_region_line(presentation, index, offset));
             }
+            Some(Drag::RightPan { start, panning: false, .. }) => self.open_context_menu(start, cx),
             _ => {}
         }
         cx.notify();
@@ -1739,6 +1816,15 @@ impl DiagramCanvas {
             self.pan = self.pan.offset(dx, dy);
         }
         cx.notify();
+    }
+
+    /// Two fingers spread or pinched on a touchpad zoom about the point between them.
+    fn on_pinch(&mut self, ev: &PinchEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if ev.delta != 0.0 {
+            self.hover = None;
+            self.zoom_at(ev.position, (1.0 + ev.delta).clamp(0.5, 2.0));
+            cx.notify();
+        }
     }
 
     fn on_drop(&mut self, dragged: &DraggedElement, window: &mut Window, cx: &mut Context<Self>) {
@@ -2261,22 +2347,11 @@ impl Painter<'_> {
         }
     }
 
-    /// The grid, kept inside the corners rounded by `corner`.
-    fn grid(&mut self, bounds: Bounds<Pixels>, corner: f32) {
+    fn grid(&mut self, bounds: Bounds<Pixels>) {
         let step = GRID * self.t.zoom;
         if step < 8.0 {
             return;
         }
-        // How far a line `inset` from an edge must stay off the perpendicular edge to keep
-        // inside the corner's arc.
-        let cut = |inset: f32| {
-            if inset >= corner {
-                0.0
-            } else {
-                let d = corner - inset.max(0.0);
-                corner - (corner * corner - d * d).sqrt()
-            }
-        };
         let (left, right) = (f32::from(bounds.origin.x), f32::from(bounds.right()));
         let (top, bottom) = (f32::from(bounds.origin.y), f32::from(bounds.bottom()));
         let top_left = self.t.to_logical(bounds.origin);
@@ -2284,12 +2359,8 @@ impl Painter<'_> {
         let mut x = (top_left.x / GRID).floor() * GRID;
         while x <= bottom_right.x {
             let sx = f32::from(self.t.pt(MPoint::new(x, 0.0)).x);
-            let shorten = cut((sx - left).min(right - sx - 1.0));
             self.window.paint_quad(fill(
-                Bounds::new(
-                    point(px(sx), px(top + shorten)),
-                    size(px(1.0), px(bottom - top - 2.0 * shorten)),
-                ),
+                Bounds::new(point(px(sx), px(top)), size(px(1.0), px(bottom - top))),
                 self.c.grid,
             ));
             x += GRID;
@@ -2297,12 +2368,8 @@ impl Painter<'_> {
         let mut y = (top_left.y / GRID).floor() * GRID;
         while y <= bottom_right.y {
             let sy = f32::from(self.t.pt(MPoint::new(0.0, y)).y);
-            let shorten = cut((sy - top).min(bottom - sy - 1.0));
             self.window.paint_quad(fill(
-                Bounds::new(
-                    point(px(left + shorten), px(sy)),
-                    size(px(right - left - 2.0 * shorten), px(1.0)),
-                ),
+                Bounds::new(point(px(left), px(sy)), size(px(right - left), px(1.0))),
                 self.c.grid,
             ));
             y += GRID;
@@ -2454,6 +2521,10 @@ impl Render for DiagramCanvas {
             (ws.active_diagram, ws.tool)
         };
         self.switch_viewport(active);
+        if self.home_pending && self.clear.get().is_some() && !self.bounds.get().is_empty() {
+            self.home_pending = false;
+            self.pan = self.home();
+        }
         let font_family = diagram_font();
         let key = {
             let ws = self.workspace.read(cx);
@@ -2527,17 +2598,16 @@ impl Render for DiagramCanvas {
         };
         let (pan, zoom, drag) = (self.pan, self.zoom, self.drag.clone());
         let column = self.display.visibility_column;
-        let corner = self.corner_radius;
         // The row under the editor is hidden; a new member's empty row covers none.
         let editing_element =
             self.editing.as_ref().filter(|e| e.new_member.is_none()).map(|e| e.element);
         let bounds_cell = self.bounds.clone();
         let this = cx.entity();
-        let menu_owner = this.clone();
         let cursor = if tool == Tool::Select { CursorStyle::Arrow } else { CursorStyle::Crosshair };
 
         let handles = self.hover_handles(cx).filter(|_| tool == Tool::Select);
         let offer_menu = self.offer_menu(window, cx);
+        let context_menu = self.open_menu(window, cx);
 
         // The in-place editor sits over the edited text, in canvas-local pixels.
         let editor = self.editing.as_ref().map(|edit| {
@@ -2559,7 +2629,6 @@ impl Render for DiagramCanvas {
             .size_full()
             .overflow_hidden()
             .bg(colors.background)
-            .rounded(px(corner))
             .cursor(cursor)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_left_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
@@ -2586,7 +2655,12 @@ impl Render for DiagramCanvas {
                 MouseButton::Middle,
                 cx.listener(|this, ev: &MouseUpEvent, _, cx| this.end_drag(ev.position, cx)),
             )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, ev: &MouseUpEvent, _, cx| this.end_drag(ev.position, cx)),
+            )
             .on_scroll(cx.listener(Self::on_scroll))
+            .on_pinch(cx.listener(Self::on_pinch))
             .on_drop(cx.listener(Self::on_drop))
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(|this, _: &DeleteSelection, _, cx| {
@@ -2667,7 +2741,12 @@ impl Render for DiagramCanvas {
                             let target = this.clone();
                             window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
                                 if phase == DispatchPhase::Bubble
-                                    && matches!(ev.button, MouseButton::Left | MouseButton::Middle)
+                                    && matches!(
+                                        ev.button,
+                                        MouseButton::Left
+                                            | MouseButton::Middle
+                                            | MouseButton::Right
+                                    )
                                 {
                                     target.update(cx, |c, cx| c.end_drag(ev.position, cx));
                                 }
@@ -2685,7 +2764,7 @@ impl Render for DiagramCanvas {
                                 edge_line: None,
                                 column,
                             };
-                            p.grid(bounds, corner);
+                            p.grid(bounds);
                             for node in &scene.nodes {
                                 p.node(node, editing_element);
                             }
@@ -2809,6 +2888,6 @@ impl Render for DiagramCanvas {
             .children(editor)
             .children(handles)
             .children(offer_menu)
-            .context_menu(move |menu, window, cx| Self::context_menu(&menu_owner, menu, window, cx))
+            .children(context_menu)
     }
 }
