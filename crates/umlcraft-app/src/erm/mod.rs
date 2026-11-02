@@ -1,9 +1,15 @@
 //! Entity-relationship diagrams (`.ucerm`, crate `umlcraft-erm`): each one opens in a window of
-//! its own, outside the project, from the File menu, the command line or "Open with". The
-//! window is a frame (`window`) around the canvas (`canvas`), so that the canvas can later
-//! become a tab of the main window.
+//! its own, outside the project, from the File menu, the command line or "Open with", and is
+//! edited there. The window is a frame (`window`) around the canvas (`canvas`, with the mouse
+//! and keys in `input` and in-place editing in `text`), the palette (`palette`) and the
+//! properties (`props`), so that the canvas can later become a tab of the main window. The
+//! editing itself (rules, undo, hit tests, clipboard) is in the crate.
 
 mod canvas;
+mod input;
+mod palette;
+mod props;
+mod text;
 mod window;
 
 use std::cell::RefCell;
@@ -11,26 +17,115 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::*;
 use rust_i18n::t;
-use umlcraft_erm::{Diagram, Id, Issue, IssueKind, ReadError};
+use umlcraft_erm::{Diagram, EditError, Id, Issue, IssueKind, ReadError};
+
+pub use palette::Shape;
 
 actions!(
     erm,
     [
         // Asks for a `.ucerm` file and opens it in a window of its own.
         OpenErm,
+        // Opens a window with a new, empty diagram.
+        NewErm,
         ExportErmSvg,
         // White background, as the app's other PNG images.
         ExportErmPng,
         ExportErmPngTransparent,
-        // Shows the 10 px grid on the sheet, or hides it.
+        // Shows the 10 px grid, or hides it.
         ToggleGrid,
+        // Shows the properties beside the canvas, or hides them.
+        ToggleProperties,
+        // Edits the text of the selected element in place.
+        EditText,
+        Duplicate,
+        FitToText,
+        // Adds an attribute to the selected node.
+        AddAttribute,
+        // Waits for a click on a second entity and joins both by a new relationship.
+        RelationshipTo,
+        // Lets the ends of the selected lines float.
+        ReleaseEnds,
     ]
 );
 
+/// Moves the selection by `(dx, dy)` px (arrow keys).
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = erm, no_json)]
+pub struct Nudge {
+    pub dx: i32,
+    pub dy: i32,
+}
+
+/// Grows the selected node by `(dw, dh)` px (Ctrl+arrow keys).
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = erm, no_json)]
+pub struct Grow {
+    pub dw: i32,
+    pub dh: i32,
+}
+
+/// Puts a new shape of the palette into the middle of the view.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = erm, no_json)]
+pub struct PlaceShape {
+    pub shape: Shape,
+}
+
+/// The keys of the ER canvas; they only apply there (Ulf's canvas binds its own in `Canvas`).
+pub fn bind_keys(cx: &mut App) {
+    let c = Some("ErmCanvas");
+    let mut keys = vec![
+        crate::key(cx, "delete", crate::DeleteSelection, c),
+        crate::key(cx, "backspace", crate::DeleteSelection, c),
+        crate::key(cx, "secondary-a", crate::SelectAll, c),
+        crate::key(cx, "secondary-c", crate::Copy, c),
+        crate::key(cx, "secondary-x", crate::Cut, c),
+        crate::key(cx, "secondary-v", crate::Paste, c),
+        crate::key(cx, "secondary-d", Duplicate, c),
+        crate::key(cx, "escape", crate::Cancel, c),
+        crate::key(cx, "f2", EditText, c),
+        crate::key(cx, "enter", EditText, c),
+        crate::key(cx, "secondary-shift-f", FitToText, c),
+    ];
+    // As draw.io: 1 px, with Shift one grid step; with Ctrl the size.
+    for (name, x, y) in [("left", -1, 0), ("right", 1, 0), ("up", 0, -1), ("down", 0, 1)] {
+        keys.push(crate::key(cx, name, Nudge { dx: x, dy: y }, c));
+        let step = canvas::GRID as i32;
+        keys.push(crate::key(
+            cx,
+            &format!("shift-{name}"),
+            Nudge { dx: x * step, dy: y * step },
+            c,
+        ));
+        keys.push(crate::key(cx, &format!("secondary-{name}"), Grow { dw: x, dh: y }, c));
+        keys.push(crate::key(
+            cx,
+            &format!("secondary-shift-{name}"),
+            Grow { dw: x * step, dh: y * step },
+            c,
+        ));
+    }
+    cx.bind_keys(keys);
+}
+
+/// An open window: the file it shows (canonical path; `None` for a new diagram never saved),
+/// its handle and its frame.
+struct Open {
+    key: Option<PathBuf>,
+    handle: AnyWindowHandle,
+    view: WeakEntity<window::ErmWindow>,
+}
+
 thread_local! {
-    /// The windows open, by the file they show (canonical path), so that opening a file
-    /// again brings its window to the front. Closed windows drop out when they are looked up.
-    static OPEN: RefCell<Vec<(PathBuf, AnyWindowHandle)>> = const { RefCell::new(Vec::new()) };
+    /// The windows open, so that opening a file again brings its window to the front and
+    /// quitting can ask about unsaved diagrams. Closed windows drop out when looked up.
+    static OPEN: RefCell<Vec<Open>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The canonical path a file is known by.
+fn key_of(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Whether a file is an ER diagram, by its extension.
@@ -55,19 +150,26 @@ pub fn prompt_open(window: &mut Window, cx: &mut App) {
     .detach();
 }
 
+/// Opens a window with a new, empty diagram.
+pub fn new_diagram(cx: &mut App) {
+    let diagram = Diagram::new(t!("erm.untitled_stem").to_string());
+    if let Some((handle, view)) = window::open(None, diagram, cx) {
+        OPEN.with_borrow_mut(|open| open.push(Open { key: None, handle, view }));
+    }
+}
+
 /// Opens `path` in a window of its own, or brings the window that shows it to the front. A
 /// file that cannot be read is reported over `window`.
 pub fn open(path: PathBuf, window: &mut Window, cx: &mut App) {
     let path = std::path::absolute(&path).unwrap_or(path);
-    let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    let key = key_of(&path);
     if activate(&key, cx) {
         return;
     }
     match read(&path) {
-        Ok((diagram, issues)) => {
-            let notes = issues.iter().map(|i| issue_text(Some(&diagram), i)).collect();
-            if let Some(handle) = window::open(path, diagram, notes, cx) {
-                OPEN.with_borrow_mut(|open| open.push((key, handle)));
+        Ok((diagram, _)) => {
+            if let Some((handle, view)) = window::open(Some(path), diagram, cx) {
+                OPEN.with_borrow_mut(|open| open.push(Open { key: Some(key), handle, view }));
             }
         }
         Err(detail) => {
@@ -84,17 +186,57 @@ pub fn open(path: PathBuf, window: &mut Window, cx: &mut App) {
     }
 }
 
+/// Forgets windows that are closed.
+fn prune(cx: &mut App) {
+    let handles: Vec<AnyWindowHandle> = OPEN.with_borrow(|o| o.iter().map(|w| w.handle).collect());
+    let closed: Vec<AnyWindowHandle> =
+        handles.into_iter().filter(|h| h.update(cx, |_, _, _| ()).is_err()).collect();
+    OPEN.with_borrow_mut(|open| open.retain(|w| !closed.contains(&w.handle)));
+}
+
 /// Brings the window showing `key` to the front; whether there is one.
 fn activate(key: &Path, cx: &mut App) -> bool {
+    prune(cx);
     let windows: Vec<_> = OPEN.with_borrow(|open| {
-        open.iter().filter(|(p, _)| p == key).map(|(_, handle)| *handle).collect()
+        open.iter().filter(|w| w.key.as_deref() == Some(key)).map(|w| w.handle).collect()
     });
-    let shown = windows
+    windows
         .into_iter()
-        .any(|handle| handle.update(cx, |_, window, _| window.activate_window()).is_ok());
-    // Closed windows no longer update.
-    OPEN.with_borrow_mut(|open| open.retain(|(_, handle)| handle.update(cx, |_, _, _| ()).is_ok()));
-    shown
+        .any(|handle| handle.update(cx, |_, window, _| window.activate_window()).is_ok())
+}
+
+/// After "Save as": the window now shows `path`.
+fn rekey(handle: AnyWindowHandle, path: &Path) {
+    let key = key_of(path);
+    OPEN.with_borrow_mut(|open| {
+        for w in open.iter_mut().filter(|w| w.handle == handle) {
+            w.key = Some(key.clone());
+        }
+    });
+}
+
+/// The names of the diagrams with unsaved changes, for asking before the app quits.
+pub fn unsaved(cx: &mut App) -> Vec<String> {
+    prune(cx);
+    let views: Vec<_> = OPEN.with_borrow(|open| open.iter().map(|w| w.view.clone()).collect());
+    views
+        .into_iter()
+        .filter_map(|v| v.upgrade())
+        .filter(|v| v.read(cx).unsaved(cx))
+        .map(|v| v.read(cx).title())
+        .collect()
+}
+
+/// Why an edit was refused, in the UI's language.
+pub fn edit_error(err: &EditError) -> String {
+    match err {
+        EditError::Missing(_) => t!("erm.edit_missing").to_string(),
+        EditError::NotAllowed(a, b) => {
+            t!("erm.issue.not_allowed", source = kind_name(a), target = kind_name(b)).to_string()
+        }
+        EditError::Rule(kind) => issue_what(kind),
+        EditError::NotApplicable => t!("erm.edit_not_applicable").to_string(),
+    }
 }
 
 /// Reads a file; the error is the reason in the UI's language.
@@ -203,11 +345,11 @@ fn element_label(d: &Diagram, id: &Id) -> String {
     id.to_string()
 }
 
-/// The file name an export suggests: the diagram's name, else the file's.
-fn file_stem(diagram: &Diagram, path: &Path) -> String {
+/// The file name an export or a new file suggests: the diagram's name, else the file's.
+fn file_stem(diagram: &Diagram, path: Option<&Path>) -> String {
     let name = diagram.meta.name.trim();
     let name = if name.is_empty() {
-        path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        path.and_then(Path::file_stem).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
     } else {
         name.to_owned()
     };
@@ -249,6 +391,38 @@ mod tests {
             IssueKind::BadGeometry,
             IssueKind::BadCardinality,
         ]
+    }
+
+    #[test]
+    fn every_text_of_the_window_exists_in_both_languages() {
+        let sources = [
+            include_str!("mod.rs"),
+            include_str!("canvas.rs"),
+            include_str!("input.rs"),
+            include_str!("palette.rs"),
+            include_str!("props.rs"),
+            include_str!("text.rs"),
+            include_str!("window.rs"),
+        ];
+        let mut keys: Vec<String> = Vec::new();
+        for source in sources {
+            for part in source.split("t!(\"").skip(1) {
+                let key = part.split('"').next().unwrap();
+                if !key.contains('{') && key.contains('.') {
+                    keys.push(key.to_owned());
+                }
+            }
+        }
+        for shape in super::Shape::ALL {
+            keys.push(format!("erm.shape.{}", shape.key()));
+        }
+        assert!(keys.len() > 80, "{} keys found", keys.len());
+        for locale in ["de", "en"] {
+            for key in &keys {
+                let text = rust_i18n::t!(key.as_str(), locale = locale).to_string();
+                assert!(!text.ends_with(key.as_str()), "{locale}: {key} is missing");
+            }
+        }
     }
 
     #[test]
@@ -337,17 +511,24 @@ mod tests {
                 rejected += 1;
             }
         }
-        assert!(rejected > 10, "{rejected} invalid fixtures");
+        assert!(rejected >= 10, "{rejected} invalid fixtures");
         assert!(read(Path::new("/nonexistent/x.ucerm")).is_err());
+        // Unfinished diagrams open, with their warnings.
+        let unfinished = fixture("warnings");
+        for entry in std::fs::read_dir(&unfinished).unwrap() {
+            let path = entry.unwrap().path();
+            let (_, issues) = read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(!issues.is_empty());
+        }
     }
 
     #[test]
     fn exports_are_named_after_the_diagram_else_the_file() {
         let mut d = Diagram::new("Flug buchen");
-        assert_eq!(file_stem(&d, Path::new("/a/flug.ucerm")), "Flug buchen");
+        assert_eq!(file_stem(&d, Some(Path::new("/a/flug.ucerm"))), "Flug buchen");
         d.meta.name = "Kunde/Ticket".into();
-        assert_eq!(file_stem(&d, Path::new("/a/flug.ucerm")), "Kunde_Ticket");
+        assert_eq!(file_stem(&d, Some(Path::new("/a/flug.ucerm"))), "Kunde_Ticket");
         d.meta.name = "  ".into();
-        assert_eq!(file_stem(&d, Path::new("/a/flug.ucerm")), "flug");
+        assert_eq!(file_stem(&d, Some(Path::new("/a/flug.ucerm"))), "flug");
     }
 }

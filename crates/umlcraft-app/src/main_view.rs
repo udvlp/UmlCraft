@@ -1375,7 +1375,27 @@ impl MainView {
     }
 
     fn quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard(window, cx, Box::new(|_, _, cx| cx.quit()));
+        // ER diagrams live in windows of their own; quitting would close them unasked.
+        let unsaved = crate::erm::unsaved(cx);
+        if unsaved.is_empty() {
+            self.confirm_discard(window, cx, Box::new(|_, _, cx| cx.quit()));
+            return;
+        }
+        let message = t!("dialog.erm_unsaved").to_string();
+        let answers = [t!("dialog.quit_anyway").to_string(), t!("dialog.cancel").to_string()];
+        let answers: Vec<&str> = answers.iter().map(String::as_str).collect();
+        let rx =
+            window.prompt(PromptLevel::Warning, &message, Some(&unsaved.join("\n")), &answers, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            if rx.await != Ok(0) {
+                return;
+            }
+            this.update_in(cx, |this, window, cx| {
+                this.confirm_discard(window, cx, Box::new(|_, _, cx| cx.quit()))
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -2350,6 +2370,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
         MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
         menu_item("menu.import_astah", ImportAstah),
         menu_item("menu.import_structogram", ImportStructogram),
+        menu_item("menu.new_erm", crate::erm::NewErm),
         menu_item("menu.open_erm", crate::erm::OpenErm),
     ];
     file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items([
@@ -2501,6 +2522,7 @@ fn file_menu(
     menu = item(menu, "menu.open_sample", Box::new(OpenSample));
     menu = item(menu, "menu.import_astah", Box::new(ImportAstah));
     menu = item(menu, "menu.import_structogram", Box::new(ImportStructogram));
+    menu = item(menu, "menu.new_erm", Box::new(crate::erm::NewErm));
     menu = item(menu, "menu.open_erm", Box::new(crate::erm::OpenErm));
     menu = menu.submenu(t!("menu.export"), window, cx, move |menu, _, _| {
         menu.menu(t!("menu.export_svg"), Box::new(ExportSvg))
@@ -2693,6 +2715,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::new_structogram))
             .on_action(cx.listener(Self::import_structogram))
             .on_action(|_: &crate::erm::OpenErm, window, cx| crate::erm::prompt_open(window, cx))
+            .on_action(|_: &crate::erm::NewErm, _, cx| crate::erm::new_diagram(cx))
             .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::export_astah))
             .on_action(cx.listener(Self::import_source))
