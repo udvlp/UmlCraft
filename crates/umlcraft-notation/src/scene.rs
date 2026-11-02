@@ -2067,14 +2067,16 @@ fn layout_classifier(
     let size = style.font_size.unwrap_or(FONT_SIZE);
 
     // Italics alone are easy to miss, so abstract classes say it in words as well: UML's
-    // `{abstract}` below the name or, as a setting, «abstract» above it.
+    // `{abstract}` below the name or, as a setting, «abstract» above it. A class with a
+    // stereotype «abstract» of its own says it once, as in Astah.
     let is_abstract = matches!(kind, ElementKind::Class(p) if p.is_abstract);
-    let keyword = is_abstract && !measure.abstract_stereotype();
+    let says_so = !style.hide_stereotypes && e.data().stereotypes.iter().any(|s| s == "abstract");
+    let keyword = is_abstract && !measure.abstract_stereotype() && !says_so;
     let mut stereotypes: Vec<String> = match kind {
         ElementKind::Interface(_) => vec!["interface".into()],
         ElementKind::Enumeration(_) => vec!["enumeration".into()],
         ElementKind::DataType(_) => vec!["dataType".into()],
-        _ if is_abstract && !keyword => vec!["abstract".into()],
+        _ if is_abstract && !keyword && !says_so => vec!["abstract".into()],
         _ => Vec::new(),
     };
     if !style.hide_stereotypes {
@@ -3384,19 +3386,29 @@ mod tests {
             })
         })
         .unwrap();
-        let header = |measure: &dyn TextMeasure| -> Vec<(String, bool)> {
-            let scene = build(doc.model(), d, &Preview::default(), measure);
+        let header = |model: &Model, measure: &dyn TextMeasure| -> Vec<(String, bool)> {
+            let scene = build(model, d, &Preview::default(), measure);
             let rows = &scene.node(node).unwrap().rows;
             rows.iter().take(2).map(|r| (r.text.clone(), r.italic)).collect()
         };
         assert_eq!(
-            header(&ApproxMeasure),
+            header(doc.model(), &ApproxMeasure),
             [("Shape1".to_owned(), true), ("{abstract}".to_owned(), false)]
         );
         assert_eq!(
-            header(&Stereotype),
+            header(doc.model(), &Stereotype),
             [("<<abstract>>".to_owned(), false), ("Shape1".to_owned(), true)]
         );
+        // A stereotype «abstract» of its own says it once, either way.
+        doc.edit("stereotype", |tx| {
+            tx.update(class, |data| data.stereotypes = vec!["abstract".into()])
+        })
+        .unwrap();
+        let once = [("<<abstract>>".to_owned(), false), ("Shape1".to_owned(), true)];
+        assert_eq!(header(doc.model(), &ApproxMeasure), once);
+        assert_eq!(header(doc.model(), &Stereotype), once);
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        assert!(!scene.node(node).unwrap().rows.iter().any(|r| r.text == "{abstract}"));
     }
 
     #[test]

@@ -21,6 +21,8 @@ today.
 - **Parameter directions as in Astah**: boxes from Astah projects show `out` and `inout` only
   where Astah does (when the box shows directions, then with `in` as well); boxes made in
   UmlCraft keep showing `out` and `inout`.
+- **"abstract" once**: an abstract class that has the stereotype «abstract» of its own no
+  longer shows `{abstract}` below its name as well, nor «abstract» twice.
 
 ## 0.16.0 – 2026-11-01
 
