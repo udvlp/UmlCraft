@@ -1993,6 +1993,13 @@ impl MainView {
             };
             div().relative().flex_1().min_h_0().child(content).into_any_element()
         } else {
+            // With diagrams, one click in the tree opens one; without, the hint says where
+            // to make one.
+            let model = ws.doc.model();
+            let hint = match model.elements().any(|e| crate::workspace::is_shown(model, e.id())) {
+                true => t!("canvas.no_diagram"),
+                false => t!("canvas.no_diagram_yet"),
+            };
             // The same white as a diagram's, under the floating panels.
             div()
                 .flex_1()
@@ -2002,7 +2009,7 @@ impl MainView {
                 .bg(cx.theme().background)
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child(t!("canvas.no_diagram").to_string())
+                .child(hint.to_string())
                 .into_any_element()
         };
         // Nothing of the diagram area draws over the panels beside it.
