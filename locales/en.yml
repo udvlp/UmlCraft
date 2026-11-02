@@ -72,7 +72,6 @@ ribbon:
     nsd_branches: Branches
     nsd_loops: Loops
     nsd_element: Element
-    nsd_export: Structorizer
     numbering: Numbering
   paste: Paste
   cut: Cut

@@ -1269,11 +1269,15 @@ impl Render for NsdView {
         let this = cx.entity();
         let context_menu = self.open_menu(window, cx);
         let area = self.area.clone();
-        let surround = cx.theme().muted;
+        // White around the structogram, as around a diagram.
+        let surround = cx.theme().background;
         let accent = cx.theme().blue;
         if self.home_pending && self.clear.get().is_some() && !self.area.get().is_empty() {
             self.home_pending = false;
             self.pan = self.home();
+        } else if self.home_pending {
+            // The area and the clear area come with this frame's layout: place it in the next.
+            window.request_animation_frame();
         }
         v_flex()
             .size_full()

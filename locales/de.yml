@@ -72,7 +72,6 @@ ribbon:
     nsd_branches: Verzweigungen
     nsd_loops: Schleifen
     nsd_element: Element
-    nsd_export: Structorizer
     numbering: Nummerierung
   paste: Einfügen
   cut: Ausschneiden

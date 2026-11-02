@@ -71,6 +71,10 @@ today.
 - **Names and notes on one baseline**: the version beside the name in the title bar and the kind
   beside each name in the project tree stand on the name's baseline. The title bar's icons are
   as large as the ribbon's small ones.
+- **Structograms on white**: the structogram editor is white around the structogram, as around
+  a diagram, and an opened structogram starts beside the floating cards. Save for Structorizer
+  moved to Tools › Exchange, next to Import and Export, and is greyed out unless a structogram is
+  open.
 
 ## 0.16.0 – 2026-11-01
 

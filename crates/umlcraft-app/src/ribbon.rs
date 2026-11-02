@@ -213,7 +213,7 @@ pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
             (None, None) => Vec::new(),
         },
         RibbonTab::View => view(state),
-        RibbonTab::Tools => tools(),
+        RibbonTab::Tools => tools(state),
     }
 }
 
@@ -482,14 +482,6 @@ fn structogram(allowed: crate::nsd::Allowed) -> Vec<Group> {
                 .enabled(allowed.branching),
             ],
         ),
-        group(
-            "nsd_export",
-            vec![
-                Item::new("nsd-export", fluent("arrow_export_ltr"), t!("ribbon.export_nsd"))
-                    .tooltip(t!("ribbon.export_nsd_tip"))
-                    .action(crate::nsd::ExportStructogram),
-            ],
-        ),
     ]
 }
 
@@ -528,7 +520,7 @@ fn view(state: &State) -> Vec<Group> {
     ]
 }
 
-fn tools() -> Vec<Group> {
+fn tools(state: &State) -> Vec<Group> {
     let languages = [
         (SourceLanguage::Java, "java", "menu.java"),
         (SourceLanguage::CSharp, "csharp", "menu.csharp"),
@@ -554,6 +546,11 @@ fn tools() -> Vec<Group> {
                     .action(ImportAstah),
                 Item::new("astah-export", fluent("arrow_export_ltr"), t!("ribbon.export"))
                     .action(ExportAstah),
+                // Goes to the structogram shown, so only with one.
+                Item::new("nsd-export", fluent("arrow_export_ltr"), t!("ribbon.export_nsd"))
+                    .tooltip(t!("ribbon.export_nsd_tip"))
+                    .action(crate::nsd::ExportStructogram)
+                    .enabled(state.structogram.is_some()),
             ],
         ),
         group(
