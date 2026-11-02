@@ -1305,8 +1305,8 @@ mod tests {
         for (diagram, kind) in diagrams {
             doc.edit("layout", |tx| {
                 if layout::can_arrange(kind) {
-                    let down = layout::Direction::Down;
-                    layout::arrange(tx, diagram, None, down, &ApproxMeasure).map(|_| ())
+                    let direction = layout::default_direction(kind);
+                    layout::arrange(tx, diagram, None, direction, &ApproxMeasure).map(|_| ())
                 } else {
                     let view = tx.model().view(diagram).unwrap();
                     let edges: Vec<Id> = view

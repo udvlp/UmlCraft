@@ -585,8 +585,12 @@ impl Workspace {
 
     /// Arranges the active diagram, or with a selection only that, and routes its lines.
     /// Nodes in the way of the arranged selection move aside.
-    pub fn arrange(&mut self, direction: layout::Direction) {
+    pub fn arrange(&mut self, direction: Option<layout::Direction>) {
         let Some(diagram) = self.active_diagram else { return };
+        let kind = self.doc.model().get(diagram).and_then(|d| d.kind().as_diagram());
+        let Some(direction) = direction.or_else(|| kind.map(layout::default_direction)) else {
+            return;
+        };
         let selected: Vec<Id> = self.selected_nodes().into_iter().map(|(id, _)| id).collect();
         let scope = (!selected.is_empty()).then_some(&selected[..]);
         let label = t!("edit.arrange").to_string();

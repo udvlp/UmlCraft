@@ -157,7 +157,8 @@ pub struct SetLineShape {
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = umlcraft, no_json)]
 pub struct Arrange {
-    pub direction: Direction,
+    /// Unset: the diagram kind's usual direction.
+    pub direction: Option<Direction>,
 }
 
 /// Imports source files, or a folder of them, into the open project (Tools menu).
@@ -263,7 +264,7 @@ fn main() {
             // Astah's shortcuts for the line styles.
             key(cx, "secondary-l", SetLineShape { shape: LineShape::Line }, Some("Canvas")),
             key(cx, "secondary-e", SetLineShape { shape: LineShape::RightAngle }, Some("Canvas")),
-            key(cx, "secondary-shift-l", Arrange { direction: Direction::Down }, Some("Canvas")),
+            key(cx, "secondary-shift-l", Arrange { direction: None }, Some("Canvas")),
             key(cx, "secondary-shift-r", RouteLines, Some("Canvas")),
             key(cx, "secondary-0", ResetZoom, None),
             key(cx, "secondary-=", ZoomIn, None),

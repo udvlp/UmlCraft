@@ -289,9 +289,15 @@ fn home(state: &State) -> Vec<Group> {
             "layout",
             vec![
                 Item::new("auto-arrange", fluent("flowchart"), t!("ribbon.auto_arrange"))
-                    .action(Arrange { direction: Direction::Down })
-                    .menu_entry(t!("menu.arrange_down"), Arrange { direction: Direction::Down })
-                    .menu_entry(t!("menu.arrange_right"), Arrange { direction: Direction::Right })
+                    .action(Arrange { direction: None })
+                    .menu_entry(
+                        t!("menu.arrange_down"),
+                        Arrange { direction: Some(Direction::Down) },
+                    )
+                    .menu_entry(
+                        t!("menu.arrange_right"),
+                        Arrange { direction: Some(Direction::Right) },
+                    )
                     .enabled(state.diagram.is_some_and(layout::can_arrange)),
                 Item::new("route-lines", fluent("arrow_routing"), t!("ribbon.route_lines"))
                     .action(RouteLines)

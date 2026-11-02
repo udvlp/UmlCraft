@@ -133,9 +133,11 @@ The model tree lists the contents of packages sorted: packages, diagrams, then e
 kind and name. A new diagram at the top of the model comes in a package of its own name.
 Automatic layout: new lines are routed around the nodes at right angles and follow when their
 nodes move, until their route is edited by hand (on use case diagrams they start straight);
-Route lines (Ctrl+Shift+R) does that for the selected lines or the whole diagram. Arrange automatically (Ctrl+Shift+L) lays out class,
-component and deployment diagrams in layers, top to bottom or left to right, generals above
-their specifics; with a selection only that, pushing other nodes aside.
+Route lines (Ctrl+Shift+R) does that for the selected lines or the whole diagram. Arrange automatically (Ctrl+Shift+L) lays out every
+diagram but sequence diagrams in layers, top to bottom or left to right: generals above
+their specifics, activities along their flows with partitions kept as columns, state
+machines along their transitions with each region on its own, actors beside the system
+boundary; with a selection only that, pushing other nodes aside.
 Free texts and lines on every diagram (Text and Line tools): texts edited in place, lines
 dashed or with arrowheads, their ends dragged one by one. Light and dark theme, German and
 English. Members show their visibility right before the name (`- name`); UmlCraft's

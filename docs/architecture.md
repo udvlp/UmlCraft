@@ -180,7 +180,16 @@ that a diff shows which element changed.
   bottom up so that generals are centered over theirs. Parts nothing connects are packed into
   rows, larger ones first. Containers are laid out inside out and sized around what they
   hold. Arranging a selection keeps its top left corner; nodes it grows into move right or
-  down. All its lines are routed afterwards.
+  down. All its lines are routed afterwards. The other kinds but sequence diagrams use the
+  same layers: flows and transitions point from layer to layer (cycles give way at the edges
+  met last going out from the initial node), include and extend from the base use case to
+  the other. State machines and use case diagrams run left to right unless told otherwise
+  (`default_direction`). An orthogonal state lays out each region on its own and stacks them
+  as its `Regions` say, with new separators. Use case diagrams put actors beside the system
+  boundary (secondary actors, whose end alone is navigable, after it) and level with their
+  use cases. A whole activity is laid out in rows from the layers: partitions stay columns
+  side by side, every node in the one it was in, and fork and join bars span what they join,
+  with straight lines to the nodes above and below.
 - `member` produces and parses the text form of attributes and operations and writes it back to
   the model; known classifiers become real type references.
 - `object` derives an object's slots from its classifier: one per attribute, inherited ones

@@ -83,7 +83,7 @@ every change and can undo it with Ctrl+Z); otherwise a project of the server's o
 …) and diagrams showing parts of it. Start with `get_document`. To draw a diagram: \
 `create_diagram`, then `create_element` for each box (no position needed), `add_member` for \
 attributes and operations (`- name : String`, `+ total() : int`), `connect` for relationships, \
-then `arrange_diagram` (class, component, deployment diagrams) and `render_diagram` to look at \
+then `arrange_diagram` (any kind but sequence diagrams) and `render_diagram` to look at \
 the result. `get_diagram` lists what a diagram shows and which element and relationship tools \
 its kind offers. Ids are UUID strings returned by the tools.";
 
@@ -267,9 +267,12 @@ pub fn list() -> Vec<Value> {
         ),
         tool(
             "arrange_diagram",
-            "Lays out a class, component or deployment diagram in layers (generals above \
-             their specifics, wholes above their parts) and routes its lines; with `nodes` only \
-             those, where they are, pushing others aside.",
+            "Lays out a diagram other than a sequence diagram in layers (generals above their \
+             specifics, wholes above their parts, flows and transitions from step to step, \
+             actors beside the system boundary; partitions stay columns and regions keep what \
+             they hold) and routes its lines; with `nodes` only those, where they are, pushing \
+             others aside. Without a direction, state machines and use case diagrams run to \
+             the right and the others down.",
             json!({
                 "diagram": id("The diagram."),
                 "direction": { "type": "string", "enum": ["down", "right"] },
@@ -950,14 +953,12 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
 fn arrange_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
     if !layout::can_arrange(kind) {
-        return Err(format!(
-            "only class, component and deployment diagrams can be arranged, not a {} diagram",
-            diagram_key(kind)
-        ));
+        return Err(format!("a {} diagram cannot be arranged", diagram_key(kind)));
     }
     let direction = match opt_str(args, "direction") {
         Some("right") => layout::Direction::Right,
-        _ => layout::Direction::Down,
+        Some("down") => layout::Direction::Down,
+        _ => layout::default_direction(kind),
     };
     let model = host.document().model();
     let scope: Option<Vec<Id>> = ids_arg(args, "nodes")?

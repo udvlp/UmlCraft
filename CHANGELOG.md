@@ -11,6 +11,13 @@ today.
   and whether it shows parameter directions, in both directions of the import and export.
 - **Colored names and lines**: names in their own font color and lines in their own color, as
   in Astah projects, are drawn and exported that way.
+- **Arrange automatically for more diagrams**: activity, state machine and use case diagrams
+  can be arranged too. Activities run top to bottom along their flows, partitions stay columns
+  with every step in its own, and fork and join bars span what they join. State machines run
+  left to right along their transitions, composite states hold their substates and each region
+  is laid out on its own. Use cases go into the system boundary with actors beside it, level
+  with their use cases. The Arrange button picks the direction that suits the diagram; its menu
+  still offers both.
 - **Parameter directions as in Astah**: boxes from Astah projects show `out` and `inout` only
   where Astah does (when the box shows directions, then with `in` as well); boxes made in
   UmlCraft keep showing `out` and `inout`.
