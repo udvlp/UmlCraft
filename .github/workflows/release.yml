@@ -406,9 +406,10 @@ jobs:
           path: dist
       - name: Create the draft release
         run: |
+          sed "s/@VERSION@/$VERSION/g" packaging/release-notes.md > release-notes.md
           cd dist
           sha256sum * > SHA256SUMS.txt
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
             --title "UmlCraft $VERSION" \
-            --notes-file ../packaging/release-notes.md --generate-notes \
+            --notes-file ../release-notes.md --generate-notes \
             *
