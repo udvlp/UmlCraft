@@ -3,6 +3,18 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **AI clients take screenshots without disturbing**: the MCP server's new `set_window` tool
+  sizes the UmlCraft window in the pixels of `screenshot` and moves it beyond the screens,
+  where it keeps drawing but nobody sees it, to the taskbar or back onto a screen, without
+  taking the focus. `screenshot` now also captures a minimized window, which the user does not
+  see come back.
+- **AI clients set the view**: `set_view` switches theme and language and zooms the diagram or
+  structogram shown (to fit, or to a percentage); `select` selects elements on the diagram
+  shown; `new_document` with `sample` opens the sample project; `open_diagram` also opens
+  structograms.
+
 ## 0.17.0 – 2026-11-02
 
 - **NixOS**: a Nix flake builds UmlCraft from source, with its launcher, icon and file types

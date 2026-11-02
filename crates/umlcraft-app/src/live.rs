@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use gpui_kit::{Context, Window};
 use rust_i18n::t;
+use serde_json::{Value, json};
 use umlcraft_mcp::live::{LiveServer, Request};
 use umlcraft_mcp::{Content, Host, Reply};
 use umlcraft_model::{Document, Id};
@@ -46,6 +47,48 @@ pub fn screenshot<V: 'static>(request: Request, window: &Window, cx: &mut Contex
                     .and_then(|image| crate::png::from_rgba(image, scale));
                 request.answer(match png {
                     Ok(png) => Reply { content: vec![Content::Image(png)], is_error: false },
+                    Err(err) => Reply::error(err),
+                });
+            }
+        })
+        .detach();
+}
+
+/// Answers the `set_window` tool: sizes and places the window from a background thread, since
+/// Windows asks the window's own thread to take the new size, and waits until it has.
+pub fn set_window<V: 'static>(request: Request, window: &Window, cx: &mut Context<V>) {
+    let target = match umlcraft_screenshot::Target::of(window) {
+        Ok(target) => target,
+        Err(err) => return request.answer(Reply::error(err)),
+    };
+    let args = request.arguments.clone();
+    let size = |key: &str| args.get(key).and_then(Value::as_f64).map(|v| v.round().max(1.0) as u32);
+    let (width, height) = (size("width"), size("height"));
+    let placement = match args.get("placement").and_then(Value::as_str) {
+        None => None,
+        Some(name) => match umlcraft_screenshot::Placement::parse(name) {
+            Some(placement) => Some(placement),
+            None => {
+                return request.answer(Reply::error(format!(
+                    "`placement` is screen, offscreen or minimized, not `{name}`"
+                )));
+            }
+        },
+    };
+    let executor = cx.background_executor().clone();
+    executor
+        .spawn({
+            let executor = executor.clone();
+            async move {
+                let state = umlcraft_screenshot::arrange(target, width, height, placement);
+                executor.timer(FRAME).await;
+                request.answer(match state {
+                    Ok(state) => Reply::json(json!({
+                        "width": state.width,
+                        "height": state.height,
+                        "placement": state.placement.name(),
+                        "scale": state.scale,
+                    })),
                     Err(err) => Reply::error(err),
                 });
             }
@@ -117,5 +160,13 @@ impl Host for AppHost<'_> {
     fn saved(&mut self, path: PathBuf) {
         self.ws.path = Some(path.clone());
         self.effects.saved = Some(path);
+    }
+
+    fn select(&mut self, presentations: Vec<Id>) {
+        self.ws.select(presentations);
+    }
+
+    fn sample(&self) -> Result<Document, String> {
+        Ok(crate::demo::velo(&*self.ws.measure))
     }
 }

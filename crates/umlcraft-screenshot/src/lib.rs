@@ -1,8 +1,9 @@
 //! A screenshot of the app's own window as the user sees it: title bar, ribbon, panels and
-//! canvas, also while other windows cover it. Only Windows so far.
+//! canvas, also while other windows cover it, while it is minimized or while it lies beyond the
+//! screens; and the window's size and place for such screenshots. Only Windows so far.
 //!
-//! Capture from a thread other than the window's: Windows asks the window's thread to draw
-//! itself, which must be free to answer.
+//! Call these from a thread other than the window's: Windows asks the window's thread to draw
+//! itself and to take its new size, which must be free to answer.
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -35,6 +36,7 @@ pub struct Image {
 }
 
 /// The window in physical pixels, without the invisible borders Windows adds for resizing.
+/// A minimized window is captured as if restored; the user does not see it come back.
 pub fn capture(target: Target) -> Result<Image, String> {
     #[cfg(windows)]
     return win::capture(target.hwnd);
@@ -43,6 +45,65 @@ pub fn capture(target: Target) -> Result<Image, String> {
         let _ = target;
         Err(UNSUPPORTED.into())
     }
+}
+
+/// Where the window is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// On a screen, where the user sees it.
+    Screen,
+    /// Beyond the right edge of the screens: drawn as usual and captured, but nobody sees it.
+    Offscreen,
+    /// Minimized to the taskbar; captured as if restored.
+    Minimized,
+}
+
+impl Placement {
+    pub fn name(self) -> &'static str {
+        match self {
+            Placement::Screen => "screen",
+            Placement::Offscreen => "offscreen",
+            Placement::Minimized => "minimized",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        [Placement::Screen, Placement::Offscreen, Placement::Minimized]
+            .into_iter()
+            .find(|p| p.name() == name)
+    }
+}
+
+/// The window's size as [`capture`] takes it (physical pixels) and its place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowState {
+    pub width: u32,
+    pub height: u32,
+    pub placement: Placement,
+    /// Physical pixels per logical pixel (2 at 200 %).
+    pub scale: f32,
+}
+
+/// Gives the window the size `width` × `height` as [`capture`] takes it (each `None` keeps it)
+/// and moves it to `placement` (`None` keeps it), without taking the focus from other windows.
+pub fn arrange(
+    target: Target,
+    width: Option<u32>,
+    height: Option<u32>,
+    placement: Option<Placement>,
+) -> Result<WindowState, String> {
+    #[cfg(windows)]
+    return win::arrange(target.hwnd, width, height, placement);
+    #[cfg(not(windows))]
+    {
+        let _ = (target, width, height, placement);
+        Err(UNSUPPORTED.into())
+    }
+}
+
+/// The window's size and place.
+pub fn state(target: Target) -> Result<WindowState, String> {
+    arrange(target, None, None, None)
 }
 
 /// A rectangle in pixels, right and bottom exclusive.
@@ -82,40 +143,316 @@ fn crop_bgra(bgra: &[u8], width: i32, height: i32, crop: Rect) -> Image {
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod win {
+    use std::thread::sleep;
+    use std::time::Duration;
+
     use windows::Win32::Foundation::{HWND, RECT};
-    use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED, DwmGetWindowAttribute,
+        DwmSetWindowAttribute,
+    };
     use windows::Win32::Graphics::Gdi::{
         BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
         DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SelectObject,
     };
     use windows::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
     use windows::Win32::UI::HiDpi::{
-        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetThreadDpiAwarenessContext,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, IsIconic, IsWindow, PW_RENDERFULLCONTENT,
+        GetSystemMetrics, GetWindowPlacement, GetWindowRect, IsIconic, IsWindow,
+        PW_RENDERFULLCONTENT, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+        SWP_NOZORDER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetWindowPlacement, SetWindowPos,
+        SystemParametersInfoW, WINDOWPLACEMENT,
     };
+    use windows::core::BOOL;
 
-    use super::{Image, Rect, crop_bgra};
+    use super::{Image, Placement, Rect, WindowState, crop_bgra};
+
+    /// How long a window restored from the taskbar takes to draw itself again.
+    const REDRAW: Duration = Duration::from_millis(300);
+    /// Room between the screens' right edge and a window placed beyond it.
+    const BEYOND: i32 = 100;
 
     pub fn capture(hwnd: isize) -> Result<Image, String> {
+        let hwnd = window(hwnd)?;
+        physical(|| {
+            let parked = park(hwnd);
+            if parked.is_some() {
+                sleep(REDRAW);
+            }
+            // SAFETY: see `grab`.
+            let image = unsafe { grab(hwnd) };
+            if let Some(parked) = parked {
+                unpark(hwnd, parked);
+            }
+            image
+        })
+    }
+
+    pub fn arrange(
+        hwnd: isize,
+        width: Option<u32>,
+        height: Option<u32>,
+        placement: Option<Placement>,
+    ) -> Result<WindowState, String> {
+        let hwnd = window(hwnd)?;
+        physical(|| {
+            let was = current(hwnd);
+            let placement = placement.unwrap_or(was);
+            let unchanged = width.is_none() && height.is_none() && placement == was;
+            // A minimized window has no frame to measure; restore it out of sight first.
+            let parked = park(hwnd);
+            let (outer, visible) = bounds(hwnd);
+            let size = |given: Option<u32>, now: i32, frame: i32| {
+                given.map_or(now, |v| v.clamp(1, 16_000) as i32) + frame
+            };
+            let w = size(width, visible.right - visible.left, frame_width(outer, visible));
+            let h = size(height, visible.bottom - visible.top, frame_height(outer, visible));
+            if unchanged {
+                if let Some(parked) = parked {
+                    unpark(hwnd, parked);
+                }
+            } else {
+                let on_screen = || match &parked {
+                    Some(parked) if was != Placement::Offscreen => {
+                        let r = to_screen(parked.placement.rcNormalPosition);
+                        (r.left, r.top)
+                    }
+                    _ if was == Placement::Screen => (outer.left, outer.top),
+                    _ => centred(w, h),
+                };
+                match placement {
+                    Placement::Screen | Placement::Offscreen => {
+                        let (x, y) =
+                            if placement == Placement::Offscreen { beyond() } else { on_screen() };
+                        // SAFETY: a plain Win32 call on a checked window handle.
+                        unsafe {
+                            let _ =
+                                SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+                        }
+                        if parked.is_some() {
+                            transitions(hwnd, true);
+                        }
+                    }
+                    Placement::Minimized => {
+                        // To the taskbar straight away; restored, it comes back on a screen.
+                        let (x, y) = on_screen();
+                        let mut wp = parked.map_or_else(|| self::placement(hwnd), |p| p.placement);
+                        wp.rcNormalPosition =
+                            to_workspace(RECT { left: x, top: y, right: x + w, bottom: y + h });
+                        wp.showCmd = SW_SHOWMINNOACTIVE.0 as u32;
+                        transitions(hwnd, false);
+                        // SAFETY: the placement is a full WINDOWPLACEMENT with its length set.
+                        unsafe {
+                            let _ = SetWindowPlacement(hwnd, &wp);
+                        }
+                        transitions(hwnd, true);
+                    }
+                }
+            }
+            Ok(WindowState {
+                width: (w - frame_width(outer, visible)) as u32,
+                height: (h - frame_height(outer, visible)) as u32,
+                placement: current(hwnd),
+                // SAFETY: a plain Win32 call on a checked window handle.
+                scale: unsafe { GetDpiForWindow(hwnd) } as f32 / 96.0,
+            })
+        })
+    }
+
+    fn window(hwnd: isize) -> Result<HWND, String> {
         let hwnd = HWND(hwnd as *mut _);
-        // SAFETY: plain Win32 calls on a window handle, which Windows checks itself.
+        // SAFETY: Windows checks the handle itself.
+        if unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+            Ok(hwnd)
+        } else {
+            Err("The UmlCraft window is gone.".into())
+        }
+    }
+
+    /// Runs `f` with this thread counting in physical pixels, like the frame bounds.
+    fn physical<T>(f: impl FnOnce() -> T) -> T {
+        // SAFETY: switches this thread's DPI awareness and back.
         unsafe {
-            if !IsWindow(Some(hwnd)).as_bool() {
-                return Err("The UmlCraft window is gone.".into());
-            }
-            if IsIconic(hwnd).as_bool() {
-                return Err("The UmlCraft window is minimized; ask the user to restore it.".into());
-            }
-            // Physical pixels whatever the thread was set to, like the frame bounds below.
             let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-            let image = grab(hwnd);
+            let out = f();
             if !previous.0.is_null() {
                 SetThreadDpiAwarenessContext(previous);
             }
-            image
+            out
         }
+    }
+
+    fn current(hwnd: HWND) -> Placement {
+        // SAFETY: a plain Win32 call on a checked window handle.
+        if unsafe { IsIconic(hwnd) }.as_bool() {
+            return Placement::Minimized;
+        }
+        let (_, visible) = bounds(hwnd);
+        let screens = screens();
+        let overlaps = visible.left < screens.right
+            && visible.right > screens.left
+            && visible.top < screens.bottom
+            && visible.bottom > screens.top;
+        if overlaps { Placement::Screen } else { Placement::Offscreen }
+    }
+
+    /// The window with its invisible resize borders, and the part one sees.
+    fn bounds(hwnd: HWND) -> (RECT, RECT) {
+        let mut outer = RECT::default();
+        // SAFETY: both calls write one RECT, whose size is given.
+        unsafe {
+            let _ = GetWindowRect(hwnd, &mut outer);
+            let mut visible = outer;
+            let got = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                (&raw mut visible).cast(),
+                size_of::<RECT>() as u32,
+            );
+            (outer, if got.is_ok() { visible } else { outer })
+        }
+    }
+
+    fn frame_width(outer: RECT, visible: RECT) -> i32 {
+        (outer.right - outer.left) - (visible.right - visible.left)
+    }
+
+    fn frame_height(outer: RECT, visible: RECT) -> i32 {
+        (outer.bottom - outer.top) - (visible.bottom - visible.top)
+    }
+
+    /// All screens together.
+    fn screens() -> RECT {
+        // SAFETY: plain Win32 calls.
+        unsafe {
+            let (left, top) =
+                (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN));
+            RECT {
+                left,
+                top,
+                right: left + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                bottom: top + GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            }
+        }
+    }
+
+    /// Where a window goes that nobody should see.
+    fn beyond() -> (i32, i32) {
+        let screens = screens();
+        (screens.right + BEYOND, screens.top)
+    }
+
+    /// The main screen without the taskbar.
+    fn work_area() -> RECT {
+        let mut area = RECT::default();
+        // SAFETY: SPI_GETWORKAREA writes one RECT.
+        unsafe {
+            let _ = SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                Some((&raw mut area).cast()),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            );
+        }
+        area
+    }
+
+    /// The top left of a `w` × `h` window in the middle of the main screen.
+    fn centred(w: i32, h: i32) -> (i32, i32) {
+        let area = work_area();
+        let x = area.left + ((area.right - area.left - w) / 2).max(0);
+        let y = area.top + ((area.bottom - area.top - h) / 2).max(0);
+        (x, y)
+    }
+
+    // A window's normal position counts from the main screen's work area, not the screen.
+    fn to_screen(r: RECT) -> RECT {
+        let area = work_area();
+        RECT {
+            left: r.left + area.left,
+            top: r.top + area.top,
+            right: r.right + area.left,
+            bottom: r.bottom + area.top,
+        }
+    }
+
+    fn to_workspace(r: RECT) -> RECT {
+        let area = work_area();
+        RECT {
+            left: r.left - area.left,
+            top: r.top - area.top,
+            right: r.right - area.left,
+            bottom: r.bottom - area.top,
+        }
+    }
+
+    fn placement(hwnd: HWND) -> WINDOWPLACEMENT {
+        let mut wp =
+            WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+        // SAFETY: the placement has its length set.
+        unsafe {
+            let _ = GetWindowPlacement(hwnd, &mut wp);
+        }
+        wp
+    }
+
+    /// Without the animation of minimizing and restoring (`false`), or with it again.
+    fn transitions(hwnd: HWND, on: bool) {
+        let disabled = BOOL::from(!on);
+        // SAFETY: the attribute takes one BOOL, whose size is given.
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_TRANSITIONS_FORCEDISABLED,
+                (&raw const disabled).cast(),
+                size_of::<BOOL>() as u32,
+            );
+        }
+    }
+
+    /// A minimized window, restored beyond the screens for a moment.
+    struct Parked {
+        placement: WINDOWPLACEMENT,
+    }
+
+    /// Restores a minimized window beyond the screens, where it draws itself without being
+    /// seen or taking the focus; `None` for a window that is not minimized.
+    fn park(hwnd: HWND) -> Option<Parked> {
+        // SAFETY: a plain Win32 call on a checked window handle.
+        if !unsafe { IsIconic(hwnd) }.as_bool() {
+            return None;
+        }
+        let saved = placement(hwnd);
+        let normal = saved.rcNormalPosition;
+        let (x, y) = beyond();
+        let mut wp = saved;
+        wp.rcNormalPosition = to_workspace(RECT {
+            left: x,
+            top: y,
+            right: x + normal.right - normal.left,
+            bottom: y + normal.bottom - normal.top,
+        });
+        wp.showCmd = SW_SHOWNOACTIVATE.0 as u32;
+        transitions(hwnd, false);
+        // SAFETY: the placement is a full WINDOWPLACEMENT with its length set.
+        unsafe {
+            let _ = SetWindowPlacement(hwnd, &wp);
+        }
+        Some(Parked { placement: saved })
+    }
+
+    /// Minimizes a parked window again, with its normal position as before.
+    fn unpark(hwnd: HWND, parked: Parked) {
+        let mut wp = parked.placement;
+        wp.showCmd = SW_SHOWMINNOACTIVE.0 as u32;
+        // SAFETY: the placement is a full WINDOWPLACEMENT with its length set.
+        unsafe {
+            let _ = SetWindowPlacement(hwnd, &wp);
+        }
+        transitions(hwnd, true);
     }
 
     /// Draws the window into a bitmap: `PW_RENDERFULLCONTENT` takes the content as composed

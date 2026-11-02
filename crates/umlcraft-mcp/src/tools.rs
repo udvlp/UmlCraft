@@ -43,7 +43,7 @@ impl Reply {
         Self { content: vec![Content::Text(text.into())], is_error: true }
     }
 
-    fn json(value: Value) -> Self {
+    pub fn json(value: Value) -> Self {
         Self::text(value.to_string())
     }
 
@@ -204,13 +204,56 @@ pub fn list() -> Vec<Value> {
             "screenshot",
             "The UmlCraft app's window as a PNG image, as the user sees it: title bar, ribbon, \
              model tree, properties, diagram tabs and canvas, also while other windows cover \
-             it. Only while the app runs (on Windows); `render_diagram` draws a diagram \
-             without it.",
+             it, while it is minimized or placed off screen (`set_window`). Only while the app \
+             runs (on Windows); `render_diagram` draws a diagram without it.",
             json!({
                 "scale": number("Size relative to the window's pixels, 0.25 to 1; default 1."),
             }),
             &[],
         )),
+        tool(
+            "set_window",
+            "Sizes and places the UmlCraft app's window, for `screenshot`s that should not \
+             disturb the user: `offscreen` puts it beyond the screens, where it keeps drawing \
+             but nobody sees it, `minimized` to the taskbar, `screen` back where the user sees \
+             it. Never takes the focus. Without arguments it only tells the window's size, \
+             place and scale (2 at 200 %). Only while the app runs (on Windows).",
+            json!({
+                "width": number("Width in the pixels of `screenshot` (physical pixels)."),
+                "height": number("Height in the pixels of `screenshot`."),
+                "placement": { "type": "string", "enum": ["screen", "offscreen", "minimized"] },
+            }),
+            &[],
+        ),
+        tool(
+            "set_view",
+            "Changes how the UmlCraft app looks: its theme and language (both are the user's \
+             settings, which the app keeps; set them back when done) and the zoom of the \
+             diagram or structogram shown. Only while the app runs.",
+            json!({
+                "theme": { "type": "string", "enum": ["light", "dark"] },
+                "language": { "type": "string", "enum": ["en", "de", "system"] },
+                "zoom": {
+                    "description": "\"fit\" for the whole diagram, or a percentage such as 100.",
+                    "oneOf": [{ "type": "string", "enum": ["fit"] }, { "type": "number" }],
+                },
+            }),
+            &[],
+        ),
+        tool(
+            "select",
+            "Selects elements on the diagram shown, as a click would; the properties panel \
+             shows the first. An empty list clears the selection.",
+            json!({
+                "ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Elements or their presentations on the diagram.",
+                },
+                "diagram": id("The diagram, shown first; the one shown if omitted."),
+            }),
+            &["ids"],
+        ),
         tool(
             "create_diagram",
             "Creates a diagram (sequence, activity and state machine diagrams inside a new \
@@ -476,15 +519,19 @@ pub fn list() -> Vec<Value> {
         tool("redo", "Redoes the last undone change.", json!({}), &[]),
         tool(
             "open_diagram",
-            "Shows a diagram (in the app: brings its tab to the front).",
-            json!({ "diagram": id("The diagram.") }),
+            "Shows a diagram or structogram (in the app: brings its tab to the front).",
+            json!({ "diagram": id("The diagram or structogram.") }),
             &["diagram"],
         ),
         tool(
             "new_document",
-            "Starts a new project with one class diagram. In the app only when the open \
-             project has no unsaved changes.",
-            json!({ "name": text("The project's name.") }),
+            "Starts a new project with one class diagram, or with `sample` the app's sample \
+             project (Velo, every diagram kind; File › Open sample project). In the app only \
+             when the open project has no unsaved changes.",
+            json!({
+                "name": text("The project's name."),
+                "sample": { "type": "boolean", "description": "The sample project (only in the app)." },
+            }),
             &[],
         ),
         tool(
@@ -525,14 +572,16 @@ pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> R
         "render_diagram" => render_diagram(host, args),
         // The app answers this one itself, with its window; it never comes here from the app
         // but inside `batch`.
-        "screenshot" => Err(if host.live() {
-            "`screenshot` cannot run inside `batch`; call it on its own.".into()
+        "screenshot" | "set_window" | "set_view" => Err(if host.live() {
+            format!("`{name}` cannot run inside `batch`; call it on its own.")
         } else {
-            "There is no UmlCraft window to capture: this session works on a project of the \
-             server's own (the app is not running, or this session started without it). \
-             `render_diagram` draws a diagram without the app."
-                .into()
+            format!(
+                "`{name}` needs the UmlCraft window: this session works on a project of the \
+                 server's own (the app is not running, or this session started without it). \
+                 `render_diagram` draws a diagram without the app."
+            )
         }),
+        "select" => select(host, args),
         "create_diagram" => create_diagram(host, args),
         "create_element" => create_element(host, args),
         "create_model_element" => create_model_element(host, args),
@@ -1647,14 +1696,35 @@ fn undo(host: &mut dyn Host, undo: bool) -> Outcome {
 
 fn open_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let diagram = id_arg(args, "diagram")?;
-    diagram_of(host.document().model(), diagram)?;
+    let model = host.document().model();
+    let structogram = model.get(diagram).is_some_and(|e| e.kind().as_structogram().is_some());
+    if !structogram {
+        diagram_of(model, diagram)?;
+    }
     host.show_diagram(diagram);
     Ok(Reply::json(json!({ "shown_diagram": diagram })))
 }
 
 // ----- Files ---------------------------------------------------------------------------------
 
+fn select(host: &mut dyn Host, args: &Value) -> Outcome {
+    let (diagram, _) = diagram_arg(host, args, "diagram")?;
+    let ids = ids_arg(args, "ids")?.ok_or("`ids` is missing")?;
+    let model = host.document().model();
+    let presentations =
+        ids.into_iter().map(|id| on_diagram(model, diagram, id)).collect::<Result<Vec<_>, _>>()?;
+    host.show_diagram(diagram);
+    host.select(presentations.clone());
+    Ok(Reply::json(json!({ "diagram": diagram, "selection": presentations })))
+}
+
 fn new_project(host: &mut dyn Host, args: &Value) -> Outcome {
+    if args.get("sample").and_then(Value::as_bool) == Some(true) {
+        let doc = host.sample()?;
+        let diagram = first_diagram(doc.model());
+        host.replace(doc, None)?;
+        return Ok(Reply::json(json!({ "diagram": diagram })));
+    }
     let doc = new_document(opt_str(args, "name").unwrap_or("Project"));
     let diagram = first_diagram(doc.model());
     host.replace(doc, None)?;
@@ -1775,6 +1845,36 @@ mod tests {
         assert!(reply.is_error);
         assert_eq!(screenshot_scale(&json!({ "scale": 0.1 })), 0.25);
         assert_eq!(screenshot_scale(&json!({})), 1.0);
+        for tool in ["set_window", "set_view"] {
+            assert!(call(&mut host, &Access::default(), tool, &json!({})).is_error, "{tool}");
+        }
+        let sample =
+            call(&mut host, &Access::default(), "new_document", &json!({ "sample": true }));
+        assert!(sample.is_error);
+    }
+
+    #[test]
+    fn select_takes_elements_and_presentations() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "Shop" }));
+        let d = id(&d["diagram"]);
+        let order = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "class", "name": "Order" }),
+        );
+        let by_element = run(&mut host, "select", json!({ "ids": [order["element"]] }));
+        assert_eq!(by_element["selection"], json!([order["presentation"]]));
+        let by_presentation =
+            run(&mut host, "select", json!({ "ids": [order["presentation"]], "diagram": d }));
+        assert_eq!(by_presentation["selection"], by_element["selection"]);
+        let unknown = call(
+            &mut host,
+            &Access::default(),
+            "select",
+            &json!({ "ids": [Id::generate().to_string()] }),
+        );
+        assert!(unknown.is_error);
     }
 
     #[test]

@@ -182,7 +182,10 @@ project of its own, which it can save. It creates diagrams, elements, lines and 
 renames, moves and deletes, puts messages into fragments with their operands, writes and
 rewrites structograms, arranges diagrams, renders them as images to look at, and exports PNG
 and SVG. Several changes can make one undo step. While the app runs, it can also take a
-screenshot of the UmlCraft window (on Windows), also when other windows cover it. The app accepts connections from this computer only, with a token only the user
+screenshot of the UmlCraft window (on Windows), also when other windows cover it or it is
+minimized; it sizes the window and can move it beyond the screens, where it keeps drawing but
+nobody sees it, sets theme, language, zoom and selection, and opens the sample project, so
+that screenshots need no one at the screen. The app accepts connections from this computer only, with a token only the user
 can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
 
 ## Not yet supported
