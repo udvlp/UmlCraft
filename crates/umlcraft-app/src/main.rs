@@ -3,6 +3,7 @@
 mod about_dialog;
 mod canvas;
 mod demo;
+mod erm;
 mod errors;
 #[cfg(test)]
 mod fuzz;

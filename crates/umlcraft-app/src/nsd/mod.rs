@@ -12,6 +12,8 @@ use rust_i18n::t;
 use umlcraft_nsd::{Diagram, ElementKind};
 
 pub use view::{Allowed, NsdView};
+// The ER diagram window rasterizes and writes its exports the same way.
+pub(crate) use view::{OPTIONS, rasterize, write_file};
 
 actions!(
     nsd,

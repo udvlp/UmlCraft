@@ -6831,6 +6831,7 @@ dependencies = [
  "sys-locale",
  "umlcraft-asta",
  "umlcraft-asta-export",
+ "umlcraft-erm",
  "umlcraft-format",
  "umlcraft-mcp",
  "umlcraft-model",
