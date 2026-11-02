@@ -2,7 +2,7 @@
 //! buttons that show an icon.
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{ActiveTheme, Icon, Sizable};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex};
 use gpui_kit::*;
 
 /// The part of the window, in window pixels, that the floating panels leave free over the
@@ -114,6 +114,46 @@ impl MenuAt {
             .child(menu.clone());
         Some(deferred(menu).with_priority(1).into_any_element())
     }
+}
+
+/// The line height of [`name_and_note`]'s texts, set on both so that the baseline offset is
+/// computed with the height they are laid out in.
+const NAME_AND_NOTE_LINE: Rems = rems(1.125);
+
+/// A name (`text_sm`, of `weight`) and after it, smaller and muted, a note such as a version
+/// or a kind (`text_xs`), on one baseline. Flex layout knows no text baselines
+/// (`items_baseline` aligns the boxes' bottoms), so the note moves down by what its baseline
+/// sits higher in its line, from the font's metrics; a semibold face has metrics of its own.
+/// GPUI snaps boxes and glyph baselines to device pixels, so the offset is the difference of
+/// the two baselines each rounded to device pixels: then both land on the same pixel row.
+pub fn name_and_note(
+    name: impl Into<SharedString>,
+    note: impl Into<SharedString>,
+    weight: FontWeight,
+    window: &Window,
+    cx: &App,
+) -> Div {
+    let text = window.text_system();
+    let family = cx.theme().font_family.clone();
+    let rem = window.rem_size();
+    let line = NAME_AND_NOTE_LINE.to_pixels(rem).round();
+    let scale = window.scale_factor();
+    // Where a line puts its baseline: the ascent below half the leading. In device pixels,
+    // rounded as GPUI places glyphs. Not `TextSystem::baseline_offset`, which takes the
+    // descent with the sign the platform gives it (negative on Windows), unlike line layout.
+    let baseline = |weight: FontWeight, size: Rems| {
+        let font_id = text.resolve_font(&Font { weight, ..font(family.clone()) });
+        let size = size.to_pixels(rem);
+        let (ascent, descent) = (text.ascent(font_id, size), text.descent(font_id, size).abs());
+        (f32::from((line - ascent - descent) / 2.0 + ascent) * scale).round()
+    };
+    let down =
+        px((baseline(weight, rems(0.875)) - baseline(FontWeight::NORMAL, rems(0.75))) / scale);
+    h_flex()
+        .items_start()
+        .line_height(NAME_AND_NOTE_LINE)
+        .child(div().text_sm().font_weight(weight).child(name.into()))
+        .child(div().mt(down).text_xs().text_color(cx.theme().muted_foreground).child(note.into()))
 }
 
 /// An icon from the app's assets, e.g. `icons::fluent("save")`.

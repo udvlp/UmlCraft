@@ -68,6 +68,9 @@ today.
   parameters, enumeration literals, slots, template parameters, extension points, interactions,
   activities, state machines, operands and regions have icons of their own, so the tree reads
   evenly.
+- **Names and notes on one baseline**: the version beside the name in the title bar and the kind
+  beside each name in the project tree stand on the name's baseline. The title bar's icons are
+  as large as the ribbon's small ones.
 
 ## 0.16.0 – 2026-11-01
 

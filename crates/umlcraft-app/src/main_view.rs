@@ -1733,7 +1733,7 @@ impl MainView {
 
     /// Logo, File menu, save, undo and redo, and the project's name; the window's controls on
     /// the right are the title bar's own.
-    fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.read(cx);
         // The step's name, e.g. "Undo Delete".
         let named = |label: Option<&str>, key: &str, plain: &str| match label {
@@ -1758,8 +1758,17 @@ impl MainView {
                 .flex_1()
                 .gap_1()
                 .child(img(icons::LOGO).size(px(18.0)).mr_1())
-                .child(div().text_sm().font_semibold().child("UmlCraft"))
-                .child(div().text_xs().text_color(muted).mr_2().child(env!("CARGO_PKG_VERSION")))
+                .child(
+                    shell::name_and_note(
+                        "UmlCraft",
+                        env!("CARGO_PKG_VERSION"),
+                        FontWeight::SEMIBOLD,
+                        window,
+                        cx,
+                    )
+                    .gap_1()
+                    .mr_2(),
+                )
                 .child(
                     Button::new("file-menu").ghost().small().label(t!("menu.file")).dropdown_menu(
                         move |menu, window, cx| {
@@ -1889,7 +1898,7 @@ impl MainView {
         let header = panel_header(None, t!("panel.model"), Some(count.to_string()), cx);
         v_flex().size_full().child(header).child(
             div().flex_1().min_h_0().py_1().child(
-                tree(&self.tree, move |ix, entry, selected, _, _| {
+                tree(&self.tree, move |ix, entry, selected, window, cx| {
                     let item = entry.item();
                     let meta = meta.get(&item.id);
                     let kind = meta.map(|m| m.kind.type_name()).unwrap_or_default();
@@ -1921,12 +1930,15 @@ impl MainView {
                         .pl_1()
                         .gap_2()
                         .child(icon)
-                        .child(div().text_sm().child(item.label.clone()))
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(t!(format!("kind.{kind}")).to_string()),
+                            shell::name_and_note(
+                                item.label.clone(),
+                                t!(format!("kind.{kind}")).to_string(),
+                                FontWeight::NORMAL,
+                                window,
+                                cx,
+                            )
+                            .gap_2(),
                         )
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
@@ -2676,7 +2688,7 @@ impl Render for MainView {
                     None => canvas.update(cx, |c, cx| c.zoom_to_fit(cx)),
                 }
             }))
-            .child(self.title_bar(cx))
+            .child(self.title_bar(window, cx))
             .children(self.update_question(cx))
             .child(body)
     }
