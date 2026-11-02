@@ -23,6 +23,19 @@ today.
   UmlCraft keep showing `out` and `inout`.
 - **"abstract" once**: an abstract class that has the stereotype «abstract» of its own no
   longer shows `{abstract}` below its name as well, nor «abstract» twice.
+- **AI clients make several changes as one step**: the MCP server's `batch` tool runs a list
+  of calls as one undo step, all or nothing, and later calls can use the ids earlier ones
+  returned.
+- **AI clients build whole sequence diagrams**: they can put messages into fragments such as
+  `alt` and `loop`, add and remove operands with their guards, and set a message's sort,
+  guard, arguments, return value and the operation it calls, draw found and lost messages,
+  choose the lifelines a fragment covers and move messages and fragments up or down, also into
+  another operand. Deleting a region or an operand through the MCP server now leaves the
+  diagram as tidy as deleting it in the app.
+- **AI clients write structograms**: they create a structogram from a tree of instructions,
+  branches and loops, optionally for an operation, read it back in the same form, change it and
+  look at it as an image. The project overview lists the structograms. They can also change
+  single elements of a structogram and export it as an image or a Structorizer file.
 
 ## 0.16.0 – 2026-11-01
 

@@ -8,15 +8,16 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 use umlcraft_model::{
-    DiagramKind, ElementData, ElementKind, Id, Model, ModelError, Point, Rect, Shape, Tx,
-    Visibility,
+    DiagramKind, ElementData, ElementKind, Id, InteractionOperator, MessageSort, Model, ModelError,
+    Point, Rect, Shape, Tx, Visibility,
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview};
-use umlcraft_notation::{autoroute, edit, layout, member, sequence_edit, svg};
+use umlcraft_notation::{autoroute, edit, layout, member, sequence_edit, state_edit, svg};
 
 use crate::base64;
 use crate::host::{Access, Host, first_diagram, new_document};
+use crate::structogram;
 
 /// Part of a tool's reply.
 #[derive(Clone, Debug, PartialEq)]
@@ -85,7 +86,29 @@ every change and can undo it with Ctrl+Z); otherwise a project of the server's o
 attributes and operations (`- name : String`, `+ total() : int`), `connect` for relationships, \
 then `arrange_diagram` (any kind but sequence diagrams) and `render_diagram` to look at \
 the result. `get_diagram` lists what a diagram shows and which element and relationship tools \
-its kind offers. Ids are UUID strings returned by the tools.";
+its kind offers. In a sequence diagram, `connect` draws a message between lifelines below the others \
+unless `y` says where, `wrap_in_fragment` puts messages into an `alt`, `loop`, … and `add_operand` adds a \
+case. Structograms (Nassi-Shneiderman diagrams) are JSON trees: `create_structogram`, \
+`get_structogram`, `update_structogram`. `batch` runs several calls as one undo step; a string `$0.id` in a later call's \
+arguments takes the `id` from the first call's reply. Ids are UUID strings returned by the \
+tools.";
+
+/// The description of `create_structogram`, with the tree it takes.
+const STRUCTOGRAM_FORMAT: &str = "Creates a structogram (Nassi-Shneiderman diagram) from a \
+tree: {\"title\": \"total(a, n)\", \"kind\": \"sub\", \"body\": [{\"kind\": \"instruction\", \
+\"text\": \"s := 0\"}, {\"kind\": \"for\", \"text\": \"for i := 1 to n\", \"body\": [...]}, \
+{\"kind\": \"if\", \"text\": \"s > 100?\", \"then\": [...], \"else\": [...]}, {\"kind\": \
+\"case\", \"text\": \"unit?\", \"branches\": [{\"label\": \"1\", \"body\": [...]}, {\"label\": \
+\"default\", \"body\": [...]}]}, {\"kind\": \"while\", \"text\": \"while x > 0\", \"body\": \
+[...]}, {\"kind\": \"repeat\", \"text\": \"until x = 0\", \"body\": [...]}, {\"kind\": \
+\"forever\", \"body\": [...]}, {\"kind\": \"call\", \"text\": \"sort(a)\"}, {\"kind\": \
+\"jump\", \"text\": \"return s\"}, {\"kind\": \"try\", \"text\": \"e\", \"body\": [...], \
+\"catch\": [...], \"finally\": [...]}, {\"kind\": \"parallel\", \"branches\": [[...], \
+[...]]}]}. Texts are written as structograms write them: no types, `x := value`, no `;`, \
+conditions as questions; several lines are joined with \\n. A case's last branch is its \
+default (label `%` for none). Elements may have `comment`, `disabled` and `color` (six hex \
+digits). `kind` of the root: program (default), sub for a method, includable; `keywords`: \
+english (default) or german (`für`, `solange`, `bis`, `gib`).";
 
 const DIAGRAM_KINDS: [(&str, DiagramKind); 7] = [
     ("class", DiagramKind::Class),
@@ -118,6 +141,14 @@ pub fn list() -> Vec<Value> {
         tool
     };
     let kinds: Vec<&str> = DIAGRAM_KINDS.iter().map(|(key, _)| *key).collect();
+    let structogram_schema = json!({
+        "type": "object",
+        "description": format!(
+            "title (string), kind (program, sub, includable), keywords (english, german), \
+             comment, body (list of elements, each with `kind`: {})",
+            structogram::kind_names().join(", ")
+        ),
+    });
     vec![
         read_only(tool(
             "get_document",
@@ -144,6 +175,13 @@ pub fn list() -> Vec<Value> {
             &["id"],
         )),
         read_only(tool(
+            "get_structogram",
+            "A structogram (Nassi-Shneiderman diagram) as the tree `create_structogram` takes, \
+             with its owner and the operation whose method it shows.",
+            json!({ "id": id("The structogram.") }),
+            &["id"],
+        )),
+        read_only(tool(
             "get_diagram",
             "What a diagram shows: nodes with their element, kind, name and bounds as drawn; \
              lines with their element and ends; and the tools its kind offers for \
@@ -153,9 +191,9 @@ pub fn list() -> Vec<Value> {
         )),
         read_only(tool(
             "render_diagram",
-            "A diagram as a PNG image, as UmlCraft draws it.",
+            "A diagram or structogram as a PNG image, as UmlCraft draws it.",
             json!({
-                "diagram": id("The diagram; the one shown if omitted."),
+                "diagram": id("The diagram or structogram; the one shown if omitted."),
                 "scale": number("Pixels per unit, 0.5 to 2; default 1."),
             }),
             &[],
@@ -218,15 +256,16 @@ pub fn list() -> Vec<Value> {
              UmlCraft refuses what UML does not allow. `source` and `target` are elements or \
              their presentations. Generalization runs from the specific to the general, \
              realization from the class to the interface. Messages go below the others unless \
-             `y` is given.",
+             `y` is given. `foundMessage` (from outside the interaction) and `lostMessage` (to \
+             outside) take one lifeline, as `source`.",
             json!({
                 "diagram": id("The diagram."),
                 "tool": text("The relationship tool."),
                 "source": id("Element or presentation it starts at."),
-                "target": id("Element or presentation it ends at."),
+                "target": id("Element or presentation it ends at; not for found and lost messages."),
                 "y": number("Sequence diagrams: the height of the message."),
             }),
-            &["diagram", "tool", "source", "target"],
+            &["diagram", "tool", "source"],
         ),
         tool(
             "add_member",
@@ -240,30 +279,114 @@ pub fn list() -> Vec<Value> {
             &["owner", "text"],
         ),
         tool(
+            "wrap_in_fragment",
+            "Puts messages of a sequence diagram into a new combined fragment, together with \
+             everything drawn between them; they must lie in the same interaction or operand. \
+             An `alt` gets an `else` operand. The reply lists the fragment's operands.",
+            json!({
+                "diagram": id("The sequence diagram."),
+                "items": { "type": "array", "items": { "type": "string" },
+                           "description": "The messages, fragments or interaction uses." },
+                "operator": { "type": "string",
+                              "enum": ["alt", "opt", "loop", "par", "break", "critical", "neg",
+                                       "assert", "strict", "seq", "ignore", "consider"],
+                              "description": "`opt` if omitted." },
+                "guard": text("The first operand's guard, without brackets."),
+            }),
+            &["diagram", "items"],
+        ),
+        tool(
+            "create_structogram",
+            STRUCTOGRAM_FORMAT,
+            json!({
+                "structogram": structogram_schema.clone(),
+                "owner": id("Package or class to put it in; the operation's class, else the \
+                             project, if omitted."),
+                "operation": id("The operation whose method it shows."),
+            }),
+            &["structogram"],
+        ),
+        tool(
+            "update_structogram",
+            "Changes a structogram: what the given tree sets (as for `create_structogram`; \
+             `body` replaces the whole content), and the operation it shows (\"\" for none).",
+            json!({
+                "id": id("The structogram."),
+                "structogram": structogram_schema,
+                "operation": id("The operation whose method it shows, or \"\" for none."),
+            }),
+            &["id"],
+        ),
+        tool(
+            "edit_structogram",
+            "Changes one element of a structogram: inserts `element` (an element of the tree \
+             `create_structogram` takes) at `path`, replaces the element there or removes it. \
+             A path names a list and an index, as `get_structogram` nests them: `body.2`, \
+             `body.1.then.0`, `body.0.else.3`, `body.4.body.0` (in a loop or try), \
+             `body.0.branches.1.body.0` (in a case), `body.0.branches.1.0` (in a parallel \
+             element); the index may be the list's length to append.",
+            json!({
+                "id": id("The structogram."),
+                "action": { "type": "string", "enum": ["insert", "replace", "remove"] },
+                "path": text("Where, e.g. `body.1.then.0`."),
+                "element": { "type": "object",
+                             "description": "For insert and replace: the element, with `kind`." },
+            }),
+            &["id", "action", "path"],
+        ),
+        tool(
+            "add_operand",
+            "Adds an operand at the bottom of a combined fragment (`alt`, `par`, …) of a \
+             sequence diagram, with room for it in the fragment's frames.",
+            json!({
+                "fragment": id("The combined fragment."),
+                "guard": text("The operand's guard, without brackets, e.g. `x > 0` or `else`."),
+            }),
+            &["fragment"],
+        ),
+        tool(
             "update_element",
             "Changes an element: its name, a member's text (as for `add_member`), its \
-             documentation or its stereotypes.",
+             documentation or its stereotypes; a message's sort, guard, arguments, return \
+             value and operation; a combined fragment's operator (an `alt` gets an `else` \
+             operand) and the lifelines a fragment or interaction use covers (its frame then \
+             spans them); the guard of an operand, flow or transition.",
             json!({
                 "id": id("The element."),
                 "name": text("New name."),
                 "text": text("Attributes and operations: the whole member as text."),
                 "documentation": text("New documentation."),
                 "stereotypes": { "type": "array", "items": { "type": "string" } },
+                "guard": text("Messages, operands, flows, transitions: the guard, without brackets."),
+                "sort": { "type": "string",
+                          "enum": ["synchronous", "asynchronous", "reply", "create", "destroy"] },
+                "arguments": text("Messages: the arguments, written between the parentheses."),
+                "return_value": text("Replies: the value they return."),
+                "operation": text("Messages: the id of the operation it calls, or \"\" for none."),
+                "operator": { "type": "string",
+                              "enum": ["alt", "opt", "loop", "par", "break", "critical", "neg",
+                                       "assert", "strict", "seq", "ignore", "consider"] },
+                "covered": { "type": "array", "items": { "type": "string" },
+                             "description": "Fragments and interaction uses: the lifelines \
+                                             covered; all if empty." },
             }),
             &["id"],
         ),
         tool(
             "move_node",
-            "Moves a node of a diagram, or gives it another size.",
+            "Moves a node of a diagram, or gives it another size. In a sequence diagram it \
+             also moves a message (to height `y`) or a fragment (its top to `y`) as dragging \
+             does: into the interaction or operand found there, with the bar a message starts; \
+             `get_diagram` gives the heights of messages and operands.",
             json!({
                 "diagram": id("The diagram."),
-                "node": id("The element or its presentation."),
-                "x": number("Left edge."),
-                "y": number("Top edge."),
+                "node": id("The element or its presentation: a node, or a message."),
+                "x": number("Left edge; kept if omitted."),
+                "y": number("Top edge, or a message's height."),
                 "width": number("New width."),
                 "height": number("New height."),
             }),
-            &["diagram", "node", "x", "y"],
+            &["diagram", "node", "y"],
         ),
         tool(
             "arrange_diagram",
@@ -309,6 +432,29 @@ pub fn list() -> Vec<Value> {
             }),
             &["diagram", "id"],
         ),
+        tool(
+            "batch",
+            "Runs several tools one after the other as one change, which one undo takes back. \
+             If one fails, nothing is changed. A string argument `$2.element` stands for the \
+             field `element` of the reply of the call at index 2 (from 0), so later calls can \
+             use what earlier ones created. Not for undo, redo, batch, open_file and \
+             new_document.",
+            json!({
+                "calls": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool": text("The tool's name."),
+                            "arguments": { "type": "object" },
+                        },
+                        "required": ["tool"],
+                    },
+                },
+                "label": text("What the change is called in the undo history."),
+            }),
+            &["calls"],
+        ),
         tool("undo", "Undoes the last change.", json!({}), &[]),
         tool("redo", "Redoes the last undone change.", json!({}), &[]),
         tool(
@@ -339,10 +485,11 @@ pub fn list() -> Vec<Value> {
         ),
         tool(
             "export_image",
-            "Writes a diagram as an SVG or PNG image to an allowed folder (by the extension).",
+            "Writes a diagram or structogram as an SVG or PNG image to an allowed folder (by the \
+             extension); a structogram also as a Structorizer file (.nsd).",
             json!({
-                "diagram": id("The diagram."),
-                "path": text("The image file, .svg or .png."),
+                "diagram": id("The diagram or structogram."),
+                "path": text("The file: .svg, .png, or .nsd for a structogram."),
             }),
             &["diagram", "path"],
         ),
@@ -365,12 +512,19 @@ pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> R
         "show_element" => show_element(host, args),
         "connect" => connect(host, args),
         "add_member" => add_member(host, args),
+        "wrap_in_fragment" => wrap_in_fragment(host, args),
+        "add_operand" => add_operand(host, args),
+        "get_structogram" => get_structogram(host, args),
+        "create_structogram" => create_structogram(host, args),
+        "update_structogram" => update_structogram(host, args),
+        "edit_structogram" => edit_structogram(host, args),
         "update_element" => update_element(host, args),
         "move_node" => move_node(host, args),
         "arrange_diagram" => arrange_diagram(host, args),
         "route_lines" => route_lines(host, args),
         "delete_element" => delete_element(host, args),
         "remove_from_diagram" => remove_from_diagram(host, args),
+        "batch" => batch(host, access, args),
         "undo" => undo(host, true),
         "redo" => undo(host, false),
         "open_diagram" => open_diagram(host, args),
@@ -528,8 +682,17 @@ fn change<R>(
 fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
     let model = host.document().model();
     let mut diagrams = Vec::new();
+    let mut structograms = Vec::new();
     let mut stack = vec![model.root()];
     while let Some(id) = stack.pop() {
+        if let Some(p) = model.get(id).and_then(|e| e.kind().as_structogram()) {
+            structograms.push(json!({
+                "id": id,
+                "title": p.structogram.text().join(" "),
+                "owner": model.get(id).and_then(|e| e.owner()),
+                "operation": p.operation,
+            }));
+        }
         if let Some(kind) = model.get(id).and_then(|e| e.kind().as_diagram()) {
             let owner = model.get(id).and_then(|e| e.owner());
             diagrams.push(json!({
@@ -551,6 +714,7 @@ fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
         "can_undo": host.document().can_undo(),
         "can_redo": host.document().can_redo(),
         "diagrams": diagrams,
+        "structograms": structograms,
         "shown_diagram": host.active_diagram(),
         "selection": host.selection(),
         "allowed_folders": if access.any { json!("any") } else { json!(access.folders) },
@@ -633,22 +797,39 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
         };
         let name = p.element.map(|e| member::display_name(model, e)).unwrap_or_default();
         if let Some((source, target)) = p.endpoints() {
-            lines.push(json!({
+            let mut line = json!({
                 "presentation": p.id,
                 "element": p.element,
                 "kind": kind,
                 "name": name,
                 "source": source,
                 "target": target,
-            }));
+            });
+            if let Shape::Message { y, .. } = p.shape {
+                line["y"] = json!(y);
+            }
+            lines.push(line);
         } else if let Some(bounds) = scene.node(p.id).map(|n| n.rect).or(p.bounds()) {
-            nodes.push(json!({
+            let mut node = json!({
                 "presentation": p.id,
                 "element": p.element,
                 "kind": kind,
                 "name": name,
                 "bounds": rect(bounds),
-            }));
+            });
+            // Where each operand lies, for moving messages into it.
+            if let (Shape::Fragment { separators, .. }, Some(fragment)) = (&p.shape, p.element) {
+                let operands = model.children(fragment);
+                let tops = std::iter::once(bounds.y).chain(separators.iter().map(|s| bounds.y + s));
+                let bottoms = separators.iter().map(|s| bounds.y + s).chain([bounds.bottom()]);
+                let operands: Vec<Value> = operands
+                    .iter()
+                    .zip(tops.zip(bottoms))
+                    .map(|(o, (top, bottom))| json!({ "id": o, "top": top, "bottom": bottom }))
+                    .collect();
+                node["operands"] = json!(operands);
+            }
+            nodes.push(node);
         }
     }
     let tools = palette::palette(kind);
@@ -704,8 +885,16 @@ fn diagram_svg(host: &mut dyn Host, diagram: Id) -> String {
 }
 
 fn render_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
-    let (diagram, _) = diagram_arg(host, args, "diagram")?;
     let scale = opt_num(args, "scale").unwrap_or(1.0).clamp(0.5, 2.0);
+    let shown = opt_id(args, "diagram")?.or(host.active_diagram());
+    let model = host.document().model();
+    if let Some(p) = shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram()) {
+        let svg = umlcraft_nsd::svg::render(&p.structogram, umlcraft_nsd::Metrics::for_platform());
+        // Structogram images are in pixels already.
+        let image = png(&svg, scale * svg::SCALE)?;
+        return Ok(Reply { content: vec![Content::Image(image)], is_error: false });
+    }
+    let (diagram, _) = diagram_arg(host, args, "diagram")?;
     let image = png(&diagram_svg(host, diagram), scale)?;
     Ok(Reply { content: vec![Content::Image(image)], is_error: false })
 }
@@ -824,7 +1013,12 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     let tool = edge_tool(kind, str_arg(args, "tool")?)?;
     let model = host.document().model();
     let source = on_diagram(model, diagram, id_arg(args, "source")?)?;
-    let target = on_diagram(model, diagram, id_arg(args, "target")?)?;
+    // Found and lost messages are drawn from their lifeline to itself.
+    let target = match (tool, opt_id(args, "target")?) {
+        (EdgeTool::FoundMessage | EdgeTool::LostMessage, _) => source,
+        (_, Some(target)) => on_diagram(model, diagram, target)?,
+        (_, None) => return Err("`target` is missing".into()),
+    };
     let slot = match opt_num(args, "y") {
         Some(y) if tool.message_sort().is_some() => {
             let (doc, measure) = host.parts();
@@ -903,6 +1097,11 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
             kind.type_name()
         ));
     }
+    let mut settings = kind.clone();
+    set_properties(model, &mut settings, args)?;
+    let is_alt = |kind: &ElementKind| matches!(kind, ElementKind::CombinedFragment(p) if p.operator == InteractionOperator::Alt);
+    let becomes_alt = is_alt(&settings) && !is_alt(&kind);
+    let recovered = args.get("covered").is_some();
     change(host, "update_element", |tx| {
         if let Some(text) = &text {
             member::apply_member_text(tx, id, text)?;
@@ -910,7 +1109,7 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         if let Some(name) = name {
             tx.rename(id, name)?;
         }
-        if documentation.is_some() || stereotypes.is_some() {
+        if documentation.is_some() || stereotypes.is_some() || settings != kind {
             tx.update(id, |data| {
                 if let Some(documentation) = documentation {
                     data.documentation = documentation;
@@ -918,27 +1117,307 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
                 if let Some(stereotypes) = stereotypes {
                     data.stereotypes = stereotypes;
                 }
+                data.kind = settings;
             })?;
+        }
+        // A fragment turned into an alt gets its else, as in the app.
+        if becomes_alt {
+            palette::add_else(tx, id)?;
+        }
+        // Frames span the lifelines they cover once these are given.
+        if recovered {
+            sequence_edit::cover(tx, id)?;
         }
         sequence_edit::tidy_all(tx)
     })?;
     Ok(Reply::json(summary(host.document().model(), id)))
 }
 
+const SORTS: [(&str, MessageSort); 5] = [
+    ("synchronous", MessageSort::Synchronous),
+    ("asynchronous", MessageSort::Asynchronous),
+    ("reply", MessageSort::Reply),
+    ("create", MessageSort::Create),
+    ("destroy", MessageSort::Destroy),
+];
+
+const OPERATORS: [(&str, InteractionOperator); 12] = [
+    ("alt", InteractionOperator::Alt),
+    ("opt", InteractionOperator::Opt),
+    ("loop", InteractionOperator::Loop),
+    ("par", InteractionOperator::Par),
+    ("break", InteractionOperator::Break),
+    ("critical", InteractionOperator::Critical),
+    ("neg", InteractionOperator::Neg),
+    ("assert", InteractionOperator::Assert),
+    ("strict", InteractionOperator::Strict),
+    ("seq", InteractionOperator::Seq),
+    ("ignore", InteractionOperator::Ignore),
+    ("consider", InteractionOperator::Consider),
+];
+
+/// The value named by the string `key` of `args`, out of `names`.
+fn pick<T: Copy>(args: &Value, key: &str, names: &[(&str, T)]) -> Result<Option<T>, String> {
+    let Some(name) = opt_str(args, key) else { return Ok(None) };
+    match names.iter().find(|(n, _)| *n == name) {
+        Some(&(_, value)) => Ok(Some(value)),
+        None => {
+            let names: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
+            Err(format!("`{key}` is one of {}, not `{name}`", names.join(", ")))
+        }
+    }
+}
+
+/// Writes the settings of `args` that belong to the element's kind into `kind`: a guard, a
+/// message's sort, arguments, return value and operation, a fragment's operator.
+fn set_properties(model: &Model, kind: &mut ElementKind, args: &Value) -> Result<(), String> {
+    let type_name = kind.type_name();
+    let refuse = |key: &str| format!("a {type_name} has no `{key}`");
+    if let Some(guard) = opt_str(args, "guard") {
+        let guard = guard.trim();
+        let guard = guard.strip_prefix('[').and_then(|g| g.strip_suffix(']')).unwrap_or(guard);
+        let guard = guard.trim().to_owned();
+        match kind {
+            ElementKind::Message(p) => p.guard = guard,
+            ElementKind::InteractionOperand(p) => p.guard = guard,
+            ElementKind::ActivityEdge(p) => p.guard = guard,
+            ElementKind::Transition(p) => p.guard = guard,
+            ElementKind::InternalTransition(p) => p.guard = guard,
+            _ => return Err(refuse("guard")),
+        }
+    }
+    if let Some(operator) = pick(args, "operator", &OPERATORS)? {
+        let ElementKind::CombinedFragment(p) = kind else { return Err(refuse("operator")) };
+        p.operator = operator;
+    }
+    if let Some(ids) = ids_arg(args, "covered")? {
+        // Presentations stand for their lifelines.
+        let lifeline = |id: Id| -> Result<Id, String> {
+            let id = model.views().find_map(|(_, v)| v.get(id)?.element).unwrap_or(id);
+            match model.get(id).map(|e| e.kind()) {
+                Some(ElementKind::Lifeline(_)) => Ok(id),
+                _ => Err(format!("{id} is no lifeline")),
+            }
+        };
+        let covered = ids.into_iter().map(lifeline).collect::<Result<Vec<_>, _>>()?;
+        match kind {
+            ElementKind::CombinedFragment(p) => p.covered = covered,
+            ElementKind::InteractionUse(p) => p.covered = covered,
+            _ => return Err(refuse("covered")),
+        }
+    }
+    let message_keys = ["sort", "arguments", "return_value", "operation"];
+    let Some(key) = message_keys.into_iter().find(|k| args.get(k).is_some()) else {
+        return Ok(());
+    };
+    let ElementKind::Message(p) = kind else { return Err(refuse(key)) };
+    if let Some(sort) = pick(args, "sort", &SORTS)? {
+        p.sort = sort;
+    }
+    if let Some(arguments) = opt_str(args, "arguments") {
+        p.arguments = arguments.trim().to_owned();
+    }
+    if let Some(value) = opt_str(args, "return_value") {
+        p.return_value = value.trim().to_owned();
+    }
+    if let Some(operation) = opt_str(args, "operation") {
+        p.operation = match operation.trim() {
+            "" => None,
+            text => {
+                let operation = parse_id(text)?;
+                if !matches!(
+                    model.get(operation).map(|e| e.kind()),
+                    Some(ElementKind::Operation(_))
+                ) {
+                    return Err(format!("{operation} is no operation"));
+                }
+                Some(operation)
+            }
+        };
+    }
+    Ok(())
+}
+
+fn wrap_in_fragment(host: &mut dyn Host, args: &Value) -> Outcome {
+    let (diagram, kind) = diagram_arg(host, args, "diagram")?;
+    if kind != DiagramKind::Sequence {
+        return Err("fragments belong to sequence diagrams".into());
+    }
+    let model = host.document().model();
+    let view = model.view(diagram).ok_or("no view")?;
+    // Presentations stand for their messages.
+    let items: Vec<Id> = ids_arg(args, "items")?
+        .ok_or("`items` is missing")?
+        .into_iter()
+        .map(|i| view.get(i).and_then(|p| p.element).unwrap_or(i))
+        .collect();
+    let operator = pick(args, "operator", &OPERATORS)?.unwrap_or(InteractionOperator::Opt);
+    let mut guard = ElementKind::InteractionOperand(Default::default());
+    set_properties(model, &mut guard, &json!({ "guard": opt_str(args, "guard").unwrap_or("") }))?;
+    let fragment = change(host, "wrap_in_fragment", |tx| {
+        let (fragment, _) = palette::wrap_in_fragment(tx, diagram, &items)?;
+        tx.update(fragment, |data| {
+            if let ElementKind::CombinedFragment(p) = &mut data.kind {
+                p.operator = operator;
+            }
+        })?;
+        if let Some(&operand) = tx.model().children(fragment).first() {
+            tx.update(operand, |data| data.kind = guard)?;
+        }
+        if operator == InteractionOperator::Alt {
+            palette::add_else(tx, fragment)?;
+        }
+        sequence_edit::tidy(tx, diagram)?;
+        Ok(fragment)
+    })?;
+    let model = host.document().model();
+    let mut reply = summary(model, fragment);
+    reply["operands"] = json!(model.children(fragment));
+    Ok(Reply::json(reply))
+}
+
+/// The structogram `id` names.
+fn structogram_of(model: &Model, id: Id) -> Result<&umlcraft_model::StructogramProps, String> {
+    model
+        .get(id)
+        .and_then(|e| e.kind().as_structogram())
+        .ok_or_else(|| format!("{id} is no structogram"))
+}
+
+/// `operation` if it names an operation.
+fn operation_arg(model: &Model, operation: Id) -> Result<Id, String> {
+    match model.get(operation).map(|e| e.kind()) {
+        Some(ElementKind::Operation(_)) => Ok(operation),
+        _ => Err(format!("{operation} is no operation")),
+    }
+}
+
+fn structogram_reply(model: &Model, id: Id) -> Result<Value, String> {
+    let p = structogram_of(model, id)?;
+    Ok(json!({
+        "id": id,
+        "kind": "structogram",
+        "owner": model.get(id).and_then(|e| e.owner()),
+        "operation": p.operation,
+        "structogram": structogram::to_json(&p.structogram),
+    }))
+}
+
+fn get_structogram(host: &mut dyn Host, args: &Value) -> Outcome {
+    Ok(Reply::json(structogram_reply(host.document().model(), id_arg(args, "id")?)?))
+}
+
+fn create_structogram(host: &mut dyn Host, args: &Value) -> Outcome {
+    let model = host.document().model();
+    let tree = args.get("structogram").ok_or("`structogram` is missing")?;
+    let diagram = structogram::from_json(tree, None)?;
+    let operation = opt_id(args, "operation")?.map(|o| operation_arg(model, o)).transpose()?;
+    let owner = match opt_id(args, "owner")? {
+        Some(owner) => owner,
+        None => operation.and_then(|o| model.get(o)?.owner()).unwrap_or(model.root()),
+    };
+    let id = change(host, "create_structogram", |tx| {
+        let mut props = umlcraft_model::StructogramProps::new(&diagram);
+        props.operation = operation;
+        tx.create(owner, ElementData::new("", ElementKind::Structogram(props)))
+    })?;
+    Ok(Reply::json(structogram_reply(host.document().model(), id)?))
+}
+
+fn update_structogram(host: &mut dyn Host, args: &Value) -> Outcome {
+    let id = id_arg(args, "id")?;
+    let model = host.document().model();
+    let before = structogram_of(model, id)?;
+    let diagram = match args.get("structogram") {
+        Some(tree) => Some(structogram::from_json(tree, Some(&before.structogram))?),
+        None => None,
+    };
+    let operation = match opt_str(args, "operation").map(str::trim) {
+        None => None,
+        Some("") => Some(None),
+        Some(text) => Some(Some(operation_arg(model, parse_id(text)?)?)),
+    };
+    change(host, "update_structogram", |tx| {
+        if let Some(diagram) = &diagram {
+            tx.set_structogram(id, diagram)?;
+        }
+        if let Some(operation) = operation {
+            tx.update(id, |data| {
+                if let ElementKind::Structogram(p) = &mut data.kind {
+                    p.operation = operation;
+                }
+            })?;
+        }
+        Ok(())
+    })?;
+    Ok(Reply::json(structogram_reply(host.document().model(), id)?))
+}
+
+fn edit_structogram(host: &mut dyn Host, args: &Value) -> Outcome {
+    let id = id_arg(args, "id")?;
+    let before = structogram_of(host.document().model(), id)?;
+    let mut tree = structogram::to_json(&before.structogram);
+    let action = str_arg(args, "action")?;
+    structogram::edit(&mut tree, action, str_arg(args, "path")?, args.get("element"))?;
+    let diagram = structogram::from_json(&tree, Some(&before.structogram))?;
+    change(host, "edit_structogram", |tx| tx.set_structogram(id, &diagram))?;
+    Ok(Reply::json(structogram_reply(host.document().model(), id)?))
+}
+
+fn add_operand(host: &mut dyn Host, args: &Value) -> Outcome {
+    let fragment = id_arg(args, "fragment")?;
+    let model = host.document().model();
+    if !matches!(model.get(fragment).map(|e| e.kind()), Some(ElementKind::CombinedFragment(_))) {
+        return Err(format!("{fragment} is no combined fragment"));
+    }
+    let mut guard = ElementKind::InteractionOperand(Default::default());
+    set_properties(model, &mut guard, &json!({ "guard": opt_str(args, "guard").unwrap_or("") }))?;
+    let operand = change(host, "add_operand", |tx| {
+        let operand = palette::add_operand(tx, fragment)?;
+        tx.update(operand, |data| data.kind = guard)?;
+        sequence_edit::tidy_all(tx)?;
+        Ok(operand)
+    })?;
+    Ok(Reply::json(summary(host.document().model(), operand)))
+}
+
 fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, _) = diagram_arg(host, args, "diagram")?;
     let model = host.document().model();
     let node = on_diagram(model, diagram, id_arg(args, "node")?)?;
-    let bounds = model
-        .view(diagram)
-        .and_then(|v| v.get(node))
-        .and_then(|p| p.bounds())
-        .ok_or("only nodes can be moved")?;
-    let x = opt_num(args, "x").ok_or("`x` is missing")?;
+    let presentation = model.view(diagram).and_then(|v| v.get(node)).ok_or("no presentation")?;
+    // Messages and fragments of a sequence diagram move as when dragged in the app: to height
+    // `y`, into the interaction or operand found there.
+    let item = presentation.element.filter(|&e| {
+        is_sequence(model, diagram)
+            && matches!(
+                model.get(e).map(|e| e.kind()),
+                Some(
+                    ElementKind::Message(_)
+                        | ElementKind::CombinedFragment(_)
+                        | ElementKind::InteractionUse(_)
+                )
+            )
+    });
     let y = opt_num(args, "y").ok_or("`y` is missing")?;
+    let bounds = presentation.bounds();
+    let slot = item.and_then(|_| {
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), diagram, &Preview::default(), measure);
+        scene.sequence.as_ref().and_then(|l| l.slot_at(y))
+    });
+    if let (Some(item), Some(slot), None) = (item, slot, bounds) {
+        change(host, "move_node", |tx| palette::move_to_slot(tx, item, slot))?;
+        return Ok(Reply::json(json!({ "presentation": node, "y": y })));
+    }
+    let bounds = bounds.ok_or("only nodes and messages can be moved")?;
+    let x = opt_num(args, "x").unwrap_or(bounds.x);
     let width = opt_num(args, "width").unwrap_or(bounds.width).max(4.0);
     let height = opt_num(args, "height").unwrap_or(bounds.height).max(4.0);
     change(host, "move_node", |tx| {
+        if let (Some(item), Some(slot)) = (item, slot) {
+            palette::move_to_slot(tx, item, slot)?;
+        }
         tx.set_bounds(diagram, node, Rect::new(x, y, width, height))?;
         if is_sequence(tx.model(), diagram) {
             sequence_edit::tidy(tx, diagram)?;
@@ -1000,8 +1479,15 @@ fn delete_element(host: &mut dyn Host, args: &Value) -> Outcome {
             return Err("the model's root cannot be deleted".into());
         }
         let what = summary(model, id);
+        let kind = model.get(id).map(|e| e.kind().clone());
         change(host, "delete_element", |tx| {
-            tx.delete(id)?;
+            // As in the app: the neighbors of a region take its room, and an operand takes the
+            // line above it and its guard's place along.
+            match kind {
+                Some(ElementKind::Region) => state_edit::delete_region(tx, id)?,
+                Some(ElementKind::InteractionOperand(_)) => sequence_edit::delete_operand(tx, id)?,
+                _ => tx.delete(id)?,
+            }
             sequence_edit::tidy_all(tx)
         })?;
         return Ok(Reply::json(json!({ "deleted": what })));
@@ -1029,6 +1515,80 @@ fn remove_from_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
         sequence_edit::tidy_all(tx)
     })?;
     Ok(Reply::json(json!({ "removed": presentation })))
+}
+
+/// Tools a batch may not run: they change the history or replace the project.
+const NOT_IN_BATCH: [&str; 5] = ["undo", "redo", "batch", "open_file", "new_document"];
+
+fn batch(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
+    let calls = args.get("calls").and_then(Value::as_array).ok_or("`calls` must be an array")?;
+    let depth = host.document().undo_depth();
+    let mut results: Vec<Value> = Vec::with_capacity(calls.len());
+    let failed = |host: &mut dyn Host, i: usize, why: String| {
+        host.parts().0.roll_back_to(depth);
+        Err(format!("call {i} failed, nothing was changed: {why}"))
+    };
+    for (i, c) in calls.iter().enumerate() {
+        let Some(name) = c.get("tool").and_then(Value::as_str) else {
+            return failed(host, i, "`tool` is missing".into());
+        };
+        if NOT_IN_BATCH.contains(&name) {
+            return failed(host, i, format!("`{name}` cannot run in a batch"));
+        }
+        let arguments = match resolve(c.get("arguments").unwrap_or(&json!({})), &results) {
+            Ok(arguments) => arguments,
+            Err(why) => return failed(host, i, why),
+        };
+        let reply = call(host, access, name, &arguments);
+        let text: Vec<&str> = reply
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Text(text) => Some(text.as_str()),
+                Content::Image(_) => None,
+            })
+            .collect();
+        let text = text.join("\n");
+        if reply.is_error {
+            return failed(host, i, format!("{name}: {text}"));
+        }
+        results.push(serde_json::from_str(&text).unwrap_or(Value::String(text)));
+    }
+    let label = host.label(opt_str(args, "label").unwrap_or("batch"));
+    host.parts().0.squash_since(depth, label);
+    Ok(Reply::json(json!({ "results": results })))
+}
+
+/// `arguments` with each string `$<index>.<field>[.<field>…]` replaced by that field of the
+/// reply of an earlier call.
+fn resolve(arguments: &Value, results: &[Value]) -> Result<Value, String> {
+    Ok(match arguments {
+        Value::String(s) if s.starts_with('$') => {
+            let mut path = s[1..].split('.');
+            let index = path.next().and_then(|i| i.parse::<usize>().ok());
+            let Some(reply) = index.and_then(|i| results.get(i)) else {
+                return Err(format!("`{s}` names no earlier call"));
+            };
+            let mut value = reply;
+            for field in path {
+                value = match value {
+                    Value::Array(items) => field.parse::<usize>().ok().and_then(|i| items.get(i)),
+                    _ => value.get(field),
+                }
+                .ok_or_else(|| format!("the reply of call {} has no `{s}`", index.unwrap_or(0)))?;
+            }
+            value.clone()
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|v| resolve(v, results)).collect::<Result<_, _>>()?)
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| Ok((k.clone(), resolve(v, results)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        other => other.clone(),
+    })
 }
 
 fn undo(host: &mut dyn Host, undo: bool) -> Outcome {
@@ -1091,13 +1651,35 @@ fn save_file(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
 }
 
 fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
-    let (diagram, _) = diagram_arg(host, args, "diagram")?;
     let path = access.check(Path::new(str_arg(args, "path")?), None)?;
-    let svg = diagram_svg(host, diagram);
-    let bytes = match extension(&path).as_str() {
-        "svg" => svg.into_bytes(),
-        "png" => png(&svg, 2.0)?,
-        _ => return Err("the image file needs the extension .svg or .png".into()),
+    let shown = opt_id(args, "diagram")?.or(host.active_diagram());
+    let model = host.document().model();
+    let structogram = shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram());
+    let bytes = match (structogram, extension(&path).as_str()) {
+        (Some(p), "nsd") => {
+            let origin = format!("UmlCraft {}", env!("CARGO_PKG_VERSION"));
+            let made = umlcraft_nsd::Provenance { author: "", date: "", origin: &origin };
+            umlcraft_nsd::write(&umlcraft_nsd::content::to_file(&p.structogram, &made)).into_bytes()
+        }
+        (Some(p), extension) => {
+            let svg =
+                umlcraft_nsd::svg::render(&p.structogram, umlcraft_nsd::Metrics::for_platform());
+            match extension {
+                "svg" => svg.into_bytes(),
+                // Two pixels per pixel of the structogram, as diagrams get two per unit.
+                "png" => png(&svg, 2.0 * svg::SCALE)?,
+                _ => return Err("a structogram goes to .svg, .png or .nsd".into()),
+            }
+        }
+        (None, extension) => {
+            let (diagram, _) = diagram_arg(host, args, "diagram")?;
+            let svg = diagram_svg(host, diagram);
+            match extension {
+                "svg" => svg.into_bytes(),
+                "png" => png(&svg, 2.0)?,
+                _ => return Err("the image file needs the extension .svg or .png".into()),
+            }
+        }
     };
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
@@ -1216,6 +1798,55 @@ mod tests {
     }
 
     #[test]
+    fn a_batch_is_one_step_and_all_or_nothing() {
+        let mut host = Headless::new();
+        let before = host.document().undo_depth();
+        let calls = json!([
+            { "tool": "create_diagram", "arguments": { "kind": "class", "name": "Shop" } },
+            { "tool": "create_element",
+              "arguments": { "diagram": "$0.diagram", "tool": "class", "name": "Order" } },
+            { "tool": "create_element",
+              "arguments": { "diagram": "$0.diagram", "tool": "class", "name": "Customer" } },
+            { "tool": "add_member", "arguments": { "owner": "$1.element", "text": "+ total() : int" } },
+            { "tool": "connect", "arguments": {
+                "diagram": "$0.diagram", "tool": "association",
+                "source": "$1.element", "target": "$2.element" } },
+            { "tool": "arrange_diagram", "arguments": { "diagram": "$0.diagram" } },
+        ]);
+        let done = run(&mut host, "batch", json!({ "calls": calls, "label": "Shop" }));
+        let d = id(&done["results"][0]["diagram"]);
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        assert_eq!(diagram["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(diagram["lines"].as_array().unwrap().len(), 1);
+        assert_eq!(host.document().undo_depth(), before + 1);
+        assert_eq!(host.document().undo_label(), Some("Shop"));
+        host.document().model().check().unwrap();
+        run(&mut host, "undo", json!({}));
+        assert!(host.document().model().get(parse_id(&d).unwrap()).is_none());
+
+        // A failing call takes back what the calls before it did.
+        let revision = host.document().revision();
+        let model = format!("{:?}", host.document().model().get(host.document().model().root()));
+        let calls = json!([
+            { "tool": "create_diagram", "arguments": { "kind": "class", "name": "Shop" } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram", "tool": "nonsense" } },
+        ]);
+        let refused = call(&mut host, &Access::default(), "batch", &json!({ "calls": calls }));
+        assert!(refused.is_error);
+        assert_ne!(host.document().revision(), revision);
+        assert_eq!(
+            format!("{:?}", host.document().model().get(host.document().model().root())),
+            model
+        );
+        let undo = json!([{ "tool": "undo" }]);
+        assert!(call(&mut host, &Access::default(), "batch", &json!({ "calls": undo })).is_error);
+        let dangling = json!([{ "tool": "get_element", "arguments": { "id": "$3.element" } }]);
+        assert!(
+            call(&mut host, &Access::default(), "batch", &json!({ "calls": dangling })).is_error
+        );
+    }
+
+    #[test]
     fn a_sequence_diagram_gets_lifelines_and_messages() {
         let mut host = Headless::new();
         let d = run(&mut host, "create_diagram", json!({ "kind": "sequence", "name": "Order" }));
@@ -1236,11 +1867,222 @@ mod tests {
             json!({ "diagram": d, "tool": "message", "source": a["element"], "target": b["element"] }),
         );
         assert_eq!(call_["kind"], "message");
-        run(
+        let reply = run(
             &mut host,
             "connect",
             json!({ "diagram": d, "tool": "reply", "source": b["element"], "target": a["element"] }),
         );
+        host.document().model().check().unwrap();
+
+        // Message settings.
+        let uid = |v: &Value| parse_id(v.as_str().unwrap()).unwrap();
+        let pay = call_["element"].clone();
+        let update = json!({ "id": pay, "name": "pay", "arguments": "total", "guard": "[open]",
+                             "sort": "asynchronous" });
+        run(&mut host, "update_element", update);
+        run(&mut host, "update_element", json!({ "id": reply["element"], "return_value": "ok" }));
+        let message = |host: &Headless, id: &Value| match host.document().model().get(uid(id)) {
+            Some(e) => match e.kind() {
+                ElementKind::Message(p) => p.clone(),
+                _ => panic!("no message"),
+            },
+            None => panic!("gone"),
+        };
+        let p = message(&host, &pay);
+        assert_eq!(
+            (p.sort, p.arguments.as_str(), p.guard.as_str()),
+            (MessageSort::Asynchronous, "total", "open")
+        );
+        assert_eq!(message(&host, &reply["element"]).return_value, "ok");
+        let lifeline = json!({ "id": a["element"], "guard": "x" });
+        assert!(call(&mut host, &Access::default(), "update_element", &lifeline).is_error);
+        let bogus = json!({ "id": pay, "sort": "sometimes" });
+        assert!(call(&mut host, &Access::default(), "update_element", &bogus).is_error);
+
+        // Fragments and their operands.
+        let guards = |host: &Headless, fragment: Id| -> Vec<String> {
+            let model = host.document().model();
+            model
+                .children(fragment)
+                .iter()
+                .filter_map(|&o| match model.get(o).map(|e| e.kind()) {
+                    Some(ElementKind::InteractionOperand(p)) => Some(p.guard.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let wrap = json!({ "diagram": d, "items": [pay, reply["element"]], "operator": "alt",
+                           "guard": "paid" });
+        let alt = run(&mut host, "wrap_in_fragment", wrap);
+        let fragment = uid(&alt["id"]);
+        assert_eq!(alt["operands"].as_array().map(Vec::len), Some(2));
+        assert_eq!(guards(&host, fragment), ["paid", "else"]);
+        let late =
+            run(&mut host, "add_operand", json!({ "fragment": fragment, "guard": "[late]" }));
+        assert_eq!(guards(&host, fragment), ["paid", "else", "late"]);
+        run(&mut host, "delete_element", json!({ "id": late["id"] }));
+        assert_eq!(guards(&host, fragment), ["paid", "else"]);
+        run(&mut host, "update_element", json!({ "id": fragment, "operator": "loop" }));
+        assert!(matches!(
+            host.document().model().get(fragment).map(|e| e.kind()),
+            Some(ElementKind::CombinedFragment(p)) if p.operator == InteractionOperator::Loop
+        ));
+        let pay_owner = host.document().model().get(uid(&pay)).and_then(|e| e.owner());
+        assert_eq!(pay_owner, host.document().model().children(fragment).first().copied());
+        host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn messages_move_between_operands() {
+        let mut host = Headless::new();
+        let uid = |v: &Value| parse_id(v.as_str().unwrap()).unwrap();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "sequence", "name": "Pay" }));
+        let d = d["diagram"].clone();
+        let lifeline = |host: &mut Headless, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": "lifeline", "name": name }))
+        };
+        let (a, b, c) =
+            (lifeline(&mut host, "a"), lifeline(&mut host, "b"), lifeline(&mut host, "c"));
+        let found = json!({ "diagram": d, "tool": "foundMessage", "source": a["element"] });
+        let found = run(&mut host, "connect", found);
+        let lost = json!({ "diagram": d, "tool": "lostMessage", "source": b["element"] });
+        run(&mut host, "connect", lost);
+        let gates: Vec<_> = host
+            .document()
+            .model()
+            .elements()
+            .filter_map(|e| match e.kind() {
+                ElementKind::Message(p) => Some(p.gate),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(gates, [umlcraft_model::MessageGate::Found, umlcraft_model::MessageGate::Lost]);
+        let missing = json!({ "diagram": d, "tool": "message", "source": a["element"] });
+        assert!(call(&mut host, &Access::default(), "connect", &missing).is_error);
+
+        let send = |host: &mut Headless, from: &Value, to: &Value| {
+            let m = json!({ "diagram": d, "tool": "message", "source": from, "target": to });
+            run(host, "connect", m)
+        };
+        let first = send(&mut host, &a["element"], &b["element"]);
+        let second = send(&mut host, &a["element"], &b["element"]);
+        let wrap = json!({ "diagram": d, "items": [first["element"]], "operator": "alt" });
+        let alt = run(&mut host, "wrap_in_fragment", wrap);
+
+        // Covering c as well widens the frame to it.
+        let frame = |host: &mut Headless| {
+            let diagram = run(host, "get_diagram", json!({ "diagram": d }));
+            let nodes = diagram["nodes"].as_array().unwrap().clone();
+            nodes.into_iter().find(|n| n["element"] == alt["id"]).unwrap()
+        };
+        let narrow = frame(&mut host)["bounds"]["width"].as_f64().unwrap();
+        let cover = json!({ "id": alt["id"],
+                            "covered": [a["element"], b["element"], c["presentation"]] });
+        run(&mut host, "update_element", cover);
+        let wide = frame(&mut host);
+        assert!(wide["bounds"]["width"].as_f64().unwrap() > narrow);
+        let covered = match host.document().model().get(uid(&alt["id"])).map(|e| e.kind()) {
+            Some(ElementKind::CombinedFragment(p)) => p.covered.clone(),
+            _ => panic!("no fragment"),
+        };
+        assert_eq!(covered, [uid(&a["element"]), uid(&b["element"]), uid(&c["element"])]);
+
+        // The second message into the else.
+        let operands = wide["operands"].as_array().unwrap();
+        assert_eq!(operands.len(), 2);
+        let otherwise = &operands[1];
+        let y = (otherwise["top"].as_f64().unwrap() + otherwise["bottom"].as_f64().unwrap()) / 2.0;
+        run(&mut host, "move_node", json!({ "diagram": d, "node": second["element"], "y": y }));
+        let owner = host.document().model().get(uid(&second["element"])).and_then(|e| e.owner());
+        assert_eq!(owner, Some(uid(&otherwise["id"])));
+        let _ = found;
+        host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn structograms_are_made_read_and_changed() {
+        let mut host = Headless::new();
+        let root = run(&mut host, "get_document", json!({}))["root"].clone();
+        let class = json!({ "owner": root, "tool": "class", "name": "Cart" });
+        let class = run(&mut host, "create_model_element", class);
+        let op = run(
+            &mut host,
+            "add_member",
+            json!({ "owner": class["id"], "text": "+ total(n : int) : int" }),
+        );
+        let tree = json!({ "title": "total(n)", "kind": "sub", "body": [
+            { "kind": "instruction", "text": "s := 0" },
+            { "kind": "for", "text": "for i := 1 to n", "body": [
+                { "kind": "instruction", "text": "s := s + i" } ] },
+            { "kind": "jump", "text": "return s" } ] });
+        let made = run(
+            &mut host,
+            "create_structogram",
+            json!({ "structogram": tree, "operation": op["id"] }),
+        );
+        assert_eq!(made["owner"], class["id"]);
+        assert_eq!(made["operation"], op["id"]);
+        let got = run(&mut host, "get_structogram", json!({ "id": made["id"] }));
+        assert_eq!(got["structogram"]["body"], tree["body"]);
+        let document = run(&mut host, "get_document", json!({}));
+        assert_eq!(document["structograms"][0]["title"], "total(n)");
+
+        let image = call(
+            &mut host,
+            &Access::default(),
+            "render_diagram",
+            &json!({ "diagram": made["id"] }),
+        );
+        assert!(matches!(&image.content[0], Content::Image(png) if png.starts_with(b"\x89PNG")));
+
+        // A new body, the title and keywords kept; then no operation.
+        let body = json!([{ "kind": "if", "text": "n > 0?", "then": [], "else": [] }]);
+        let changed = run(
+            &mut host,
+            "update_structogram",
+            json!({ "id": made["id"], "structogram": { "body": body } }),
+        );
+        assert_eq!(changed["structogram"]["title"], "total(n)");
+        assert_eq!(changed["structogram"]["kind"], "sub");
+        assert_eq!(changed["structogram"]["body"], body);
+        let unlinked =
+            run(&mut host, "update_structogram", json!({ "id": made["id"], "operation": "" }));
+        assert_eq!(unlinked["operation"], Value::Null);
+        run(&mut host, "undo", json!({}));
+        run(&mut host, "undo", json!({}));
+        let back = run(&mut host, "get_structogram", json!({ "id": made["id"] }));
+        assert_eq!(back["structogram"]["body"], tree["body"]);
+        assert_eq!(back["operation"], op["id"]);
+
+        // One element by its path.
+        let element = json!({ "kind": "jump", "text": "return 0" });
+        let edit = json!({ "id": made["id"], "action": "insert", "path": "body.1.body.0",
+                           "element": element });
+        let edited = run(&mut host, "edit_structogram", edit);
+        assert_eq!(edited["structogram"]["body"][1]["body"][0], element);
+        let remove = json!({ "id": made["id"], "action": "remove", "path": "body.9" });
+        assert!(call(&mut host, &Access::default(), "edit_structogram", &remove).is_error);
+
+        // As image and as Structorizer file.
+        let dir = std::env::temp_dir().join("umlcraft-mcp-structogram");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::host::absolute(&dir);
+        let access = Access { folders: vec![dir.clone()], any: false };
+        for name in ["total.png", "total.svg", "total.nsd"] {
+            let export = json!({ "diagram": made["id"], "path": dir.join(name) });
+            let written = call(&mut host, &access, "export_image", &export);
+            assert!(!written.is_error, "{written:?}");
+        }
+        let nsd = std::fs::read_to_string(dir.join("total.nsd")).unwrap();
+        assert!(umlcraft_nsd::read(&nsd).unwrap().text() == ["total(n)"]);
+        let txt = json!({ "diagram": made["id"], "path": dir.join("total.txt") });
+        assert!(call(&mut host, &access, "export_image", &txt).is_error);
+
+        let wrong = json!({ "id": class["id"], "structogram": { "body": [] } });
+        assert!(call(&mut host, &Access::default(), "update_structogram", &wrong).is_error);
+        let broken = json!({ "structogram": { "title": "x", "body": [{ "kind": "goto" }] } });
+        assert!(call(&mut host, &Access::default(), "create_structogram", &broken).is_error);
         host.document().model().check().unwrap();
     }
 

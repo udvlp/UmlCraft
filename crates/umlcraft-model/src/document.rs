@@ -114,6 +114,33 @@ impl Document {
         }
     }
 
+    /// How many steps can be undone; a mark for [`Document::squash_since`] and
+    /// [`Document::roll_back_to`].
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Makes the steps done since the history was `depth` deep one step called `label`.
+    pub fn squash_since(&mut self, depth: usize, label: impl Into<String>) {
+        if self.undo.len() <= depth {
+            return;
+        }
+        let steps = self.undo.split_off(depth);
+        let seq = steps.last().map_or(self.next_seq, |t| t.seq);
+        let inverse = steps.into_iter().flat_map(|t| t.inverse).collect();
+        self.undo.push(Transaction { seq, label: label.into(), inverse });
+    }
+
+    /// Takes back the steps done since the history was `depth` deep and forgets them; they
+    /// cannot be redone.
+    pub fn roll_back_to(&mut self, depth: usize) {
+        while self.undo.len() > depth {
+            let t = self.undo.pop().expect("deeper than depth");
+            revert(&mut self.model, t.inverse);
+            self.revision += 1;
+        }
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

@@ -6897,6 +6897,7 @@ dependencies = [
  "umlcraft-format",
  "umlcraft-model",
  "umlcraft-notation",
+ "umlcraft-nsd",
  "uuid",
 ]
 

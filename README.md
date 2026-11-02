@@ -165,8 +165,9 @@ program is `/Applications/UmlCraft.app/Contents/MacOS/umlcraft-cli`.
 While UmlCraft runs, the assistant works in the open project: every change shows up at once,
 named "AI: …" in the undo history, and Ctrl+Z takes it back. Without the app it works on a
 project of its own, which it can save. It creates diagrams, elements, lines and members,
-renames, moves and deletes, arranges diagrams, renders them as images to look at, and exports
-PNG and SVG. The app accepts connections from this computer only, with a token only the user
+renames, moves and deletes, puts messages into fragments with their operands, writes and
+rewrites structograms, arranges diagrams, renders them as images to look at, and exports PNG
+and SVG. Several changes can make one undo step. The app accepts connections from this computer only, with a token only the user
 can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
 
 ## Not yet supported

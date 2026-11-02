@@ -13,6 +13,7 @@ mod base64;
 pub mod host;
 pub mod live;
 pub mod protocol;
+mod structogram;
 pub mod tools;
 
 pub use host::{Access, Headless, Host};

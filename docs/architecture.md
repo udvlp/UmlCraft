@@ -734,24 +734,56 @@ and stdout, one message per line (`umlcraft_mcp::protocol::serve`: `initialize`,
 
 ### Tools and hosts
 
-`umlcraft_mcp::tools` lists 24 tools and runs them against a `Host`, which hands out the
+`umlcraft_mcp::tools` lists 31 tools and runs them against a `Host`, which hands out the
 `Document`, a `TextMeasure`, the path and, in the app, the active diagram and the selection:
 
-- reading: `get_document`, `list_elements`, `get_element`, `get_diagram`, `render_diagram` (a PNG
-  through resvg, as MCP image content, so the client sees what it drew);
+- reading: `get_document`, `list_elements`, `get_element`, `get_structogram`, `get_diagram`,
+  `render_diagram` (a PNG through resvg, as MCP image content, so the client sees what it
+  drew; of a structogram too);
 - editing: `create_diagram`, `create_element`, `create_model_element`, `show_element`,
-  `connect`, `add_member`, `update_element`, `move_node`, `arrange_diagram`, `route_lines`,
-  `delete_element`, `remove_from_diagram`, `undo`, `redo`;
+  `connect`, `add_member`, `create_structogram`, `update_structogram`, `edit_structogram`,
+  `wrap_in_fragment`,
+  `add_operand`, `update_element`, `move_node`, `arrange_diagram`, `route_lines`,
+  `delete_element`, `remove_from_diagram`, `batch`, `undo`, `redo`;
 - the project: `open_diagram`, `new_document`, `open_file`, `save_file`, `export_image`.
 
 Every editing tool is one undo step made the way the app makes it:
 `umlcraft_notation::edit::apply` fits auto-sized boxes and lets routed lines follow, the same
 function `Workspace::edit` uses; diagrams come from `edit::create_diagram`, nodes and lines
 from the palettes (`palette::create_node`, `palette::connect`), members from
-`member::apply_member_text`. A tool that fails rolls back and answers with the error, which
+`member::apply_member_text`, fragments and operands from `palette::wrap_in_fragment` and
+`palette::add_operand`; `update_element` gives a fragment that becomes an `alt` its `else`
+(`palette::add_else`), and `delete_element` takes regions and operands out with
+`state_edit::delete_region` and `sequence_edit::delete_operand`, as the app does. A tool that fails rolls back and answers with the error, which
 for an unknown tool key lists the valid ones. Ids are UUID strings; kinds are the element
 kinds' `type_name`s. A node without a position goes to a free place right of the drawing
 (`free_origin`).
+
+`batch` runs a list of calls as one undo step, all or nothing. A string argument
+`$<index>.<field>` takes that field from the reply of an earlier call in the list, so a batch
+can create a class and add members to it. The tools run as they would alone; afterwards
+`Document::squash_since` joins their steps into one, and a failing call ends the batch with
+`Document::roll_back_to`, which takes the steps back without leaving them to redo. Undo, redo,
+nested batches and opening or starting a project are refused inside a batch.
+
+Structograms travel as a JSON tree instead of Structorizer's XML (`umlcraft_mcp::structogram`):
+the root's title, kind and keywords, and a `body` of elements, each with a `kind` (`instruction`,
+`call`, `jump`, `if`, `case`, `for`, `while`, `repeat`, `forever`, `try`, `parallel`), its
+`text` (lines joined by `\n`) and its parts (`body`, `then`/`else`, `catch`/`finally`, labeled
+`branches` for a case, the last one the default). `get_structogram` writes what
+`create_structogram` reads, so a client can read a structogram, change the tree and hand it to
+`update_structogram`, which keeps what the tree leaves out (title, kind, header) and goes
+through `Tx::set_structogram`, so an imported structogram counts as edited by hand. Elements
+are made with `umlcraft_nsd::edit::new_element`, as in the editor. `edit_structogram` inserts,
+replaces or removes one element at a path into that tree (`body.1.then.0`) and writes the
+whole tree back the same way. `render_diagram` and `export_image` draw structograms with
+`umlcraft_nsd::svg`; `export_image` also writes a `.nsd` file (`content::to_file`).
+
+In sequence diagrams `connect` makes found and lost messages from one lifeline,
+`update_element` sets what a fragment covers and spans its frame (`sequence_edit::cover`), and
+`move_node` moves messages and fragments by height as dragging does (`palette::move_to_slot`
+at the scene's `slot_at`), so they change operands; `get_diagram` gives messages their `y` and
+fragments the range of each operand.
 
 Two hosts exist. `Headless` holds a project of its own, measured with `ApproxMeasure`; in the
 app `AppHost` (`crates/umlcraft-app/src/live.rs`) wraps the `Workspace`, labels each step
