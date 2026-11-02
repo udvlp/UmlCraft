@@ -830,8 +830,8 @@ attributes (keys, partial keys, derived, multivalued, composite), relationships 
 n-ary, identifying, with attributes) and generalization (IS-A), with `[min,max]` on the lines
 read look-across (`[1,1]` at `Kunde` on `Kunde – bucht – Ticket`: every ticket has one
 customer). They are drawn like the ER shapes of draw.io; draw.io is Apache-2.0 licensed, its
-drawing rules were worked out from its source and exports, none of its code is used. The app
-window and the SQL import follow in later steps.
+drawing rules were worked out from its source and exports, none of its code is used. The SQL
+import follows in a later step.
 
 - **Model** (`model`). A `Diagram` is a graph like draw.io's: `Node`s with a typed `NodeKind`
   (`Entity { weak }`, `AssociativeEntity`, `Attribute { key, derived, multivalued }`,
@@ -892,6 +892,23 @@ window and the SQL import follow in later steps.
   within 0.05 px of draw.io's, every label on draw.io's pixel, and our images rasterized with
   resvg differ from draw.io's PNGs in at most the share of pixels `tests/drawio_deviations.txt`
   allows each file, with the reason (text smoothing, right-angle routing, stroke widths).
+- **App** (`umlcraft-app/src/erm`). An ER diagram opens in a window of its own, outside the
+  project: File → "Open ER diagram (.ucerm)", the command line or "Open with" (`MainView::open`
+  hands `.ucerm` over and keeps the project; a file already open brings its window to the
+  front). The window (`window.rs`) is a frame with a title bar like the main window's, a
+  toolbar (zoom, grid, SVG and PNG export) and the canvas; the canvas (`canvas.rs`) is an entity
+  of its own, so that it can later become a tab of the main window. It shows the SVG export
+  rasterized with resvg like the structogram view (it uses `nsd::rasterize`, its fonts and
+  `write_file`): a new image when zoom, screen scale or grid change, in the background, at most
+  8192 px. Zoom 25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−, Ctrl+Shift+0 fits), panning
+  with the wheel (Shift: sideways), the middle button or Space and the left button. Until the
+  user zooms or pans, the sheet is fitted into the window, at most at 100 %. The sheet stays
+  white in the dark theme; the grid (draw.io's: 10 px, every fourth line stronger) is drawn
+  into the image shown, never into an export. PNG images are the SVG at twice the size, white
+  or transparent. Read errors and the warnings of `check` are told in the UI's language
+  (`erm.issue.*`, an element by its name, a line by its ends); errors in a dialog, warnings
+  in a line under the canvas that opens into their list. ER diagrams do not go into the
+  recent files (the list opens projects).
 
 ## MCP server
 
