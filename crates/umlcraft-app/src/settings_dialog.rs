@@ -40,7 +40,7 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             .and_then(|l| LANGUAGES.iter().position(|&(code, _)| code == l))
             .map_or(0, |ix| ix + 1);
         let update_check = settings.update_check == Some(true);
-        let dark = cx.theme().is_dark();
+        let dark = settings.dark;
         let muted = cx.theme().muted_foreground;
 
         let (v1, v2, v3, v4) = (view.clone(), view.clone(), view.clone(), view.clone());
@@ -59,13 +59,18 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                 })
                 .ok();
             });
+        // 0 follows the system, then light and dark.
         let theme = RadioGroup::horizontal("settings-theme")
-            .children([t!("settings.light").to_string(), t!("settings.dark").to_string()])
-            .selected_index(Some(usize::from(dark)))
+            .children([
+                t!("settings.system_theme").to_string(),
+                t!("settings.light").to_string(),
+                t!("settings.dark").to_string(),
+            ])
+            .selected_index(Some(dark.map_or(0, |dark| 1 + usize::from(dark))))
             .on_change(move |&ix, window, cx| {
-                let dark = ix == 1;
+                let dark = ix.checked_sub(1).map(|i| i == 1);
                 v2.update(cx, |this, cx| {
-                    if cx.theme().is_dark() != dark {
+                    if this.settings().dark != dark {
                         this.set_dark(dark, window, cx);
                     }
                 })

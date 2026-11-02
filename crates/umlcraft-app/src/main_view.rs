@@ -129,9 +129,7 @@ pub struct MainView {
 
 impl MainView {
     pub fn new(settings: Settings, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        if settings.dark == Some(true) {
-            Theme::change(ThemeMode::Dark, Some(window), cx);
-        }
+        apply_theme(settings.dark, window, cx);
         let (display, keywords) = (settings.display(), settings.keywords());
         let workspace = cx.new(|cx| {
             Workspace::new(blank_document(), None)
@@ -170,6 +168,12 @@ impl MainView {
             cx.observe(&canvas, |_, _, cx| cx.notify()),
             cx.observe_in(&workspace, window, |this, _, window, cx| {
                 this.sync_from_workspace(window, cx);
+            }),
+            // Without a theme of its own, the window turns light or dark with the system.
+            cx.observe_window_appearance(window, |this, window, cx| {
+                if this.settings.dark.is_none() {
+                    Theme::sync_system_appearance(Some(window), cx);
+                }
             }),
         ];
 
@@ -1369,7 +1373,7 @@ impl MainView {
     }
 
     fn toggle_theme(&mut self, _: &ToggleTheme, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_dark(!cx.theme().is_dark(), window, cx);
+        self.set_dark(Some(!cx.theme().is_dark()), window, cx);
     }
 
     fn toggle_language(&mut self, _: &ToggleLanguage, window: &mut Window, cx: &mut Context<Self>) {
@@ -1521,9 +1525,10 @@ impl MainView {
         &self.settings
     }
 
-    pub fn set_dark(&mut self, dark: bool, window: &mut Window, cx: &mut Context<Self>) {
-        Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, Some(window), cx);
-        self.settings.dark = Some(dark);
+    /// Switches to a dark or light theme, or with `None` to the system's appearance.
+    pub fn set_dark(&mut self, dark: Option<bool>, window: &mut Window, cx: &mut Context<Self>) {
+        apply_theme(dark, window, cx);
+        self.settings.dark = dark;
         self.settings.save();
     }
 
@@ -2419,6 +2424,16 @@ fn file_menu(
     menu = item(menu, "menu.save_as", Box::new(SaveProjectAs));
     menu = item(menu.separator(), "menu.about", Box::new(OpenAbout));
     item(menu, "menu.quit", Box::new(Quit))
+}
+
+/// The dark or light theme, or with `None` the one of the system's appearance.
+fn apply_theme(dark: Option<bool>, window: &mut Window, cx: &mut App) {
+    match dark {
+        Some(dark) => {
+            Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, Some(window), cx)
+        }
+        None => Theme::sync_system_appearance(Some(window), cx),
+    }
 }
 
 /// A new project: only the model, no diagram yet.

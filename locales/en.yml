@@ -484,6 +484,7 @@ settings:
   title: Settings
   language: Language
   system_language: System language
+  system_theme: System
   theme: Theme
   light: Light
   dark: Dark

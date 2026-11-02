@@ -484,6 +484,7 @@ settings:
   title: Einstellungen
   language: Sprache
   system_language: Systemsprache
+  system_theme: System
   theme: Farbschema
   light: Hell
   dark: Dunkel
