@@ -51,10 +51,10 @@ pub fn card_background(cx: &App) -> Hsla {
     if theme.is_dark() { theme.background.blend(white().opacity(0.06)) } else { theme.background }
 }
 
-/// A panel floating over the diagram: a very light grey (#f8f8f8) over the white diagram in
+/// A panel floating over the diagram: a very light grey (#f4f4f4) over the white diagram in
 /// the light theme, a shade lighter than the diagram in the dark one.
 pub fn floating_background(cx: &App) -> Hsla {
-    if cx.theme().is_dark() { card_background(cx) } else { rgb(0xf8f8f8).into() }
+    if cx.theme().is_dark() { card_background(cx) } else { rgb(0xf4f4f4).into() }
 }
 
 fn shadow(cx: &App, alpha: f32, y: f32, blur: f32) -> BoxShadow {
