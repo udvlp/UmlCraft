@@ -1,9 +1,10 @@
 //! Each file in `tests/fixtures/invalid` breaks one rule and is rejected with that rule's
 //! error. Files named `pN-…` break rule PN of `check`; `format-…` files break the format.
+//! Files in `tests/fixtures/warnings` are unfinished diagrams: they open, with the warning.
 
 use std::path::Path;
 
-use umlcraft_erm::{IssueKind, ReadError, read};
+use umlcraft_erm::{IssueKind, ReadError, Severity, read};
 
 fn read_invalid(name: &str) -> ReadError {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/invalid").join(name);
@@ -23,12 +24,8 @@ fn every_rule_has_a_rejected_file() {
         ("p1-duplicate-id", |k| *k == IssueKind::DuplicateId),
         ("p2-missing-end", |k| matches!(k, IssueKind::MissingEnd { end } if end.0 == "nowhere")),
         ("p3-not-allowed", |k| *k == IssueKind::NotAllowed { source: "entity", target: "entity" }),
-        ("p4-no-owner", |k| *k == IssueKind::NoOwner),
         ("p4-several-owners", |k| *k == IssueKind::SeveralOwners),
         ("p5-own-part", |k| *k == IssueKind::OwnPart),
-        ("p6-too-few-participants", |k| *k == IssueKind::TooFewParticipants),
-        ("p7-identifying-without-weak", |k| *k == IssueKind::IdentifyingWithoutWeak),
-        ("p9-is-a-ends", |k| *k == IssueKind::IsAEnds),
         ("p9-super-type-outside-is-a", |k| *k == IssueKind::SuperTypeOutsideIsA),
         ("p11-bad-geometry", |k| *k == IssueKind::BadGeometry),
         ("p12-bad-cardinality", |k| *k == IssueKind::BadCardinality),
@@ -42,6 +39,24 @@ fn every_rule_has_a_rejected_file() {
             }
             other => panic!("{name}: {other}"),
         }
+    }
+}
+
+#[test]
+fn unfinished_diagrams_open_with_a_warning() {
+    let rules: &[Rule] = &[
+        ("p4-no-owner", |k| *k == IssueKind::NoOwner),
+        ("p6-too-few-participants", |k| *k == IssueKind::TooFewParticipants),
+        ("p7-identifying-without-weak", |k| *k == IssueKind::IdentifyingWithoutWeak),
+        ("p9-is-a-ends", |k| *k == IssueKind::IsAEnds),
+    ];
+    for (name, expected) in rules {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/warnings/{name}.ucerm"));
+        let (_, issues) = read(&std::fs::read_to_string(&path).unwrap())
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(issues.iter().any(|i| expected(&i.kind)), "{name}: {issues:?}");
+        assert!(issues.iter().all(|i| i.severity() == Severity::Warning), "{name}: {issues:?}");
     }
 }
 
