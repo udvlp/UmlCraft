@@ -60,7 +60,8 @@ today.
   starting a new one. A fragment put around a message keeps the message's label clear of its
   tab, and a new operand makes room below the fragment instead of taking in what follows it.
 - **Project tree with chevrons**: as in the Windows Explorer, a chevron in front of an item shows
-  whether it can be opened (pointing right) or is open (pointing down).
+  whether it can be opened (pointing right) or is open (pointing down). A click on the chevron
+  opens or closes the item, a click on its name only selects it.
 - **An icon for every item in the project tree**: the project, attributes, operations,
   parameters, enumeration literals, slots, template parameters, extension points, interactions,
   activities, state machines, operands and regions have icons of their own, so the tree reads

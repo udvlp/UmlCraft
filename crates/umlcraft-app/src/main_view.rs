@@ -1884,6 +1884,7 @@ impl MainView {
         let muted = cx.theme().muted_foreground;
         let drop_highlight = cx.theme().list_active;
         let workspace = self.workspace.clone();
+        let tree_state = self.tree.clone();
         let count = self.workspace.read(cx).doc.model().len();
         let header = panel_header(None, t!("panel.model"), Some(count.to_string()), cx);
         v_flex().size_full().child(header).child(
@@ -1910,19 +1911,31 @@ impl MainView {
                             Icon::new(name).size_4().text_color(muted).into_any_element()
                         }
                     };
-                    let mut row = div().id(("tree-row", ix)).w_full().child(
-                        h_flex()
-                            .gap_2()
-                            .overflow_hidden()
-                            .child(h_flex().flex_none().gap_1().child(chevron).child(icon))
-                            .child(div().text_sm().child(item.label.clone()))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(t!(format!("kind.{kind}")).to_string()),
-                            ),
-                    );
+                    // A click on the chevron reaches the tree, which selects the item and opens
+                    // or closes it; a click on the name only selects it.
+                    let tree = tree_state.clone();
+                    let name = h_flex()
+                        .id(("tree-name", ix))
+                        .flex_1()
+                        .min_w_0()
+                        .pl_1()
+                        .gap_2()
+                        .child(icon)
+                        .child(div().text_sm().child(item.label.clone()))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(t!(format!("kind.{kind}")).to_string()),
+                        )
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            tree.update(cx, |tree, cx| tree.set_selected_index(Some(ix), cx));
+                        });
+                    let mut row = div()
+                        .id(("tree-row", ix))
+                        .w_full()
+                        .child(h_flex().overflow_hidden().child(chevron).child(name));
                     // Every element but the root can be dragged: into another tree item (to
                     // change its owner) or onto the canvas (to show it there).
                     if let Some(meta) = meta.filter(|m| !m.is_root) {
