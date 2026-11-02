@@ -737,12 +737,12 @@ and stdout, one message per line (`umlcraft_mcp::protocol::serve`: `initialize`,
 
 ### Tools and hosts
 
-`umlcraft_mcp::tools` lists 31 tools and runs them against a `Host`, which hands out the
+`umlcraft_mcp::tools` lists 32 tools and runs them against a `Host`, which hands out the
 `Document`, a `TextMeasure`, the path and, in the app, the active diagram and the selection:
 
 - reading: `get_document`, `list_elements`, `get_element`, `get_structogram`, `get_diagram`,
   `render_diagram` (a PNG through resvg, as MCP image content, so the client sees what it
-  drew; of a structogram too);
+  drew; of a structogram too), `screenshot` (the app's window, see below);
 - editing: `create_diagram`, `create_element`, `create_model_element`, `show_element`,
   `connect`, `add_member`, `create_structogram`, `update_structogram`, `edit_structogram`,
   `wrap_in_fragment`,
@@ -809,6 +809,18 @@ the call over an `async-channel` to `MainView::serve_mcp`, which runs it on the 
 inside `Workspace::update` and so never races a user edit. `_ping` is answered on the server
 thread, and a call the app has not answered after 120 s (a modal dialog) comes back as an
 error.
+
+`screenshot` is the one call `serve_mcp` does not hand to `tools::call`: it needs the window,
+not the project (`live::screenshot`). It takes the window's handle
+(`umlcraft_screenshot::Target`) and captures on a background thread 100 ms later, so the
+window has drawn the last call's change and its own thread is free when Windows asks it to
+draw for the capture. `umlcraft-screenshot` calls `PrintWindow` with `PW_RENDERFULLCONTENT`,
+which gets GPUI's DirectX content as composed, also under other windows, at physical pixels
+(the thread is per-monitor DPI aware) and crops the invisible resize borders
+(`DWMWA_EXTENDED_FRAME_BOUNDS`); `png::from_rgba` shrinks it to `scale` and encodes it. That
+crate is the only one with `unsafe` code, which the workspace forbids elsewhere; on other
+systems it answers that screenshots are not supported yet. Headless, or inside `batch`, the
+tool answers with an error.
 
 `backend::Auto` picks per call: the app when one answers (`LiveClient::discover`, newest file
 first), otherwise the headless project. Once the headless project was changed or a file

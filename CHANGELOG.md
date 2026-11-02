@@ -40,6 +40,9 @@ today.
   single elements of a structogram and export it as an image or a Structorizer file.
 - **AI clients see more of a sequence diagram**: `connect` names the message it draws, and
   `get_diagram` lists the activation bars with their lifeline, top and bottom.
+- **AI clients see the whole window**: the MCP server's `screenshot` tool returns an image of
+  the UmlCraft window with ribbon, panels and diagram, also while other windows cover it
+  (Windows only so far, and only while the app runs).
 - **Sequence diagrams keep their shape as they grow**: a message drawn below the others from a
   lifeline still busy with a call it has not answered continues that call's bar instead of
   starting a new one. A fragment put around a message keeps the message's label clear of its

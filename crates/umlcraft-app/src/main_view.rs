@@ -168,7 +168,9 @@ impl MainView {
         let live = crate::live::start().map(|(server, calls)| {
             cx.spawn_in(window, async move |this, cx| {
                 while let Ok(request) = calls.recv().await {
-                    if this.update(cx, |this, cx| this.serve_mcp(request, cx)).is_err() {
+                    let served =
+                        this.update_in(cx, |this, window, cx| this.serve_mcp(request, window, cx));
+                    if served.is_err() {
                         break;
                     }
                 }
@@ -384,7 +386,17 @@ impl MainView {
     }
 
     /// Runs a call of the MCP server against the open project and answers it.
-    fn serve_mcp(&mut self, request: umlcraft_mcp::live::Request, cx: &mut Context<Self>) {
+    fn serve_mcp(
+        &mut self,
+        request: umlcraft_mcp::live::Request,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Needs the window, not the project, and answers later.
+        if request.name == "screenshot" {
+            crate::live::screenshot(request, window, cx);
+            return;
+        }
         let mut effects = crate::live::Effects::default();
         let reply = self.workspace.update(cx, |ws, cx| {
             let mut host = crate::live::AppHost { ws, effects: &mut effects };

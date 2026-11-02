@@ -26,6 +26,27 @@ pub fn from_svg(svg: &str, scale: f32) -> anyhow::Result<Vec<u8>> {
     Ok(pixmap.encode_png()?)
 }
 
+/// A screenshot as a PNG image, shrunk to `scale` of its size (at most 1).
+pub fn from_rgba(image: umlcraft_screenshot::Image, scale: f32) -> Result<Vec<u8>, String> {
+    let size = tiny_skia::IntSize::from_wh(image.width, image.height).ok_or("empty image")?;
+    // Opaque pixels are the same premultiplied.
+    let pixmap = tiny_skia::Pixmap::from_vec(image.rgba, size).ok_or("wrong pixel count")?;
+    let pixmap = if scale < 1.0 {
+        let size = size.scale_by(scale).ok_or("empty image")?;
+        let mut small = tiny_skia::Pixmap::new(size.width(), size.height()).ok_or("empty image")?;
+        let paint = tiny_skia::PixmapPaint {
+            quality: tiny_skia::FilterQuality::Bicubic,
+            ..Default::default()
+        };
+        let transform = tiny_skia::Transform::from_scale(scale, scale);
+        small.draw_pixmap(0, 0, pixmap.as_ref(), &paint, transform, None);
+        small
+    } else {
+        pixmap
+    };
+    pixmap.encode_png().map_err(|err| err.to_string())
+}
+
 /// Puts an SVG export on the clipboard together with its PNG, rasterized at `scale` as
 /// [`from_svg`] takes it. Word and PowerPoint paste the SVG as a vector image, programs without
 /// SVG take the PNG.

@@ -22,6 +22,7 @@ umlcraft-reverse = { path = "crates/umlcraft-reverse" }
 umlcraft-nsd = { path = "crates/umlcraft-nsd" }
 umlcraft-nsd-code = { path = "crates/umlcraft-nsd-code" }
 umlcraft-mcp = { path = "crates/umlcraft-mcp" }
+umlcraft-screenshot = { path = "crates/umlcraft-screenshot" }
 
 # gpui-kit pins the matching GPUI release (gpui-pre) together with gpui-component.
 gpui-kit = "=0.8.1"
@@ -48,6 +49,17 @@ resvg = { version = "0.49", default-features = false, features = ["text", "syste
 rust-embed = { version = "8", features = ["interpolate-folder-path", "include-exclude"] }
 # The app icon in umlcraft.exe.
 embed-resource = "3"
+# The MCP server's screenshot of the app window: the window's handle (as GPUI gives it) and the
+# Win32 calls that capture it. GPUI pulls in both, in these versions.
+raw-window-handle = "0.6"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_Xps",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
 # The optional update check asks GitHub for the latest release, over rustls with the platform's
 # certificates (no bundled root list).
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }

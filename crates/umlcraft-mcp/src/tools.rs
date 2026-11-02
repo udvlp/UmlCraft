@@ -85,7 +85,7 @@ every change and can undo it with Ctrl+Z); otherwise a project of the server's o
 `create_diagram`, then `create_element` for each box (no position needed), `add_member` for \
 attributes and operations (`- name : String`, `+ total() : int`), `connect` for relationships, \
 then `arrange_diagram` (any kind but sequence diagrams) and `render_diagram` to look at \
-the result. `get_diagram` lists what a diagram shows and which element and relationship tools \
+the result (`screenshot` shows the app's whole window while it runs). `get_diagram` lists what a diagram shows and which element and relationship tools \
 its kind offers. In a sequence diagram, `connect` draws a message between lifelines below the others \
 unless `y` says where, `wrap_in_fragment` puts messages into an `alt`, `loop`, … and `add_operand` adds a \
 case. Structograms (Nassi-Shneiderman diagrams) are JSON trees: `create_structogram`, \
@@ -197,6 +197,17 @@ pub fn list() -> Vec<Value> {
             json!({
                 "diagram": id("The diagram or structogram; the one shown if omitted."),
                 "scale": number("Pixels per unit, 0.5 to 2; default 1."),
+            }),
+            &[],
+        )),
+        read_only(tool(
+            "screenshot",
+            "The UmlCraft app's window as a PNG image, as the user sees it: title bar, ribbon, \
+             model tree, properties, diagram tabs and canvas, also while other windows cover \
+             it. Only while the app runs (on Windows); `render_diagram` draws a diagram \
+             without it.",
+            json!({
+                "scale": number("Size relative to the window's pixels, 0.25 to 1; default 1."),
             }),
             &[],
         )),
@@ -512,6 +523,16 @@ pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> R
         "get_element" => get_element(host, args),
         "get_diagram" => get_diagram(host, args),
         "render_diagram" => render_diagram(host, args),
+        // The app answers this one itself, with its window; it never comes here from the app
+        // but inside `batch`.
+        "screenshot" => Err(if host.live() {
+            "`screenshot` cannot run inside `batch`; call it on its own.".into()
+        } else {
+            "There is no UmlCraft window to capture: this session works on a project of the \
+             server's own (the app is not running, or this session started without it). \
+             `render_diagram` draws a diagram without the app."
+                .into()
+        }),
         "create_diagram" => create_diagram(host, args),
         "create_element" => create_element(host, args),
         "create_model_element" => create_model_element(host, args),
@@ -555,6 +576,11 @@ fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
 
 fn opt_num(args: &Value, key: &str) -> Option<f32> {
     args.get(key).and_then(Value::as_f64).map(|v| v as f32)
+}
+
+/// The size of `screenshot`'s image relative to the window, from its arguments.
+pub fn screenshot_scale(args: &Value) -> f32 {
+    opt_num(args, "scale").unwrap_or(1.0).clamp(0.25, 1.0)
 }
 
 fn parse_id(text: &str) -> Result<Id, String> {
@@ -1740,6 +1766,15 @@ mod tests {
                 assert!(!text.starts_with("unknown tool"), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn a_screenshot_needs_the_app() {
+        let mut host = Headless::new();
+        let reply = call(&mut host, &Access::default(), "screenshot", &json!({}));
+        assert!(reply.is_error);
+        assert_eq!(screenshot_scale(&json!({ "scale": 0.1 })), 0.25);
+        assert_eq!(screenshot_scale(&json!({})), 1.0);
     }
 
     #[test]

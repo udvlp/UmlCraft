@@ -170,7 +170,8 @@ named "AI: …" in the undo history, and Ctrl+Z takes it back. Without the app i
 project of its own, which it can save. It creates diagrams, elements, lines and members,
 renames, moves and deletes, puts messages into fragments with their operands, writes and
 rewrites structograms, arranges diagrams, renders them as images to look at, and exports PNG
-and SVG. Several changes can make one undo step. The app accepts connections from this computer only, with a token only the user
+and SVG. Several changes can make one undo step. While the app runs, it can also take a
+screenshot of the UmlCraft window (on Windows), also when other windows cover it. The app accepts connections from this computer only, with a token only the user
 can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
 
 ## Not yet supported
@@ -275,6 +276,7 @@ one.
 | `tools/nsd-metrics` | The Java tool that writes the text metrics `umlcraft-nsd` lays structograms out with |
 | `crates/umlcraft-mcp` | MCP server: tools on a project, the protocol, the bridge to the running app |
 | `crates/umlcraft-cli` | `umlcraft-cli`: the MCP server for AI clients and its setup |
+| `crates/umlcraft-screenshot` | The app window as an image, for the MCP server's `screenshot` (Windows) |
 | `crates/umlcraft-app` | GPUI application (`gpui-kit` 0.8) |
 
 Details: [docs/architecture.md](docs/architecture.md). Commands and project rules for

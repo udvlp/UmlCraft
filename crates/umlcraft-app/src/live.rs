@@ -4,10 +4,12 @@
 //! each, shown at once.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use gpui_kit::{Context, Window};
 use rust_i18n::t;
-use umlcraft_mcp::Host;
 use umlcraft_mcp::live::{LiveServer, Request};
+use umlcraft_mcp::{Content, Host, Reply};
 use umlcraft_model::{Document, Id};
 use umlcraft_notation::scene::TextMeasure;
 
@@ -24,6 +26,35 @@ pub fn start() -> Option<(LiveServer, async_channel::Receiver<Request>)> {
     .ok()?;
     Some((server, rx))
 }
+
+/// Answers the `screenshot` tool with the app's window. Captures on a background thread a
+/// moment later: the window's own thread has to draw what a call just changed first, and
+/// Windows asks it to draw the window again for the capture.
+pub fn screenshot<V: 'static>(request: Request, window: &Window, cx: &mut Context<V>) {
+    let target = match umlcraft_screenshot::Target::of(window) {
+        Ok(target) => target,
+        Err(err) => return request.answer(Reply::error(err)),
+    };
+    let scale = umlcraft_mcp::tools::screenshot_scale(&request.arguments);
+    let executor = cx.background_executor().clone();
+    executor
+        .spawn({
+            let executor = executor.clone();
+            async move {
+                executor.timer(FRAME).await;
+                let png = umlcraft_screenshot::capture(target)
+                    .and_then(|image| crate::png::from_rgba(image, scale));
+                request.answer(match png {
+                    Ok(png) => Reply { content: vec![Content::Image(png)], is_error: false },
+                    Err(err) => Reply::error(err),
+                });
+            }
+        })
+        .detach();
+}
+
+/// Long enough for the window to show the last call's change.
+const FRAME: Duration = Duration::from_millis(100);
 
 /// What a call asks of the main view beyond the workspace.
 #[derive(Default)]

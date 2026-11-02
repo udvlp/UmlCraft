@@ -1,0 +1,22 @@
+[package]
+name = "umlcraft-screenshot"
+description = "Captures the app's own window as an image (for the MCP server's screenshot tool)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+raw-window-handle.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+# The workspace forbids unsafe code; this crate is the one place that calls the system's C API,
+# so it denies unsafe code and allows it in that module alone.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
