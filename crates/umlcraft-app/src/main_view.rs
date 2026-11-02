@@ -1376,6 +1376,10 @@ impl MainView {
         self.set_dark(Some(!cx.theme().is_dark()), window, cx);
     }
 
+    fn set_theme(&mut self, theme: &SetTheme, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_dark(theme.dark, window, cx);
+    }
+
     fn toggle_language(&mut self, _: &ToggleLanguage, window: &mut Window, cx: &mut Context<Self>) {
         let next = if &*rust_i18n::locale() == "de" { "en" } else { "de" };
         self.set_language(Some(next.to_owned()), window, cx);
@@ -1476,7 +1480,7 @@ impl MainView {
             numbering: props
                 .filter(|p| p.diagram == DiagramKind::Sequence)
                 .map(|p| (!p.hide_message_numbers, p.flat_message_numbers)),
-            dark: cx.theme().is_dark(),
+            theme: self.settings.dark,
         };
         let tabs = ribbon::tabs(&state);
         let active = if tabs.iter().any(|(t, _)| *t == self.ribbon_tab) {
@@ -2617,6 +2621,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::paste_as_reference))
             .on_action(cx.listener(Self::toggle_theme))
+            .on_action(cx.listener(Self::set_theme))
             .on_action(cx.listener(Self::toggle_language))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::open_about))

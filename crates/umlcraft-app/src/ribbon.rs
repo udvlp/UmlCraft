@@ -47,7 +47,8 @@ pub struct State {
     pub can_wrap: bool,
     /// On a sequence diagram: whether it shows message numbers, and whether flat ones.
     pub numbering: Option<(bool, bool)>,
-    pub dark: bool,
+    /// The chosen theme; `None` follows the system's appearance.
+    pub theme: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,7 +63,17 @@ pub enum Size {
 
 /// A line of a button's menu.
 pub enum MenuEntry {
-    Command { label: String, icon: Option<SharedString>, action: Box<dyn Action> },
+    Command {
+        label: String,
+        icon: Option<SharedString>,
+        action: Box<dyn Action>,
+    },
+    /// One of a choice, checked if it is the current one.
+    Check {
+        label: String,
+        checked: bool,
+        action: Box<dyn Action>,
+    },
     Separator,
 }
 
@@ -72,6 +83,11 @@ impl Clone for MenuEntry {
             Self::Command { label, icon, action } => Self::Command {
                 label: label.clone(),
                 icon: icon.clone(),
+                action: action.boxed_clone(),
+            },
+            Self::Check { label, checked, action } => Self::Check {
+                label: label.clone(),
+                checked: *checked,
                 action: action.boxed_clone(),
             },
             Self::Separator => Self::Separator,
@@ -144,6 +160,16 @@ impl Item {
             icon: Some(icon),
             action: Box::new(action),
         });
+        self
+    }
+
+    fn menu_check_entry(
+        mut self,
+        label: impl Into<String>,
+        checked: bool,
+        action: impl Action,
+    ) -> Self {
+        self.menu.push(MenuEntry::Check { label: label.into(), checked, action: Box::new(action) });
         self
     }
 
@@ -486,10 +512,11 @@ fn structogram(allowed: crate::nsd::Allowed) -> Vec<Group> {
 }
 
 fn view(state: &State) -> Vec<Group> {
-    let (theme_icon, theme_label) = if state.dark {
-        ("weather_sunny", t!("ribbon.light"))
-    } else {
-        ("weather_moon", t!("ribbon.dark"))
+    // The theme chosen, not the one a click switches to.
+    let (theme_icon, theme_label) = match state.theme {
+        None => ("dark_theme", t!("settings.system_theme")),
+        Some(false) => ("weather_sunny", t!("ribbon.light")),
+        Some(true) => ("weather_moon", t!("ribbon.dark")),
     };
     vec![
         group(
@@ -510,7 +537,22 @@ fn view(state: &State) -> Vec<Group> {
         group(
             "appearance",
             vec![
-                Item::new("theme", fluent(theme_icon), theme_label).action(ToggleTheme),
+                Item::new("theme", fluent(theme_icon), theme_label)
+                    .menu_check_entry(
+                        t!("settings.system_theme"),
+                        state.theme.is_none(),
+                        SetTheme { dark: None },
+                    )
+                    .menu_check_entry(
+                        t!("ribbon.light"),
+                        state.theme == Some(false),
+                        SetTheme { dark: Some(false) },
+                    )
+                    .menu_check_entry(
+                        t!("ribbon.dark"),
+                        state.theme == Some(true),
+                        SetTheme { dark: Some(true) },
+                    ),
                 Item::new("language", fluent("local_language"), t!("toolbar.language"))
                     .action(ToggleLanguage),
                 Item::new("settings", fluent("settings"), t!("toolbar.settings"))
@@ -685,6 +727,9 @@ fn entries_menu(
                 ),
                 MenuEntry::Command { label, icon: None, action } => {
                     menu.menu(label.clone(), action.boxed_clone())
+                }
+                MenuEntry::Check { label, checked, action } => {
+                    menu.menu_with_check(label.clone(), *checked, action.boxed_clone())
                 }
                 MenuEntry::Separator => menu.separator(),
             };
@@ -995,7 +1040,7 @@ mod tests {
             can_paste: false,
             can_wrap: false,
             numbering: None,
-            dark: false,
+            theme: None,
         };
         assert!(!tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));
         state.diagram = Some(DiagramKind::Class);
