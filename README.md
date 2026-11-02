@@ -139,7 +139,9 @@ their specifics; with a selection only that, pushing other nodes aside.
 Free texts and lines on every diagram (Text and Line tools): texts edited in place, lines
 dashed or with arrowheads, their ends dragged one by one. Light and dark theme, German and
 English. Members show their visibility right before the name (`- name`); UmlCraft's
-visibility column lines up all names of a compartment instead. Abstract classes show
+visibility column lines up all names of a compartment instead. Per class box, the properties
+panel hides its attributes or operations, stereotypes, the members' visibility, attribute types,
+initial values, parameters, parameter types or return types. Abstract classes show
 `{abstract}` below their italic name, or «abstract» above it; read-only attributes can end in
 `{readOnly}`. Theme, language, the column, how abstract classes are marked, `{readOnly}` and
 the keywords of structograms are chosen in the settings (the gear in the title bar, or Ctrl+,).

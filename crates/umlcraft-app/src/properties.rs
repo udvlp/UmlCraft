@@ -1924,6 +1924,62 @@ impl Render for PropertiesPanel {
                         p.id,
                         |s, v| s.hide_operations = v,
                     ));
+                // What the box leaves out of its members, as Astah offers it per box.
+                type Flag = (&'static str, &'static str, fn(&Style) -> bool, fn(&mut Style, bool));
+                const MEMBERS: [Flag; 7] = [
+                    (
+                        "hide-stereotypes",
+                        "prop.hide_stereotypes",
+                        |s| s.hide_stereotypes,
+                        |s, v| s.hide_stereotypes = v,
+                    ),
+                    (
+                        "hide-member-visibility",
+                        "prop.hide_member_visibility",
+                        |s| s.hide_member_visibility,
+                        |s, v| s.hide_member_visibility = v,
+                    ),
+                    (
+                        "hide-attribute-types",
+                        "prop.hide_attribute_types",
+                        |s| s.hide_attribute_types,
+                        |s, v| s.hide_attribute_types = v,
+                    ),
+                    (
+                        "hide-initial-values",
+                        "prop.hide_initial_values",
+                        |s| s.hide_initial_values,
+                        |s, v| s.hide_initial_values = v,
+                    ),
+                    (
+                        "hide-parameters",
+                        "prop.hide_parameters",
+                        |s| s.hide_parameters,
+                        |s, v| s.hide_parameters = v,
+                    ),
+                    (
+                        "hide-parameter-types",
+                        "prop.hide_parameter_types",
+                        |s| s.hide_parameter_types,
+                        |s, v| s.hide_parameter_types = v,
+                    ),
+                    (
+                        "hide-return-types",
+                        "prop.hide_return_types",
+                        |s| s.hide_return_types,
+                        |s, v| s.hide_return_types = v,
+                    ),
+                ];
+                for (id, key, get, set) in MEMBERS {
+                    body = body.child(style_flag(
+                        id,
+                        t!(key).into(),
+                        get(&p.style),
+                        workspace.clone(),
+                        p.id,
+                        set,
+                    ));
+                }
             }
             if matches!(&shown, Some(ElementKind::Lifeline(_))) {
                 body = body

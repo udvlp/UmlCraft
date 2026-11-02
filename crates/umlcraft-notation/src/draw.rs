@@ -561,18 +561,28 @@ pub fn qualifier_box(rect: Rect) -> Primitive {
     frame(rect, Paint::Fill)
 }
 
-/// The end markers of an edge. On curves they point along the curve's end, which runs toward
-/// the neighboring control point.
+/// The end markers of an edge and the arrow next to its name ([`end_markers`] and
+/// [`name_arrow`]).
 pub fn markers(edge: &EdgeShape) -> Vec<Primitive> {
+    let mut result = end_markers(edge);
+    result.extend(name_arrow(edge));
+    result
+}
+
+/// The markers at the ends of an edge, drawn in its line color. On curves they point along the
+/// curve's end, which runs toward the neighboring control point.
+pub fn end_markers(edge: &EdgeShape) -> Vec<Primitive> {
     let pts = &edge.points;
     let n = pts.len();
     let mut result = marker(pts[n - 1], pts[n - 2], edge.target_marker);
     result.extend(marker(pts[0], pts[1], edge.source_marker));
-    result.extend(
-        edge.name_arrow
-            .map(|points| Primitive::Polygon { points: points.to_vec(), fill: Paint::Line }),
-    );
     result
+}
+
+/// The triangle that shows which way an association's name reads. Astah draws it black
+/// whatever the line's color.
+pub fn name_arrow(edge: &EdgeShape) -> Option<Primitive> {
+    edge.name_arrow.map(|points| Primitive::Polygon { points: points.to_vec(), fill: Paint::Line })
 }
 
 fn marker(tip: Point, from: Point, marker: EndMarker) -> Vec<Primitive> {

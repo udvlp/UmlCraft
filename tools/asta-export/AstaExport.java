@@ -1560,6 +1560,9 @@ public final class AstaExport {
                 drop("edgeRoute");
             }
             labels(link, source, diagram, p);
+            if (p.get("style") instanceof Map<?, ?> style) {
+                ink(link, (Map<String, Object>) style);
+            }
             return link;
         });
         if (made instanceof ILinkPresentation link) {
@@ -1712,6 +1715,79 @@ public final class AstaExport {
         // The API refuses every value of `font.size`.
         if (style.get("fontSize") != null) {
             drop("fontSize");
+        }
+        ink(node, style);
+        if (Boolean.TRUE.equals(style.get("hideStereotypes"))) {
+            option(node, "stereotype_visibility", "false");
+        }
+        if ("class".equals(type) || "interface".equals(type) || "enumeration".equals(type)
+                || "dataType".equals(type)) {
+            members(node, style, (String) p.get("element"));
+        }
+    }
+
+    /// What a classifier box leaves out of its members, under the names of Astah's API.
+    private void members(INodePresentation node, Map<String, Object> style, String element) {
+        String[][] switches = {
+            {"hideMemberVisibility", "visibilitye_kind_visibility"},
+            {"hideAttributeTypes", "attribute_type_visibility"},
+            {"hideInitialValues", "attribute_initial_value_visibility"},
+            {"hideAttributeStereotypes", "attribute_stereotype_visibility"},
+            {"hideOperationStereotypes", "operation_stereotype_visibility"},
+            {"hideParameters", "operation_parameter_visibility"},
+            {"hideParameterTypes", "operation_parameter_type_visibility"},
+            {"hideReturnTypes", "operation_return_type_visibility"},
+        };
+        for (String[] s : switches) {
+            if (Boolean.TRUE.equals(style.get(s[0]))) {
+                option(node, s[1], "false");
+            }
+        }
+        // Astah shows parameter directions all or none; UmlCraft by default shows `out` and
+        // `inout`, so a box with such a parameter shows them all in Astah.
+        boolean directions = switch (style.get("parameterDirections") instanceof String d ? d : "explicit") {
+            case "all" -> true;
+            case "hidden" -> false;
+            default -> hasDirections(element);
+        };
+        if (directions) {
+            option(node, "operation_parameter_direction_kind_visibility", "true");
+        }
+        for (String[] kind : new String[][] {{"hiddenAttributes", "attribute"}, {"hiddenOperations", "operation"}}) {
+            for (Object v : list(style.get(kind[0]))) {
+                option(node, v + kind[1], "false");
+            }
+        }
+    }
+
+    /// Whether an operation of the classifier has an `out` or `inout` parameter.
+    private boolean hasDirections(String classifier) {
+        for (String member : children(classifier)) {
+            for (String parameter : children(member)) {
+                String direction = text(elements.get(parameter), "direction");
+                if ("out".equals(direction) || "inOut".equals(direction)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// The text and line colors of a shape or line other than Astah's black.
+    private void ink(IPresentation presentation, Map<String, Object> style) {
+        for (String[] key : new String[][] {{"fontColor", "font.color"}, {"stroke", "line.color"}}) {
+            if (style.get(key[0]) instanceof String c && c.length() >= 7) {
+                option(presentation, key[1], c.substring(0, 7).toUpperCase());
+            }
+        }
+    }
+
+    /// A display option; one the API refuses for this kind of shape is reported.
+    private void option(IPresentation presentation, String key, String value) {
+        try {
+            presentation.setProperty(key, value);
+        } catch (InvalidEditingException e) {
+            drop("displayOption");
         }
     }
 

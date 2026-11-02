@@ -14,8 +14,8 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    Aggregation, AssociationEnd, ElementKind, Id, LineShape, Model, Multiplicity, Navigability,
-    Point as MPoint, Rect, Shape, TypeRef,
+    Aggregation, AssociationEnd, Color, ElementKind, Id, LineShape, Model, Multiplicity,
+    Navigability, Point as MPoint, Rect, Shape, TypeRef,
 };
 use umlcraft_notation::draw::{self, Paint, Primitive};
 use umlcraft_notation::member::{self, member_text};
@@ -2063,8 +2063,19 @@ struct Painter<'a> {
     /// The fill color chosen for the node being painted; only on a light background, where the
     /// texts stay readable on it.
     node_fill: Option<Hsla>,
+    /// The line color chosen for the edge being painted, likewise.
+    edge_line: Option<Hsla>,
     /// Members show their visibility in UmlCraft's own column.
     column: bool,
+}
+
+fn hsla(c: Color) -> Hsla {
+    Hsla::from(Rgba {
+        r: f32::from(c.r) / 255.0,
+        g: f32::from(c.g) / 255.0,
+        b: f32::from(c.b) / 255.0,
+        a: f32::from(c.a) / 255.0,
+    })
 }
 
 impl Painter<'_> {
@@ -2121,7 +2132,7 @@ impl Painter<'_> {
         let c = self.c;
         match paint {
             Paint::Fill => self.node_fill.unwrap_or(c.fill),
-            Paint::Line => c.line,
+            Paint::Line => self.edge_line.unwrap_or(c.line),
             Paint::Background => c.background,
             Paint::Translucent => Hsla { a: 0.35, ..c.fill },
             Paint::Muted => c.muted,
@@ -2130,7 +2141,7 @@ impl Painter<'_> {
     }
 
     fn primitive(&mut self, primitive: &Primitive) {
-        let line = self.c.line;
+        let line = self.paint(Paint::Line);
         match primitive {
             Primitive::Polyline { points, width, style } => self.line(points, *width, line, *style),
             Primitive::Curve { points, width, style } => {
@@ -2205,8 +2216,13 @@ impl Painter<'_> {
         measured
     }
 
+    /// A text color of its own, only on a light background, where it stays readable.
+    fn ink(&self, color: Option<Color>) -> Hsla {
+        color.filter(|_| self.c.background.l > 0.5).map_or(self.c.text, hsla)
+    }
+
     fn row(&mut self, row: &Row) {
-        let color = self.c.text;
+        let color = self.ink(row.color);
         let column = scene::visibility_column(&row.text).filter(|_| {
             self.column && row.role == RowRole::Member && row.align == LabelAlign::Left
         });
@@ -2296,14 +2312,7 @@ impl Painter<'_> {
     /// Paints a node's outline and its rows, except the row being edited in place.
     fn node(&mut self, node: &NodeShape, editing: Option<Id>) {
         let light = self.c.background.l > 0.5;
-        self.node_fill = node.fill.filter(|_| light).map(|c| {
-            Hsla::from(Rgba {
-                r: f32::from(c.r) / 255.0,
-                g: f32::from(c.g) / 255.0,
-                b: f32::from(c.b) / 255.0,
-                a: f32::from(c.a) / 255.0,
-            })
-        });
+        self.node_fill = node.fill.filter(|_| light).map(hsla);
         for primitive in draw::figure(node) {
             self.primitive(&primitive);
         }
@@ -2317,13 +2326,19 @@ impl Painter<'_> {
     }
 
     fn edge(&mut self, edge: &EdgeShape, selected: bool) {
-        let color = if selected { self.c.selection } else { self.c.line };
+        let light = self.c.background.l > 0.5;
+        self.edge_line = edge.stroke.filter(|_| light).map(hsla);
+        let color = if selected { self.c.selection } else { self.paint(Paint::Line) };
         self.line(&edge.path(), if selected { 2.0 } else { 1.0 }, color, edge.line);
-        for primitive in draw::markers(edge) {
+        for primitive in draw::end_markers(edge) {
             self.primitive(&primitive);
         }
-        let text = self.c.text;
+        self.edge_line = None;
+        if let Some(primitive) = draw::name_arrow(edge) {
+            self.primitive(&primitive);
+        }
         for label in &edge.labels {
+            let text = self.ink(label.color);
             let area = draw::label_area(label);
             let width = self.text(&label.text, area, FONT_SIZE, false, false, text, label.align);
             if label.underline {
@@ -2667,6 +2682,7 @@ impl Render for DiagramCanvas {
                                 window,
                                 cx,
                                 node_fill: None,
+                                edge_line: None,
                                 column,
                             };
                             p.grid(bounds, corner);

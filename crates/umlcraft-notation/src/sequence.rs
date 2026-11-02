@@ -626,6 +626,7 @@ fn plain_row(text: String, element: Id) -> Row {
         role: RowRole::Member,
         element: Some(element),
         hinted: false,
+        color: None,
     }
 }
 
@@ -895,6 +896,7 @@ fn message_edge(
                 align: LabelAlign::Center,
                 underline: false,
                 keyword: false,
+                color: None,
             },
             (None, Some(x)) => EdgeLabel {
                 text: text.clone(),
@@ -902,6 +904,7 @@ fn message_edge(
                 align: LabelAlign::Left,
                 underline: false,
                 keyword: false,
+                color: None,
             },
             (None, None) => unreachable!("one of them is set"),
         });
@@ -944,6 +947,7 @@ fn message_edge(
             align: LabelAlign::Center,
             underline: false,
             keyword: false,
+            color: None,
         });
     }
     // Astah centers a label's text by Java's whole-pixel width, mostly a little wider than the
@@ -971,6 +975,7 @@ fn message_edge(
         free_labels: Vec::new(),
         association: false,
         end_labels: Vec::new(),
+        stroke: None,
     }
 }
 

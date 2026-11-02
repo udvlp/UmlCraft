@@ -34,7 +34,7 @@ pub fn render(scene: &Scene, measure: &dyn TextMeasure) -> String {
 /// units; at [`FINE_UNITS`] per logical unit their spacing stays even.
 pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> String {
     let area = bounds(scene, measure).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)).inflate(MARGIN);
-    let mut svg = Svg { out: String::new(), measure, fill: None, units };
+    let mut svg = Svg { out: String::new(), measure, fill: None, line: None, ink: None, units };
     svg.out += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
     svg.out += &format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{pw}\" height=\"{ph}\" \
@@ -61,8 +61,10 @@ pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> St
         }
         svg.fill = None;
         for row in &node.rows {
+            svg.ink = row.color;
             svg.row(row);
         }
+        svg.ink = None;
     }
     if let Some(layout) = &scene.sequence {
         for p in draw::sequence(layout) {
@@ -70,11 +72,17 @@ pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> St
         }
     }
     for edge in &scene.edges {
+        svg.line = edge.stroke;
         svg.primitive(&draw::edge_line(edge, 1.0));
-        for p in draw::markers(edge) {
+        for p in draw::end_markers(edge) {
+            svg.primitive(&p);
+        }
+        svg.line = None;
+        if let Some(p) = draw::name_arrow(edge) {
             svg.primitive(&p);
         }
         for label in &edge.labels {
+            svg.ink = label.color;
             let width = measure.width(&label.text, FONT_SIZE, false);
             let area = draw::label_area(label);
             svg.text(&label.text, area, FONT_SIZE, false, false, label.align, width);
@@ -88,6 +96,7 @@ pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> St
                 });
             }
         }
+        svg.ink = None;
         for (rect, rows) in &edge.qualifiers {
             svg.primitive(&draw::qualifier_box(*rect));
             for row in rows {
@@ -131,6 +140,10 @@ struct Svg<'a> {
     measure: &'a dyn TextMeasure,
     /// Fill color of the node being drawn.
     fill: Option<Color>,
+    /// Line color of the edge being drawn.
+    line: Option<Color>,
+    /// Color of the text being drawn.
+    ink: Option<Color>,
     /// Image units per logical unit.
     units: f32,
 }
@@ -142,13 +155,14 @@ impl Svg<'_> {
         let num = |v: f32| num(v * k);
         let element = match p {
             Primitive::Polyline { points, width, style } => format!(
-                "<polyline points=\"{}\" fill=\"none\" stroke=\"{BLACK}\" stroke-width=\"{}\"{}/>",
+                "<polyline points=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\"{}/>",
                 points_attr(points, k),
+                self.line_color(),
                 num(*width),
                 dashes(*style, k),
             ),
             Primitive::Curve { points: [a, b, c, d], width, style } => format!(
-                "<path d=\"M{} {} C{} {} {} {} {} {}\" fill=\"none\" stroke=\"{BLACK}\" \
+                "<path d=\"M{} {} C{} {} {} {} {} {}\" fill=\"none\" stroke=\"{}\" \
                  stroke-width=\"{}\"{}/>",
                 num(a.x),
                 num(a.y),
@@ -158,13 +172,15 @@ impl Svg<'_> {
                 num(c.y),
                 num(d.x),
                 num(d.y),
+                self.line_color(),
                 num(*width),
                 dashes(*style, k),
             ),
             Primitive::Polygon { points, fill } => format!(
-                "<polygon points=\"{}\"{} stroke=\"{BLACK}\"/>",
+                "<polygon points=\"{}\"{} stroke=\"{}\"/>",
                 points_attr(points, k),
                 self.fill_attr(*fill),
+                self.line_color(),
             ),
             Primitive::Ellipse { center, rx, ry, fill, width } => format!(
                 "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{} stroke=\"{BLACK}\" \
@@ -219,8 +235,14 @@ impl Svg<'_> {
                 None => format!(" fill=\"{DEFAULT_FILL}\""),
             },
             Paint::Translucent => format!(" fill=\"{WHITE}\" fill-opacity=\"0.35\""),
+            Paint::Line => format!(" fill=\"{}\"", self.line_color()),
             paint => format!(" fill=\"{}\"", color(paint)),
         }
+    }
+
+    /// The color of lines: the edge's own or black.
+    fn line_color(&self) -> String {
+        self.line.map_or_else(|| BLACK.to_owned(), hex)
     }
 
     /// A row of a node. Astah centers such texts by their whole-pixel width or their exact one,
@@ -330,12 +352,13 @@ impl Svg<'_> {
         let k = self.units;
         let num = |v: f32| num(v * k);
         self.out += &format!(
-            "<text x=\"{}\" y=\"{}\" font-size=\"{}\"{}{}>{}</text>\n",
+            "<text x=\"{}\" y=\"{}\" font-size=\"{}\"{}{}{}>{}</text>\n",
             num(draw::text_left(area, width, align)),
             num(area.y + draw::baseline(size)),
             num(size),
             if bold { " font-weight=\"bold\"" } else { "" },
             if italic { " font-style=\"italic\"" } else { "" },
+            self.ink.map(|c| format!(" fill=\"{}\"", hex(c))).unwrap_or_default(),
             escape(text),
         );
     }
@@ -349,6 +372,11 @@ fn color(paint: Paint) -> &'static str {
         Paint::Muted => GRAY,
         Paint::None => "none",
     }
+}
+
+/// `#rrggbb`: line and text colors are opaque.
+fn hex(c: Color) -> String {
+    format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
 }
 
 /// The dash pattern of `style`, `k` image units per logical unit.

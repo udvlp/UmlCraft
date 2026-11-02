@@ -273,6 +273,13 @@ prop:
   display: Darstellung im Diagramm
   hide_attributes: Attribute ausblenden
   hide_operations: Operationen ausblenden
+  hide_stereotypes: Stereotype ausblenden
+  hide_member_visibility: Sichtbarkeit der Member ausblenden
+  hide_attribute_types: Attributtypen ausblenden
+  hide_initial_values: Initialwerte ausblenden
+  hide_parameters: Parameter ausblenden
+  hide_parameter_types: Parametertypen ausblenden
+  hide_return_types: Rückgabetypen ausblenden
   hide_instance_name: Namen ausblenden
   hide_instance_type: Classifier ausblenden
   dashed: Gestrichelt
@@ -410,6 +417,7 @@ dialog:
   more_files: "… und %{count} weitere"
   astah_unlicensed: "Die Anwendung, die .asta-Projekte schreibt, hat das Speichern abgelehnt, weil ihre Lizenzprüfung fehlgeschlagen ist. Bitte sie einmal starten und die Lizenz prüfen, dann erneut exportieren."
 export_dropped:
+  displayOption: Anzeigeoptionen, die Astah für diese Art Form nicht übernimmt
   comment: Kommentare, die auf keinem Diagramm stehen
   interaction: Interaktionen ohne Diagramm
   message: Nachrichten, die nicht auf ihrem Diagramm stehen

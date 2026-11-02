@@ -273,6 +273,13 @@ prop:
   display: Display on diagram
   hide_attributes: Hide attributes
   hide_operations: Hide operations
+  hide_stereotypes: Hide stereotypes
+  hide_member_visibility: Hide visibility of members
+  hide_attribute_types: Hide attribute types
+  hide_initial_values: Hide initial values
+  hide_parameters: Hide parameters
+  hide_parameter_types: Hide parameter types
+  hide_return_types: Hide return types
   hide_instance_name: Hide name
   hide_instance_type: Hide classifier
   dashed: Dashed
@@ -410,6 +417,7 @@ dialog:
   more_files: "… and %{count} more"
   astah_unlicensed: "The application that writes .asta projects refused to save because its license check failed. Start it once and check its license, then export again."
 export_dropped:
+  displayOption: Display options Astah does not take for this kind of shape
   comment: Comments not shown on a diagram
   interaction: Interactions without a diagram
   message: Messages not shown on their diagram

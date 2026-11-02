@@ -3,6 +3,18 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **What a class box shows of its members**: per box, the properties can hide stereotypes,
+  the members' visibility, attribute types, initial values, parameters, parameter types and
+  return types. Astah projects keep these options, and also which visibilities a box leaves out
+  and whether it shows parameter directions, in both directions of the import and export.
+- **Colored names and lines**: names in their own font color and lines in their own color, as
+  in Astah projects, are drawn and exported that way.
+- **Parameter directions as in Astah**: boxes from Astah projects show `out` and `inout` only
+  where Astah does (when the box shows directions, then with `in` as well); boxes made in
+  UmlCraft keep showing `out` and `inout`.
+
 ## 0.16.0 – 2026-11-01
 
 - **Messages stay on their lifelines**: a message drawn or dragged above the heads goes right

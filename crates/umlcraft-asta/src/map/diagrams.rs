@@ -49,7 +49,51 @@ impl Importer<'_> {
             .filter(|_| self.r.style(p, "font.size.auto").as_deref() == Some("false"))
             .and_then(|s| s.parse::<f32>().ok())
             .filter(|&size| size.is_finite() && size > 0.0 && size != scene::FONT_SIZE);
+        style.font_color = self.ink(p, "font.color");
+        style.hide_stereotypes = self.r.g.bool_field(p, "stereotypeVisibility") == Some(false);
         style
+    }
+
+    /// What a classifier box leaves out of its members. Astah keeps the switches as fields of
+    /// the presentation, the visibilities filtered out and the parameter directions in its
+    /// style map (`attribute.filter_by_visibility`: `,privateattribute,packageattribute`).
+    fn member_filters(&self, p: ObjId, style: &mut Style) {
+        let off = |field: &str| self.r.g.bool_field(p, field) == Some(false);
+        style.hide_member_visibility = off("visibilityKindVisibility");
+        style.hide_attribute_types = off("attributeTypeVisibility");
+        style.hide_initial_values = off("attributeInitValueVisibility");
+        style.hide_attribute_stereotypes = off("attributeStereotypeVisibility");
+        style.hide_operation_stereotypes = off("operationStereotypeVisibility");
+        style.hide_parameters = off("parameterVisibility");
+        style.hide_parameter_types = off("parameterTypeVisibility");
+        style.hide_return_types = off("returnTypeVisibility");
+        // Astah shows no directions unless told to, and then `in` as well.
+        style.parameter_directions =
+            match self.r.style(p, "operation.parameter.directionkind.visibility").as_deref() {
+                Some("true") => ParameterDirections::All,
+                _ => ParameterDirections::Hidden,
+            };
+        let hidden = |key: &str, suffix: &str| -> Vec<Visibility> {
+            let filter = self.r.style(p, key).unwrap_or_default();
+            [
+                ("public", Visibility::Public),
+                ("protected", Visibility::Protected),
+                ("package", Visibility::Package),
+                ("private", Visibility::Private),
+            ]
+            .into_iter()
+            .filter(|(name, _)| filter.split(',').any(|f| f == format!("{name}{suffix}")))
+            .map(|(_, v)| v)
+            .collect()
+        };
+        style.hidden_attributes = hidden("attribute.filter_by_visibility", "attribute");
+        style.hidden_operations = hidden("operation.filter_by_visibility", "operation");
+    }
+
+    /// A text or line color other than Astah's black (`font.color`, `line.color`).
+    pub(super) fn ink(&self, p: ObjId, key: &str) -> Option<Color> {
+        let color = self.r.style(p, key).filter(|c| !c.eq_ignore_ascii_case("#000000"))?;
+        color.to_ascii_lowercase().parse().ok()
     }
 
     /// Recreates the diagram's nodes and edges.
@@ -179,6 +223,7 @@ impl Importer<'_> {
                 && r.g.field(p, "notationType").and_then(Value::as_i64) == Some(1);
             style.auto_size = scene::is_boxed_classifier(&element_kind)
                 && r.g.bool_field(p, "doAutoResize") == Some(true);
+            self.member_filters(p, &mut style);
         }
         if class == "RectPresentation" {
             style.name_offset = self.boundary_name(p).map(|(_, at)| at);
@@ -393,6 +438,9 @@ impl Importer<'_> {
             Some("curve_right_angle") => LineShape::CurveRightAngle,
             _ => LineShape::Line,
         };
+        // Astah draws the line in its color and the name in the font's.
+        presentation.style.stroke = self.ink(p, "line.color");
+        presentation.style.font_color = self.ink(p, "font.color");
         let curve = presentation.style.line_shape.is_curve();
         let bounds = |id: Id| self.model.view(diagram)?.get(id)?.bounds();
         // Lines end at the node's ellipse or diamond, as the scene draws them.

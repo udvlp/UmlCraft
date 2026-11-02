@@ -6,8 +6,8 @@ use std::fmt;
 
 use umlcraft_model::{
     AssociationEnd, ElementData, ElementKind, Id, Model, ModelError, Multiplicity,
-    ParameterDirection, ParameterProps, Result, TemplateParameterKind, TemplateParameterProps, Tx,
-    TypeExpr, TypeRef, Visibility,
+    ParameterDirection, ParameterDirections, ParameterProps, Result, Style, TemplateParameterKind,
+    TemplateParameterProps, Tx, TypeExpr, TypeRef, Visibility,
 };
 
 pub fn type_label(model: &Model, type_ref: &Option<TypeRef>) -> Option<String> {
@@ -112,21 +112,58 @@ pub fn template_parameter_text(model: &Model, id: Id) -> String {
     s
 }
 
-/// The text of a member as shown in a compartment (and offered for editing).
+/// The text of a member as typed when editing it, and as a class box shows it unless its style
+/// leaves something out.
 pub fn member_text(model: &Model, id: Id) -> String {
+    member_body(model, id, &Style::default())
+}
+
+/// Whether a classifier box with `style` shows the member: its visibility may be filtered out.
+pub fn member_shown(model: &Model, id: Id, style: &Style) -> bool {
+    let Some(e) = model.get(id) else { return false };
+    let hidden = match e.kind() {
+        ElementKind::Attribute(_) => &style.hidden_attributes,
+        ElementKind::Operation(_) => &style.hidden_operations,
+        _ => return true,
+    };
+    !hidden.contains(&e.data().visibility)
+}
+
+/// The text of a member as a classifier box with `style` shows it: what the box leaves out is
+/// left out, and the member's stereotypes follow its visibility, as in Astah
+/// (`+ <<enum constant>> PLAIN : Terrain`).
+pub fn member_label(model: &Model, id: Id, style: &Style) -> String {
     let Some(e) = model.get(id) else { return String::new() };
-    let vis = e.data().visibility.symbol();
+    let mut text = member_body(model, id, style);
+    let stereotypes = &e.data().stereotypes;
+    let shown = match e.kind() {
+        ElementKind::Attribute(_) => !style.hide_attribute_stereotypes,
+        ElementKind::Operation(_) => !style.hide_operation_stereotypes,
+        _ => false,
+    };
+    if shown && !stereotypes.is_empty() {
+        let at = if style.hide_member_visibility { 0 } else { text.find(' ').map_or(0, |i| i + 1) };
+        text.insert_str(at, &format!("{} ", crate::scene::stereotype_text(stereotypes)));
+    }
+    text
+}
+
+fn member_body(model: &Model, id: Id, style: &Style) -> String {
+    let Some(e) = model.get(id) else { return String::new() };
+    let symbol = e.data().visibility.symbol();
+    let vis = if style.hide_member_visibility { String::new() } else { format!("{symbol} ") };
     let name = e.name();
     match e.kind() {
         ElementKind::Attribute(p) => {
-            let mut s = format!("{vis} {}{name}", if p.is_derived { "/" } else { "" });
-            if let Some(t) = type_label(model, &p.type_ref) {
+            let mut s = format!("{vis}{}{name}", if p.is_derived { "/" } else { "" });
+            if let Some(t) = type_label(model, &p.type_ref).filter(|_| !style.hide_attribute_types)
+            {
                 s.push_str(&format!(" : {t}"));
             }
             if let Some(m) = p.multiplicity {
                 s.push_str(&format!(" [{m}]"));
             }
-            if !p.default_value.is_empty() {
+            if !p.default_value.is_empty() && !style.hide_initial_values {
                 s.push_str(&format!(" = {}", p.default_value));
             }
             s
@@ -138,10 +175,11 @@ pub fn member_text(model: &Model, id: Id) -> String {
                 .filter_map(|&c| model.get(c))
                 .filter_map(|c| match c.kind() {
                     ElementKind::Parameter(pp) if pp.direction != ParameterDirection::Return => {
-                        Some(parameter_text(model, c.name(), pp))
+                        Some(parameter_text(model, c.name(), pp, style))
                     }
                     _ => None,
                 })
+                .filter(|_| !style.hide_parameters)
                 .collect();
             let templates: Vec<String> = template_parameters(model, id)
                 .into_iter()
@@ -152,8 +190,9 @@ pub fn member_text(model: &Model, id: Id) -> String {
             } else {
                 format!("<{}>", templates.join(", "))
             };
-            let mut s = format!("{vis} {name}{templates}({})", params.join(", "));
-            if let Some(t) = type_label(model, &p.return_type) {
+            let mut s = format!("{vis}{name}{templates}({})", params.join(", "));
+            if let Some(t) = type_label(model, &p.return_type).filter(|_| !style.hide_return_types)
+            {
                 s.push_str(&format!(" : {t}"));
             }
             s
@@ -163,13 +202,16 @@ pub fn member_text(model: &Model, id: Id) -> String {
     }
 }
 
-fn parameter_text(model: &Model, name: &str, p: &ParameterProps) -> String {
-    let mut s = match p.direction {
-        ParameterDirection::Out => format!("out {name}"),
-        ParameterDirection::InOut => format!("inout {name}"),
+fn parameter_text(model: &Model, name: &str, p: &ParameterProps, style: &Style) -> String {
+    let mut s = match (p.direction, style.parameter_directions) {
+        (_, ParameterDirections::Hidden) => name.to_owned(),
+        (ParameterDirection::Out, _) => format!("out {name}"),
+        (ParameterDirection::InOut, _) => format!("inout {name}"),
+        // Astah writes `in` with a space before and an extra one after: `total( in  a : int)`.
+        (_, ParameterDirections::All) => format!(" in  {name}"),
         _ => name.to_owned(),
     };
-    if let Some(t) = type_label(model, &p.type_ref) {
+    if let Some(t) = type_label(model, &p.type_ref).filter(|_| !style.hide_parameter_types) {
         s.push_str(&format!(" : {t}"));
     }
     if !p.default_value.is_empty() {
@@ -933,6 +975,84 @@ mod tests {
         doc.edit("edit", |tx| apply_member_text(tx, submit, "+ submit()")).unwrap();
         assert_eq!(member_text(doc.model(), submit), "+ submit()");
         assert!(doc.model().children(submit).is_empty());
+    }
+
+    /// What a box leaves out, as Astah shows it (measured with its command line's images).
+    #[test]
+    fn member_labels_follow_the_box_style() {
+        let (mut doc, ids) = order_system();
+        let mut member = |text: &str, stereotype: &str| {
+            let text = text.to_owned();
+            let stereotype = stereotype.to_owned();
+            doc.edit("member", |tx| {
+                let id = if text.contains('(') {
+                    tx.create(
+                        ids.order,
+                        ElementData::new("", ElementKind::Operation(Default::default())),
+                    )?
+                } else {
+                    tx.create(
+                        ids.order,
+                        ElementData::new("", ElementKind::Attribute(Default::default())),
+                    )?
+                };
+                apply_member_text(tx, id, &text)?;
+                if !stereotype.is_empty() {
+                    tx.update(id, |d| d.stereotypes = vec![stereotype])?;
+                }
+                Ok(id)
+            })
+            .unwrap()
+        };
+        let secret = member("- secret : String = \"x\"", "id");
+        let swap = member("# swap(out x : int, inout y : int, z : int) : void", "op");
+        let model = doc.model();
+        let label = |id, f: fn(&mut Style)| {
+            let mut style = Style::default();
+            f(&mut style);
+            member_label(model, id, &style)
+        };
+        assert_eq!(label(secret, |_| {}), "- <<id>> secret : String = \"x\"");
+        assert_eq!(
+            label(swap, |_| {}),
+            "# <<op>> swap(out x : int, inout y : int, z : int) : void"
+        );
+        assert_eq!(
+            label(secret, |s| s.hide_member_visibility = true),
+            "<<id>> secret : String = \"x\""
+        );
+        assert_eq!(label(secret, |s| s.hide_attribute_types = true), "- <<id>> secret = \"x\"");
+        assert_eq!(label(secret, |s| s.hide_initial_values = true), "- <<id>> secret : String");
+        assert_eq!(
+            label(secret, |s| s.hide_attribute_stereotypes = true),
+            "- secret : String = \"x\""
+        );
+        let hidden = |s: &mut Style| s.parameter_directions = ParameterDirections::Hidden;
+        assert_eq!(label(swap, hidden), "# <<op>> swap(x : int, y : int, z : int) : void");
+        let all = |s: &mut Style| s.parameter_directions = ParameterDirections::All;
+        assert_eq!(
+            label(swap, all),
+            "# <<op>> swap(out x : int, inout y : int,  in  z : int) : void"
+        );
+        assert_eq!(label(swap, |s| s.hide_parameters = true), "# <<op>> swap() : void");
+        assert_eq!(
+            label(swap, |s| s.hide_return_types = true),
+            "# <<op>> swap(out x : int, inout y : int, z : int)"
+        );
+        let types = |s: &mut Style| {
+            s.hide_parameter_types = true;
+            s.parameter_directions = ParameterDirections::Hidden;
+        };
+        assert_eq!(label(swap, types), "# <<op>> swap(x, y, z) : void");
+        assert_eq!(
+            label(swap, |s| s.hide_operation_stereotypes = true),
+            "# swap(out x : int, inout y : int, z : int) : void"
+        );
+        let private = Style { hidden_attributes: vec![Visibility::Private], ..Style::default() };
+        assert!(!member_shown(model, secret, &private));
+        assert!(member_shown(model, swap, &private));
+        // Editing always offers the whole text.
+        assert_eq!(member_text(model, secret), "- secret : String = \"x\"");
     }
 
     #[test]

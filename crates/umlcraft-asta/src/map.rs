@@ -12,14 +12,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, AssociationProps,
-    AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
+    AttributeProps, ClassifierProps, Color, CombinedFragmentProps, CommentProps, DiagramKind,
     DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps, GeneralizationProps, Id,
     IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
     InteractionUseProps, InternalTransitionProps, LifelineProps, LineShape, LinkEnd, LinkProps,
     MessageGate, MessageProps, MessageSort, Model, Multiplicity, Navigability, Op, OperationProps,
-    ParameterDirection, ParameterProps, Point, Presentation, PseudostateKind, Qualifier, Rect,
-    Regions, Shape, SlotProps, StateProps, Style, TaggedValue, TemplateParameterKind,
-    TemplateParameterProps, TransitionProps, TypeExpr, TypeRef, Visibility,
+    ParameterDirection, ParameterDirections, ParameterProps, Point, Presentation, PseudostateKind,
+    Qualifier, Rect, Regions, Shape, SlotProps, StateProps, Style, TaggedValue,
+    TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef, Visibility,
 };
 use umlcraft_notation::palette;
 use umlcraft_notation::route;

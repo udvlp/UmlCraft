@@ -6,10 +6,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use umlcraft_asta_export::Astah;
 use umlcraft_model::sample::order_system;
 use umlcraft_model::{
-    ActivityNodeKind, ActivityNodeProps, CommentProps, DiagramKind, DirectedProps, Document,
+    ActivityNodeKind, ActivityNodeProps, Color, CommentProps, DiagramKind, DirectedProps, Document,
     ElementData, ElementKind, ExtendProps, Id, IncludeProps, InteractionUseProps, LifelineProps,
-    LineShape, MessageGate, MessageSort, Model, OperationProps, Point, Qualifier, Rect, Shape,
-    TemplateParameterKind, TemplateParameterProps, TypeExpr, TypeRef,
+    LineShape, MessageGate, MessageSort, Model, OperationProps, ParameterDirections, Point,
+    Qualifier, Rect, Shape, Style, TemplateParameterKind, TemplateParameterProps, TypeExpr,
+    TypeRef, Visibility,
 };
 use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
 use umlcraft_notation::sequence_edit;
@@ -1039,4 +1040,63 @@ fn display_settings_through_astah() {
         .collect();
     assert_eq!(offsets.len(), 1, "{offsets:?}");
     assert!(offsets[0].distance(Point::new(20.0, -30.0)) < 0.01, "{offsets:?}");
+}
+
+#[test]
+fn member_filters_and_colors_through_astah() {
+    let (mut doc, ids) = order_system();
+    let d = ids.class_diagram;
+    let view = doc.model().view(d).unwrap();
+    let boxed = view
+        .presentations()
+        .iter()
+        .find(|p| {
+            !p.is_edge()
+                && p.element.and_then(|e| doc.model().get(e)).is_some_and(|e| {
+                    matches!(e.kind(), ElementKind::Class(_)) && !e.children().is_empty()
+                })
+        })
+        .unwrap();
+    let (node, class) = (boxed.id, name(doc.model(), boxed.element.unwrap()));
+    let edge = view.presentations().iter().find(|p| p.is_edge() && p.element.is_some()).unwrap().id;
+    let red = Color::rgb(0xff, 0, 0);
+    let blue = Color::rgb(0, 0, 0xff);
+    let want = |s: &mut Style| {
+        s.font_color = Some(red);
+        s.hide_member_visibility = true;
+        s.hide_attribute_types = true;
+        s.hide_initial_values = true;
+        s.hide_parameter_types = true;
+        s.hide_return_types = true;
+        s.parameter_directions = ParameterDirections::All;
+        s.hidden_attributes = vec![Visibility::Private];
+        s.hidden_operations = vec![Visibility::Protected, Visibility::Package];
+    };
+    doc.edit("filters", |tx| {
+        tx.update_presentation(d, node, |p| want(&mut p.style))?;
+        tx.update_presentation(d, edge, |p| {
+            p.style.stroke = Some(blue);
+            p.style.font_color = Some(red);
+        })
+    })
+    .unwrap();
+    let Some(back) = through_astah(doc.model(), "filters") else { return };
+    let styles: Vec<Style> = back
+        .elements()
+        .filter(|e| e.name() == class && matches!(e.kind(), ElementKind::Class(_)))
+        .flat_map(|e| back.shown_on(e.id()))
+        .map(|(d, n)| back.view(d).unwrap().get(n).unwrap().style.clone())
+        .collect();
+    let [got] = &styles[..] else { panic!("{styles:?}") };
+    let mut expected = got.clone();
+    want(&mut expected);
+    assert_eq!(*got, expected);
+    let lines: Vec<(Option<Color>, Option<Color>)> = back
+        .elements()
+        .flat_map(|e| back.shown_on(e.id()))
+        .map(|(d, n)| &back.view(d).unwrap().get(n).unwrap().style)
+        .filter(|s| s.stroke.is_some())
+        .map(|s| (s.stroke, s.font_color))
+        .collect();
+    assert_eq!(lines, [(Some(blue), Some(red))]);
 }

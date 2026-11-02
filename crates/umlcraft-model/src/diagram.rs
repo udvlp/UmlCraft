@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::element::Visibility;
 use crate::geometry::{Point, Rect};
 use crate::id::Id;
 
@@ -358,10 +359,44 @@ impl EdgeLabels {
 pub struct Style {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Color>,
+    /// Edges: color of the line and its arrow heads; unset, the theme's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<Color>,
+    /// Color of the name, of a node or on an edge; unset, the theme's text color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_color: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f32>,
+    /// Nodes: leave out the stereotypes above the name. Keywords such as «interface» stay.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_stereotypes: bool,
+    /// Classifier boxes: leave out the members' visibility (`+`, `-`, …).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_member_visibility: bool,
+    /// Classifier boxes: leave out the attributes' types.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_attribute_types: bool,
+    /// Classifier boxes: leave out the attributes' initial values.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_initial_values: bool,
+    /// Classifier boxes: leave out the attributes' stereotypes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_attribute_stereotypes: bool,
+    /// Classifier boxes: leave out the operations' stereotypes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_operation_stereotypes: bool,
+    /// Classifier boxes: leave out the operations' return types.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_return_types: bool,
+    /// Classifier boxes: which parameter directions the operations show.
+    #[serde(default, skip_serializing_if = "ParameterDirections::is_default")]
+    pub parameter_directions: ParameterDirections,
+    /// Classifier boxes: the attributes of these visibilities are left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_attributes: Vec<Visibility>,
+    /// Classifier boxes: the operations of these visibilities are left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_operations: Vec<Visibility>,
     /// Classifier boxes: hide the attribute compartment; objects: the slot compartment.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_attributes: bool,
@@ -389,11 +424,12 @@ pub struct Style {
     /// head as the icon of the represented classifier.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub iconic: bool,
-    /// Messages: leave out the parentheses with the arguments.
+    /// Messages: leave out the parentheses with the arguments. Classifier boxes: leave out the
+    /// operations' parameters (`total() : int`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_parameters: bool,
-    /// Messages that show the parameters of the operation they call (calls without arguments):
-    /// leave out the parameters' types.
+    /// Messages that show the parameters of the operation they call (calls without arguments)
+    /// and classifier boxes: leave out the parameters' types.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_parameter_types: bool,
     /// Messages that show the parameters of the operation they call: add its return type.
@@ -415,6 +451,25 @@ pub struct Style {
 
 impl Style {
     pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Which parameter directions an operation shows in a classifier box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ParameterDirections {
+    /// `out` and `inout`; `in` goes without saying.
+    #[default]
+    Explicit,
+    /// None, as Astah shows them unless told otherwise.
+    Hidden,
+    /// All, `in` as well, as Astah shows them when told to.
+    All,
+}
+
+impl ParameterDirections {
+    pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
 }

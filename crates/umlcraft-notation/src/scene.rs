@@ -12,7 +12,7 @@ use umlcraft_model::{
 };
 
 use crate::labels::{self, FreeLabel, LabelKind};
-use crate::member::member_text;
+use crate::member::{member_label, member_shown};
 use crate::route::{self, Route, anchor_point};
 use crate::sequence::{self, SequenceLayout};
 
@@ -421,6 +421,8 @@ pub struct Row {
     pub element: Option<Id>,
     /// Drawn with whole-pixel advances, as Astah draws the texts in fragment tabs.
     pub hinted: bool,
+    /// A text color of its own; unset, the theme's.
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -504,6 +506,8 @@ pub struct EdgeShape {
     /// `end_labels`.
     pub association: bool,
     pub end_labels: Vec<EndLabel>,
+    /// A color of its own for the line and its arrow heads; unset, the theme's.
+    pub stroke: Option<Color>,
 }
 
 /// A role name or multiplicity among an edge's labels.
@@ -665,6 +669,8 @@ pub struct EdgeLabel {
     pub underline: bool,
     /// «include» or «extend», which can be dragged away from the line.
     pub keyword: bool,
+    /// A text color of its own; unset, the theme's.
+    pub color: Option<Color>,
 }
 
 /// An uncommitted change shown while the user drags.
@@ -748,6 +754,7 @@ struct Line {
     underline: bool,
     role: RowRole,
     element: Option<Id>,
+    color: Option<Color>,
 }
 
 /// `text` as one line: line breaks and tabs become spaces, other control characters are
@@ -777,6 +784,7 @@ impl Line {
             underline: false,
             role,
             element,
+            color: None,
         }
     }
 
@@ -869,6 +877,7 @@ impl Line {
             role: self.role,
             element: self.element,
             hinted: false,
+            color: self.color,
         }
     }
 }
@@ -993,6 +1002,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 (label, element.is_some_and(|e| !e.name().is_empty()), keyword),
                 to_lollipop,
                 labels,
+                &p.style,
                 measure,
             ))
         };
@@ -1052,6 +1062,7 @@ fn free_line(p: &Presentation, preview: &Preview) -> Option<EdgeShape> {
         free_labels: Vec::new(),
         association: false,
         end_labels: Vec::new(),
+        stroke: None,
     })
 }
 
@@ -1154,7 +1165,22 @@ fn layout_node(
         (Some(e), _) => layout_element(model, e, &p.style, p.regions(), bounds, measure),
         (None, _) => (bounds, Figure::Other, Vec::new()),
     };
-    NodeShape { id: p.id, element: p.element, rect, figure, rows, fill: p.style.fill }
+    NodeShape {
+        id: p.id,
+        element: p.element,
+        rect,
+        figure,
+        rows: colored(rows, &p.style),
+        fill: p.style.fill,
+    }
+}
+
+/// The rows with the name in the presentation's font color, as Astah colors only the name.
+pub(crate) fn colored(mut rows: Vec<Row>, style: &Style) -> Vec<Row> {
+    for row in rows.iter_mut().filter(|r| r.role == RowRole::Name) {
+        row.color = style.font_color;
+    }
+    rows
 }
 
 /// A free text as Astah draws it: no outline, each line 10 right of the box's left edge, the
@@ -1484,8 +1510,8 @@ fn layout_box(
 ) -> (Rect, Figure, Vec<Row>) {
     let id = e.id();
     let classifier = instance_of.flatten().and_then(|c| model.get(c));
-    let own = Some(&e.data().stereotypes);
-    let base = classifier.map(|c| &c.data().stereotypes);
+    let own = (!style.hide_stereotypes).then_some(&e.data().stereotypes);
+    let base = classifier.map(|c| &c.data().stereotypes).filter(|_| !style.hide_stereotypes);
     let mut lines = stereotype_lines([own, base].into_iter().flatten(), FONT_SIZE, id);
     let mut name = match instance_of {
         Some(classifier) => {
@@ -1579,8 +1605,11 @@ fn layout_object(
     const PAD_Y: f32 = BOX_PAD_Y;
     let id = e.id();
     // Its own stereotypes, then its class's, as Astah shows them.
-    let own = Some(&e.data().stereotypes);
-    let base = classifier.and_then(|c| model.get(c)).map(|c| &c.data().stereotypes);
+    let own = (!style.hide_stereotypes).then_some(&e.data().stereotypes);
+    let base = classifier
+        .and_then(|c| model.get(c))
+        .map(|c| &c.data().stereotypes)
+        .filter(|_| !style.hide_stereotypes);
     let mut header = stereotype_lines([own, base].into_iter().flatten(), FONT_SIZE, id);
     let (text, colon_first) = instance_text(model, e, classifier, style);
     let mut name = Line::new(text, FONT_SIZE, RowRole::Name, Some(id));
@@ -2048,7 +2077,9 @@ fn layout_classifier(
         _ if is_abstract && !keyword => vec!["abstract".into()],
         _ => Vec::new(),
     };
-    stereotypes.extend(e.data().stereotypes.iter().cloned());
+    if !style.hide_stereotypes {
+        stereotypes.extend(e.data().stereotypes.iter().cloned());
+    }
     let mut header = stereotype_lines([&stereotypes], size, id);
     let mut name = Line::new(crate::member::display_name(model, id), size, RowRole::Name, Some(id));
     name.bold = true;
@@ -2062,18 +2093,9 @@ fn layout_classifier(
         e.children()
             .iter()
             .filter_map(|&c| model.get(c))
-            .filter(|c| pick(c.kind()))
+            .filter(|c| pick(c.kind()) && member_shown(model, c.id(), style))
             .map(|c| {
-                let mut text = member_text(model, c.id());
-                // Stereotypes follow the visibility: "+ <<enum constant>> PLAIN : Terrain".
-                let stereotypes = &c.data().stereotypes;
-                if !stereotypes.is_empty()
-                    && let Some(at) = text.find(' ').filter(|_| {
-                        matches!(c.kind(), ElementKind::Attribute(_) | ElementKind::Operation(_))
-                    })
-                {
-                    text.insert_str(at + 1, &format!("{} ", stereotype_text(stereotypes)));
-                }
+                let mut text = member_label(model, c.id(), style);
                 if matches!(c.kind(), ElementKind::Attribute(p) if p.is_read_only)
                     && measure.read_only_constraint()
                 {
@@ -2257,6 +2279,7 @@ fn edge_for(
     (name_label, has_name, bind_keyword): (Option<String>, bool, Option<String>),
     to_lollipop: bool,
     placed: &EdgeLabels,
+    style: &Style,
     measure: &dyn TextMeasure,
 ) -> EdgeShape {
     // The line runs from the source anchor through the waypoints to the target anchor; it is
@@ -2304,6 +2327,7 @@ fn edge_for(
         free_labels: Vec::new(),
         association: false,
         end_labels: Vec::new(),
+        stroke: style.stroke,
     };
     // Role, multiplicity and whether the role is underlined (static), per end.
     let mut ends: [(Option<String>, Option<String>, bool); 2] = Default::default();
@@ -2443,6 +2467,7 @@ fn edge_for(
         align: LabelAlign::Left,
         underline: false,
         keyword: false,
+        color: None,
     };
     let (a, b) = route::middle_segment(pts, shape.is_curve());
     let center = middle(a, b);
@@ -2475,8 +2500,10 @@ fn edge_for(
         let (index, lines) = (edge.labels.len(), 1 + usize::from(below.is_some()));
         note_free(&mut edge.free_labels, index, placed.name.is_none(), LabelKind::Name, lines);
     }
-    edge.labels.extend(name);
-    edge.labels.extend(below);
+    // Astah colors only the name, not the ends' roles and multiplicities.
+    let colored = |l: EdgeLabel| EdgeLabel { color: style.font_color, ..l };
+    edge.labels.extend(name.map(colored));
+    edge.labels.extend(below.map(colored));
     let [(source_role, source_mult, source_static), (target_role, target_mult, target_static)] =
         ends;
     let (source_tip, source_from) = (pts[0], pts[1]);
@@ -2620,7 +2647,14 @@ fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> E
     let center = Point::new(tip.x + along * ux + left * lx, tip.y + along * uy + left * ly);
     let width = label_width(&text, measure);
     let anchor = center.offset(-width / 2.0, -LABEL_HEIGHT / 2.0);
-    EdgeLabel { text, anchor, align: LabelAlign::Left, underline: false, keyword: false }
+    EdgeLabel {
+        text,
+        anchor,
+        align: LabelAlign::Left,
+        underline: false,
+        keyword: false,
+        color: None,
+    }
 }
 
 /// Places the name of an edge as Astah does, whatever the edge (associations, dependencies,
@@ -2630,7 +2664,14 @@ fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> E
 fn association_name(text: String, middle: Point, measure: &dyn TextMeasure) -> EdgeLabel {
     let width = label_width(&text, measure);
     let anchor = middle.offset(-width / 2.0, 9.0 - LABEL_HEIGHT / 2.0);
-    EdgeLabel { text, anchor, align: LabelAlign::Left, underline: false, keyword: false }
+    EdgeLabel {
+        text,
+        anchor,
+        align: LabelAlign::Left,
+        underline: false,
+        keyword: false,
+        color: None,
+    }
 }
 
 /// Astah's triangle that shows which way a name reads, next to the name's box (top left `at`,
@@ -2693,7 +2734,14 @@ fn keyword_label(
             center.offset(nx * distance - half_w, ny * distance - half_h)
         }
     };
-    EdgeLabel { text, anchor, align: LabelAlign::Left, underline: false, keyword: true }
+    EdgeLabel {
+        text,
+        anchor,
+        align: LabelAlign::Left,
+        underline: false,
+        keyword: true,
+        color: None,
+    }
 }
 
 /// Where the line from the center of `rect` toward `toward` leaves the rectangle.
