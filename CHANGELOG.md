@@ -3,6 +3,12 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Light or dark as the system**: without a theme of its own, UmlCraft follows the system's
+  appearance and switches along with it. The View tab and the settings choose between System,
+  Light and Dark.
+
 ## 0.17.0 – 2026-11-02
 
 - **NixOS**: a Nix flake builds UmlCraft from source, with its launcher, icon and file types
