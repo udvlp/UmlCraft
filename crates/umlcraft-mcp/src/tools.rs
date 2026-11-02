@@ -185,7 +185,9 @@ pub fn list() -> Vec<Value> {
             "get_diagram",
             "What a diagram shows: nodes with their element, kind, name and bounds as drawn; \
              lines with their element and ends; and the tools its kind offers for \
-             `create_element` and `connect`.",
+             `create_element` and `connect`. Sequence diagrams: messages with their height \
+             `y`, fragments with the range of each operand, and the activation bars of each \
+             lifeline (`top`, `bottom`).",
             json!({ "diagram": id("The diagram; the one shown if omitted.") }),
             &[],
         )),
@@ -256,14 +258,18 @@ pub fn list() -> Vec<Value> {
              UmlCraft refuses what UML does not allow. `source` and `target` are elements or \
              their presentations. Generalization runs from the specific to the general, \
              realization from the class to the interface. Messages go below the others unless \
-             `y` is given. `foundMessage` (from outside the interaction) and `lostMessage` (to \
-             outside) take one lifeline, as `source`.",
+             `y` is given; those sent from a lifeline that is busy with a call it has not \
+             answered yet continue that call's bar. `foundMessage` (from outside the \
+             interaction) and `lostMessage` (to outside) take one lifeline, as `source`; a \
+             lost message is drawn as a reply (it mostly answers a found one) until \
+             `update_element` gives it another `sort`.",
             json!({
                 "diagram": id("The diagram."),
                 "tool": text("The relationship tool."),
                 "source": id("Element or presentation it starts at."),
                 "target": id("Element or presentation it ends at; not for found and lost messages."),
                 "y": number("Sequence diagrams: the height of the message."),
+                "name": text("Its name, e.g. a message's or an association's."),
             }),
             &["diagram", "tool", "source"],
         ),
@@ -786,9 +792,15 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let rect = |r: Rect| json!({ "x": r.x, "y": r.y, "width": r.width, "height": r.height });
     let mut nodes = Vec::new();
     let mut lines = Vec::new();
+    let mut bars = Vec::new();
     for p in view.presentations() {
+        // Activation bars, so that a client can send a message from inside one (at its `y`).
+        if let Shape::Activation { lifeline, top, height, .. } = p.shape {
+            let element = view.get(lifeline).and_then(|l| l.element);
+            bars.push(json!({ "lifeline": element, "top": top, "bottom": top + height }));
+            continue;
+        }
         let kind = match (p.element, &p.shape) {
-            (_, Shape::Activation { .. }) => continue,
             (Some(e), _) => kind_name(model, e),
             (None, Shape::Text { .. }) => "text",
             (None, Shape::Line { .. }) => "line",
@@ -842,7 +854,7 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
             .map(|t| t.key())
             .collect()
     };
-    Ok(Reply::json(json!({
+    let mut reply = json!({
         "id": diagram,
         "name": model.get(diagram).map_or("", |e| e.name()),
         "kind": diagram_key(kind),
@@ -850,7 +862,11 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
         "lines": lines,
         "element_tools": keys(true),
         "relationship_tools": keys(false),
-    })))
+    });
+    if kind == DiagramKind::Sequence {
+        reply["bars"] = json!(bars);
+    }
+    Ok(Reply::json(reply))
 }
 
 /// Fonts for rasterizing, loaded once.
@@ -1011,6 +1027,7 @@ fn show_element(host: &mut dyn Host, args: &Value) -> Outcome {
 fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
     let tool = edge_tool(kind, str_arg(args, "tool")?)?;
+    let name = opt_str(args, "name").map(str::to_owned);
     let model = host.document().model();
     let source = on_diagram(model, diagram, id_arg(args, "source")?)?;
     // Found and lost messages are drawn from their lifeline to itself.
@@ -1035,6 +1052,10 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
         };
         if tool != EdgeTool::NoteAnchor {
             autoroute::route_new_lines(tx, diagram, &[edge])?;
+        }
+        let element = tx.model().view(diagram).and_then(|v| v.get(edge)).and_then(|p| p.element);
+        if let (Some(name), Some(element)) = (&name, element) {
+            tx.rename(element, name.clone())?;
         }
         Ok(edge)
     })?;
@@ -1930,6 +1951,75 @@ mod tests {
         let pay_owner = host.document().model().get(uid(&pay)).and_then(|e| e.owner());
         assert_eq!(pay_owner, host.document().model().children(fragment).first().copied());
         host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn appended_messages_continue_the_call_their_sender_is_busy_with() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "sequence", "name": "Order" }));
+        let d = d["diagram"].clone();
+        let lifeline = |host: &mut Headless, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": "lifeline", "name": name }))
+        };
+        let (a, b, c) =
+            (lifeline(&mut host, "a"), lifeline(&mut host, "b"), lifeline(&mut host, "c"));
+        let send = |host: &mut Headless, tool: &str, from: &Value, to: &Value, name: &str| {
+            let m = json!({ "diagram": d, "tool": tool, "source": from, "target": to,
+                            "name": name });
+            run(host, "connect", m)
+        };
+        send(&mut host, "message", &a["element"], &b["element"], "order");
+        let check = send(&mut host, "message", &b["element"], &b["element"], "check");
+        send(&mut host, "message", &b["element"], &c["element"], "pay");
+        send(&mut host, "reply", &c["element"], &b["element"], "");
+        send(&mut host, "message", &b["element"], &a["element"], "done");
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let y = |name: &str| {
+            let lines = diagram["lines"].as_array().unwrap();
+            lines.iter().find(|l| l["name"] == name).unwrap()["y"].as_f64().unwrap()
+        };
+        assert_eq!(diagram["lines"][1]["name"], "check");
+        // b works in one bar from the call it gets to the call it makes last.
+        let outer = diagram["bars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|bar| bar["lifeline"] == b["element"])
+            .map(|bar| (bar["top"].as_f64().unwrap(), bar["bottom"].as_f64().unwrap()))
+            .max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)))
+            .unwrap();
+        assert!((outer.0 - y("order")).abs() < 0.5, "{outer:?}");
+        assert!(outer.1 > y("done"), "{outer:?}");
+
+        // A loop around the call to self stays above the call that follows.
+        let wrap = json!({ "diagram": d, "items": [check["element"]], "operator": "loop" });
+        let lp = run(&mut host, "wrap_in_fragment", wrap);
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let frame = diagram["nodes"].as_array().unwrap().iter().find(|n| n["element"] == lp["id"]);
+        let bounds = &frame.unwrap()["bounds"];
+        let bottom = bounds["y"].as_f64().unwrap() + bounds["height"].as_f64().unwrap();
+        let pay = diagram["lines"].as_array().unwrap().iter().find(|l| l["name"] == "pay");
+        assert!(bottom < pay.unwrap()["y"].as_f64().unwrap());
+
+        // An alt around the next call stays beside the loop, not inside it.
+        let pay = pay.unwrap()["element"].clone();
+        let alt = run(
+            &mut host,
+            "wrap_in_fragment",
+            json!({ "diagram": d, "items": [pay], "operator": "alt" }),
+        );
+        let model = host.document().model();
+        let owner =
+            |id: &Value| model.get(parse_id(id.as_str().unwrap()).unwrap()).and_then(|e| e.owner());
+        assert_eq!(owner(&alt["id"]), owner(&lp["id"]));
+        model.check().unwrap();
+        // Its else pushes the call after it down instead of taking it in.
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let frame = diagram["nodes"].as_array().unwrap().iter().find(|n| n["element"] == alt["id"]);
+        let bounds = &frame.unwrap()["bounds"];
+        let bottom = bounds["y"].as_f64().unwrap() + bounds["height"].as_f64().unwrap();
+        let done = diagram["lines"].as_array().unwrap().iter().find(|l| l["name"] == "done");
+        assert!(bottom < done.unwrap()["y"].as_f64().unwrap(), "{bottom}");
     }
 
     #[test]

@@ -36,6 +36,8 @@ today.
   branches and loops, optionally for an operation, read it back in the same form, change it and
   look at it as an image. The project overview lists the structograms. They can also change
   single elements of a structogram and export it as an image or a Structorizer file.
+- **AI clients see more of a sequence diagram**: `connect` names the message it draws, and
+  `get_diagram` lists the activation bars with their lifeline, top and bottom.
 - **Sequence diagrams keep their shape as they grow**: a message drawn below the others from a
   lifeline still busy with a call it has not answered continues that call's bar instead of
   starting a new one. A fragment put around a message keeps the message's label clear of its

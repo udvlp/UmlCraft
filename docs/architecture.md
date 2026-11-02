@@ -785,8 +785,8 @@ whole tree back the same way. `render_diagram` and `export_image` draw structogr
 In sequence diagrams `connect` makes found and lost messages from one lifeline,
 `update_element` sets what a fragment covers and spans its frame (`sequence_edit::cover`), and
 `move_node` moves messages and fragments by height as dragging does (`palette::move_to_slot`
-at the scene's `slot_at`), so they change operands; `get_diagram` gives messages their `y` and
-fragments the range of each operand.
+at the scene's `slot_at`), so they change operands; `get_diagram` gives messages their `y`,
+fragments the range of each operand and lists the bars.
 
 Two hosts exist. `Headless` holds a project of its own, measured with `ApproxMeasure`; in the
 app `AppHost` (`crates/umlcraft-app/src/live.rs`) wraps the `Workspace`, labels each step
