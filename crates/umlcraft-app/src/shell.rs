@@ -121,7 +121,6 @@ pub fn icon(path: impl Into<SharedString>) -> Icon {
     Icon::empty().path(path)
 }
 
-/// A borderless button with an icon that dispatches `action`; `tooltip` names it.
 /// Wraps a button of the title bar. To Windows the whole bar is the caption: a press nobody
 /// handles starts moving the window, and the button never sees the release. Handling the press
 /// here keeps it in the app; the button below has seen it already.
@@ -129,6 +128,24 @@ pub fn in_title_bar(button: impl IntoElement) -> Div {
     div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(button)
 }
 
+/// An [`icon_button`] of the title bar, its icon as large as the ribbon's small ones.
+pub fn title_bar_button(
+    id: impl Into<ElementId>,
+    path: impl Into<SharedString>,
+    tooltip: impl Into<SharedString>,
+    action: Box<dyn Action>,
+) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .px_1()
+        // A child, not `Button::icon`, which sizes it after the button.
+        .child(icon(path).size(crate::ribbon::SMALL_ICON_SIZE))
+        .tooltip(tooltip)
+        .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+}
+
+/// A borderless button with an icon that dispatches `action`; `tooltip` names it.
 pub fn icon_button(
     id: impl Into<ElementId>,
     path: impl Into<SharedString>,

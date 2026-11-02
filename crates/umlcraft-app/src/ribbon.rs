@@ -647,8 +647,8 @@ const SPLIT_LOWER: Pixels = px(36.0);
 /// A large button's icon; with icons only, a smaller one.
 const LARGE_ICON: Pixels = px(28.0);
 const COMPACT_ICON: Pixels = px(22.0);
-/// A small button's icon.
-const SMALL_ICON_SIZE: Pixels = px(20.0);
+/// A small button's icon, and the title bar's.
+pub const SMALL_ICON_SIZE: Pixels = px(20.0);
 
 /// Background and text of the open tab and of a selected button: navy on a pale blue in the
 /// light theme, pale blue on a dark blue in the dark one (the theme's own blue is too loud).

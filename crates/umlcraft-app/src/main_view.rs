@@ -1769,14 +1769,14 @@ impl MainView {
                     ),
                 )
                 .child(divider())
-                .child(shell::in_title_bar(shell::icon_button(
+                .child(shell::in_title_bar(shell::title_bar_button(
                     "save",
                     icons::fluent("save"),
                     t!("toolbar.save"),
                     Box::new(SaveProject),
                 )))
                 .child(shell::in_title_bar(
-                    shell::icon_button(
+                    shell::title_bar_button(
                         "undo",
                         icons::fluent("arrow_undo"),
                         undo_tip,
@@ -1785,7 +1785,7 @@ impl MainView {
                     .disabled(!ws.doc.can_undo()),
                 ))
                 .child(shell::in_title_bar(
-                    shell::icon_button(
+                    shell::title_bar_button(
                         "redo",
                         icons::fluent("arrow_redo"),
                         redo_tip,
@@ -1819,14 +1819,14 @@ impl MainView {
                             })),
                     ))
                 })
-                .child(shell::in_title_bar(shell::icon_button(
+                .child(shell::in_title_bar(shell::title_bar_button(
                     "about",
                     icons::fluent("info"),
                     t!("toolbar.about"),
                     Box::new(OpenAbout),
                 )))
                 .child(
-                    shell::in_title_bar(shell::icon_button(
+                    shell::in_title_bar(shell::title_bar_button(
                         "settings",
                         icons::fluent("settings"),
                         t!("toolbar.settings"),
