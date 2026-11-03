@@ -664,6 +664,7 @@ kind:
   comment: Notiz
   diagram: Diagramm
   structogram: Struktogramm
+  erDiagram: ER-Diagramm
   activity: Aktivität
   activityNode: Aktivitätsknoten
   activityEdge: Fluss

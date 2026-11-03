@@ -202,6 +202,9 @@ ICONS = {
     # A structogram: an instruction above an alternative with its two branches.
     'structogram': [rect(2.5, 2.5, 15, 15, 1), path('M2.5 6.5H17.5M2.5 11.5H17.5'),
                     path('M2.5 6.5L10 11.5L17.5 6.5M10 11.5V17.5')],
+    # An ER diagram (Chen): an entity with an attribute, joined to a relationship.
+    'erDiagram': [rect(2.5, 11.5, 8, 5), ellipse(5.5, 4.5, 3, 2), path('M5.5 6.5V11.5'),
+                  path('M14 3.5L17.5 7L14 10.5L10.5 7Z'), path('M8.5 11.5L12 8.5')],
     # Structogram elements, drawn as Structorizer draws them
     'nsdInstruction': [rect(2.5, 5.5, 15, 9), path('M5.5 10H14.5')],
     'nsdCall': [rect(2.5, 5.5, 15, 9), path('M5 5.5V14.5M15 5.5V14.5')],

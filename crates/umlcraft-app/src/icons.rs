@@ -77,6 +77,11 @@ pub fn structogram_icon() -> SharedString {
     uml("structogram")
 }
 
+/// ER diagrams, which open in a window of their own.
+pub fn er_diagram_icon() -> SharedString {
+    uml("erDiagram")
+}
+
 /// A kind of structogram element, as Structorizer draws it.
 pub fn nsd_kind_icon(kind: umlcraft_nsd::ElementKind) -> SharedString {
     let tag = kind.tag();
