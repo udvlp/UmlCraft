@@ -215,9 +215,12 @@ fn run(
         let result = cx
             .background_executor()
             .spawn(async move {
+                let mut options = options;
                 let schema = if schema.dialect == dialect {
                     schema
                 } else {
+                    // Schemas are a matter of the dialect: those offered were PostgreSQL's.
+                    options.schemas = None;
                     umlcraft_erm_sql::read(&bytes, Some(dialect)).map_err(|e| dump_error(&e))?
                 };
                 Ok::<Import, String>(umlcraft_erm_sql::import(&schema, &options))

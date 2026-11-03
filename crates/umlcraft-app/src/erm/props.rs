@@ -156,6 +156,17 @@ impl PropsPanel {
             return;
         }
         let opt = |v: &str| (!v.trim().is_empty()).then(|| v.trim().to_owned());
+        // Empty is the standard size; anything but a sensible number is not taken, and the
+        // field shows the size again.
+        let font_size = match font_size_input(&value) {
+            Some(size) => size,
+            None if field == Field::FontSize => {
+                self.seen = None;
+                cx.notify();
+                return;
+            }
+            None => None,
+        };
         self.canvas.update(cx, |c, cx| {
             c.apply(cx, |d| {
                 match (field, &one) {
@@ -168,9 +179,7 @@ impl PropsPanel {
                         edit::set_role(d, id, &value)?
                     }
                     (Field::FontSize, _) => {
-                        let size = value.trim().replace(',', ".").parse::<f64>().ok();
-                        let size = size.filter(|s| *s > 0.0 && *s != 12.0);
-                        edit::set_style(d, &selection, |s| s.font_size = size)?
+                        edit::set_style(d, &selection, |s| s.font_size = font_size)?
                     }
                     (_, Some(Item::Node(id))) => {
                         let mut p: Props = node_props.clone().unwrap_or_default();
@@ -355,6 +364,20 @@ fn section_title(cx: &App, key: &str) -> Div {
 
 fn hex(c: &str) -> u32 {
     u32::from_str_radix(c.trim_start_matches('#'), 16).unwrap_or(0xffffff)
+}
+
+/// A typed font size: `Some(None)` for the standard size (empty or 12), `Some(Some(px))` for
+/// 4 to 144 px, `None` for anything else.
+fn font_size_input(value: &str) -> Option<Option<f64>> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Some(None);
+    }
+    let size = v.replace(',', ".").parse::<f64>().ok()?;
+    if !(4.0..=144.0).contains(&size) {
+        return None;
+    }
+    Some((size != 12.0).then_some(size))
 }
 
 fn font_size(style: &Style) -> String {
@@ -585,7 +608,7 @@ impl Render for PropsPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{fill_colors, line_colors};
+    use super::{fill_colors, font_size_input, line_colors};
 
     #[test]
     fn colours_are_the_main_windows_and_fills_light_versions_of_them() {
@@ -597,5 +620,15 @@ mod tests {
         // Black becomes a light grey, pure red a light red; white parts stay white.
         assert_eq!(fills[1], "#cccccc");
         assert!(fills.contains(&"#ffcccc".to_owned()), "{fills:?}");
+    }
+
+    #[test]
+    fn font_sizes_are_sensible_numbers() {
+        assert_eq!(font_size_input(""), Some(None));
+        assert_eq!(font_size_input(" 12 "), Some(None));
+        assert_eq!(font_size_input("14,5"), Some(Some(14.5)));
+        for wrong in ["inf", "1e400", "NaN", "14px", "0", "-3", "500"] {
+            assert_eq!(font_size_input(wrong), None, "{wrong}");
+        }
     }
 }

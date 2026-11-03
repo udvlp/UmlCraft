@@ -335,7 +335,10 @@ impl ErmCanvas {
         let free = ev.modifiers.alt;
         let screen = |dx: f64, dy: f64, zoom: f32| (dx.abs().max(dy.abs()) as f32) * zoom;
         let zoom = self.zoom;
-        let d = self.diagram().clone();
+        // One copy of the diagram, only for the drags that preview a change.
+        let previews =
+            matches!(self.drag, Some(Drag::Move { .. } | Drag::Resize { .. } | Drag::Label { .. }));
+        let mut base = previews.then(|| self.diagram().clone());
         let mut preview: Option<Diagram> = None;
         let selection = self.movable();
         // Computed apart from `self.drag` where they need `self`.
@@ -367,12 +370,12 @@ impl ErmCanvas {
                     return;
                 }
                 *moved = true;
-                let (mx, my) = match hit::bounds_of(&d, &selection) {
+                let Some(mut p) = base.take() else { return };
+                let (mx, my) = match hit::bounds_of(&p, &selection) {
                     Some(b) if !free => snap_move(&b, rx, ry),
                     _ => (rx, ry),
                 };
                 (*dx, *dy) = (mx, my);
-                let mut p = d.clone();
                 if edit::move_items(&mut p, &selection, mx, my).is_ok() {
                     preview = Some(p);
                 }
@@ -381,14 +384,14 @@ impl ErmCanvas {
                 let shift = ev.modifiers.shift;
                 let r = handle.resize(original, p.x - start.x, p.y - start.y, MIN_SIZE, shift);
                 *bounds = if free || shift { r } else { snap_resized(*handle, r) };
-                let mut p = d.clone();
+                let Some(mut p) = base.take() else { return };
                 if edit::set_bounds(&mut p, item, *bounds).is_ok() {
                     preview = Some(p);
                 }
             }
             Some(Drag::Label { link, start, dx, dy }) => {
                 (*dx, *dy) = ((p.x - start.x).round(), (p.y - start.y).round());
-                let mut p = d.clone();
+                let Some(mut p) = base.take() else { return };
                 if edit::move_label(&mut p, link, *dx, *dy).is_ok() {
                     preview = Some(p);
                 }
