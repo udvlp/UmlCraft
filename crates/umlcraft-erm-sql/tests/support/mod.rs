@@ -1,5 +1,6 @@
-//! The imported model as the table of `docs/erm-spec.md` § 6.3 (`refs/tools/sqlproto.py
-//! expect` writes the same form, so its output is the expected result).
+//! The imported model as a table, one row per entity and relationship with its attributes
+//! and ends (the form of `tests/expected/*.md`, which the Python prototype the rules were
+//! worked out with writes as well).
 
 #![allow(dead_code)]
 

@@ -1,5 +1,5 @@
 //! What the parser reads from a dump: tables with their columns and constraints, neutral to
-//! the dialect (`docs/erm-spec.md` § 6.1).
+//! the dialect.
 
 use std::collections::BTreeMap;
 use std::fmt;

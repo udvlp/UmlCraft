@@ -1,4 +1,4 @@
--- ERM test schema for PostgreSQL 17.6 (step 0.8 of docs/plan-erm-phase-0.md).
+-- ERM test schema for PostgreSQL 17.6.
 -- Same content as mysql.sql, plus a second schema `fracht`, a domain and an enum type.
 -- Loaded by tools/dumps.sh into the database `flug`; pg_dump writes every FK as ALTER TABLE.
 

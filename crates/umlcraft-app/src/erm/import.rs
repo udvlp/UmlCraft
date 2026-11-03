@@ -1,6 +1,6 @@
 //! "Import SQL dump as ER diagram …": a file, a small dialog (dialect, attributes, schemas),
 //! the import in the background and a window with the result, unsaved, whose notes say what
-//! was found (`docs/plan-erm-phase-5.md` § 5.6).
+//! was found.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;

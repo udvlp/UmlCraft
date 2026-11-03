@@ -1,9 +1,10 @@
-//! The smoke corpus outside the repository (`refs/corpus`, see `docs/erm-spec.md` § 6.4):
+//! The smoke corpus outside the repository (`$UMLCRAFT_ERM_REFS/corpus/<system>/<db>`):
 //! Sakila, Pagila, Employees, Chinook and Northwind as dumped by MySQL 9.7, MariaDB 11.8 and
 //! PostgreSQL 17.6, three dumps each. Skipped without `UMLCRAFT_ERM_REFS`.
 //!
 //! Every dump reads without a problem, gives the model the prototype gives
-//! (`refs/expected/<system>-<db>.md`, written by `tools/sqlproto.py expect`) and is laid out
+//! (`$UMLCRAFT_ERM_REFS/expected/<system>-<db>.md`, written by the Python prototype the
+//! rules were worked out with, in the form of `support::describe`) and is laid out
 //! without overlaps.
 
 mod support;

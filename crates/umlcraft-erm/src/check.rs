@@ -1,4 +1,4 @@
-//! The rules a valid diagram keeps (`docs/erm-spec.md` § 5, P1–P12).
+//! The rules a valid diagram keeps (P1–P12).
 //!
 //! Errors make a file unreadable, warnings are reported and the file still opens. Diagrams on
 //! their way (a new relationship without participants, an attribute without owner) only warn;
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn allowed_connections_follow_the_table() {
-        // Rows: source; columns: target, in the order of kinds() (spec § 3.2).
+        // Rows: source; columns: target, in the order of kinds().
         let table = [
             [false, true, true, true, true],
             [true, false, true, true, false],

@@ -1,7 +1,7 @@
 //! The test schema (`tests/fixtures/schema`, the flight example and every import case) as
 //! dumped by MySQL 8.4 and 9.7, MariaDB 11.8 and PostgreSQL 16 and 17.6, three dumps each:
 //! without data, with data (`COPY` / `INSERT`) and with routines and triggers. All dumps of
-//! one system give the same model, and it is the one in `docs/erm-spec.md` § 6.3.
+//! one system give the same model, and it is the one in `tests/expected`.
 
 mod support;
 

@@ -1,4 +1,4 @@
-//! Automatic layout (`docs/erm-spec.md` § 7.2): for the SQL import and for "arrange" in the
+//! Automatic layout: for the SQL import and for "arrange" in the
 //! editor. Works on any diagram.
 //!
 //! 1. Entities, relationships and IS-As are the core graph. Each relationship goes into the

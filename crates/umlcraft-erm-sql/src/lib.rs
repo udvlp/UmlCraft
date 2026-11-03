@@ -1,6 +1,6 @@
 //! Entity-relationship diagrams from SQL dumps (`mysqldump`, `mariadb-dump`, `pg_dump` in
 //! plain format): the tables become entities, their columns attributes and their foreign
-//! keys relationships, after the rules in `docs/erm-spec.md` § 6; the result is laid out
+//! keys relationships, after the rules in [`map`]; the result is laid out
 //! with [`umlcraft_erm::layout`].
 //!
 //! - [`dialect`]: which database wrote the dump, and its name.

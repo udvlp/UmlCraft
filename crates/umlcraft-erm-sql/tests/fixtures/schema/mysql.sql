@@ -1,4 +1,4 @@
--- ERM test schema for MySQL 9.7 and MariaDB 11.8 (step 0.8 of docs/plan-erm-phase-0.md).
+-- ERM test schema for MySQL 9.7 and MariaDB 11.8.
 -- Same content as postgres.sql. Every table says which import case it covers.
 -- Loaded by tools/dumps.sh into the database `flug`; the dumps are the test data, not this file.
 

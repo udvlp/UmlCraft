@@ -17,7 +17,7 @@ pub fn text_box(node: &Node) -> Rect {
 }
 
 /// A size that fits `name` on one line, never smaller than the sizes new nodes get
-/// (`docs/erm-spec.md` § 7.2): ellipses and entities grow by 10 px steps, rhombi get room for
+/// (sizes of the flight example): ellipses and entities grow by 10 px steps, rhombi get room for
 /// the text at their narrower middle. IS-A and associative entities keep their size.
 pub fn fit(kind: &NodeKind, name: &str, current: (f64, f64)) -> (f64, f64) {
     let longest = name

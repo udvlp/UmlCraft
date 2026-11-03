@@ -17,7 +17,7 @@ use crate::model::{
 /// The smallest box a node or text can be given, so that it stays grabbable.
 pub const MIN_SIZE: (f64, f64) = (20.0, 10.0);
 /// Where the cardinality of a new participation sits: in the middle of the line, 15 px beside
-/// it (`docs/plan-erm-phase-4.md` D5).
+/// it.
 pub const NEW_LABEL_POS: LabelPos = LabelPos { x: 0.0, y: 15.0, dx: 0.0, dy: 0.0 };
 /// The cardinality a new participation gets.
 pub const NEW_CARDINALITY: Cardinality = Cardinality::new(0, Max::Many);

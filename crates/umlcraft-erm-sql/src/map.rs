@@ -1,5 +1,5 @@
-//! The tables of a dump as a Chen diagram (`docs/erm-spec.md` § 6.2, rules S1–S11 in their
-//! order; S1 partitions are folded by the parser).
+//! The tables of a dump as a Chen diagram, by the rules S1–S11 in their order (S1,
+//! partitions, is done by the parser; S2 same foreign key twice → once; S3–S11 below).
 //!
 //! - A junction table (its primary key is the columns of two or more foreign keys, nothing
 //!   else refers to it) becomes a relationship between the tables it joins (S3).

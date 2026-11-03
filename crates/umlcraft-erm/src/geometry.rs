@@ -279,8 +279,8 @@ mod tests {
         assert!((p.x - x).abs() < 0.01 && (p.y - y).abs() < 0.01, "{p:?} is not ({x}, {y})");
     }
 
-    /// Numbers from `refs/tools/geom.py` on `lines.drawio` and Steven's original, both
-    /// matching draw.io's export to 0.007 px.
+    /// Numbers from that script on draw.io's own files (a test file of lines and the flight
+    /// example), both matching draw.io's export to 0.007 px.
     #[test]
     fn fixed_ports_project_onto_the_outline() {
         // An ellipse's box corner (exitX=1;exitY=1) lands on the ellipse, not on the corner

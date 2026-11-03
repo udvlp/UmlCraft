@@ -1,4 +1,4 @@
-//! Cutting a dump into statements (`refs/notes/dump-syntax.md`, `docs/erm-spec.md` § 6.1).
+//! Cutting a dump into statements, as `mysqldump`, `mariadb-dump` and `pg_dump` write them.
 //!
 //! Works on bytes: data in `INSERT`s may be binary and need not be UTF-8, and lines may be
 //! megabytes long. Comments are dropped, except MySQL's version comments `/*!40101 …*/` and

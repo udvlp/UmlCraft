@@ -1,4 +1,4 @@
-//! Reading the statements the import needs (`docs/erm-spec.md` § 6.1.4): `CREATE TABLE`,
+//! Reading the statements the import needs: `CREATE TABLE`,
 //! `ALTER TABLE … ADD PRIMARY KEY | UNIQUE | FOREIGN KEY`, `ATTACH PARTITION`, `CREATE UNIQUE
 //! INDEX`, `COMMENT ON TABLE | COLUMN`; `USE`/`CREATE DATABASE` for the name and
 //! `CREATE VIEW` for the placeholder tables of older `mysqldump`s.
