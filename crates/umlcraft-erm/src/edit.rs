@@ -574,16 +574,19 @@ mod tests {
     }
 
     #[test]
-    fn an_identifying_relationship_identifies_one_weak_entity() {
+    fn a_weak_entity_may_own_a_weak_entity() {
+        // order item → note: both weak; until a double line says which one is identified,
+        // that is a warning, not a refusal.
         let mut d = Diagram::new("t");
         let r = add_node(&mut d, NodeKind::Relationship { identifying: true }, "r", p(0.0, 0.0));
         let w1 = add_node(&mut d, NodeKind::Entity { weak: true }, "W1", p(-200.0, 0.0));
         let w2 = add_node(&mut d, NodeKind::Entity { weak: true }, "W2", p(200.0, 0.0));
         connect(&mut d, &r, &w1, (None, None)).unwrap();
-        assert_eq!(
-            connect(&mut d, &r, &w2, (None, None)),
-            Err(EditError::Rule(IssueKind::IdentifyingWithSeveralWeak))
-        );
+        connect(&mut d, &r, &w2, (None, None)).unwrap();
+        let issues: Vec<_> = crate::check(&d).into_iter().filter(|i| i.element == r).collect();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind, IssueKind::IdentifyingWithSeveralWeak);
+        assert_eq!(issues[0].severity(), crate::Severity::Warning);
     }
 
     #[test]

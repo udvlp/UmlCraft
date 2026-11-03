@@ -7,7 +7,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::model::{Diagram, Id, LabelPos, LabelText, Max, Min, NodeKind, Point, Rect, Style};
+use crate::model::{
+    Diagram, Id, LabelPos, LabelText, Line, Max, Min, NodeKind, Point, Rect, Style,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Severity {
@@ -54,7 +56,9 @@ pub enum IssueKind {
     TooFewParticipants,
     /// P7 (warning: unfinished)
     IdentifyingWithoutWeak,
-    /// P7
+    /// P7 (warning): more than one weak entity is identified (joined by a double line, or
+    /// without double lines all weak participants). A weak owner is fine: in a chain
+    /// (order → item → note) the identified one takes part with a double line.
     IdentifyingWithSeveralWeak,
     /// P8 (warning)
     WeakWithoutIdentifying,
@@ -81,6 +85,7 @@ impl IssueKind {
             Self::NoOwner
             | Self::TooFewParticipants
             | Self::IdentifyingWithoutWeak
+            | Self::IdentifyingWithSeveralWeak
             | Self::WeakWithoutIdentifying
             | Self::IsAEnds
             | Self::CardinalityOutsideParticipation => Severity::Warning,
@@ -243,12 +248,20 @@ pub fn check(d: &Diagram) -> Vec<Issue> {
                     push(&n.id, IssueKind::TooFewParticipants);
                 }
                 if identifying {
-                    let weak: HashSet<&Id> = participants
-                        .iter()
-                        .copied()
-                        .filter(|o| matches!(kinds[o], NodeKind::Entity { weak: true }))
+                    let weak: Vec<(&Id, Line)> = d
+                        .links_of(&n.id)
+                        .filter_map(|l| Some((l.other(&n.id)?, l.line)))
+                        .filter(|(o, _)| {
+                            matches!(kinds.get(o), Some(NodeKind::Entity { weak: true }))
+                        })
                         .collect();
-                    match weak.len() {
+                    let total = weak.iter().any(|(_, line)| *line == Line::Double);
+                    let identified: HashSet<&Id> = weak
+                        .iter()
+                        .filter(|(_, line)| !total || *line == Line::Double)
+                        .map(|(o, _)| *o)
+                        .collect();
+                    match identified.len() {
                         0 => push(&n.id, IssueKind::IdentifyingWithoutWeak),
                         1 => {}
                         _ => push(&n.id, IssueKind::IdentifyingWithSeveralWeak),
@@ -422,6 +435,26 @@ mod tests {
         d.node_mut(&a).unwrap().kind = NodeKind::Entity { weak: true };
         d.node_mut(&r).unwrap().kind = NodeKind::Relationship { identifying: true };
         assert_eq!(check(&d), vec![]);
+    }
+
+    #[test]
+    fn a_weak_owner_of_a_weak_entity_is_valid() {
+        let (mut d, a, b, r) = binary();
+        d.node_mut(&a).unwrap().kind = NodeKind::Entity { weak: true };
+        d.node_mut(&b).unwrap().kind = NodeKind::Entity { weak: true };
+        d.node_mut(&r).unwrap().kind = NodeKind::Relationship { identifying: true };
+        // Without double lines both count as identified: a warning, no error.
+        let issues = check(&d);
+        assert_eq!(
+            issues,
+            vec![Issue { element: r.clone(), kind: IssueKind::IdentifyingWithSeveralWeak }]
+        );
+        assert_eq!(issues[0].severity(), Severity::Warning);
+        // The double line says which one is identified; the other is its (weak) owner.
+        let l = d.links.iter_mut().find(|l| l.target == b).unwrap();
+        l.line = Line::Double;
+        let issues: Vec<_> = check(&d).into_iter().filter(|i| i.element == r).collect();
+        assert_eq!(issues, vec![]);
     }
 
     #[test]

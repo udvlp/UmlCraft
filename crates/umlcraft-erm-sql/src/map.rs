@@ -577,6 +577,23 @@ mod tests {
     }
 
     #[test]
+    fn chained_weak_entities_make_a_valid_diagram() {
+        // order → item → note: the item is weak and owns the weak note.
+        let sql = "CREATE TABLE o (id int PRIMARY KEY);\n\
+                   CREATE TABLE oi (o_id int, nr int, PRIMARY KEY (o_id, nr), \
+                   FOREIGN KEY (o_id) REFERENCES o (id));\n\
+                   CREATE TABLE oin (o_id int, nr int, k int, PRIMARY KEY (o_id, nr, k), \
+                   FOREIGN KEY (o_id, nr) REFERENCES oi (o_id, nr));";
+        let s = parse(sql.as_bytes(), Dialect::MySql);
+        let d = map(&s, &Options::default()).diagram;
+        let weak = d.nodes.iter().filter(|n| n.kind == NodeKind::Entity { weak: true }).count();
+        assert_eq!(weak, 2);
+        assert_eq!(umlcraft_erm::check(&d), []);
+        let text = umlcraft_erm::write(&d);
+        assert!(umlcraft_erm::read(&text).is_ok());
+    }
+
+    #[test]
     fn options_choose_attributes_and_schemas() {
         let sql = "CREATE TABLE public.a (id int, x int);\nALTER TABLE public.a ADD PRIMARY KEY (id);\n\
                    CREATE TABLE s.b (id int);";
