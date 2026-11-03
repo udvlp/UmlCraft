@@ -234,7 +234,7 @@ pub fn list() -> Vec<Value> {
              settings, which the app keeps; set them back when done) and the zoom of the \
              diagram or structogram shown. Only while the app runs.",
             json!({
-                "theme": { "type": "string", "enum": ["light", "dark"] },
+                "theme": { "type": "string", "enum": ["light", "dark", "system"] },
                 "language": { "type": "string", "enum": ["en", "de", "system"] },
                 "zoom": {
                     "description": "\"fit\" for the whole diagram, or a percentage such as 100.",

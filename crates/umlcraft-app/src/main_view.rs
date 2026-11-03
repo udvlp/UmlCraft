@@ -468,11 +468,12 @@ impl MainView {
         let zoom = args.get("zoom");
         let dark = match theme {
             None => None,
-            Some("light") => Some(false),
-            Some("dark") => Some(true),
+            Some("system") => Some(None),
+            Some("light") => Some(Some(false)),
+            Some("dark") => Some(Some(true)),
             Some(other) => {
                 return umlcraft_mcp::Reply::error(format!(
-                    "`theme` is light or dark, not `{other}`"
+                    "`theme` is light, dark or system, not `{other}`"
                 ));
             }
         };
