@@ -8,6 +8,10 @@ use rust_i18n::t;
 /// screens and in print.
 pub const SCALE: f32 = 2.0;
 
+/// The most pixels an image may have: 400 MB of pixels to draw into. Beyond that the memory
+/// may not be there, and asking for it would end the app instead of failing.
+const MAX_PIXELS: u64 = 100_000_000;
+
 /// Rasterizes an SVG export at `scale` pixels per logical unit with the system's fonts.
 pub fn from_svg(svg: &str, scale: f32) -> anyhow::Result<Vec<u8>> {
     let mut options = usvg::Options::default();
@@ -20,8 +24,11 @@ pub fn from_svg(svg: &str, scale: f32) -> anyhow::Result<Vec<u8>> {
         .to_int_size()
         .scale_by(scale)
         .ok_or_else(|| anyhow::anyhow!(rust_i18n::t!("error.image_empty").to_string()))?;
-    let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())
-        .ok_or_else(|| anyhow::anyhow!(rust_i18n::t!("error.image_too_large").to_string()))?;
+    let too_large = || anyhow::anyhow!(rust_i18n::t!("error.image_too_large").to_string());
+    if u64::from(size.width()) * u64::from(size.height()) > MAX_PIXELS {
+        return Err(too_large());
+    }
+    let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height()).ok_or_else(too_large)?;
     resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
     Ok(pixmap.encode_png()?)
 }

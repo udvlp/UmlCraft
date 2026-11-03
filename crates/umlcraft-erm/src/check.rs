@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::model::{Diagram, Id, LabelPos, LabelText, Max, NodeKind, Point, Rect};
+use crate::model::{Diagram, Id, LabelPos, LabelText, Max, NodeKind, Point, Rect, Style};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Severity {
@@ -63,7 +63,8 @@ pub enum IssueKind {
     SuperTypeOutsideIsA,
     /// P10 (warning)
     CardinalityOutsideParticipation,
-    /// P11
+    /// P11: a position, size or offset that is not a number, out of range (more than 100,000
+    /// px from the origin) or an empty box, or a font size not above 0 and up to 400 px.
     BadGeometry,
     /// P12
     BadCardinality,
@@ -205,7 +206,7 @@ pub fn check(d: &Diagram) -> Vec<Issue> {
 
     for n in &d.nodes {
         // P11
-        if !rect_ok(&n.bounds) {
+        if !rect_ok(&n.bounds) || !font_ok(&n.style) {
             push(&n.id, IssueKind::BadGeometry);
         }
         match n.kind {
@@ -266,7 +267,7 @@ pub fn check(d: &Diagram) -> Vec<Issue> {
     }
 
     for t in &d.texts {
-        if !rect_ok(&t.bounds) {
+        if !rect_ok(&t.bounds) || !font_ok(&t.style) {
             push(&t.id, IssueKind::BadGeometry);
         }
     }
@@ -289,16 +290,30 @@ fn is_own_part(d: &Diagram, start: &Id) -> bool {
     false
 }
 
+/// How far from the origin positions and sizes may reach: far beyond any drawing, and small
+/// enough that sums of them stay finite and an image of the whole diagram stays drawable.
+const MAX_COORD: f64 = 1e5;
+/// The largest font size, in px.
+const MAX_FONT_SIZE: f64 = 400.0;
+
+fn coord_ok(v: f64) -> bool {
+    v.is_finite() && v.abs() <= MAX_COORD
+}
+
 fn rect_ok(r: &Rect) -> bool {
-    [r.x, r.y, r.width, r.height].iter().all(|v| v.is_finite()) && r.width > 0.0 && r.height > 0.0
+    [r.x, r.y, r.width, r.height].into_iter().all(coord_ok) && r.width > 0.0 && r.height > 0.0
 }
 
 fn point_ok(p: &Point) -> bool {
-    p.x.is_finite() && p.y.is_finite()
+    coord_ok(p.x) && coord_ok(p.y)
 }
 
 fn pos_ok(p: &LabelPos) -> bool {
-    [p.x, p.y, p.dx, p.dy].iter().all(|v| v.is_finite())
+    [p.x, p.y, p.dx, p.dy].into_iter().all(coord_ok)
+}
+
+fn font_ok(style: &Style) -> bool {
+    style.font_size.is_none_or(|s| s > 0.0 && s <= MAX_FONT_SIZE)
 }
 
 #[cfg(test)]
@@ -347,6 +362,26 @@ mod tests {
     #[test]
     fn a_binary_relationship_is_valid() {
         assert_eq!(check(&binary().0), vec![]);
+    }
+
+    #[test]
+    fn positions_far_out_and_odd_font_sizes_are_bad_geometry() {
+        let bad = |change: fn(&mut crate::model::Node)| {
+            let (mut d, a, ..) = binary();
+            change(d.node_mut(&a).unwrap());
+            check(&d) == vec![Issue { element: a, kind: IssueKind::BadGeometry }]
+        };
+        assert!(bad(|n| n.bounds.x = 1e308));
+        assert!(bad(|n| n.bounds.width = 2e5));
+        assert!(bad(|n| n.style.font_size = Some(0.0)));
+        assert!(bad(|n| n.style.font_size = Some(-3.0)));
+        assert!(bad(|n| n.style.font_size = Some(1e300)));
+        // Far, but within reach, and large type are fine.
+        let (mut d, a, ..) = binary();
+        let node = d.node_mut(&a).unwrap();
+        node.bounds.x = 90_000.0;
+        node.style.font_size = Some(72.0);
+        assert_eq!(check(&d), vec![]);
     }
 
     #[test]

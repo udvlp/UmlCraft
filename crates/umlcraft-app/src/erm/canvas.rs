@@ -11,8 +11,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use resvg::usvg;
+use rust_i18n::t;
 use umlcraft_erm::Diagram;
 
 use super::ToggleGrid;
@@ -52,6 +54,8 @@ pub struct ErmCanvas {
     grid: bool,
     /// What is shown: the export's SVG, with the grid if it is on.
     tree: Option<Arc<usvg::Tree>>,
+    /// Why there is no tree: the SVG did not parse. Shown instead of the sheet.
+    failure: Option<String>,
     /// Counts the images asked for, so that one rasterized meanwhile for an older state is
     /// dropped.
     generation: u64,
@@ -81,6 +85,7 @@ impl ErmCanvas {
             diagram,
             grid: false,
             tree: None,
+            failure: None,
             generation: 0,
             size: (1.0, 1.0),
             zoom: 1.0,
@@ -116,7 +121,10 @@ impl ErmCanvas {
         if self.grid {
             svg = with_grid(&svg);
         }
-        self.tree = OPTIONS.with(|options| usvg::Tree::from_str(&svg, options)).ok().map(Arc::new);
+        match OPTIONS.with(|options| usvg::Tree::from_str(&svg, options)) {
+            Ok(tree) => (self.tree, self.failure) = (Some(Arc::new(tree)), None),
+            Err(err) => (self.tree, self.failure) = (None, Some(err.to_string())),
+        }
         if let Some(tree) = &self.tree {
             let size = tree.size();
             self.size = (size.width().max(1.0), size.height().max(1.0));
@@ -379,6 +387,19 @@ impl Render for ErmCanvas {
                 )
                 .size_full(),
             )
+            .when_some(self.failure.clone(), |this, error| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .p_8()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(cx.theme().danger)
+                        .child(t!("erm.draw_failed", error = error).to_string()),
+                )
+            })
     }
 }
 

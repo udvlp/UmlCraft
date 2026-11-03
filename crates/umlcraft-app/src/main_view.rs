@@ -574,25 +574,20 @@ impl MainView {
         self.prompt_and_open(window, cx);
     }
 
+    /// The file first, then unsaved changes: an ER diagram leaves the project open.
     fn prompt_and_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard(
-            window,
-            cx,
-            Box::new(|_, window, cx| {
-                let rx = cx.prompt_for_paths(PathPromptOptions {
-                    files: true,
-                    directories: false,
-                    multiple: false,
-                    prompt: None,
-                });
-                cx.spawn_in(window, async move |this, cx| {
-                    let Ok(Ok(Some(paths))) = rx.await else { return };
-                    let Some(path) = paths.into_iter().next() else { return };
-                    this.update_in(cx, |this, window, cx| this.open(path, window, cx)).ok();
-                })
-                .detach();
-            }),
-        );
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else { return };
+            let Some(path) = paths.into_iter().next() else { return };
+            this.update_in(cx, |this, window, cx| this.ask_to_open(path, window, cx)).ok();
+        })
+        .detach();
     }
 
     /// Where new structograms go: the selected package, else the project.
@@ -695,11 +690,7 @@ impl MainView {
 
     fn open_recent(&mut self, action: &OpenRecent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.settings.recent.get(action.index).cloned() else { return };
-        self.confirm_discard(
-            window,
-            cx,
-            Box::new(move |this, window, cx| this.open(path, window, cx)),
-        );
+        self.ask_to_open(path, window, cx);
     }
 
     /// Opens a project, or imports an `.asta` or `.nsd` file as a new project. An ER diagram
@@ -2466,6 +2457,22 @@ fn menus(settings: &Settings) -> Vec<Menu> {
 /// take its place.
 fn install_menus(settings: &Settings, cx: &mut App) {
     cx.set_menus(menus(settings));
+}
+
+/// Quit from a window without a project (an ER diagram's, through the platform's menu): a main
+/// window asks about unsaved changes as its own Quit does; without one the app just ends.
+pub fn quit_from_other_window(cx: &mut App) {
+    let main = cx.windows().into_iter().find_map(|handle| {
+        let root = handle.downcast::<gpui_kit::base::Root>()?;
+        let view = root.read(cx).ok()?.view().clone().downcast::<MainView>().ok()?;
+        Some((root, view))
+    });
+    let Some((root, view)) = main else { return cx.quit() };
+    root.update(cx, |_, window, cx| {
+        window.activate_window();
+        view.update(cx, |this, cx| this.quit(&Quit, window, cx));
+    })
+    .ok();
 }
 
 /// The title bar's File menu: the same entries as the platform's File menu. Exporting a

@@ -187,7 +187,7 @@ fn element_label(d: &Diagram, id: &Id) -> String {
     let node = |id: &Id| {
         d.node(id).map(|n| match n.name.trim() {
             "" => t!("erm.unnamed", kind = kind_name(n.kind.type_name())).to_string(),
-            name => format!("„{}“", name.replace('\n', " ")),
+            name => t!("error.named", name = name.replace('\n', " ")).to_string(),
         })
     };
     if let Some(name) = node(id) {
@@ -295,7 +295,8 @@ mod tests {
         let issue = Issue { element: entity.id.clone(), kind: IssueKind::BadGeometry };
         let text = issue_text(Some(&d), &issue);
         assert!(text.starts_with("P11"), "{text}");
-        assert!(text.contains(&format!("„{}“", entity.name)), "{text}");
+        let named = rust_i18n::t!("error.named", name = entity.name.replace('\n', " "));
+        assert!(text.contains(named.as_ref()), "{text}");
         let link = &d.links[0];
         let issue = Issue { element: link.id.clone(), kind: IssueKind::BadCardinality };
         assert!(!issue_text(Some(&d), &issue).contains(link.id.as_str()));

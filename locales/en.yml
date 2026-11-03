@@ -846,6 +846,7 @@ nsd:
 erm:
   window_kind: "– ER diagram"
   open_failed: The ER diagram could not be opened.
+  draw_failed: "The diagram cannot be drawn: %{error}"
   not_utf8: The file is not encoded as UTF-8; ER diagrams are UTF-8.
   error_json: "The file is not a valid ER diagram: %{detail}"
   error_not_erm: The file is not an UmlCraft ER diagram.

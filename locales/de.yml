@@ -846,6 +846,7 @@ nsd:
 erm:
   window_kind: "– ER-Diagramm"
   open_failed: Das ER-Diagramm konnte nicht geöffnet werden.
+  draw_failed: "Das Diagramm lässt sich nicht zeichnen: %{error}"
   not_utf8: Die Datei ist nicht in UTF-8 kodiert; ER-Diagramme sind UTF-8.
   error_json: "Die Datei ist kein gültiges ER-Diagramm: %{detail}"
   error_not_erm: Die Datei ist kein ER-Diagramm von UmlCraft.

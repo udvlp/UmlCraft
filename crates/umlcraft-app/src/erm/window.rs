@@ -13,7 +13,7 @@ use umlcraft_erm::Diagram;
 
 use super::canvas::ErmCanvas;
 use super::{ExportErmPng, ExportErmPngTransparent, ExportErmSvg, ToggleGrid, file_stem};
-use crate::{ResetZoom, ZoomIn, ZoomOut, ZoomToFit, icons, shell};
+use crate::{ExportPng, ExportSvg, Quit, ResetZoom, ZoomIn, ZoomOut, ZoomToFit, icons, shell};
 
 /// Opens a window for `diagram`, read from `path`; `notes` are the warnings found in it.
 pub fn open(
@@ -295,6 +295,16 @@ impl Render for ErmWindow {
             .on_action(cx.listener(Self::export_svg))
             .on_action(cx.listener(Self::export_png))
             .on_action(cx.listener(Self::export_png_transparent))
+            // The platform's menu bar (macOS) is the main window's; its commands that make
+            // sense here act on this window or the app.
+            .on_action(
+                cx.listener(|this, _: &ExportSvg, window, cx| this.export(Export::Svg, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ExportPng, window, cx| {
+                this.export(Export::Png { transparent: false }, window, cx)
+            }))
+            .on_action(|_: &super::OpenErm, window, cx| super::prompt_open(window, cx))
+            .on_action(|_: &Quit, _, cx| crate::main_view::quit_from_other_window(cx))
             .child(self.title_bar(cx))
             .child(self.toolbar(cx))
             .child(

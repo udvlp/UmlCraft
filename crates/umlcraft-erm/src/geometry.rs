@@ -1,7 +1,7 @@
 //! Where draw.io puts things: the outlines of the shapes, where lines start and end, the
 //! second frames, double lines and the position of line labels. Every rule names its source in
-//! draw.io 31.7 (`docs/erm-spec.md` § 1); `refs/tools/geom.py` checked the line ends on 338
-//! lines of draw.io's exports.
+//! draw.io 31.7; the line ends were checked on 338 lines of draw.io's exports. The rules come
+//! from draw.io; the code computing them is our own.
 
 use crate::model::{Diagram, LabelPos, Link, Node, NodeKind, Point, Rect};
 
@@ -37,60 +37,52 @@ pub fn perimeter(outline: Outline, b: &Rect, next: Point) -> Point {
     }
 }
 
-/// `mxPerimeter.RectanglePerimeter`: the side follows from the angle towards `next`.
+/// Where the ray from the middle of a rectangle towards `next` leaves it: the ray is scaled
+/// until it reaches the nearer of the vertical and the horizontal sides. Towards the middle
+/// itself, the middle of the right side (draw.io's `RectanglePerimeter`).
 fn rectangle(b: &Rect, next: Point) -> Point {
     let c = b.center();
-    let alpha = (next.y - c.y).atan2(next.x - c.x);
-    let t = b.height.atan2(b.width);
-    let pi = std::f64::consts::PI;
-    let beta = pi / 2.0 - alpha;
-    if alpha < -pi + t || alpha > pi - t {
-        Point::new(b.x, c.y - b.width * alpha.tan() / 2.0)
-    } else if alpha < -t {
-        Point::new(c.x - b.height * beta.tan() / 2.0, b.y)
-    } else if alpha < t {
-        Point::new(b.x + b.width, c.y + b.width * alpha.tan() / 2.0)
-    } else {
-        Point::new(c.x + b.height * beta.tan() / 2.0, b.y + b.height)
+    let (dx, dy) = (next.x - c.x, next.y - c.y);
+    if dx == 0.0 && dy == 0.0 {
+        return Point::new(b.x + b.width, c.y);
     }
+    let reach = |half: f64, d: f64| if d == 0.0 { f64::INFINITY } else { half / d.abs() };
+    let k = reach(b.width / 2.0, dx).min(reach(b.height / 2.0, dy));
+    Point::new(c.x + k * dx, c.y + k * dy)
 }
 
-/// `mxPerimeter.EllipsePerimeter`, which cuts the direction to whole numbers first
-/// (`parseInt`), so lines towards a point a fraction away still hit the top or the bottom.
+/// Where the ray from the middle of an ellipse towards `next` leaves it. draw.io's
+/// `EllipsePerimeter` cuts the direction to whole numbers first, so a line towards a point a
+/// fraction of a pixel to the side still meets the top or the bottom; towards the middle
+/// itself it gives `next`.
 fn ellipse(b: &Rect, next: Point) -> Point {
-    let (a, bb) = (b.width / 2.0, b.height / 2.0);
     let c = b.center();
     let (dx, dy) = ((next.x - c.x).trunc(), (next.y - c.y).trunc());
-    if dx == 0.0 {
-        return if dy == 0.0 { next } else { Point::new(c.x, c.y + bb * dy.signum()) };
+    if dx == 0.0 && dy == 0.0 {
+        return next;
     }
-    let d = dy / dx;
-    let h = c.y - d * c.x;
-    let e = a * a * d * d + bb * bb;
-    let f = -2.0 * c.x * e;
-    let g = a * a * d * d * c.x * c.x + bb * bb * c.x * c.x - a * a * bb * bb;
-    let det = (f * f - 4.0 * e * g).max(0.0).sqrt();
-    let x1 = (-f + det) / (2.0 * e);
-    let x2 = (-f - det) / (2.0 * e);
-    let p1 = Point::new(x1, d * x1 + h);
-    let p2 = Point::new(x2, d * x2 + h);
-    if distance(p1, next) < distance(p2, next) { p1 } else { p2 }
+    // The point c + k·(dx, dy) lies on the ellipse where (k·dx/rx)² + (k·dy/ry)² = 1.
+    let (rx, ry) = (b.width / 2.0, b.height / 2.0);
+    let k = 1.0 / ((dx / rx).powi(2) + (dy / ry).powi(2)).sqrt();
+    Point::new(c.x + k * dx, c.y + k * dy)
 }
 
-/// `mxPerimeter.RhombusPerimeter`: the corner on an axis, else the cut with the edge of the
-/// quadrant `next` lies in.
+/// Where the ray from the middle of a rhombus towards `next` leaves it. As in draw.io's
+/// `RhombusPerimeter`, a direction along an axis gives that corner (straight down when `next`
+/// is the middle), and a `next` inside the rhombus off the axes gives the middle.
 fn rhombus(b: &Rect, next: Point) -> Point {
     let c = b.center();
-    let (x, y, w, h) = (b.x, b.y, b.width, b.height);
-    if c.x == next.x {
-        return if c.y > next.y { Point::new(c.x, y) } else { Point::new(c.x, y + h) };
+    let (dx, dy) = (next.x - c.x, next.y - c.y);
+    let (rx, ry) = (b.width / 2.0, b.height / 2.0);
+    if dx == 0.0 {
+        return Point::new(c.x, if dy < 0.0 { c.y - ry } else { c.y + ry });
     }
-    if c.y == next.y {
-        return if c.x > next.x { Point::new(x, c.y) } else { Point::new(x + w, c.y) };
+    if dy == 0.0 {
+        return Point::new(if dx < 0.0 { c.x - rx } else { c.x + rx }, c.y);
     }
-    let corner_y = if next.y < c.y { y } else { y + h };
-    let corner_x = if next.x < c.x { x } else { x + w };
-    intersection(next, c, Point::new(c.x, corner_y), Point::new(corner_x, c.y)).unwrap_or(c)
+    // The point c + k·(dx, dy) lies on the rhombus where k·(|dx|/rx + |dy|/ry) = 1.
+    let k = 1.0 / (dx.abs() / rx + dy.abs() / ry);
+    if k > 1.0 { c } else { Point::new(c.x + k * dx, c.y + k * dy) }
 }
 
 /// The IS-A triangle's corners: apex, bottom right, bottom left.
@@ -122,16 +114,18 @@ fn polygon(points: &[Point], b: &Rect, next: Point) -> Point {
         .unwrap_or(c)
 }
 
-/// `mxUtils.intersection` of the segments a–b and c–d.
+/// Where the segments a–b and c–d cross; none when they are parallel or miss each other.
 fn intersection(a: Point, b: Point, c: Point, d: Point) -> Option<Point> {
-    let denom = (d.y - c.y) * (b.x - a.x) - (d.x - c.x) * (b.y - a.y);
-    if denom == 0.0 {
+    // a + t·r = c + u·s, solved with the 2D cross product.
+    let cross = |p: (f64, f64), q: (f64, f64)| p.0 * q.1 - p.1 * q.0;
+    let (r, s, ac) = ((b.x - a.x, b.y - a.y), (d.x - c.x, d.y - c.y), (c.x - a.x, c.y - a.y));
+    let rs = cross(r, s);
+    if rs == 0.0 {
         return None;
     }
-    let ua = ((d.x - c.x) * (a.y - c.y) - (d.y - c.y) * (a.x - c.x)) / denom;
-    let ub = ((b.x - a.x) * (a.y - c.y) - (b.y - a.y) * (a.x - c.x)) / denom;
-    ((0.0..=1.0).contains(&ua) && (0.0..=1.0).contains(&ub))
-        .then(|| Point::new(a.x + ua * (b.x - a.x), a.y + ua * (b.y - a.y)))
+    let (t, u) = (cross(ac, s) / rs, cross(ac, r) / rs);
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u))
+        .then(|| Point::new(a.x + t * r.0, a.y + t * r.1))
 }
 
 pub fn distance(a: Point, b: Point) -> f64 {
@@ -173,29 +167,35 @@ pub fn points_of(d: &Diagram, link: &Link) -> Option<Vec<Point>> {
     Some(link_points(d.node(&link.source)?, d.node(&link.target)?, link))
 }
 
-/// Where a label's text is centered (`mxGraphView.getPoint`): `x` from -1 to 1 along the
+/// Where a label's text is centered, as draw.io places it: `x` from -1 to 1 along the
 /// polyline, measured in whole pixels, then `y` px to the left of the direction of the
 /// segment it falls on, then the offset.
 pub fn label_anchor(points: &[Point], pos: &LabelPos) -> Point {
-    let segments: Vec<f64> = points.windows(2).map(|w| distance(w[0], w[1])).collect();
-    let total: f64 = segments.iter().sum();
-    if segments.is_empty() {
+    let lengths: Vec<f64> = points.windows(2).map(|w| distance(w[0], w[1])).collect();
+    let Some(last) = lengths.len().checked_sub(1) else {
         let p = points.first().copied().unwrap_or_default();
         return Point::new(p.x + pos.dx, p.y + pos.dy);
+    };
+    let along = ((pos.x / 2.0 + 0.5) * lengths.iter().sum::<f64>()).round();
+    // The segment the label falls on: the first whose end, rounded, lies beyond `along`.
+    let mut start = 0.0;
+    let mut i = 0;
+    while i < last && along >= (start + lengths[i]).round() {
+        start += lengths[i];
+        i += 1;
     }
-    let dist = ((pos.x / 2.0 + 0.5) * total).round();
-    let mut length = 0.0;
-    let mut index = 0;
-    while index + 1 < segments.len() && dist >= (length + segments[index]).round() {
-        length += segments[index];
-        index += 1;
-    }
-    let segment = segments[index];
-    let (p0, pe) = (points[index], points[index + 1]);
-    let factor = if segment == 0.0 { 0.0 } else { (dist - length) / segment };
-    let (dx, dy) = (pe.x - p0.x, pe.y - p0.y);
-    let (nx, ny) = if segment == 0.0 { (0.0, 0.0) } else { (dy / segment, dx / segment) };
-    Point::new(p0.x + dx * factor + nx * pos.y + pos.dx, p0.y + dy * factor - ny * pos.y + pos.dy)
+    let (from, to, length) = (points[i], points[i + 1], lengths[i]);
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    // The share of the segment and the unit normal to its left (y grows downwards).
+    let (share, left) = if length == 0.0 {
+        (0.0, (0.0, 0.0))
+    } else {
+        ((along - start) / length, (dy / length, -dx / length))
+    };
+    Point::new(
+        from.x + share * dx + left.0 * pos.y + pos.dx,
+        from.y + share * dy + left.1 * pos.y + pos.dy,
+    )
 }
 
 /// The two lines of a double line (`shape=link`, 4 px wide): the polyline moved 2 px to each
