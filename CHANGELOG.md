@@ -12,6 +12,9 @@ today.
   bike rental this way. AI clients create them as `composite_structure` and place parts and
   ports with `create_element` and `on`. Astah's `.asta` files bring them along both ways, with
   the interfaces a port provides drawn as a ball and those it requires as a socket.
+- **Structograms in the dark theme**: the editor draws structograms in the dark colours of the
+  diagrams, light lines and texts on dark grey, with the elements' own colours dimmed, instead
+  of a bright white sheet. Exports and the clipboard keep Structorizer's black on white.
 - **AI clients take screenshots without disturbing**: the MCP server's new `set_window` tool
   sizes the UmlCraft window in the pixels of `screenshot` and moves it beyond the screens,
   where it keeps drawing but nobody sees it, to the taskbar or back onto a screen, without

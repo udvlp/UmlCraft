@@ -72,3 +72,27 @@ fn a_diagram_of_every_kind_draws_as_before() {
     let svg = svg.replace(family, "'DejaVu Sans', Dialog, Arial, sans-serif");
     snapshot("new/all-elements.svg", &svg);
 }
+
+#[test]
+fn a_palette_recolours_everything() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/new");
+    let diagram = read(&std::fs::read_to_string(dir.join("all-elements.nsd")).unwrap()).unwrap();
+    let m = Metrics::linux();
+    let layout = Layout::of(&diagram, m);
+    let light = svg::render_with(&diagram, &layout, m, &svg::Palette::STRUCTORIZER);
+    assert_eq!(light, svg::render(&diagram, m), "exports keep Structorizer's colours");
+    let dark = svg::Palette {
+        line: umlcraft_nsd::Color([0xee, 0xee, 0xee]),
+        background: umlcraft_nsd::Color([0x20, 0x20, 0x20]),
+        head: umlcraft_nsd::Color([0x30, 0x30, 0x30]),
+        comment: umlcraft_nsd::Color([0x90, 0x90, 0x90]),
+        hatch: umlcraft_nsd::Color([0x80, 0x80, 0x80]),
+        includes: umlcraft_nsd::Color([0x80, 0x80, 0x80]),
+        tint: 0.35,
+    };
+    let dark = svg::render_with(&diagram, &layout, m, &dark);
+    for black_or_white in ["#000000", "#ffffff", "#c0c0c0", "#404040"] {
+        assert!(!dark.contains(black_or_white), "{black_or_white} left in the dark image");
+    }
+    assert!(dark.contains("fill=\"#eeeeee\""), "texts in the line colour");
+}
