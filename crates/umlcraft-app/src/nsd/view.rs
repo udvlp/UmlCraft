@@ -5,8 +5,8 @@
 //! The diagram is drawn by `umlcraft_nsd`'s SVG export and rasterized with resvg, so that the
 //! view shows exactly what an export holds, turned texts and hatching included. The image is
 //! made again when the diagram, the zoom or the screen's scale changes. Selection and the place
-//! a drag would drop to are drawn over it, so they never reach an export. The diagram stays a
-//! white sheet in the dark theme too, as in Structorizer; the area around it follows the theme.
+//! a drag would drop to are drawn over it, so they never reach an export. In the dark theme the
+//! view draws it in the diagrams' dark colours, while exports keep Structorizer's black on white.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -20,6 +20,7 @@ use rust_i18n::t;
 use umlcraft_model::Id;
 use umlcraft_nsd::layout::Layout;
 use umlcraft_nsd::path::{self, Path as NsdPath, Selection, Slot, Span};
+use umlcraft_nsd::svg::Palette;
 use umlcraft_nsd::{Color, Diagram, EditError, ElementKind, clip, edit};
 
 use super::dialog::{self, Edited, Target};
@@ -106,9 +107,11 @@ pub struct NsdView {
     notes: Vec<String>,
     notes_open: bool,
     layout: Layout,
-    /// The diagram as SVG, drawn again after each change.
+    /// The diagram as SVG, as exports have it, drawn again after each change.
     svg: String,
-    /// The SVG parsed, again only after a change.
+    /// The colours of the theme the view is shown in.
+    palette: Palette,
+    /// The diagram as shown, in `palette`, parsed; again only after a change.
     tree: Option<Arc<usvg::Tree>>,
     /// Counts the changes, so that an image rasterized meanwhile in the background is dropped.
     generation: u64,
@@ -158,8 +161,15 @@ impl NsdView {
                     cx.notify();
                 }
             }),
-            // The area around the diagram follows the theme.
-            cx.observe_global::<Theme>(|_, cx| cx.notify()),
+            // The diagram and the area around it follow the theme.
+            cx.observe_global::<Theme>(|this, cx| {
+                let palette = palette(cx.theme());
+                if palette != this.palette {
+                    this.palette = palette;
+                    this.draw();
+                }
+                cx.notify();
+            }),
         ];
         let diagram = structogram(&workspace, id, cx).unwrap_or_else(|| {
             let made = umlcraft_nsd::Provenance { author: "", date: "", origin: "" };
@@ -177,6 +187,7 @@ impl NsdView {
             notes_open: false,
             layout,
             svg: String::new(),
+            palette: palette(cx.theme()),
             tree: None,
             generation: 0,
             size: (0.0, 0.0),
@@ -227,9 +238,12 @@ impl NsdView {
     /// Draws the diagram as laid out.
     fn draw(&mut self) {
         let metrics = umlcraft_nsd::Metrics::for_platform();
-        self.svg = umlcraft_nsd::svg::render_layout(&self.diagram, &self.layout, metrics);
-        self.tree =
-            OPTIONS.with(|options| usvg::Tree::from_str(&self.svg, options)).ok().map(Arc::new);
+        self.svg = umlcraft_nsd::svg::render_with(&self.diagram, &self.layout, metrics, &LIGHT);
+        let shown = (self.palette != LIGHT).then(|| {
+            umlcraft_nsd::svg::render_with(&self.diagram, &self.layout, metrics, &self.palette)
+        });
+        let shown = shown.as_deref().unwrap_or(&self.svg);
+        self.tree = OPTIONS.with(|options| usvg::Tree::from_str(shown, options)).ok().map(Arc::new);
         self.generation += 1;
         let (w, h) = self.layout.size;
         self.size = ((w + 1) as f32, (h + 1) as f32);
@@ -1243,6 +1257,32 @@ fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&temporary, path).inspect_err(|_| {
         std::fs::remove_file(&temporary).ok();
     })
+}
+
+/// What exports have and the light theme shows.
+const LIGHT: Palette = Palette::PLAIN;
+
+/// The colours a structogram is shown in: [`LIGHT`] in the light theme, those of the diagrams
+/// in the dark one, with the elements' own colours dimmed. Neither marks elements with a
+/// comment.
+fn palette(theme: &Theme) -> Palette {
+    if !theme.is_dark() {
+        return LIGHT;
+    }
+    let color = |c: Hsla| {
+        let c = c.to_rgb();
+        let byte = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+        Color([byte(c.r), byte(c.g), byte(c.b)])
+    };
+    Palette {
+        line: color(theme.foreground),
+        background: color(theme.secondary),
+        head: color(theme.muted),
+        comment: None,
+        hatch: color(theme.muted_foreground),
+        includes: color(theme.muted_foreground),
+        tint: 0.35,
+    }
 }
 
 /// The parsed SVG rasterized at `scale`, as GPUI takes images (BGRA, not premultiplied).

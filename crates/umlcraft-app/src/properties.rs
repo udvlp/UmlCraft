@@ -2271,6 +2271,17 @@ impl Render for PropertiesPanel {
                     p.id,
                     |s, v| s.iconic = v,
                 ));
+                // A required interface: a half circle instead of the circle.
+                if p.style.iconic {
+                    body = body.child(style_flag(
+                        "socket",
+                        t!("prop.socket").into(),
+                        p.style.socket,
+                        workspace.clone(),
+                        p.id,
+                        |s, v| s.socket = v,
+                    ));
+                }
             }
             if let Some(b) = p.bounds() {
                 body = body.child(field(

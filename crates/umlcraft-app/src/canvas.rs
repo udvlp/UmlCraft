@@ -24,7 +24,7 @@ use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::route::{self, Route};
 use umlcraft_notation::scene::{
     self, Compartment, CompartmentHit, EdgeHandle, EdgeShape, EndLabelHit, FONT_SIZE, Figure,
-    Handle, LabelAlign, LineStyle, NodeShape, Preview, Row, RowRole, Scene, TextMeasure,
+    Handle, LabelAlign, LineStyle, NodeShape, PORT_SIZE, Preview, Row, RowRole, Scene, TextMeasure,
 };
 use umlcraft_notation::sequence::SequenceLayout;
 
@@ -892,7 +892,11 @@ impl DiagramCanvas {
 
         match tool {
             Tool::Node(node_tool) => {
-                let origin = snap_point(p);
+                // A port goes where it is clicked, on the border there.
+                let origin = match node_tool {
+                    NodeTool::Port => MPoint::new(p.x - PORT_SIZE / 2.0, p.y - PORT_SIZE / 2.0),
+                    _ => snap_point(p),
+                };
                 // A fragment goes where it is placed in the sequence, around the lifelines there.
                 let place = self
                     .scene

@@ -420,10 +420,15 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Needs the window, not the project, and answers later.
-        if request.name == "screenshot" {
-            crate::live::screenshot(request, window, cx);
-            return;
+        // These need the window, not the project; the first two answer later.
+        match request.name.as_str() {
+            "screenshot" => return crate::live::screenshot(request, window, cx),
+            "set_window" => return crate::live::set_window(request, window, cx),
+            "set_view" => {
+                let reply = self.set_view(&request.arguments, window, cx);
+                return request.answer(reply);
+            }
+            _ => {}
         }
         let mut effects = crate::live::Effects::default();
         let reply = self.workspace.update(cx, |ws, cx| {
@@ -448,6 +453,76 @@ impl MainView {
             self.remember(&path, cx);
         }
         request.answer(reply);
+    }
+
+    /// The `set_view` tool: theme, language and zoom, as the View tab sets them.
+    fn set_view(
+        &mut self,
+        args: &serde_json::Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> umlcraft_mcp::Reply {
+        use serde_json::Value;
+        let theme = args.get("theme").and_then(Value::as_str);
+        let language = args.get("language").and_then(Value::as_str);
+        let zoom = args.get("zoom");
+        let dark = match theme {
+            None => None,
+            Some("light") => Some(false),
+            Some("dark") => Some(true),
+            Some(other) => {
+                return umlcraft_mcp::Reply::error(format!(
+                    "`theme` is light or dark, not `{other}`"
+                ));
+            }
+        };
+        let language = match language {
+            None => None,
+            Some("system") => Some(None),
+            Some(code @ ("en" | "de")) => Some(Some(code.to_owned())),
+            Some(other) => {
+                return umlcraft_mcp::Reply::error(format!(
+                    "`language` is en, de or system, not `{other}`"
+                ));
+            }
+        };
+        let zoom = match zoom {
+            None => None,
+            Some(Value::String(fit)) if fit == "fit" => Some(None),
+            Some(value) => match value.as_f64() {
+                Some(percent) if percent > 0.0 => Some(Some(percent as f32 / 100.0)),
+                _ => return umlcraft_mcp::Reply::error("`zoom` is \"fit\" or a percentage"),
+            },
+        };
+        if let Some(dark) = dark {
+            self.set_dark(dark, window, cx);
+        }
+        if let Some(language) = language {
+            self.set_language(language, window, cx);
+        }
+        if let Some(zoom) = zoom {
+            match (self.active_structogram(cx), zoom) {
+                (Some(view), None) => view.update(cx, |v, cx| v.zoom_to_fit(cx)),
+                (Some(view), Some(factor)) => view.update(cx, |v, cx| {
+                    v.reset_zoom(cx);
+                    v.zoom_by(factor, cx);
+                }),
+                (None, None) => self.canvas.update(cx, |c, cx| c.zoom_to_fit(cx)),
+                (None, Some(factor)) => self.canvas.update(cx, |c, cx| {
+                    c.reset_zoom(cx);
+                    c.zoom_by(factor, cx);
+                }),
+            }
+        }
+        let zoom = match self.active_structogram(cx) {
+            Some(view) => view.read(cx).zoom(),
+            None => self.canvas.read(cx).zoom(),
+        };
+        umlcraft_mcp::Reply::json(serde_json::json!({
+            "theme": if cx.theme().is_dark() { "dark" } else { "light" },
+            "language": &*rust_i18n::locale(),
+            "zoom": (zoom * 1000.0).round() / 10.0,
+        }))
     }
 
     fn replace_document(&mut self, doc: Document, path: Option<PathBuf>, cx: &mut Context<Self>) {
@@ -2155,6 +2230,7 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::Element(NodeTool::Component),
         NewItem::Element(NodeTool::Artifact),
         NewItem::Element(NodeTool::DeploymentNode),
+        NewItem::Element(NodeTool::Port),
         NewItem::Attribute,
         NewItem::Operation,
         NewItem::Literal,
@@ -2172,15 +2248,7 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         menu = menu.separator();
     }
     let mut any = false;
-    for kind in [
-        DiagramKind::Class,
-        DiagramKind::UseCase,
-        DiagramKind::Sequence,
-        DiagramKind::Activity,
-        DiagramKind::StateMachine,
-        DiagramKind::Component,
-        DiagramKind::Deployment,
-    ] {
+    for kind in crate::ribbon::DIAGRAM_KINDS {
         let mut items = vec![NewItem::Diagram(kind)];
         if kind == DiagramKind::Class {
             items.push(NewItem::ObjectDiagram);

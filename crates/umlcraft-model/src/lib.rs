@@ -22,13 +22,14 @@ pub use document::{Document, Tx};
 pub use element::{
     ActivityEdgeProps, ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd,
     AssociationProps, AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps,
-    DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, GeneralizationProps,
-    IMPORTED_TAG, IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps,
-    InteractionOperator, InteractionUseProps, InternalTransitionProps, LifelineProps, LinkEnd,
-    LinkProps, MessageGate, MessageProps, MessageSort, Multiplicity, Navigability, OperationProps,
-    ParameterDirection, ParameterProps, ParseMultiplicityError, PseudostateKind, PseudostateProps,
-    Qualifier, RefRole, SlotProps, StateProps, StructogramProps, TaggedValue,
-    TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef, Visibility,
+    ConnectorEnd, ConnectorProps, DiagramProps, DirectedProps, ElementData, ElementKind,
+    ExtendProps, GeneralizationProps, IMPORTED_TAG, IncludeProps, InstanceKind, InstanceProps,
+    InteractionOperandProps, InteractionOperator, InteractionUseProps, InternalTransitionProps,
+    LifelineProps, LinkEnd, LinkProps, MessageGate, MessageProps, MessageSort, Multiplicity,
+    Navigability, OperationProps, ParameterDirection, ParameterProps, ParseMultiplicityError,
+    PortProps, PseudostateKind, PseudostateProps, Qualifier, RefRole, SlotProps, StateProps,
+    StructogramProps, TaggedValue, TemplateParameterKind, TemplateParameterProps, TransitionProps,
+    TypeExpr, TypeRef, Visibility,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

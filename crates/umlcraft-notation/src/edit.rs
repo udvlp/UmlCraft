@@ -1,6 +1,6 @@
 //! Edits as the app makes them, for the app and for the MCP server alike: one undo step, after
-//! which boxes sized to their content take the size it needs and lines kept by the router are
-//! routed again ([`apply`]); and new diagrams with the behavior they belong to
+//! which boxes sized to their content take the size it needs, ports stay on the border of their
+//! class or part and lines kept by the router are routed again ([`apply`]); and new diagrams with the behavior they belong to
 //! ([`create_diagram`]).
 
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use umlcraft_model::{
 };
 
 use crate::scene::{self, TextMeasure};
-use crate::{autoroute, sequence_edit};
+use crate::{autoroute, composite, sequence_edit};
 
 /// An automatically sized box: where it is, its bounds, the size its content needs, and the
 /// content.
@@ -38,7 +38,8 @@ fn fitted_boxes(model: &Model, measure: &dyn TextMeasure) -> Vec<FittedBox> {
 
 /// Runs `f` as one undo step of `doc`. Afterwards, as in Astah, boxes sized to their content
 /// whose content the edit changed take the size it now needs (a new box always does); others
-/// keep their size, even if Astah stored one that does not fit. Then lines that the router
+/// keep their size, even if Astah stored one that does not fit. Classes grow around their parts,
+/// and ports follow the border of the class or part they sit on ([`composite::follow`]). Then lines that the router
 /// keeps are routed again where their nodes moved or something moved into their way, and found
 /// and lost messages keep their length to lifelines that moved.
 pub fn apply<R>(
@@ -53,6 +54,7 @@ pub fn apply<R>(
         .collect();
     let routes = autoroute::snapshots(doc.model());
     let lifelines = sequence_edit::lifeline_centers(doc.model());
+    let ports = composite::snapshots(doc.model());
     let label = label.into();
     // Debug builds say what an edit broke, to catch it where it happens.
     #[cfg(debug_assertions)]
@@ -60,6 +62,7 @@ pub fn apply<R>(
     let result = doc.edit(label, |tx| {
         let result = f(tx)?;
         sequence_edit::follow_lifelines(tx, &lifelines)?;
+        composite::follow(tx, &ports)?;
         let close = |a: Size, b: Size| {
             (a.width - b.width).abs() < 0.01 && (a.height - b.height).abs() < 0.01
         };
@@ -93,7 +96,8 @@ pub fn behavior_of(kind: DiagramKind) -> Option<ElementKind> {
         DiagramKind::Class
         | DiagramKind::UseCase
         | DiagramKind::Component
-        | DiagramKind::Deployment => None,
+        | DiagramKind::Deployment
+        | DiagramKind::CompositeStructure => None,
     }
 }
 

@@ -13,7 +13,9 @@ use umlcraft_model::{
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview};
-use umlcraft_notation::{autoroute, edit, layout, member, sequence_edit, state_edit, svg};
+use umlcraft_notation::{
+    autoroute, composite, edit, layout, member, sequence_edit, state_edit, svg,
+};
 
 use crate::base64;
 use crate::host::{Access, Host, first_diagram, new_document};
@@ -43,7 +45,7 @@ impl Reply {
         Self { content: vec![Content::Text(text.into())], is_error: true }
     }
 
-    fn json(value: Value) -> Self {
+    pub fn json(value: Value) -> Self {
         Self::text(value.to_string())
     }
 
@@ -110,7 +112,7 @@ default (label `%` for none). Elements may have `comment`, `disabled` and `color
 digits). `kind` of the root: program (default), sub for a method, includable; `keywords`: \
 english (default) or german (`für`, `solange`, `bis`, `gib`).";
 
-const DIAGRAM_KINDS: [(&str, DiagramKind); 7] = [
+const DIAGRAM_KINDS: [(&str, DiagramKind); 8] = [
     ("class", DiagramKind::Class),
     ("use_case", DiagramKind::UseCase),
     ("sequence", DiagramKind::Sequence),
@@ -118,6 +120,7 @@ const DIAGRAM_KINDS: [(&str, DiagramKind); 7] = [
     ("state_machine", DiagramKind::StateMachine),
     ("component", DiagramKind::Component),
     ("deployment", DiagramKind::Deployment),
+    ("composite_structure", DiagramKind::CompositeStructure),
 ];
 
 fn diagram_key(kind: DiagramKind) -> &'static str {
@@ -204,13 +207,56 @@ pub fn list() -> Vec<Value> {
             "screenshot",
             "The UmlCraft app's window as a PNG image, as the user sees it: title bar, ribbon, \
              model tree, properties, diagram tabs and canvas, also while other windows cover \
-             it. Only while the app runs (on Windows); `render_diagram` draws a diagram \
-             without it.",
+             it, while it is minimized or placed off screen (`set_window`). Only while the app \
+             runs (on Windows); `render_diagram` draws a diagram without it.",
             json!({
                 "scale": number("Size relative to the window's pixels, 0.25 to 1; default 1."),
             }),
             &[],
         )),
+        tool(
+            "set_window",
+            "Sizes and places the UmlCraft app's window, for `screenshot`s that should not \
+             disturb the user: `offscreen` puts it beyond the screens, where it keeps drawing \
+             but nobody sees it, `minimized` to the taskbar, `screen` back where the user sees \
+             it. Never takes the focus. Without arguments it only tells the window's size, \
+             place and scale (2 at 200 %). Only while the app runs (on Windows).",
+            json!({
+                "width": number("Width in the pixels of `screenshot` (physical pixels)."),
+                "height": number("Height in the pixels of `screenshot`."),
+                "placement": { "type": "string", "enum": ["screen", "offscreen", "minimized"] },
+            }),
+            &[],
+        ),
+        tool(
+            "set_view",
+            "Changes how the UmlCraft app looks: its theme and language (both are the user's \
+             settings, which the app keeps; set them back when done) and the zoom of the \
+             diagram or structogram shown. Only while the app runs.",
+            json!({
+                "theme": { "type": "string", "enum": ["light", "dark"] },
+                "language": { "type": "string", "enum": ["en", "de", "system"] },
+                "zoom": {
+                    "description": "\"fit\" for the whole diagram, or a percentage such as 100.",
+                    "oneOf": [{ "type": "string", "enum": ["fit"] }, { "type": "number" }],
+                },
+            }),
+            &[],
+        ),
+        tool(
+            "select",
+            "Selects elements on the diagram shown, as a click would; the properties panel \
+             shows the first. An empty list clears the selection.",
+            json!({
+                "ids": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Elements or their presentations on the diagram.",
+                },
+                "diagram": id("The diagram, shown first; the one shown if omitted."),
+            }),
+            &["ids"],
+        ),
         tool(
             "create_diagram",
             "Creates a diagram (sequence, activity and state machine diagrams inside a new \
@@ -228,13 +274,19 @@ pub fn list() -> Vec<Value> {
              `lifeline`, `action`, `state`, `component`, `node`, `note`, … as `get_diagram` \
              lists them) and shows it on the diagram, at `x`, `y` or right of what is there. \
              It goes into the package that owns the diagram (states into the state drawn \
-             around them).",
+             around them). On composite structure diagrams a `part` becomes an attribute of \
+             the class drawn around it, which grows to hold it, and a `port` sits on the \
+             border of a class or a part; `on` names that class or part instead of `x`, `y`. \
+             A port on a part belongs to the class that is the part's type, so type the part \
+             first (`update_element` with the member `text`, e.g. `engine : Engine`).",
             json!({
                 "diagram": id("The diagram."),
                 "tool": text("The diagram tool."),
                 "name": text("Its name; a free default name if omitted."),
                 "x": number("Left edge."),
                 "y": number("Top edge."),
+                "on": id("Composite structure diagrams: the class (or part) a part goes into or \
+                          a port goes on, when `x` and `y` are not given."),
             }),
             &["diagram", "tool"],
         ),
@@ -476,15 +528,19 @@ pub fn list() -> Vec<Value> {
         tool("redo", "Redoes the last undone change.", json!({}), &[]),
         tool(
             "open_diagram",
-            "Shows a diagram (in the app: brings its tab to the front).",
-            json!({ "diagram": id("The diagram.") }),
+            "Shows a diagram or structogram (in the app: brings its tab to the front).",
+            json!({ "diagram": id("The diagram or structogram.") }),
             &["diagram"],
         ),
         tool(
             "new_document",
-            "Starts a new project with one class diagram. In the app only when the open \
-             project has no unsaved changes.",
-            json!({ "name": text("The project's name.") }),
+            "Starts a new project with one class diagram, or with `sample` the app's sample \
+             project (Velo, every diagram kind; File › Open sample project). In the app only \
+             when the open project has no unsaved changes.",
+            json!({
+                "name": text("The project's name."),
+                "sample": { "type": "boolean", "description": "The sample project (only in the app)." },
+            }),
             &[],
         ),
         tool(
@@ -525,14 +581,16 @@ pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> R
         "render_diagram" => render_diagram(host, args),
         // The app answers this one itself, with its window; it never comes here from the app
         // but inside `batch`.
-        "screenshot" => Err(if host.live() {
-            "`screenshot` cannot run inside `batch`; call it on its own.".into()
+        "screenshot" | "set_window" | "set_view" => Err(if host.live() {
+            format!("`{name}` cannot run inside `batch`; call it on its own.")
         } else {
-            "There is no UmlCraft window to capture: this session works on a project of the \
-             server's own (the app is not running, or this session started without it). \
-             `render_diagram` draws a diagram without the app."
-                .into()
+            format!(
+                "`{name}` needs the UmlCraft window: this session works on a project of the \
+                 server's own (the app is not running, or this session started without it). \
+                 `render_diagram` draws a diagram without the app."
+            )
         }),
+        "select" => select(host, args),
         "create_diagram" => create_diagram(host, args),
         "create_element" => create_element(host, args),
         "create_model_element" => create_model_element(host, args),
@@ -926,12 +984,19 @@ fn diagram_svg(host: &mut dyn Host, diagram: Id) -> String {
     svg::render(&scene, measure)
 }
 
+/// A structogram as SVG, as the app shows and exports it.
+fn structogram_svg(d: &umlcraft_nsd::Diagram) -> String {
+    let m = umlcraft_nsd::Metrics::for_platform();
+    let layout = umlcraft_nsd::layout::Layout::of(d, m);
+    umlcraft_nsd::svg::render_with(d, &layout, m, &umlcraft_nsd::svg::Palette::PLAIN)
+}
+
 fn render_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let scale = opt_num(args, "scale").unwrap_or(1.0).clamp(0.5, 2.0);
     let shown = opt_id(args, "diagram")?.or(host.active_diagram());
     let model = host.document().model();
     if let Some(p) = shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram()) {
-        let svg = umlcraft_nsd::svg::render(&p.structogram, umlcraft_nsd::Metrics::for_platform());
+        let svg = structogram_svg(&p.structogram);
         // Structogram images are in pixels already.
         let image = png(&svg, scale * svg::SCALE)?;
         return Ok(Reply { content: vec![Content::Image(image)], is_error: false });
@@ -962,8 +1027,12 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
     let tool = node_tool(kind, str_arg(args, "tool")?)?;
     let model = host.document().model();
-    let origin = match (opt_num(args, "x"), opt_num(args, "y")) {
-        (Some(x), Some(y)) => Point::new(x, y),
+    let origin = match (opt_num(args, "x"), opt_num(args, "y"), opt_id(args, "on")?) {
+        (Some(x), Some(y), _) => Point::new(x, y),
+        (_, _, Some(on)) => {
+            let on = on_diagram(model, diagram, on)?;
+            composite::free_spot(model, diagram, on, tool).ok_or("`on` is not a node")?
+        }
         _ => free_origin(model, diagram),
     };
     let name = opt_str(args, "name").map(str::to_owned);
@@ -1647,14 +1716,35 @@ fn undo(host: &mut dyn Host, undo: bool) -> Outcome {
 
 fn open_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let diagram = id_arg(args, "diagram")?;
-    diagram_of(host.document().model(), diagram)?;
+    let model = host.document().model();
+    let structogram = model.get(diagram).is_some_and(|e| e.kind().as_structogram().is_some());
+    if !structogram {
+        diagram_of(model, diagram)?;
+    }
     host.show_diagram(diagram);
     Ok(Reply::json(json!({ "shown_diagram": diagram })))
 }
 
 // ----- Files ---------------------------------------------------------------------------------
 
+fn select(host: &mut dyn Host, args: &Value) -> Outcome {
+    let (diagram, _) = diagram_arg(host, args, "diagram")?;
+    let ids = ids_arg(args, "ids")?.ok_or("`ids` is missing")?;
+    let model = host.document().model();
+    let presentations =
+        ids.into_iter().map(|id| on_diagram(model, diagram, id)).collect::<Result<Vec<_>, _>>()?;
+    host.show_diagram(diagram);
+    host.select(presentations.clone());
+    Ok(Reply::json(json!({ "diagram": diagram, "selection": presentations })))
+}
+
 fn new_project(host: &mut dyn Host, args: &Value) -> Outcome {
+    if args.get("sample").and_then(Value::as_bool) == Some(true) {
+        let doc = host.sample()?;
+        let diagram = first_diagram(doc.model());
+        host.replace(doc, None)?;
+        return Ok(Reply::json(json!({ "diagram": diagram })));
+    }
     let doc = new_document(opt_str(args, "name").unwrap_or("Project"));
     let diagram = first_diagram(doc.model());
     host.replace(doc, None)?;
@@ -1709,8 +1799,7 @@ fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
             umlcraft_nsd::write(&umlcraft_nsd::content::to_file(&p.structogram, &made)).into_bytes()
         }
         (Some(p), extension) => {
-            let svg =
-                umlcraft_nsd::svg::render(&p.structogram, umlcraft_nsd::Metrics::for_platform());
+            let svg = structogram_svg(&p.structogram);
             match extension {
                 "svg" => svg.into_bytes(),
                 // Two pixels per pixel of the structogram, as diagrams get two per unit.
@@ -1775,6 +1864,36 @@ mod tests {
         assert!(reply.is_error);
         assert_eq!(screenshot_scale(&json!({ "scale": 0.1 })), 0.25);
         assert_eq!(screenshot_scale(&json!({})), 1.0);
+        for tool in ["set_window", "set_view"] {
+            assert!(call(&mut host, &Access::default(), tool, &json!({})).is_error, "{tool}");
+        }
+        let sample =
+            call(&mut host, &Access::default(), "new_document", &json!({ "sample": true }));
+        assert!(sample.is_error);
+    }
+
+    #[test]
+    fn select_takes_elements_and_presentations() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "Shop" }));
+        let d = id(&d["diagram"]);
+        let order = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "class", "name": "Order" }),
+        );
+        let by_element = run(&mut host, "select", json!({ "ids": [order["element"]] }));
+        assert_eq!(by_element["selection"], json!([order["presentation"]]));
+        let by_presentation =
+            run(&mut host, "select", json!({ "ids": [order["presentation"]], "diagram": d }));
+        assert_eq!(by_presentation["selection"], by_element["selection"]);
+        let unknown = call(
+            &mut host,
+            &Access::default(),
+            "select",
+            &json!({ "ids": [Id::generate().to_string()] }),
+        );
+        assert!(unknown.is_error);
     }
 
     #[test]

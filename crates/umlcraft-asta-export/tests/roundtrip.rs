@@ -1100,3 +1100,163 @@ fn member_filters_and_colors_through_astah() {
         .collect();
     assert_eq!(lines, [(Some(blue), Some(red))]);
 }
+
+/// A composite structure diagram: parts, ports on the class and on parts, connectors, and a
+/// provided and a required interface drawn as ball and socket.
+#[test]
+fn composite_structure_through_astah() {
+    use umlcraft_model::ConnectorEnd;
+    use umlcraft_notation::composite::PORT_SIZE;
+    let (mut doc, ids) = order_system();
+    let owner = ids.domain;
+    let mut ports = BTreeMap::new();
+    doc.edit("composite", |tx| {
+        let create = |tx: &mut umlcraft_model::Tx, owner, name: &str, kind| {
+            tx.create(owner, ElementData::new(name, kind))
+        };
+        let controller = create(tx, owner, "Controller", ElementKind::class())?;
+        let reader_class = create(tx, owner, "CardReader", ElementKind::class())?;
+        let lock_class = create(tx, owner, "Lock", ElementKind::class())?;
+        let report = create(tx, owner, "Report", ElementKind::interface())?;
+        let power = create(tx, owner, "Power", ElementKind::interface())?;
+        let card = create(tx, controller, "card", ElementKind::port(None))?;
+        let uplink = create(tx, controller, "uplink", ElementKind::port(None))?;
+        let card_out = create(tx, reader_class, "out", ElementKind::port(None))?;
+        let open = create(tx, lock_class, "open", ElementKind::port(None))?;
+        let part = |of| ElementKind::attribute(Some(TypeRef::Element(of)));
+        let reader = create(tx, controller, "reader", part(reader_class))?;
+        let lock = create(tx, controller, "lock", part(lock_class))?;
+        let provides = DirectedProps { client: uplink, supplier: report };
+        let realization = create(tx, owner, "", ElementKind::Realization(provides))?;
+        let requires = DirectedProps { client: card, supplier: power };
+        let usage = create(tx, owner, "", ElementKind::Dependency(requires))?;
+
+        let d = create(
+            tx,
+            controller,
+            "Inside",
+            ElementKind::diagram(DiagramKind::CompositeStructure),
+        )?;
+        tx.add_node(d, Some(controller), Rect::new(100.0, 40.0, 500.0, 200.0))?;
+        // Astah widens a part narrower than its text in Astah's font, and its ports with it.
+        let n_reader = tx.add_node(d, Some(reader), Rect::new(140.0, 120.0, 180.0, 56.0))?;
+        tx.add_node(d, Some(lock), Rect::new(400.0, 120.0, 150.0, 56.0))?;
+        let half = PORT_SIZE / 2.0;
+        let mut port = |tx: &mut umlcraft_model::Tx, id, (x, y): (f32, f32)| {
+            ports.insert(name(tx.model(), id), Point::new(x, y));
+            tx.add_node(d, Some(id), Rect::new(x - half, y - half, PORT_SIZE, PORT_SIZE))
+        };
+        let n_card = port(tx, card, (100.0, 148.0))?;
+        let n_uplink = port(tx, uplink, (600.0, 148.0))?;
+        let n_out = port(tx, card_out, (320.0, 148.0))?;
+        let n_open = port(tx, open, (400.0, 148.0))?;
+        let icon = |tx: &mut umlcraft_model::Tx, id, x, socket| {
+            let n = tx.add_node(d, Some(id), Rect::new(x, 136.0, 24.0, 24.0))?;
+            tx.update_presentation(d, n, |p| {
+                p.style.iconic = true;
+                p.style.socket = socket;
+            })?;
+            Ok::<_, umlcraft_model::ModelError>(n)
+        };
+        let n_report = icon(tx, report, 680.0, false)?;
+        let n_power = icon(tx, power, 20.0, true)?;
+        tx.add_edge(d, Some(realization), n_uplink, n_report, vec![])?;
+        tx.add_edge(d, Some(usage), n_card, n_power, vec![])?;
+        let end = ConnectorEnd::new;
+        for (a, b, n_a, n_b) in [
+            (end(card, None), end(reader, None), n_card, n_reader),
+            (end(card_out, Some(reader)), end(open, Some(lock)), n_out, n_open),
+        ] {
+            let connector = create(tx, controller, "", ElementKind::connector(a, b))?;
+            tx.add_edge(d, Some(connector), n_a, n_b, vec![])?;
+        }
+
+        // Astah gives components no attributes; their parts go as association ends.
+        let dock = create(tx, owner, "Dock", ElementKind::Component(Default::default()))?;
+        let latch = create(tx, dock, "latch", part(lock_class))?;
+        let d =
+            create(tx, dock, "Dock inside", ElementKind::diagram(DiagramKind::CompositeStructure))?;
+        tx.add_node(d, Some(dock), Rect::new(100.0, 40.0, 300.0, 160.0))?;
+        tx.add_node(d, Some(latch), Rect::new(140.0, 100.0, 150.0, 56.0))?;
+        Ok(())
+    })
+    .unwrap();
+    let Some(back) = through_astah(doc.model(), "composite") else { return };
+
+    let n = |id: Id| name(&back, id);
+    let mut model: Vec<String> = back
+        .elements()
+        .filter_map(|e| match e.kind() {
+            ElementKind::Port(_) => Some(format!("port {} of {}", e.name(), n(e.owner()?))),
+            ElementKind::Attribute(p)
+                if matches!(n(e.owner()?).as_str(), "Controller" | "Dock") =>
+            {
+                let (owner, t) = (n(e.owner()?), type_text(&back, &p.type_ref));
+                Some(format!("part {} : {t} of {owner}", e.name()))
+            }
+            ElementKind::Association(p)
+                if p.ends.iter().any(|end| n(end.participant) == "Dock") =>
+            {
+                Some("association of Dock".into())
+            }
+            ElementKind::Connector(p) => {
+                let end = |i: usize| {
+                    let end = &p.ends[i];
+                    let with = end.part_with_port.map(|w| format!(" of {}", n(w)));
+                    format!("{}{}", n(end.role), with.unwrap_or_default())
+                };
+                Some(format!("connector {} — {} in {}", end(0), end(1), n(e.owner()?)))
+            }
+            _ => None,
+        })
+        .collect();
+    model.sort();
+    pretty_assertions::assert_eq!(
+        model,
+        [
+            "connector card — reader in Controller",
+            "connector out of reader — open of lock in Controller",
+            "part latch : Lock of Dock",
+            "part lock : Lock of Controller",
+            "part reader : CardReader of Controller",
+            "port card of Controller",
+            "port open of Lock",
+            "port out of CardReader",
+            "port uplink of Controller",
+        ]
+    );
+    let lines = relationships(&back);
+    for line in ["realization uplink → Report", "dependency card → Power"] {
+        assert!(lines.contains(line), "{line} not in {lines:#?}");
+    }
+
+    let d = back.elements().find(|e| e.name() == "Inside").unwrap();
+    assert_eq!(d.kind().as_diagram(), Some(DiagramKind::CompositeStructure));
+    let view = back.view(d.id()).unwrap();
+    let mut icons = Vec::new();
+    for p in view.presentations() {
+        let (Some(e), Shape::Node { bounds, .. }) = (p.element, &p.shape) else { continue };
+        let element = back.get(e).unwrap();
+        match element.kind() {
+            ElementKind::Port(_) => {
+                let at = ports[element.name()];
+                assert!(bounds.center().distance(at) < 1.0, "{} at {bounds:?}", element.name());
+            }
+            ElementKind::Interface(_) => {
+                icons.push(format!("{} {} {}", element.name(), p.style.iconic, p.style.socket));
+            }
+            _ => {}
+        }
+    }
+    icons.sort();
+    assert_eq!(icons, ["Power true true", "Report true false"]);
+    let connectors = view
+        .presentations()
+        .iter()
+        .filter(|p| {
+            p.element
+                .is_some_and(|e| matches!(back.get(e).unwrap().kind(), ElementKind::Connector(_)))
+        })
+        .count();
+    assert_eq!(connectors, 2);
+}

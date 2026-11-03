@@ -248,6 +248,34 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                 width: 2.0,
             }]
         }
+        Figure::Socket { open } => {
+            // Like Astah, a 150° arc behind the center, as two 75° pieces.
+            use std::f32::consts::PI;
+            let (c, radius) = (r.center(), crate::scene::LOLLIPOP_RADIUS);
+            let at =
+                |angle: f32| Point::new(c.x + radius * angle.cos(), c.y + radius * angle.sin());
+            let tangent = |angle: f32| Point::new(-angle.sin(), angle.cos());
+            let span = PI * 5.0 / 12.0;
+            let k = 4.0 / 3.0 * (span / 4.0).tan() * radius;
+            let start = open.y.atan2(open.x) + PI - span;
+            (0..2)
+                .map(|i| {
+                    let a = start + i as f32 * span;
+                    let b = a + span;
+                    let (p0, p3, t0, t3) = (at(a), at(b), tangent(a), tangent(b));
+                    Primitive::Curve {
+                        points: [
+                            p0,
+                            Point::new(p0.x + k * t0.x, p0.y + k * t0.y),
+                            Point::new(p3.x - k * t3.x, p3.y - k * t3.y),
+                            p3,
+                        ],
+                        width: 2.0,
+                        style: LineStyle::Solid,
+                    }
+                })
+                .collect()
+        }
         Figure::Package { tab, subsystem } => {
             // Astah draws packages with 2 px lines.
             let body = Rect::new(r.x, r.y + tab.height, r.width, r.height - tab.height);
@@ -434,6 +462,13 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             style: solid,
         }],
         Figure::Rectangle => vec![frame(r, Paint::Fill)],
+        // Astah outlines ports 2 px wide, like parts.
+        Figure::Part | Figure::Port { .. } => vec![thick_frame(r)],
+        // Drawn like a class box: 2 px around, 1 px below the name.
+        Figure::Structured { separator } => vec![
+            thick_frame(r),
+            line(vec![Point::new(r.x, *separator), Point::new(r.right(), *separator)], solid),
+        ],
         Figure::State { separator, regions, vertical } => {
             // Astah outlines states 2 px wide.
             let mut result = vec![Primitive::Frame {

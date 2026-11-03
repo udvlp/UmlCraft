@@ -286,6 +286,31 @@ substates into the one they are drawn in; further regions halve the last one. Mo
 between regions moves the substates on the other side into their new region; deleting a region
 deletes what it holds and gives its room to the neighbor before it.
 
+## Composite structures
+
+A composite structure diagram shows the inside of a class or component. Its parts are the
+class's `Attribute` elements, drawn as nodes inside the class (`Figure::Part`, `name : Type
+[m]`); the class itself is drawn as a structured class (`Figure::Structured`), not sized to
+its content and drawn behind the other nodes. `Port` elements belong to a class or component;
+a port on a part is a port of the part's type. A `Connector` owns two `ConnectorEnd`s: the part
+or port it ends at (a strong reference) and, for a port on a part, the part it is reached
+through (`part_with_port`, weak).
+
+As with system boundaries, what goes where follows from the drawing (`composite`): a new part
+belongs to the innermost class drawn around it, which grows to hold it; a new port goes on the
+border nearest to where it is dropped (within 10 of a border that one, else the class or part
+around the point) and to the class or the part's type. A connector's ends and owner follow
+from the nodes it joins. `edit::apply` takes a `composite::Snapshot` before every edit and
+`composite::follow` corrects the drawing afterwards: a class grows around a part that moved or
+changed size beyond it, a port that did not move keeps its side and its distance along it when
+its host moves or changes size, a port that moved snaps onto the nearest border, and a port
+goes along when its host is removed from the diagram. Lines on these diagrams start straight
+and Arrange is not offered. An iconic interface with `Style::socket` is drawn as a socket
+(`Figure::Socket`), its opening turned away from its first line; the properties panel sets it
+for an interface shown as a circle, the `.asta` import for interfaces a port requires. The `.asta` import reads parts, ports, connectors, ball and socket;
+the export recreates them through `CompositeStructureDiagramEditor` and writes a component's
+parts as association ends, as Astah takes no attributes on components.
+
 ## .asta import
 
 `umlcraft-asta` reads `.asta` files without any Java: `jser` is a generic reader for the Java

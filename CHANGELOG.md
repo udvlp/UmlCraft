@@ -8,6 +8,32 @@ today.
 - **Light or dark as the system**: without a theme of its own, UmlCraft follows the system's
   appearance and switches along with it. The View tab and the settings choose between System,
   Light and Dark.
+- **Composite structure diagrams**: the inside of a class or component, with parts drawn in
+  it, ports on the border of the class and of typed parts, and connectors between parts and
+  ports. A part dragged over the class's border takes the border along; ports stay on their
+  border when it moves or changes size. The sample project shows the dock controller of the
+  bike rental this way. AI clients create them as `composite_structure` and place parts and
+  ports with `create_element` and `on`. Astah's `.asta` files bring them along both ways, with
+  the interfaces a port provides drawn as a ball and those it requires as a socket.
+- **Required interfaces as sockets**: an interface shown as a circle can be shown as a socket
+  instead (properties panel, "Show as socket"), the half circle of an interface a class or
+  port requires. Its opening turns away from its line, and a dependency to it is drawn as a
+  plain line without «use».
+- **Structograms in the dark theme**: the editor draws structograms in the dark colours of the
+  diagrams, light lines and texts on dark grey, with the elements' own colours dimmed, instead
+  of a bright white sheet. Exports and the clipboard keep Structorizer's black on white.
+- **No comment markers in structograms**: elements with a comment no longer carry
+  Structorizer's grey bar, in the editor, in SVG and PNG exports and in images for AI clients.
+  The comments themselves stay, also in `.nsd` files.
+- **AI clients take screenshots without disturbing**: the MCP server's new `set_window` tool
+  sizes the UmlCraft window in the pixels of `screenshot` and moves it beyond the screens,
+  where it keeps drawing but nobody sees it, to the taskbar or back onto a screen, without
+  taking the focus. `screenshot` now also captures a minimized window, which the user does not
+  see come back.
+- **AI clients set the view**: `set_view` switches theme and language and zooms the diagram or
+  structogram shown (to fit, or to a percentage); `select` selects elements on the diagram
+  shown; `new_document` with `sample` opens the sample project; `open_diagram` also opens
+  structograms.
 
 ## 0.17.0 – 2026-11-02
 

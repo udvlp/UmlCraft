@@ -597,3 +597,53 @@ fn known_elements_and_their_shapes_are_never_lost() {
         assert_eq!(imported.lost_presentations, 0, "{name}");
     }
 }
+
+#[test]
+fn sample_composite_structure_diagram() {
+    let Some(path) = astah_file("Sample.asta") else { return };
+    let imported = umlcraft_asta::import(&path).unwrap();
+    let model = &imported.model;
+    model.check().unwrap();
+    let [diagram] = diagrams(model, DiagramKind::CompositeStructure)[..] else {
+        panic!("one composite structure diagram")
+    };
+    let view = model.view(diagram.id()).unwrap();
+    let shown = |pred: &dyn Fn(&ElementKind) -> bool| {
+        view.presentations()
+            .iter()
+            .filter(|p| p.element.and_then(|e| model.get(e)).is_some_and(|e| pred(e.kind())))
+            .count()
+    };
+    assert_eq!(shown(&|k| matches!(k, ElementKind::Port(_))), 4);
+    assert_eq!(shown(&|k| matches!(k, ElementKind::Attribute(_))), 4, "parts");
+    assert_eq!(shown(&|k| matches!(k, ElementKind::Connector(_))), 2);
+
+    // Car's rear wheels are the end of a composite association that no diagram shows; they
+    // become a part of Car, and the connector reaches the engine's port through its part.
+    let car = find(model, "Car", |k| matches!(k, ElementKind::Class(_)));
+    let rear = find(model, "rear", |k| matches!(k, ElementKind::Attribute(_)));
+    assert_eq!(rear.owner(), Some(car.id()));
+    let wheel = find(model, "Wheel", |k| matches!(k, ElementKind::Class(_)));
+    let ElementKind::Attribute(p) = rear.kind() else { unreachable!() };
+    assert_eq!(p.type_ref, Some(TypeRef::Element(wheel.id())));
+    let axle = find(model, "axle", |k| matches!(k, ElementKind::Connector(_)));
+    assert_eq!(axle.owner(), Some(car.id()));
+    let ElementKind::Connector(c) = axle.kind() else { unreachable!() };
+    let ends: Vec<_> = c.ends.iter().map(|e| (e.role, e.part_with_port)).collect();
+    assert!(ends.contains(&(rear.id(), None)), "{ends:?}");
+    assert!(ends.iter().any(|&(_, through)| through.is_some()), "{ends:?}");
+
+    // The required interface is a socket, the provided one a circle.
+    let icon = |name: &str| {
+        let interface = find(model, name, |k| matches!(k, ElementKind::Interface(_)));
+        view.presentations()
+            .iter()
+            .filter(|p| p.element == Some(interface.id()) && p.style.iconic)
+            .map(|p| p.style.socket)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(icon("power"), [true]);
+    assert_eq!(icon("powertrain"), [false]);
+    // Ports keep where Astah put their names.
+    assert!(view.presentations().iter().filter(|p| p.style.name_offset.is_some()).count() >= 4);
+}

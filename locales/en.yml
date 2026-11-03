@@ -233,9 +233,14 @@ tool:
   interactionUse: Interaction use
   foundMessage: Found message
   lostMessage: Lost message
+  part: Part
+  port: Port
+  connector: Connector
 tool_tip:
   foundMessage: "A message from outside the diagram, such as the first call of a sequence: click the lifeline that receives it. Drag the dot to change its length and side"
   lostMessage: "A message whose receiver the diagram does not show, a reply at first: click the lifeline that sends it. Drag the dot to change its length and side"
+  part: "A part of a class: click inside the class. It becomes an attribute of the class; its type says what it is"
+  port: "A port: click on or near the border of a class or a part. A port of a part belongs to the class that is the part's type"
 diagram:
   class: Class diagram
   object: Object diagram
@@ -245,6 +250,7 @@ diagram:
   stateMachine: State machine diagram
   component: Component diagram
   deployment: Deployment diagram
+  compositeStructure: Composite structure diagram
 panel:
   model: Model
   properties: Properties
@@ -300,6 +306,7 @@ prop:
   hide_slots: Hide slots
   hide_empty_slots: Hide slots without value
   iconic: Show as circle
+  socket: Show as socket (required)
   condition: Condition
   extension_points: Extension points
   owner: Owner
@@ -457,6 +464,9 @@ export_dropped:
   presentation: Diagram shapes
   componentDiagram: Component diagrams (exported as class diagrams)
   deploymentDiagram: Deployment diagrams (exported as class diagrams)
+  compositeStructureDiagram: Composite structure diagrams (exported as class diagrams without parts and ports)
+  port: Ports
+  connector: Connectors
   nestedComponent: Components, artifacts and nodes inside others (moved to the package)
   instanceKind: Component and node instances (exported as objects)
   instance: Instances not shown on a component, deployment or class diagram
@@ -621,6 +631,9 @@ kind:
   slot: Slot
   link: Link
   interactionUse: Interaction use
+  part: Part
+  port: Port
+  connector: Connector
 error:
   nsd_xml: "Line %{line}, column %{column}: not valid XML (%{message})."
   nsd_not_structorizer: The file is not a Structorizer structogram.
@@ -653,6 +666,9 @@ error:
   not_finite: A position or size is not a valid number.
   type_too_deep: "A type of %{a} is nested more than %{max} levels deep."
   invalid: "The model is inconsistent: %{detail}"
+  part_outside: A part goes inside a class. Draw the class first, then click inside it.
+  port_outside: A port goes on the border of a class or a part.
+  port_on_untyped_part: "A port on a part belongs to the part's type: give the part a class as its type first (e.g. engine : Engine)."
   multiplicity: "\"%{text}\" is not a multiplicity. Examples: 1, 0..1, 1..*, *"
   malformed: "The file is damaged (line %{line}, column %{column})."
   not_a_project: The file is not an UmlCraft project.

@@ -3,6 +3,7 @@
 use rust_i18n::t;
 use umlcraft_format::FormatError;
 use umlcraft_model::{Id, Model, ModelError, ParseMultiplicityError};
+use umlcraft_notation::composite;
 
 use crate::labels::display_name;
 
@@ -54,7 +55,12 @@ pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
         ModelError::TypeTooDeep(id) => {
             t!("error.type_too_deep", a = a(*id), max = umlcraft_model::MAX_TYPE_DEPTH)
         }
-        ModelError::Invalid(detail) => t!("error.invalid", detail = detail),
+        ModelError::Invalid(detail) => match detail.as_str() {
+            composite::PART_OUTSIDE => t!("error.part_outside"),
+            composite::PORT_OUTSIDE => t!("error.port_outside"),
+            composite::PORT_ON_UNTYPED_PART => t!("error.port_on_untyped_part"),
+            _ => t!("error.invalid", detail = detail),
+        },
     }
     .to_string()
 }

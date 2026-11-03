@@ -20,6 +20,8 @@ pub enum DiagramKind {
     StateMachine,
     Component,
     Deployment,
+    /// The inside of a structured class: its parts, ports and the connectors between them.
+    CompositeStructure,
 }
 
 /// One visible item on a diagram. Presentations of a diagram are kept in z-order (back to front).
@@ -424,6 +426,10 @@ pub struct Style {
     /// head as the icon of the represented classifier.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub iconic: bool,
+    /// Interfaces drawn iconic: as a socket, a half circle open away from the line that ends
+    /// at it, the notation of an interface a class or port requires.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub socket: bool,
     /// Messages: leave out the parentheses with the arguments. Classifier boxes: leave out the
     /// operations' parameters (`total() : int`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -437,7 +443,9 @@ pub struct Style {
     pub show_return_type: bool,
     /// System boundaries: where the box of the name's text lies relative to the boundary's top
     /// left, as Astah keeps a free text (the text starts 10 right of the box, its baseline 17
-    /// below the box's top). Unset: centered at the top.
+    /// below the box's top). Unset: centered at the top. Ports: where the box of the name lies
+    /// relative to the port's top left, as Astah keeps it; unset, outside the border the port
+    /// sits on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_offset: Option<Point>,
     /// Edges: how the line runs through its waypoints.

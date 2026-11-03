@@ -30,6 +30,12 @@ pub trait Host {
     fn replace(&mut self, doc: Document, path: Option<PathBuf>) -> Result<(), String>;
     /// Notes that the project was saved to `path`.
     fn saved(&mut self, path: PathBuf);
+    /// Selects `presentations` of the active diagram (none: clears the selection).
+    fn select(&mut self, presentations: Vec<Id>);
+    /// The app's sample project; only the app has it.
+    fn sample(&self) -> Result<Document, String> {
+        Err("The sample project comes with the UmlCraft app, which is not running.".into())
+    }
 }
 
 /// Folders in which tools may open, save and export files.
@@ -182,6 +188,9 @@ impl Host for Headless {
     fn saved(&mut self, path: PathBuf) {
         self.path = Some(path);
     }
+
+    // Nobody sees a selection here.
+    fn select(&mut self, _presentations: Vec<Id>) {}
 }
 
 /// Opens the UmlCraft project at `path`.

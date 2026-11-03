@@ -233,9 +233,14 @@ tool:
   interactionUse: Interaktionsverweis
   foundMessage: Gefundene Nachricht
   lostMessage: Verlorene Nachricht
+  part: Part
+  port: Port
+  connector: Konnektor
 tool_tip:
   foundMessage: "Eine Nachricht von außerhalb des Diagramms, etwa der erste Aufruf einer Sequenz: auf die Lebenslinie klicken, die sie empfängt. Den Punkt ziehen ändert Länge und Seite"
   lostMessage: "Eine Nachricht, deren Empfänger das Diagramm nicht zeigt, zunächst eine Antwort: auf die Lebenslinie klicken, die sie sendet. Den Punkt ziehen ändert Länge und Seite"
+  part: "Ein Part einer Klasse: in die Klasse klicken. Er wird ein Attribut der Klasse; sein Typ sagt, was er ist"
+  port: "Ein Port: auf oder nahe den Rand einer Klasse oder eines Parts klicken. Ein Port eines Parts gehört zu der Klasse, die der Typ des Parts ist"
 diagram:
   class: Klassendiagramm
   object: Objektdiagramm
@@ -245,6 +250,7 @@ diagram:
   stateMachine: Zustandsdiagramm
   component: Komponentendiagramm
   deployment: Verteilungsdiagramm
+  compositeStructure: Kompositionsstrukturdiagramm
 panel:
   model: Modell
   properties: Eigenschaften
@@ -300,6 +306,7 @@ prop:
   hide_slots: Slots ausblenden
   hide_empty_slots: Slots ohne Wert ausblenden
   iconic: Als Kreis darstellen
+  socket: Als Socket darstellen (benötigt)
   condition: Bedingung
   extension_points: Erweiterungspunkte
   owner: Besitzer
@@ -457,6 +464,9 @@ export_dropped:
   presentation: Diagrammelemente
   componentDiagram: Komponentendiagramme (als Klassendiagramme exportiert)
   deploymentDiagram: Verteilungsdiagramme (als Klassendiagramme exportiert)
+  compositeStructureDiagram: Kompositionsstrukturdiagramme (als Klassendiagramme ohne Parts und Ports exportiert)
+  port: Ports
+  connector: Konnektoren
   nestedComponent: Komponenten, Artefakte und Knoten in anderen (ins Paket verschoben)
   instanceKind: Komponenten- und Knoteninstanzen (als Objekte exportiert)
   instance: Instanzen, die auf keinem Komponenten-, Verteilungs- oder Klassendiagramm stehen
@@ -621,6 +631,9 @@ kind:
   slot: Slot
   link: Link
   interactionUse: Interaktionsverweis
+  part: Part
+  port: Port
+  connector: Konnektor
 error:
   nsd_xml: "Zeile %{line}, Spalte %{column}: kein gültiges XML (%{message})."
   nsd_not_structorizer: Die Datei ist kein Struktogramm von Structorizer.
@@ -653,6 +666,9 @@ error:
   not_finite: Eine Position oder Größe ist keine gültige Zahl.
   type_too_deep: "Ein Typ von %{a} ist tiefer als %{max} Ebenen verschachtelt."
   invalid: "Das Modell ist widersprüchlich: %{detail}"
+  part_outside: Ein Part gehört in eine Klasse. Erst die Klasse zeichnen, dann in sie hineinklicken.
+  port_outside: Ein Port gehört auf den Rand einer Klasse oder eines Parts.
+  port_on_untyped_part: "Ein Port auf einem Part gehört zum Typ des Parts: dem Part erst eine Klasse als Typ geben (etwa motor : Motor)."
   multiplicity: "„%{text}“ ist keine Multiplizität. Beispiele: 1, 0..1, 1..*, *"
   malformed: "Die Datei ist beschädigt (Zeile %{line}, Spalte %{column})."
   not_astah: Die Datei ist kein .asta-Projekt oder beschädigt.

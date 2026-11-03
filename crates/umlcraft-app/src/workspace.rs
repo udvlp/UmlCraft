@@ -1070,6 +1070,7 @@ impl NewItem {
             Self::Diagram(DiagramKind::StateMachine) => "diagram.stateMachine".into(),
             Self::Diagram(DiagramKind::Component) => "diagram.component".into(),
             Self::Diagram(DiagramKind::Deployment) => "diagram.deployment".into(),
+            Self::Diagram(DiagramKind::CompositeStructure) => "diagram.compositeStructure".into(),
             Self::ObjectDiagram => "diagram.object".into(),
             Self::Structogram => "kind.structogram".into(),
         }

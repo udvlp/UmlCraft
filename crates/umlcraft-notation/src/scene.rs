@@ -158,7 +158,13 @@ impl NodeShape {
     /// Whether the user may resize the node. Lifelines, activation bars and diagram frames
     /// are sized by the sequence layout.
     pub fn resizable(&self) -> bool {
-        !matches!(self.figure, Figure::Lifeline { .. } | Figure::Activation | Figure::Frame { .. })
+        !matches!(
+            self.figure,
+            Figure::Lifeline { .. }
+                | Figure::Activation
+                | Figure::Frame { .. }
+                | Figure::Port { .. }
+        )
     }
 }
 
@@ -238,6 +244,11 @@ pub enum Figure {
     },
     /// Interface drawn as a small circle.
     Lollipop,
+    /// Required interface drawn as a socket: a half circle of the lollipop's size, open toward
+    /// `open` (a unit vector), away from the line that ends at its back.
+    Socket {
+        open: Point,
+    },
     /// Package, with Astah's fork icon in the tab for a subsystem.
     Package {
         tab: Rect,
@@ -311,6 +322,18 @@ pub enum Figure {
     Cube {
         depth: f32,
     },
+    /// Composite structure diagrams: a structured class, its name above the line at `separator`
+    /// and its parts below it.
+    Structured {
+        separator: f32,
+    },
+    /// A part inside a structured class.
+    Part,
+    /// A port: a small square on the border of a class or a part, its name outside; where the
+    /// style places it (`name_placed`, as Astah keeps it), or beside the port.
+    Port {
+        name_placed: bool,
+    },
     /// A free text: only its rows are drawn.
     Text,
     Other,
@@ -344,6 +367,7 @@ impl Figure {
             | Self::FlowFinal
             | Self::Circle
             | Self::Lollipop
+            | Self::Socket { .. }
             | Self::UseCase { .. } => Outline::Ellipse,
             Self::Diamond => Outline::Diamond,
             _ => Outline::Rect,
@@ -885,16 +909,20 @@ impl Line {
 /// Builds the scene of `diagram`, with `preview` applied.
 pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMeasure) -> Scene {
     let Some(view) = model.view(diagram) else { return Scene::empty() };
+    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
     let mut nodes: Vec<NodeShape> = view
         .presentations()
         .iter()
         .filter_map(|p| {
             let bounds = preview.rect(p.id, p.bounds()?);
-            Some(layout_node(model, p, bounds, measure))
+            Some(layout_node(model, p, bounds, kind, measure))
         })
         .collect();
-    let is_sequence =
-        model.get(diagram).and_then(|d| d.kind().as_diagram()) == Some(DiagramKind::Sequence);
+    let is_sequence = kind == Some(DiagramKind::Sequence);
+    if kind == Some(DiagramKind::CompositeStructure) {
+        place_port_names(&mut nodes);
+    }
+    aim_sockets(view, &mut nodes);
     let (sequence, messages) = if is_sequence {
         let (layout, messages) = sequence::arrange(model, diagram, view, &mut nodes, measure);
         if matches!(model.get(diagram).map(|d| d.kind()), Some(ElementKind::Diagram(p)) if p.hide_frame)
@@ -921,6 +949,12 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         .presentations()
         .iter()
         .filter(|p| p.style.iconic && is_interface(model, p.element))
+        .map(|p| p.id)
+        .collect();
+    let sockets: HashSet<Id> = view
+        .presentations()
+        .iter()
+        .filter(|p| p.style.socket && iconic_interfaces.contains(&p.id))
         .map(|p| p.id)
         .collect();
     let candidates: Vec<&Presentation> = view
@@ -959,6 +993,8 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 _ => None,
             });
             let keyword = binding.is_some().then(|| "<<bind>>".to_owned());
+            // A line to a socket is its «use» already, as Astah draws it.
+            let to_socket = sockets.contains(target) || sockets.contains(source);
             let label = element.and_then(|e| {
                 let stereotypes: Vec<&str> = e
                     .data()
@@ -966,6 +1002,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                     .iter()
                     .map(String::as_str)
                     .filter(|s| binding.is_none() || *s != "bind")
+                    .filter(|s| !to_socket || *s != "use")
                     .collect();
                 let stereotypes = stereotypes.join(", ");
                 let parts: Vec<String> = [
@@ -978,7 +1015,11 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 .collect();
                 (!parts.is_empty()).then(|| parts.join(" "))
             });
-            let to_lollipop = iconic_interfaces.contains(target);
+            // Realizing a circle and depending on a socket are plain lines.
+            let to_lollipop = match element.map(|e| e.kind()) {
+                Some(ElementKind::Dependency(_)) => to_socket,
+                _ => iconic_interfaces.contains(target),
+            };
             let outline = |id| outlines.get(id).copied().unwrap_or(Outline::Rect);
             let clip = |id, rect| clips.get(id).copied().unwrap_or(rect);
             let qualifiers = match element.map(|e| e.kind()) {
@@ -1153,15 +1194,24 @@ fn is_interface(model: &Model, element: Option<Id>) -> bool {
         .is_some_and(|e| matches!(e.kind(), ElementKind::Interface(_)))
 }
 
+/// Lays out the node `p` in `bounds`, as it is drawn on a diagram of `kind`.
 fn layout_node(
     model: &Model,
     p: &Presentation,
     bounds: Rect,
+    kind: Option<DiagramKind>,
     measure: &dyn TextMeasure,
 ) -> NodeShape {
     let element = p.element.and_then(|e| model.get(e));
+    let composite = kind == Some(DiagramKind::CompositeStructure);
     let (rect, figure, rows) = match (element, &p.shape) {
         (_, Shape::Text { text, .. }) => layout_text(text, &p.style, bounds, measure),
+        (Some(e), _) if composite && matches!(e.kind(), ElementKind::Class(_)) => {
+            layout_structured(model, e, &p.style, bounds, measure)
+        }
+        (Some(e), _) if composite && matches!(e.kind(), ElementKind::Attribute(_)) => {
+            layout_part(model, e, &p.style, bounds, measure)
+        }
         (Some(e), _) => layout_element(model, e, &p.style, p.regions(), bounds, measure),
         (None, _) => (bounds, Figure::Other, Vec::new()),
     };
@@ -1236,7 +1286,13 @@ fn layout_element(
                 Rect::new(r.center().x - w / 2.0, top, w, line_height(12.0)),
                 LabelAlign::Center,
             );
-            (r, Figure::Lollipop, vec![row])
+            // A socket opens to the left until `aim_sockets` turns it away from its line.
+            let figure = if style.socket {
+                Figure::Socket { open: Point::new(-1.0, 0.0) }
+            } else {
+                Figure::Lollipop
+            };
+            (r, figure, vec![row])
         }
         kind if is_boxed_classifier(kind) => {
             layout_classifier(model, e, style, bounds, false, measure)
@@ -1321,6 +1377,28 @@ fn layout_element(
                 InstanceKind::Node => ElementKind::Node(Default::default()),
             };
             layout_box(model, e, &figure, Some(p.classifier), style, bounds, measure)
+        }
+        ElementKind::Port(_) => {
+            // Its name goes outside the border it sits on (`place_port_names`); until then,
+            // above its right side.
+            let mut text = e.name().to_owned();
+            if let ElementKind::Port(p) = e.kind() {
+                if let Some(t) = &p.type_ref {
+                    text.push_str(&format!(" : {}", crate::member::type_text(model, t)));
+                }
+                if let Some(m) = p.multiplicity {
+                    text.push_str(&format!("[{m}]"));
+                }
+            }
+            let line = Line::new(text, 12.0, RowRole::Name, Some(id));
+            let (w, h) = (line.width(measure), line_height(12.0));
+            let r = Rect::new(bounds.x, bounds.y, PORT_SIZE, PORT_SIZE);
+            let at = match style.name_offset {
+                Some(at) => Point::new(r.x + at.x, r.y + at.y),
+                None => Point::new(r.right() + 2.0, r.y - h),
+            };
+            let row = line.place(Rect::new(at.x, at.y, w, h), LabelAlign::Left);
+            (r, Figure::Port { name_placed: style.name_offset.is_some() }, vec![row])
         }
         ElementKind::FinalState => (bounds, Figure::ActivityFinal, Vec::new()),
         ElementKind::Pseudostate(p) => {
@@ -1806,7 +1884,7 @@ pub fn region_shapes(r: Rect, top: f32, layout: &Regions, regions: &[Id]) -> Vec
 /// Heights do not depend on the font, so an estimate of text widths will do.
 pub fn state_regions(model: &Model, p: &Presentation) -> Vec<RegionShape> {
     let Some(bounds) = p.bounds() else { return Vec::new() };
-    match layout_node(model, p, bounds, &ApproxMeasure).figure {
+    match layout_node(model, p, bounds, None, &ApproxMeasure).figure {
         Figure::State { regions, .. } => regions,
         _ => Vec::new(),
     }
@@ -1815,7 +1893,7 @@ pub fn state_regions(model: &Model, p: &Presentation) -> Vec<RegionShape> {
 /// The outline lines to node `p` end at. It does not depend on the font.
 pub fn outline_of(model: &Model, p: &Presentation) -> Outline {
     let Some(bounds) = p.bounds() else { return Outline::Rect };
-    layout_node(model, p, bounds, &ApproxMeasure).figure.outline()
+    layout_node(model, p, bounds, None, &ApproxMeasure).figure.outline()
 }
 
 /// Region shapes' dividing lines, as offsets from the state's top (or left) edge in the form
@@ -1977,6 +2055,8 @@ pub fn with_contents(model: &Model, scene: &Scene, ids: &[Id]) -> Vec<Id> {
                     | Figure::State { .. }
                     | Figure::Cube { .. }
                     | Figure::Component { .. }
+                    | Figure::Structured { .. }
+                    | Figure::Part
             )
         {
             let substate = |n: &NodeShape| {
@@ -1986,9 +2066,14 @@ pub fn with_contents(model: &Model, scene: &Scene, ids: &[Id]) -> Vec<Id> {
                         .zip(n.element)
                         .is_some_and(|(s, e)| model.is_ancestor(s, e))
             };
+            // Ports sit on the border, half outside.
+            let port = |n: &NodeShape| {
+                matches!(n.figure, Figure::Port { .. })
+                    && container.rect.inflate(PORT_SIZE / 2.0 + 0.5).contains(n.rect.center())
+            };
             for n in &scene.nodes {
                 if n.id != container.id
-                    && (container.rect.contains_rect(&n.rect) || substate(n))
+                    && (container.rect.contains_rect(&n.rect) || substate(n) || port(n))
                     && taken.insert(n.id)
                 {
                     result.push(n.id);
@@ -2037,6 +2122,132 @@ const MIN_CLASSIFIER_HEIGHT: f32 = 30.0;
 /// Astah makes automatically sized classifier boxes this much higher than their content when
 /// they show a compartment below the name; a box with only its name gets nothing extra.
 const AUTO_SIZE_EXTRA_HEIGHT: f32 = 3.0;
+
+/// A class on a composite structure diagram: its stereotypes and bold name centered at the top,
+/// a line below them, and room for its parts below the line. It keeps its size, growing only
+/// for its name.
+fn layout_structured(
+    model: &Model,
+    e: &Element,
+    style: &Style,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    let id = e.id();
+    let size = style.font_size.unwrap_or(FONT_SIZE);
+    let stereotypes =
+        if style.hide_stereotypes { Vec::new() } else { e.data().stereotypes.clone() };
+    let mut header = stereotype_lines([&stereotypes], size, id);
+    let mut name = Line::new(crate::member::display_name(model, id), size, RowRole::Name, Some(id));
+    name.bold = true;
+    name.italic = matches!(e.kind(), ElementKind::Class(p) if p.is_abstract);
+    header.push(name);
+    let header_h = 2.0 * BOX_PAD_Y + header.iter().map(|l| line_height(l.size)).sum::<f32>();
+    let widest = header.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width.max(widest + 2.0 * BOX_PAD_X).max(MIN_CLASSIFIER_WIDTH),
+        bounds.height.max(header_h + 20.0),
+    );
+    let mut y = r.y + BOX_PAD_Y;
+    let rows = header
+        .into_iter()
+        .map(|line| {
+            let h = line_height(line.size);
+            let row = line.place(Rect::new(r.x, y, r.width, h), LabelAlign::Center);
+            y += h;
+            row
+        })
+        .collect();
+    (r, Figure::Structured { separator: r.y + header_h }, rows)
+}
+
+/// A part on a composite structure diagram: a box with `name : Type [multiplicity]` centered
+/// at its top. The text edits the attribute as a member does.
+fn layout_part(
+    model: &Model,
+    e: &Element,
+    style: &Style,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    let size = style.font_size.unwrap_or(FONT_SIZE);
+    // As Astah writes a part: `- rear : Wheel[2]`.
+    let mut text = format!("{} {}", e.data().visibility.symbol(), e.name());
+    if let ElementKind::Attribute(p) = e.kind() {
+        if let Some(t) = &p.type_ref {
+            text.push_str(&format!(" : {}", crate::member::type_text(model, t)));
+        }
+        if let Some(m) = p.multiplicity {
+            text.push_str(&format!("[{m}]"));
+        }
+    }
+    let line = Line::new(text, size, RowRole::Member, Some(e.id()));
+    let h = line_height(size);
+    // Astah's parts grow only when the text needs more than 10 beside it and 9 above and below.
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width.max(line.width(measure) + 20.0),
+        bounds.height.max(h + 18.0),
+    );
+    // Astah centers the text in the box both ways.
+    let row = line.place(Rect::new(r.x, r.center().y - h / 2.0, r.width, h), LabelAlign::Center);
+    (r, Figure::Part, vec![row])
+}
+
+/// Turns each socket away from the first line that ends at it, toward the side the line does
+/// not come from.
+fn aim_sockets(view: &umlcraft_model::View, nodes: &mut [NodeShape]) {
+    let centers: HashMap<Id, Point> = nodes.iter().map(|n| (n.id, n.rect.center())).collect();
+    for node in nodes.iter_mut() {
+        let Figure::Socket { open } = &mut node.figure else { continue };
+        let other = view.presentations().iter().find_map(|p| match p.shape {
+            Shape::Edge { source, target, .. } if target == node.id => Some(source),
+            Shape::Edge { source, target, .. } if source == node.id => Some(target),
+            _ => None,
+        });
+        let Some(from) = other.and_then(|o| centers.get(&o)) else { continue };
+        let c = node.rect.center();
+        let (dx, dy) = (c.x - from.x, c.y - from.y);
+        let length = dx.hypot(dy);
+        if length > 0.01 {
+            *open = Point::new(dx / length, dy / length);
+        }
+    }
+}
+
+/// Width and height of a port's square.
+pub const PORT_SIZE: f32 = crate::composite::PORT_SIZE;
+
+/// Puts each port's name outside the border of the class or part it sits on: beside the port
+/// on the left and right, above or below it at the top and bottom.
+fn place_port_names(nodes: &mut [NodeShape]) {
+    let hosts: Vec<Rect> = nodes
+        .iter()
+        .filter(|n| {
+            matches!(n.figure, Figure::Structured { .. } | Figure::Part | Figure::Component { .. })
+        })
+        .map(|n| n.rect)
+        .collect();
+    let beside = |n: &NodeShape| matches!(n.figure, Figure::Port { name_placed: false });
+    for port in nodes.iter_mut().filter(|n| beside(n)) {
+        let c = port.rect.center();
+        let Some(side) = crate::composite::side_on(&hosts, c) else { continue };
+        let p = port.rect;
+        for row in &mut port.rows {
+            let (w, h) = (row.rect.width, row.rect.height);
+            let (x, y) = match side {
+                0 => (p.x + p.width + 2.0, p.y - h),
+                1 => (p.right() + 2.0, p.y - h),
+                2 => (p.x + p.width + 2.0, p.bottom()),
+                _ => (p.x - 2.0 - w, p.y - h),
+            };
+            row.rect = Rect::new(x, y, w, h);
+        }
+    }
+}
 
 /// Classes, interfaces, enumerations and data types, drawn as boxes with compartments.
 pub fn is_boxed_classifier(kind: &ElementKind) -> bool {
@@ -2403,7 +2614,7 @@ fn edge_for(
         }
         Some(ElementKind::Generalization(_)) => edge.target_marker = EndMarker::HollowTriangle,
         // Realizing an interface drawn as a circle is a plain line ("lollipop").
-        Some(ElementKind::Realization(_)) if to_lollipop => {}
+        Some(ElementKind::Realization(_) | ElementKind::Dependency(_)) if to_lollipop => {}
         Some(ElementKind::Realization(_)) => {
             edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::HollowTriangle;
@@ -2452,6 +2663,11 @@ fn edge_for(
             if !text.is_empty() {
                 label = join_label(label, text);
             }
+        }
+        // A connector is a plain line, with the multiplicity of each end.
+        Some(ElementKind::Connector(p)) => {
+            let multiplicity = |i: usize| p.ends[i].multiplicity.map(|m| m.to_string());
+            ends = [(None, multiplicity(0), false), (None, multiplicity(1), false)];
         }
         // A containment line runs from the owner to the nested element the edge stands for.
         Some(k) if k.is_classifier() => {
@@ -3212,6 +3428,37 @@ mod tests {
         assert_eq!(circle.rect.size(), umlcraft_model::Size::new(24.0, 24.0));
         let edge = scene.edge(realization).unwrap();
         assert!(edge.line == LineStyle::Solid && edge.target_marker == EndMarker::None);
+
+        // One Order requires, drawn as a socket: open away from Order, a plain line without
+        // «use».
+        let (interface, dependency) = doc
+            .edit("socket", |tx| {
+                let (i, ni) = crate::palette::create_node(
+                    tx,
+                    d,
+                    crate::palette::NodeTool::Interface,
+                    Point::new(600.0, 300.0),
+                    "R",
+                )?;
+                tx.update_presentation(d, ni, |p| {
+                    p.style.iconic = true;
+                    p.style.socket = true;
+                })?;
+                let u =
+                    crate::palette::connect(tx, d, crate::palette::EdgeTool::Dependency, node, ni)?;
+                let usage = tx.model().view(d).and_then(|v| v.get(u)).and_then(|p| p.element);
+                tx.update(usage.unwrap(), |data| data.stereotypes = vec!["use".into()])?;
+                Ok((i, u))
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let socket = scene.nodes.iter().find(|n| n.element == Some(interface)).unwrap();
+        let Figure::Socket { open } = socket.figure else { panic!("not a socket") };
+        let away = socket.rect.center().offset(-order.rect.center().x, -order.rect.center().y);
+        assert!(open.x * away.x + open.y * away.y > 0.0, "{open:?} opens toward Order");
+        let edge = scene.edge(dependency).unwrap();
+        assert!(edge.line == LineStyle::Solid && edge.target_marker == EndMarker::None);
+        assert!(edge.labels.iter().all(|l| !l.text.contains("use")), "{:?}", edge.labels);
     }
 
     #[test]

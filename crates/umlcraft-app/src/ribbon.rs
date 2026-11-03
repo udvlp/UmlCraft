@@ -220,7 +220,7 @@ pub fn diagram_key(kind: DiagramKind) -> String {
     crate::workspace::NewItem::Diagram(kind).key()
 }
 
-pub const DIAGRAM_KINDS: [DiagramKind; 7] = [
+pub const DIAGRAM_KINDS: [DiagramKind; 8] = [
     DiagramKind::Class,
     DiagramKind::UseCase,
     DiagramKind::Sequence,
@@ -228,6 +228,7 @@ pub const DIAGRAM_KINDS: [DiagramKind; 7] = [
     DiagramKind::StateMachine,
     DiagramKind::Component,
     DiagramKind::Deployment,
+    DiagramKind::CompositeStructure,
 ];
 
 pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
@@ -410,7 +411,8 @@ fn diagram(
                 .selected(tool == current);
                 // Tools whose name alone does not say how they are used.
                 match tool {
-                    Tool::Edge(EdgeTool::FoundMessage | EdgeTool::LostMessage) => {
+                    Tool::Edge(EdgeTool::FoundMessage | EdgeTool::LostMessage)
+                    | Tool::Node(NodeTool::Part | NodeTool::Port) => {
                         item.tooltip(t!(format!("tool_tip.{}", tool.key())))
                     }
                     _ => item,

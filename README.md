@@ -29,6 +29,7 @@ between releases is in the [changelog](CHANGELOG.md).
 | Activity | Actions, initial and final nodes, decision, merge, fork and join, object nodes (also in a state, `Order [filled]`), flows with guards, partitions (also nested) |
 | State machine | States with entry, do, exit and internal transitions, composite states, orthogonal states with regions one below the other or side by side, final states, initial, choice, junction, fork, join and history pseudostates, transitions labeled `trigger [guard] / effect`. A state dragged into another state or region becomes part of it |
 | Component and deployment | Components, artifacts and nodes with their icons, objects and instances, deployments |
+| Composite structure | The inside of a class or component: parts `name : Type [m]` drawn in it, ports on the border of the class and of typed parts, connectors between parts and ports, realizations and dependencies from ports to interfaces, which can be drawn as a circle or, when required, as a socket. A part dragged over its class's border takes the border along, and ports stay on their border when it moves or changes size |
 
 Diagrams imported from `.asta` files keep their layout, sizes and colors. The properties panel
 sets per class box what it shows of its members (stereotypes, visibility, types, initial
@@ -146,9 +147,9 @@ waypoints, zoom to fit, drag and drop within the model tree and from the tree on
 The model tree lists the contents of packages sorted: packages, diagrams, then elements by
 kind and name. A new diagram at the top of the model comes in a package of its own name.
 Automatic layout: new lines are routed around the nodes at right angles and follow when their
-nodes move, until their route is edited by hand (on use case diagrams they start straight);
+nodes move, until their route is edited by hand (on use case and composite structure diagrams they start straight);
 Route lines (Ctrl+Shift+R) does that for the selected lines or the whole diagram. Arrange automatically (Ctrl+Shift+L) lays out every
-diagram but sequence diagrams in layers, top to bottom or left to right: generals above
+diagram but sequence and composite structure diagrams in layers, top to bottom or left to right: generals above
 their specifics, activities along their flows with partitions kept as columns, state
 machines along their transitions with each region on its own, actors beside the system
 boundary; with a selection only that, pushing other nodes aside.
@@ -182,12 +183,16 @@ project of its own, which it can save. It creates diagrams, elements, lines and 
 renames, moves and deletes, puts messages into fragments with their operands, writes and
 rewrites structograms, arranges diagrams, renders them as images to look at, and exports PNG
 and SVG. Several changes can make one undo step. While the app runs, it can also take a
-screenshot of the UmlCraft window (on Windows), also when other windows cover it. The app accepts connections from this computer only, with a token only the user
+screenshot of the UmlCraft window (on Windows), also when other windows cover it or it is
+minimized; it sizes the window and can move it beyond the screens, where it keeps drawing but
+nobody sees it, sets theme, language, zoom and selection, and opens the sample project, so
+that screenshots need no one at the screen. The app accepts connections from this computer only, with a token only the user
 can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
 
 ## Not yet supported
 
-- Composite structure diagrams (ports, parts, connectors)
+- Composite structure diagrams in the `.asta` export: Astah places port names itself; the
+  diagram frame, lines between two interfaces and untyped parts of components are left out
 - More than two regions per state in the `.asta` export, because the API divides a state only
   once
 - Data flow diagrams, flowcharts, communication, timing, requirement, ER

@@ -31,6 +31,8 @@ import com.change_vision.jude.api.inf.editor.ActivityDiagramEditor;
 import com.change_vision.jude.api.inf.editor.BasicDiagramEditor;
 import com.change_vision.jude.api.inf.editor.BasicModelEditor;
 import com.change_vision.jude.api.inf.editor.ClassDiagramEditor;
+import com.change_vision.jude.api.inf.editor.CompositeStructureDiagramEditor;
+import com.change_vision.jude.api.inf.editor.CompositeStructureModelEditor;
 import com.change_vision.jude.api.inf.editor.DiagramEditor;
 import com.change_vision.jude.api.inf.editor.SequenceDiagramEditor;
 import com.change_vision.jude.api.inf.editor.StateMachineDiagramEditor;
@@ -44,8 +46,11 @@ import com.change_vision.jude.api.inf.model.IAssociation;
 import com.change_vision.jude.api.inf.model.IAttribute;
 import com.change_vision.jude.api.inf.model.IClass;
 import com.change_vision.jude.api.inf.model.IClassifierTemplateParameter;
+import com.change_vision.jude.api.inf.model.IConnector;
+import com.change_vision.jude.api.inf.model.IPort;
 import com.change_vision.jude.api.inf.model.ITemplateBinding;
 import com.change_vision.jude.api.inf.model.ICombinedFragment;
+import com.change_vision.jude.api.inf.model.IComponent;
 import com.change_vision.jude.api.inf.model.IDependency;
 import com.change_vision.jude.api.inf.model.IDiagram;
 import com.change_vision.jude.api.inf.model.IElement;
@@ -157,6 +162,7 @@ public final class AstaExport {
     private ProjectAccessor accessor;
     private BasicModelEditor basic;
     private UseCaseModelEditor useCases;
+    private CompositeStructureModelEditor structures;
     /// UmlCraft element id → Astah model element.
     private final Map<String, Object> created = new HashMap<>();
     private final List<String> templateParameters = new ArrayList<>();
@@ -239,6 +245,7 @@ public final class AstaExport {
     private void build() throws Exception {
         basic = accessor.getModelEditorFactory().getBasicModelEditor();
         useCases = accessor.getModelEditorFactory().getUseCaseModelEditor();
+        structures = accessor.getModelEditorFactory().getCompositeStructureModelEditor();
         IModel project = accessor.getProject();
         Map<String, Object> model = elements.get(root);
         if (!name(model).isEmpty()) {
@@ -303,6 +310,10 @@ public final class AstaExport {
                 // Astah draws system boundaries as rectangles; they exist only on diagrams.
                 drop("systemBoundary");
             }
+            if ("connector".equals(type(e)) && !created.containsKey(e.get("id"))) {
+                // The API creates connectors with their line on a composite structure diagram.
+                drop("connector");
+            }
         }
     }
 
@@ -325,7 +336,7 @@ public final class AstaExport {
                     }
                 }
                 case "templateParameter" -> templateParameters.add(child);
-                case "attribute", "operation" -> features.add(child);
+                case "attribute", "operation", "port" -> features.add(child);
                 case "association", "generalization", "realization", "dependency", "include", "extend" ->
                     relationships.add(child);
                 case "diagram" -> diagrams.add(child);
@@ -356,9 +367,9 @@ public final class AstaExport {
                     }
                     diagrams.addAll(own.subList(0, Math.min(1, own.size())));
                 }
-                // Comments, instances, links and system boundaries are created with their
-                // presentations on diagrams.
-                case "comment", "instance", "link", "systemBoundary" -> {
+                // Comments, instances, links, system boundaries and connectors are created with
+                // their presentations on diagrams.
+                case "comment", "instance", "link", "systemBoundary", "connector" -> {
                 }
                 default -> drop(type);
             }
@@ -427,8 +438,14 @@ public final class AstaExport {
         }
         if ("attribute".equals(type(e))) {
             Object t = type(e.get("typeRef"));
-            IAttribute a = (IAttribute) named(id, n -> t instanceof IClass c
-                ? basic.createAttribute(owner, n, c) : basic.createAttribute(owner, n, (String) t));
+            if (owner instanceof IComponent && !(t instanceof IClass)) {
+                drop("componentAttribute");
+                return;
+            }
+            IAttribute a = (IAttribute) named(id, n -> owner instanceof IComponent
+                ? componentEnd(owner, n, (IClass) t)
+                : t instanceof IClass c ? basic.createAttribute(owner, n, c)
+                : basic.createAttribute(owner, n, (String) t));
             multiplicity(a, (String) e.get("multiplicity"));
             if (!text(e, "defaultValue").isEmpty()) {
                 a.setInitialValue(text(e, "defaultValue"));
@@ -438,6 +455,21 @@ public final class AstaExport {
             a.setChangeable(!flag(e, "isReadOnly"));
             common(id, a, Set.of());
             created.put(id, a);
+            return;
+        }
+        if ("port".equals(type(e))) {
+            IPort port = (IPort) named(id, n -> basic.createPort(owner, n));
+            if (e.get("typeRef") != null) {
+                if (type(e.get("typeRef")) instanceof IClass c) {
+                    port.setType(c);
+                } else {
+                    port.setTypeExpression((String) type(e.get("typeRef")));
+                }
+            }
+            multiplicity(port, (String) e.get("multiplicity"));
+            port.setIsBehavior(flag(e, "isBehavior"));
+            common(id, port, Set.of());
+            created.put(id, port);
             return;
         }
         // An empty type expression makes an operation without a return type ("void" is shown).
@@ -631,14 +663,21 @@ public final class AstaExport {
             }
             case "generalization" -> made =
                 basic.createGeneralization(classifier(e.get("specific")), classifier(e.get("general")), name);
-            case "realization" -> made =
-                basic.createRealization(classifier(e.get("client")), classifier(e.get("supplier")), name);
+            // A port provides an interface by realizing it and requires one by using it.
+            case "realization" -> made = created.get(e.get("client")) instanceof IPort port
+                ? structures.createRealization(port, classifier(e.get("supplier")), name)
+                : basic.createRealization(classifier(e.get("client")), classifier(e.get("supplier")), name);
             case "dependency" -> {
                 INamedElement client = named(e.get("client"));
                 INamedElement supplier = named(e.get("supplier"));
                 INamedElement madeClient;
                 ITemplateBinding binding = bindings.get(e.get("client"));
-                if (list(e.get("stereotypes")).contains("bind") && binding != null
+                if (client instanceof IPort port && supplier instanceof IClass s) {
+                    IUsage usage = structures.createUsage(port, s, name);
+                    madeClient = usage.getClient();
+                    made = usage;
+                    implied = Set.of("use");
+                } else if (list(e.get("stereotypes")).contains("bind") && binding != null
                         && binding.getTemplate() == supplier) {
                     // The «bind» line of a bound class is Astah's binding itself.
                     made = binding;
@@ -749,6 +788,14 @@ public final class AstaExport {
         // Sequence diagrams are moved down to Astah's frame.
         double dy = 0;
         switch (kind) {
+            case "compositeStructure" -> {
+                CompositeStructureDiagramEditor cs =
+                    accessor.getDiagramEditorFactory().getCompositeStructureDiagramEditor();
+                diagram = (IDiagram) named(id, n -> cs.createCompositeStructureDiagram((INamedElement) owner, n));
+                frame(id, diagram);
+                compositeDiagram(id, cs);
+                current = cs;
+            }
             case "class", "useCase", "component", "deployment" -> {
                 StructureDiagramEditor editor;
                 if (!"useCase".equals(kind)) {
@@ -895,20 +942,31 @@ public final class AstaExport {
     private void frame(String id, IDiagram diagram) throws Exception {
         boolean framed = view(id).stream()
             .anyMatch(p -> "node".equals(p.get("shape")) && id.equals(p.get("element")));
+        boolean frame = false;
         for (IPresentation p : diagram.getPresentations()) {
             if ("Frame".equals(p.getType())) {
                 p.setProperty("visibility", Boolean.toString(framed));
+                frame = true;
             }
+        }
+        // Composite structure diagrams come without a frame, and the API makes none.
+        if (framed && !frame) {
+            drop("diagramFrame");
         }
     }
 
     /// Nodes in z-order, then edges and note anchors of a class or use case diagram.
     private void structureDiagram(String diagram, StructureDiagramEditor editor) throws Exception {
-        Map<String, IPresentation> shown = new HashMap<>();
+        structureDiagram(diagram, editor, new HashMap<>());
+    }
+
+    /// The same, leaving out the presentations in `shown`, which are drawn already.
+    private void structureDiagram(String diagram, StructureDiagramEditor editor, Map<String, IPresentation> shown)
+            throws Exception {
         List<Map<String, Object>> presentations = view(diagram);
         for (Map<String, Object> p : presentations) {
             if (!"node".equals(p.get("shape")) || !(p.get("element") instanceof String element)
-                    || element.equals(diagram)) {
+                    || element.equals(diagram) || shown.containsKey(p.get("id"))) {
                 continue;
             }
             Map<String, Object> r = rect(diagram, p);
@@ -951,6 +1009,221 @@ public final class AstaExport {
             shown.put((String) p.get("id"), node);
         }
         edges(editor, diagram, presentations, shown);
+    }
+
+    // ----- Composite structure diagrams -------------------------------------------------------
+
+    /// Structured classes first, then the parts drawn in them and the ports on their borders;
+    /// the interfaces ports provide or require as circles and sockets, which Astah draws with
+    /// their lines itself; then the other nodes and the lines.
+    private void compositeDiagram(String diagram, CompositeStructureDiagramEditor editor) throws Exception {
+        Map<String, IPresentation> shown = new HashMap<>();
+        // Where each drawn node lies in UmlCraft, to find what a part or port sits in or on.
+        Map<String, Map<String, Object>> rects = new HashMap<>();
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        for (Map<String, Object> p : view(diagram)) {
+            if ("node".equals(p.get("shape")) && p.get("element") instanceof String element
+                    && !element.equals(diagram)) {
+                nodes.add(p);
+            }
+        }
+        for (String pass : List.of("structured", "part", "port")) {
+            for (Map<String, Object> p : nodes) {
+                String element = (String) p.get("element");
+                String type = type(elements.get(element));
+                boolean structured = Set.of("class", "component").contains(type);
+                if (!(structured && "structured".equals(pass) || "attribute".equals(type) && "part".equals(pass)
+                        || "port".equals(type) && "port".equals(pass))) {
+                    continue;
+                }
+                Map<String, Object> r = rect(diagram, p);
+                Point2D at = new Point2D.Double(num(r, "x"), num(r, "y"));
+                Object made = attempt(element, () -> {
+                    IElement model = (IElement) created.get(element);
+                    if (model == null) {
+                        return null;
+                    }
+                    if (structured) {
+                        return editor.createStructuredClassPresentation(model, at);
+                    }
+                    // A part lies in a class drawn for its owner, a port on the border nearest to it.
+                    INodePresentation host = "port".equals(type)
+                        ? nearestBorder(shown, rects, r)
+                        : around(shown, rects, r, created.get(owners.get(element)));
+                    if (host == null) {
+                        drop("port".equals(type) ? "portOutsideHost" : "partOutsideClass");
+                        return null;
+                    }
+                    return "port".equals(type)
+                        ? editor.createPortPresentation(host, (IPort) model, at)
+                        : editor.createStructuredClassPresentation(model, host, at);
+                });
+                if (!(made instanceof INodePresentation node)) {
+                    continue;
+                }
+                if ("attribute".equals(type) && name(elements.get(element)).isEmpty()) {
+                    unnamePart((IAttribute) node.getModel());
+                }
+                attempt(element, () -> {
+                    node.setLocation(at);
+                    if (!"port".equals(type)) {
+                        resize(node, num(r, "width"), num(r, "height"));
+                    }
+                    String fill = ownFill((Map<String, Object>) p.get("style"));
+                    node.setProperty("fill.color", fill != null ? fill : DEFAULT_FILL);
+                    return null;
+                });
+                shown.put((String) p.get("id"), node);
+                rects.put((String) p.get("id"), r);
+            }
+        }
+        portInterfaces(diagram, editor, shown);
+        structureDiagram(diagram, editor, shown);
+    }
+
+    /// A part may have no name (`: Engine`). Astah creates its attribute with a numbered name;
+    /// shown as a part, it may give the name up again.
+    private void unnamePart(IAttribute part) {
+        for (String name : new String[] {"", " "}) {
+            try {
+                part.setName(name);
+                dropped.computeIfPresent("renamed", (k, n) -> n > 1 ? n - 1 : null);
+                return;
+            } catch (InvalidEditingException x) {
+                // It keeps the numbered name.
+            }
+        }
+    }
+
+    /// Astah gives components no attributes, only association ends. A part of a component becomes
+    /// the far end of an association to its type, the way Astah keeps parts it draws itself.
+    private IAttribute componentEnd(IClass owner, String name, IClass type) throws InvalidEditingException {
+        IAssociation association = basic.createAssociation(owner, type, "", "", name);
+        // Without the diamond at the whole, Astah draws the part dashed, as a reference.
+        association.getMemberEnds()[0].setComposite();
+        return association.getMemberEnds()[1];
+    }
+
+    /// The drawn class of `owner` around the box `r`.
+    private static INodePresentation around(Map<String, IPresentation> shown, Map<String, Map<String, Object>> rects,
+            Map<String, Object> r, Object owner) {
+        double cx = num(r, "x") + num(r, "width") / 2;
+        double cy = num(r, "y") + num(r, "height") / 2;
+        for (Map.Entry<String, IPresentation> e : shown.entrySet()) {
+            Map<String, Object> h = rects.get(e.getKey());
+            if (e.getValue().getModel() == owner && h != null && num(h, "x") <= cx && cx <= num(h, "x") + num(h, "width")
+                    && num(h, "y") <= cy && cy <= num(h, "y") + num(h, "height")) {
+                return (INodePresentation) e.getValue();
+            }
+        }
+        return null;
+    }
+
+    /// The drawn class or part whose border is nearest to the center of the box `r`.
+    private static INodePresentation nearestBorder(Map<String, IPresentation> shown,
+            Map<String, Map<String, Object>> rects, Map<String, Object> r) {
+        double cx = num(r, "x") + num(r, "width") / 2;
+        double cy = num(r, "y") + num(r, "height") / 2;
+        INodePresentation best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (Map.Entry<String, IPresentation> e : shown.entrySet()) {
+            Map<String, Object> h = rects.get(e.getKey());
+            if (h == null) {
+                continue;
+            }
+            double left = num(h, "x"), top = num(h, "y");
+            double right = left + num(h, "width"), bottom = top + num(h, "height");
+            double dx = Math.max(Math.max(left - cx, cx - right), 0);
+            double dy = Math.max(Math.max(top - cy, cy - bottom), 0);
+            double distance = dx > 0 || dy > 0 ? Math.hypot(dx, dy)
+                : Math.min(Math.min(cx - left, right - cx), Math.min(cy - top, bottom - cy));
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = (INodePresentation) e.getValue();
+            }
+        }
+        return best;
+    }
+
+    /// Interfaces drawn as circles or sockets at a port. Astah draws them only together with
+    /// their lines, for all realizations and usages of the port at once; each goes where
+    /// UmlCraft has it, and those UmlCraft does not draw are removed again.
+    private void portInterfaces(String diagram, CompositeStructureDiagramEditor editor,
+            Map<String, IPresentation> shown) {
+        List<Map<String, Object>> presentations = view(diagram);
+        Map<String, Map<String, Object>> byId = new HashMap<>();
+        for (Map<String, Object> p : presentations) {
+            byId.put((String) p.get("id"), p);
+        }
+        // The lines from each drawn port to an interface drawn as an icon.
+        Map<String, List<Map<String, Object>>> lines = new LinkedHashMap<>();
+        for (Map<String, Object> p : presentations) {
+            if (!"edge".equals(p.get("shape")) || !(p.get("element") instanceof String element)
+                    || !Set.of("realization", "dependency").contains(type(elements.get(element)))) {
+                continue;
+            }
+            Map<String, Object> icon = byId.get(p.get("target"));
+            boolean iconic = icon != null && icon.get("style") instanceof Map<?, ?> s
+                && Boolean.TRUE.equals(s.get("iconic"));
+            if (iconic && shown.get(p.get("source")) instanceof INodePresentation port
+                    && port.getModel() instanceof IPort) {
+                lines.computeIfAbsent((String) p.get("source"), k -> new ArrayList<>()).add(p);
+            }
+        }
+        for (Map.Entry<String, List<Map<String, Object>>> e : lines.entrySet()) {
+            INodePresentation port = (INodePresentation) shown.get(e.getKey());
+            attempt(e.getKey(), () -> {
+                Set<IPresentation> before = new HashSet<>(List.of(editor.getDiagram().getPresentations()));
+                editor.showInterfacePresentations(port, port.getLocation());
+                List<IPresentation> added = new ArrayList<>();
+                for (IPresentation p : editor.getDiagram().getPresentations()) {
+                    if (!before.contains(p)) {
+                        added.add(p);
+                    }
+                }
+                Set<IPresentation> kept = new HashSet<>();
+                for (Map<String, Object> line : e.getValue()) {
+                    Object model = created.get(line.get("element"));
+                    for (IPresentation p : added) {
+                        if (p instanceof ILinkPresentation link && link.getModel() == model) {
+                            INodePresentation icon = link.getSource() == port
+                                ? (INodePresentation) link.getTarget() : (INodePresentation) link.getSource();
+                            Map<String, Object> target = byId.get(line.get("target"));
+                            Map<String, Object> r = rect(diagram, target);
+                            icon.setLocation(new Point2D.Double(num(r, "x"), num(r, "y")));
+                            shown.put((String) line.get("target"), icon);
+                            shown.put((String) line.get("id"), link);
+                            kept.add(link);
+                            kept.add(icon);
+                        }
+                    }
+                }
+                for (IPresentation p : added) {
+                    if (!kept.contains(p) && p instanceof INodePresentation) {
+                        editor.deletePresentation(p);
+                    }
+                }
+                return null;
+            });
+        }
+    }
+
+    /// A connector between parts and ports, with the name and without the arrow that shows
+    /// which way to read it.
+    private ILinkPresentation connector(CompositeStructureDiagramEditor editor, String id,
+            INodePresentation source, INodePresentation target) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        ILinkPresentation link = editor.createConnectorPresentation(source, target, name(e));
+        link.setProperty("name_direction_visibility", "false");
+        for (Object end : list(e.get("ends"))) {
+            if (end instanceof Map<?, ?> m && m.get("multiplicity") != null) {
+                drop("connectorEndMultiplicity");
+            }
+        }
+        IConnector connector = (IConnector) link.getModel();
+        common(id, connector, Set.of());
+        created.put(id, connector);
+        return link;
     }
 
     // ----- Activity diagrams ------------------------------------------------------------------
@@ -1498,7 +1771,8 @@ public final class AstaExport {
     ) {
         for (boolean anchors : new boolean[] {false, true}) {
             for (Map<String, Object> p : presentations) {
-                if ("edge".equals(p.get("shape")) && (p.get("element") == null) == anchors) {
+                if ("edge".equals(p.get("shape")) && (p.get("element") == null) == anchors
+                        && !shown.containsKey(p.get("id"))) {
                     edge(editor, diagram, p, shown);
                 }
             }
@@ -1536,6 +1810,10 @@ public final class AstaExport {
                     && "transition".equals(type(elements.get(element)))
                     && source instanceof INodePresentation s && target instanceof INodePresentation t) {
                 link = transition(sm, (String) element, s, t);
+            } else if (editor instanceof CompositeStructureDiagramEditor cs
+                    && "connector".equals(type(elements.get(element)))
+                    && source instanceof INodePresentation s && target instanceof INodePresentation t) {
+                link = connector(cs, (String) element, s, t);
             } else if (created.get(element) instanceof IClass) {
                 // A containment line stands for the nested class; the API cannot draw one.
                 drop("containment");
@@ -1688,6 +1966,10 @@ public final class AstaExport {
         if ("interface".equals(type)) {
             boolean iconic = style != null && Boolean.TRUE.equals(style.get("iconic"));
             node.setProperty("notation_type", iconic ? "icon" : "normal");
+            // Astah draws a socket only for a port's usage (`portInterfaces`), not here.
+            if (iconic && Boolean.TRUE.equals(style.get("socket"))) {
+                drop("socket");
+            }
         }
         // Without a color of its own a node gets Astah's usual default, not the API's white.
         String fill = ownFill(style);
