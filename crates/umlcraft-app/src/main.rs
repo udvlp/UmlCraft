@@ -13,6 +13,7 @@ mod main_view;
 mod nsd;
 mod png;
 mod privacy_dialog;
+mod prompt;
 mod properties;
 mod ribbon;
 mod settings;
@@ -261,6 +262,7 @@ fn main() {
     });
     app.run(move |cx| {
         gpui_kit::init(cx);
+        prompt::init(cx);
         // "secondary" is Cmd on macOS and Ctrl elsewhere (`key`).
         cx.bind_keys([
             key(cx, "secondary-n", NewProject, None),

@@ -142,6 +142,11 @@ that a diff shows which element changed.
   below the title bar) and at most once a day; About UmlCraft checks on request. A newer
   version found (`latestVersion`) shows as a button in the title bar. `privacy_dialog.rs` shows
   what the check sends from the locales, so reading it stays offline.
+- `prompt.rs` replaces the system's message dialogs on every platform (`cx.set_prompt_builder`):
+  every `window.prompt` (errors, the question before unsaved changes are discarded) shows the
+  app's own dialog, which wraps its text, scrolls a long detail, follows the theme and answers
+  Enter with the first button and Escape with Cancel or the last one. GPUI's fallback on Linux
+  was 288 px wide and cut off what did not fit on one line.
 - Texts come from `locales/{de,en}.yml` (rust-i18n). Without a setting, the system language is used.
 - Shortcuts are bound through `key` in `main.rs`, which resolves `secondary-` (Cmd on macOS,
   Ctrl elsewhere) with `KeyBinding::load`; since `gpui-pre` 0.3.10 `KeyBinding::new` no longer

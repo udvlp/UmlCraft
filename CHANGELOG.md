@@ -8,6 +8,9 @@ today.
 - **Light or dark as the system**: without a theme of its own, UmlCraft follows the system's
   appearance and switches along with it. The View tab and the settings choose between System,
   Light and Dark.
+- **Messages in UmlCraft's own dialog**: errors and questions such as the one before unsaved
+  changes are discarded show in a dialog of UmlCraft's own on every platform, in its theme.
+  Long texts wrap instead of being cut off, as they were on Linux.
 - **Association classes, constraints, shared generalizations and robustness icons** in class
   diagrams: an association class hangs on a dashed line from the middle of its association and
   shows its name on the line; draw one with its tool or turn an association into one from the
