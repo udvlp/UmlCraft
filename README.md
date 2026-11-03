@@ -154,7 +154,7 @@ their specifics, activities along their flows with partitions kept as columns, s
 machines along their transitions with each region on its own, actors beside the system
 boundary; with a selection only that, pushing other nodes aside.
 Free texts and lines on every diagram (Text and Line tools): texts edited in place, lines
-dashed or with arrowheads, their ends dragged one by one. Light and dark theme, German and
+dashed or with arrowheads, their ends dragged one by one. Light, dark or system theme, German and
 English. Members show their visibility right before the name (`- name`); UmlCraft's
 visibility column lines up all names of a compartment instead. Per class box, the properties
 panel hides its attributes or operations, stereotypes, the members' visibility, attribute types,

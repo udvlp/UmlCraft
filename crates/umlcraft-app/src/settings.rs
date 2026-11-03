@@ -19,6 +19,7 @@ pub struct Settings {
     pub recent: Vec<PathBuf>,
     /// `None` follows the system's language.
     pub language: Option<String>,
+    /// `None` follows the system's appearance.
     pub dark: Option<bool>,
     /// Draw members' visibility in a column of its own, so all names of a compartment start
     /// in one line. Off by default: members then look as in Astah.

@@ -153,6 +153,13 @@ pub struct SetLineShape {
     pub shape: LineShape,
 }
 
+/// Chooses the light or dark theme, or with `None` the system's appearance.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct SetTheme {
+    pub dark: Option<bool>,
+}
+
 /// Arranges the active diagram, or the selection on it, in layers.
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = umlcraft, no_json)]

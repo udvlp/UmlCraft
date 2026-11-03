@@ -5,6 +5,9 @@ today.
 
 ## Unreleased
 
+- **Light or dark as the system**: without a theme of its own, UmlCraft follows the system's
+  appearance and switches along with it. The View tab and the settings choose between System,
+  Light and Dark.
 - **Composite structure diagrams**: the inside of a class or component, with parts drawn in
   it, ports on the border of the class and of typed parts, and connectors between parts and
   ports. A part dragged over the class's border takes the border along; ports stay on their
