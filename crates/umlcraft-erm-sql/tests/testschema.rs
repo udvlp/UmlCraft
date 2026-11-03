@@ -8,7 +8,7 @@ mod support;
 use pretty_assertions::assert_eq;
 use support::{describe, expected, fixtures, imported};
 use umlcraft_erm_sql::{Dialect, Options, read, split::split};
-use umlcraft_model::Id;
+use umlcraft_model::{ErNotation, Id};
 use umlcraft_notation::er_layout;
 use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
 use umlcraft_notation::svg;
@@ -83,9 +83,12 @@ fn every_dump_gives_the_expected_model() {
 
 #[test]
 fn the_imported_diagram_is_valid_and_readable() {
-    for (system, _, _, [(name, _), ..]) in SYSTEMS {
-        let (doc, result) =
-            imported(&read(&dump(system, name), None).unwrap(), &Options::default(), true);
+    let notations = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
+    for ((system, _, _, [(name, _), ..]), notation) in
+        SYSTEMS.into_iter().flat_map(|s| notations.map(|n| (s, n)))
+    {
+        let options = Options { notation, ..Options::default() };
+        let (doc, result) = imported(&read(&dump(system, name), None).unwrap(), &options, true);
         let model = doc.model();
         model.check().unwrap();
         let view = model.view(result.diagram).unwrap();
@@ -97,7 +100,7 @@ fn the_imported_diagram_is_valid_and_readable() {
             .iter()
             .map(|&(a, b)| format!("{} / {}", named(a), named(b)))
             .collect();
-        assert_eq!(overlaps, Vec::<String>::new(), "{system}");
+        assert_eq!(overlaps, Vec::<String>::new(), "{system} {notation:?}");
         assert!(
             view.presentations()
                 .iter()

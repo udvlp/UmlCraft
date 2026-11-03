@@ -11,7 +11,10 @@
 //!    side is full. One that would cover a node, a line or a label moves to the next free
 //!    place. The parts of a composite attribute go on beyond it.
 //! 4. Lines are straight; several lines between the same two nodes get a waypoint each so
-//!    they do not lie on top of each other.
+//!    they do not lie on top of each other. A line that would run through another node (one
+//!    that skips a layer passes a node there) goes around it with one or two bends beside
+//!    it; a self-reference goes round the first corner of its node where it and its labels
+//!    keep clear of the others.
 //! 5. Nodes take the size their name needs and lie on the 10 px grid; the whole starts at
 //!    (20, 20). Notes and free texts stay where they are.
 
@@ -43,6 +46,8 @@ const COLUMN_CAPACITY: usize = 3;
 const PARALLEL_SPREAD: f32 = 60.0;
 /// Free room kept around what is placed.
 const CLEARANCE: f32 = 6.0;
+/// Between a node and a line led around it.
+const DETOUR_GAP: f32 = 20.0;
 /// The top left corner of the arranged diagram.
 const MARGIN: f32 = 20.0;
 
@@ -136,8 +141,10 @@ pub fn arrange(tx: &mut Tx<'_>, diagram: Id, measure: &dyn TextMeasure) -> Resul
     let used = used_sides(&g);
     let second = place(&g, &used);
     apply(&mut g, &second);
+    detour(&mut g);
     // Where the lines run and their labels lie follow from the scene of the placed core.
     write(tx, diagram, &g)?;
+    place_loops(tx, diagram, &mut g, measure)?;
     let core = scene::build(tx.model(), diagram, &Preview::default(), measure);
     // Labels give way to the attributes where they can; where one moved onto an attribute,
     // the attributes are placed again, clear of both its places.
@@ -427,6 +434,177 @@ fn apply(g: &mut Graph, corners: &[Point]) {
             }
         }
     }
+}
+
+/// Lines between core nodes that would run through another core node go around it: with one
+/// bend beside it or two along its side, whichever is shortest and clear of the other core
+/// nodes. A line that skips a layer of the layered layout passes a node there.
+fn detour(g: &mut Graph) {
+    let boxes: Vec<(usize, Rect)> = g.core.iter().map(|&i| (i, g.nodes[i].bounds)).collect();
+    for l in g.lines.iter_mut().filter(|l| l.core && l.ends[0] != l.ends[1]) {
+        let [s, t] = l.ends;
+        let others: Vec<Rect> =
+            boxes.iter().filter(|(i, _)| *i != s && *i != t).map(|(_, r)| *r).collect();
+        let (from, to) = (g.nodes[s].bounds.center(), g.nodes[t].bounds.center());
+        let path_of = |waypoints: &[Point]| -> Vec<Point> {
+            std::iter::once(from).chain(waypoints.iter().copied()).chain([to]).collect()
+        };
+        // Whether a segment runs through one of the other nodes, kept `by` away from them.
+        let blocked = |a: Point, b: Point, by: f32| -> Option<Rect> {
+            others.iter().find(|r| segment_hits(a, b, &inflate(r, by))).copied()
+        };
+        // A bend that spreads parallel lines and fell into another node moves out of it,
+        // sideways: to the side of the node's middle it lies on.
+        for p in &mut l.waypoints {
+            if let Some(r) = others.iter().find(|r| inside(*p, &inflate(r, DETOUR_GAP / 2.0))) {
+                let vertical = (to.y - from.y).abs() >= (to.x - from.x).abs();
+                let c = r.center();
+                if vertical {
+                    p.x = if p.x < c.x { r.x - DETOUR_GAP } else { r.x + r.width + DETOUR_GAP };
+                    p.x = snap(p.x);
+                } else {
+                    p.y = if p.y < c.y { r.y - DETOUR_GAP } else { r.y + r.height + DETOUR_GAP };
+                    p.y = snap(p.y);
+                }
+            }
+        }
+        // Several nodes in a row are passed one after the other.
+        for _ in 0..6 {
+            let path = path_of(&l.waypoints);
+            let Some((k, r)) = path
+                .windows(2)
+                .enumerate()
+                .find_map(|(k, w)| blocked(w[0], w[1], 0.0).map(|r| (k, r)))
+            else {
+                break;
+            };
+            let (a, b) = (path[k], path[k + 1]);
+            let (left, right) = (snap(r.x - DETOUR_GAP), snap(r.x + r.width + DETOUR_GAP));
+            let (top, bottom) = (snap(r.y - DETOUR_GAP), snap(r.y + r.height + DETOUR_GAP));
+            let (mid_x, mid_y) = (snap(r.x + r.width / 2.0), snap(r.y + r.height / 2.0));
+            // Beside the node: one bend at its middle, or two along the whole side.
+            let candidates: Vec<Vec<Point>> = if (b.y - a.y).abs() >= (b.x - a.x).abs() {
+                let (first, last) = if b.y > a.y { (top, bottom) } else { (bottom, top) };
+                [left, right]
+                    .into_iter()
+                    .flat_map(|x| {
+                        [
+                            vec![Point::new(x, mid_y)],
+                            vec![Point::new(x, first), Point::new(x, last)],
+                        ]
+                    })
+                    .collect()
+            } else {
+                let (first, last) = if b.x > a.x { (left, right) } else { (right, left) };
+                [top, bottom]
+                    .into_iter()
+                    .flat_map(|y| {
+                        [
+                            vec![Point::new(mid_x, y)],
+                            vec![Point::new(first, y), Point::new(last, y)],
+                        ]
+                    })
+                    .collect()
+            };
+            let length = |p: &[Point]| -> f32 {
+                p.windows(2).map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y)).sum()
+            };
+            // The new stretch from `a` through the bends to `b` keeps clear of `r`; of those,
+            // the one passing the fewest other nodes (the next round leads it around them),
+            // then the shortest.
+            let best = candidates
+                .into_iter()
+                .filter_map(|bends| {
+                    let stretch: Vec<Point> =
+                        std::iter::once(a).chain(bends.iter().copied()).chain([b]).collect();
+                    let near = |w: &[Point], q: &Rect| segment_hits(w[0], w[1], q);
+                    if stretch.windows(2).any(|w| near(w, &inflate(&r, DETOUR_GAP / 2.0))) {
+                        return None;
+                    }
+                    let passed = stretch
+                        .windows(2)
+                        .filter(|w| blocked(w[0], w[1], DETOUR_GAP / 2.0).is_some())
+                        .count();
+                    let mut waypoints = l.waypoints.clone();
+                    waypoints.splice(k..k, bends);
+                    Some((passed, length(&path_of(&waypoints)), waypoints))
+                })
+                .min_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)));
+            match best {
+                Some((_, _, waypoints)) => l.waypoints = waypoints,
+                None => break,
+            }
+        }
+    }
+}
+
+/// A line from a node to itself (a self-reference in IE and IDEF1X) goes round the first
+/// corner of its node, top right, top left, bottom right, bottom left, where it and its labels
+/// keep clear of the other core nodes; top right, as drawn by default, if none is.
+fn place_loops(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    g: &mut Graph,
+    measure: &dyn TextMeasure,
+) -> Result<()> {
+    let loops: Vec<usize> = (0..g.lines.len())
+        .filter(|&k| {
+            let l = &g.lines[k];
+            l.core && l.ends[0] == l.ends[1] && l.waypoints.is_empty()
+        })
+        .collect();
+    for k in loops {
+        let node = g.lines[k].ends[0];
+        let r = g.nodes[node].bounds;
+        let others: Vec<Rect> = g
+            .core
+            .iter()
+            .filter(|&&i| i != node)
+            .map(|&i| inflate(&g.nodes[i].bounds, CLEARANCE))
+            .collect();
+        let (left, right, top, bottom) = (r.x, r.x + r.width, r.y, r.y + r.height);
+        let corners = [
+            [(right + 30.0, top + 20.0), (right + 30.0, top - 30.0), (right - 20.0, top - 30.0)],
+            [(left - 30.0, top + 20.0), (left - 30.0, top - 30.0), (left + 20.0, top - 30.0)],
+            [
+                (right + 30.0, bottom - 20.0),
+                (right + 30.0, bottom + 30.0),
+                (right - 20.0, bottom + 30.0),
+            ],
+            [
+                (left - 30.0, bottom - 20.0),
+                (left - 30.0, bottom + 30.0),
+                (left + 20.0, bottom + 30.0),
+            ],
+        ];
+        let id = g.lines[k].id;
+        let mut chosen = Vec::new();
+        // The first corner is the one drawn without waypoints.
+        for (c, corner) in corners.into_iter().enumerate() {
+            let waypoints: Vec<Point> = if c == 0 {
+                Vec::new()
+            } else {
+                corner.iter().map(|&(x, y)| Point::new(x, y)).collect()
+            };
+            tx.set_route(diagram, id, waypoints.clone(), (None, None))?;
+            let scene = scene::build(tx.model(), diagram, &Preview::default(), measure);
+            let Some(edge) = scene.edges.iter().find(|e| e.id == id) else { break };
+            let mut rects: Vec<Rect> =
+                edge.labels.iter().map(|l| crate::labels::label_rect(l, measure)).collect();
+            let xs = edge.points.iter().map(|p| p.x);
+            let ys = edge.points.iter().map(|p| p.y);
+            let (x0, x1) = (xs.clone().fold(f32::INFINITY, f32::min), xs.fold(f32::MIN, f32::max));
+            let (y0, y1) = (ys.clone().fold(f32::INFINITY, f32::min), ys.fold(f32::MIN, f32::max));
+            rects.push(Rect::new(x0, y0, x1 - x0, y1 - y0));
+            if rects.iter().all(|a| others.iter().all(|o| !overlap(a, o))) {
+                chosen = waypoints;
+                break;
+            }
+        }
+        tx.set_route(diagram, id, chosen.clone(), (None, None))?;
+        g.lines[k].waypoints = chosen;
+    }
+    Ok(())
 }
 
 /// Which sides of each core node lines to other core nodes leave through.
@@ -778,6 +956,16 @@ pub fn overlaps(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> Vec<(I
                 out.push((n.id, e.id));
             }
         }
+        // No line runs through an entity, relationship or IS-A it does not join.
+        for n in scene.nodes.iter().filter(|n| !is_attribute(n.id) && element(n.id).is_some()) {
+            if ends.is_some_and(|(s, t)| s == n.id || t == n.id) {
+                continue;
+            }
+            let r = inflate(&n.rect, -1.0);
+            if e.points.windows(2).any(|w| segment_hits(w[0], w[1], &r)) {
+                out.push((n.id, e.id));
+            }
+        }
         labels.extend(e.labels.iter().map(|l| (e.id, crate::labels::label_rect(l, measure))));
     }
     for (k, (id, r)) in labels.iter().enumerate() {
@@ -799,7 +987,7 @@ pub fn overlaps(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> Vec<(I
 mod tests {
     use umlcraft_model::{
         Cardinality, DiagramKind, Document, ElementData, ElementKind, ErAttributeProps,
-        ErEntityProps, ErIsAProps, ErKey, ErRelationshipProps, Model, Rect, Tx,
+        ErEntityProps, ErIsAProps, ErKey, ErNotation, ErRelationshipProps, Model, Rect, Tx,
     };
 
     use super::*;
@@ -914,6 +1102,40 @@ mod tests {
         }
         d.attribute(ticket, "id", true);
         (d, kunde, ticket, bucht)
+    }
+
+    #[test]
+    fn ie_lines_that_skip_a_layer_go_around_the_tables_there() {
+        let mut d = Diagram::new();
+        d.edit(|tx, _, diagram| {
+            crate::er::set_notation(tx, diagram, ErNotation::Ie, &ApproxMeasure)
+        });
+        let (_, airport) = d.entity("Flughafen");
+        let (_, gate) = d.entity("Gate");
+        let (_, flight) = d.entity("Flug");
+        let relate = |d: &mut Diagram, line, parent, child| {
+            d.edit(|tx, _, diagram| crate::er::relate(tx, diagram, line, parent, child))
+        };
+        relate(&mut d, crate::er::IeLine::Identifying, airport, gate);
+        relate(&mut d, crate::er::IeLine::NonIdentifying, gate, flight);
+        // Start and destination: two lines past the gate, one on each side.
+        let start = relate(&mut d, crate::er::IeLine::NonIdentifying, airport, flight);
+        let destination = relate(&mut d, crate::er::IeLine::NonIdentifying, airport, flight);
+        d.arrange();
+        let y = |n: Id| d.bounds(n).center().y;
+        assert!(y(airport) < y(gate) && y(gate) < y(flight));
+        assert_eq!(d.overlaps(), []);
+        let view = d.doc.model().view(d.diagram).unwrap();
+        let bends = |edge: Id| match &view.get(edge).unwrap().shape {
+            Shape::Edge { waypoints, .. } => waypoints.clone(),
+            _ => Vec::new(),
+        };
+        let g = d.bounds(gate);
+        let (a, b) = (bends(start), bends(destination));
+        assert!(!a.is_empty() && !b.is_empty());
+        let left = |w: &[Point]| w.iter().all(|p| p.x < g.x);
+        let right = |w: &[Point]| w.iter().all(|p| p.x > g.x + g.width);
+        assert!((left(&a) && right(&b)) || (right(&a) && left(&b)), "{a:?} {b:?} {g:?}");
     }
 
     #[test]

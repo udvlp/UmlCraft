@@ -172,7 +172,7 @@ impl MainView {
             // Without a theme of its own, the window turns light or dark with the system.
             cx.observe_window_appearance(window, |this, window, cx| {
                 if this.settings.dark.is_none() {
-                    Theme::sync_system_appearance(Some(window), cx);
+                    apply_theme(None, window, cx);
                 }
             }),
         ];
@@ -2545,6 +2545,11 @@ fn apply_theme(dark: Option<bool>, window: &mut Window, cx: &mut App) {
             Theme::change(if dark { ThemeMode::Dark } else { ThemeMode::Light }, Some(window), cx)
         }
         None => Theme::sync_system_appearance(Some(window), cx),
+    }
+    // The dark theme draws the frames of inputs, unchecked radio buttons and checkboxes in its
+    // border color, neutral-800 on neutral-950, which hardly shows; a lighter grey does.
+    if cx.theme().is_dark() {
+        Theme::update(cx, |theme| theme.input = hsla(0.0, 0.0, 0.40, 1.0));
     }
 }
 

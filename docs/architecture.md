@@ -905,8 +905,16 @@ diagrams from SQL dumps.
   sides first and further out ring by ring; one that would cover a node, a line or a label
   slides along its side, moves out or takes the nearest free place around its owner, and
   when a label moved onto an attribute, the attributes are placed again. Lines are straight;
-  several lines between the same two nodes get a waypoint each. Everything ends on the 10 px
-  grid from (20, 20). `overlaps` lists what still covers what (the tests require none).
+  several lines between the same two nodes get a waypoint each. A line that would run
+  through another entity, relationship or IS-A (one that skips a layer passes a node there)
+  goes around it (`detour`): one bend beside the node or two along its side, the one passing
+  the fewest other nodes and then the shortest, node after node; a spreading waypoint that
+  fell into a node moves out to its nearer side, so parallel lines pass on both sides. A
+  self-reference in IE and IDEF1X goes round the first corner of its table (top right, top
+  left, bottom right, bottom left) where the loop and its labels keep clear of the other
+  nodes (`place_loops`). Everything ends on the 10 px grid from (20, 20). `overlaps` lists
+  what still covers what, lines through nodes included (the tests require none, the SQL
+  fixtures in all three notations).
 - **App.** The ribbon's diagram tab offers the palette (entity, weak and associative entity,
   the attribute kinds, relationship, identifying relationship, IS-A, the line, notes). The
   properties panel has the switches of each kind, the key, the database properties, and for
