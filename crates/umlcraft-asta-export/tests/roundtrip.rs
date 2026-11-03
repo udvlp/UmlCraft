@@ -285,6 +285,7 @@ fn sample() -> Document {
                 node: ActivityNodeKind::Object,
                 type_ref,
                 in_state: in_state.into(),
+                ..Default::default()
             });
             let object = tx.create(activity, ElementData::new(name, kind))?;
             tx.add_node(d, Some(object), Rect::new(x, 520.0, 100.0, 40.0))?;
@@ -617,6 +618,14 @@ fn skip(reason: &str) {
 
 /// Exports `model` and imports the result again.
 fn through_astah(model: &Model, name: &str) -> Option<Model> {
+    through_astah_reporting(model, name).map(|(model, _)| model)
+}
+
+/// The same, with the export's report of what Astah did not take.
+fn through_astah_reporting(
+    model: &Model,
+    name: &str,
+) -> Option<(Model, umlcraft_asta_export::Report)> {
     let Some(astah) = Astah::find() else {
         skip("no Astah installation with the API found");
         return None;
@@ -641,7 +650,7 @@ fn through_astah(model: &Model, name: &str) -> Option<Model> {
     imported.model.check().unwrap();
     assert!(report.problems.is_empty(), "{:#?}", report.problems);
     assert!(imported.skipped.is_empty(), "{:?}", imported.skipped);
-    Some(imported.model)
+    Some((imported.model, report))
 }
 
 /// Sequence diagrams by name: each lifeline's head x and each message's height, both relative
@@ -1259,4 +1268,564 @@ fn composite_structure_through_astah() {
         })
         .count();
     assert_eq!(connectors, 2);
+}
+
+/// The activity elements beyond actions and control nodes: signal, time and call behavior
+/// actions, pins, connectors, an activity parameter node and object node properties, made with
+/// the editor's tools.
+#[test]
+fn activity_elements_through_astah() {
+    use umlcraft_model::ObjectOrdering;
+    use umlcraft_notation::edit;
+    use umlcraft_notation::palette::{self, EdgeTool, NodeTool};
+    let (mut doc, ids) = order_system();
+    let root = doc.model().root();
+    let measure = ApproxMeasure;
+    let d = edit::apply(&mut doc, "diagram", &measure, |tx| {
+        let called = edit::create_diagram(tx, root, DiagramKind::Activity, "Pay")?;
+        let activity = tx.model().get(called).unwrap().owner().unwrap();
+        let (_, _) =
+            palette::create_node(tx, called, NodeTool::Action, Point::new(100.0, 100.0), "Charge")?;
+        let d = edit::create_diagram(tx, root, DiagramKind::Activity, "Checkout")?;
+        Ok::<_, umlcraft_model::ModelError>((d, activity))
+    });
+    let (d, pay) = d.unwrap();
+    let mut nodes = BTreeMap::new();
+    let mut add = |doc: &mut Document, tool: NodeTool, name: &str, x: f32, y: f32| {
+        let (element, node) = edit::apply(doc, "node", &measure, |tx| {
+            let (element, node) = palette::create_node(tx, d, tool, Point::new(x, y), name)?;
+            if tool.is_named() {
+                tx.rename(element, name)?;
+            }
+            Ok((element, node))
+        })
+        .unwrap();
+        nodes.insert(name.to_owned(), (element, node));
+        (element, node)
+    };
+    let (pick, pick_node) = add(&mut doc, NodeTool::Action, "Pick", 100.0, 100.0);
+    let pick_rect = doc.model().view(d).unwrap().get(pick_node).unwrap().bounds().unwrap();
+    add(&mut doc, NodeTool::InputPin, "order", pick_rect.x - 10.0, pick_rect.y + 2.0);
+    add(&mut doc, NodeTool::OutputPin, "items", pick_rect.right() - 5.0, pick_rect.y + 2.0);
+    add(&mut doc, NodeTool::ObjectNode, "cart", 300.0, 100.0);
+    add(&mut doc, NodeTool::SendSignal, "Notify", 300.0, 220.0);
+    add(&mut doc, NodeTool::ActivityConnector, "A", 340.0, 340.0);
+    add(&mut doc, NodeTool::ActivityConnector, "B", 540.0, 100.0);
+    add(&mut doc, NodeTool::AcceptEvent, "Paid", 500.0, 220.0);
+    add(&mut doc, NodeTool::AcceptTimeEvent, "Wait", 700.0, 220.0);
+    let (call, _) = add(&mut doc, NodeTool::CallBehavior, "Pay order", 650.0, 340.0);
+    add(&mut doc, NodeTool::ActivityParameter, "input", 0.0, 120.0);
+    edit::apply(&mut doc, "details", &measure, |tx| {
+        let mut set = |id: Id, f: &dyn Fn(&mut ActivityNodeProps)| {
+            tx.update(id, |data| {
+                if let ElementKind::ActivityNode(p) = &mut data.kind {
+                    f(p);
+                }
+            })
+        };
+        set(nodes["cart"].0, &|p| {
+            p.ordering = Some(ObjectOrdering::Fifo);
+            p.upper_bound = "3".into();
+            p.is_stream = true;
+        })?;
+        set(nodes["order"].0, &|p| {
+            p.type_ref = Some(TypeRef::Element(ids.order));
+            p.ordering = Some(ObjectOrdering::Lifo);
+        })?;
+        set(nodes["input"].0, &|p| p.type_ref = Some(TypeRef::Element(ids.order)))?;
+        set(call, &|p| p.behavior = Some(pay))?;
+        let node = |name: &str| nodes[name].1;
+        for (a, b) in [
+            ("items", "cart"),
+            ("cart", "Notify"),
+            ("Notify", "A"),
+            ("B", "Paid"),
+            ("Paid", "Wait"),
+            ("Wait", "Pay order"),
+            ("input", "order"),
+        ] {
+            palette::connect(tx, d, EdgeTool::Flow, node(a), node(b))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    // The diagram as UmlCraft draws it, to compare with what comes back.
+    let drawn = scene::build(doc.model(), d, &Preview::default(), &measure);
+    let pins_before: BTreeMap<String, u8> = ["order", "items"]
+        .iter()
+        .map(|&n| {
+            let pin = drawn.node(nodes[n].1).unwrap().rect;
+            let action = drawn.node(pick_node).unwrap().rect.inflate(7.5);
+            (n.to_owned(), umlcraft_notation::composite::side_on(&[action], pin.center()).unwrap())
+        })
+        .collect();
+    let _ = pick;
+
+    let Some(back) = through_astah(doc.model(), "activity-elements") else { return };
+    let n = |id: Id| name(&back, id);
+    let mut lines: Vec<String> = back
+        .elements()
+        .filter_map(|e| match e.kind() {
+            ElementKind::ActivityNode(p) if nodes.contains_key(e.name()) => {
+                let mut line = format!("{} {:?} in {}", e.name(), p.node, n(e.owner()?));
+                if let Some(t) = &p.type_ref {
+                    line += &format!(" : {}", type_text(&back, &Some(t.clone())));
+                }
+                for property in p.property_lines() {
+                    line += &format!(" {property}");
+                }
+                if let Some(b) = p.behavior {
+                    line += &format!(" calls {}", n(b));
+                }
+                Some(line)
+            }
+            _ => None,
+        })
+        .collect();
+    lines.sort();
+    pretty_assertions::assert_eq!(
+        lines,
+        [
+            "A Connector in Checkout",
+            "B Connector in Checkout",
+            "Notify SendSignal in Checkout",
+            "Paid AcceptEvent in Checkout",
+            "Pay order CallBehavior in Checkout calls Pay",
+            "Pick Action in Checkout",
+            "Wait AcceptTimeEvent in Checkout",
+            "cart Object in Checkout {ordering=FIFO} {upperBound=3} {stream}",
+            "input ActivityParameter in Checkout : Order",
+            "items OutputPin in Pick",
+            "order InputPin in Pick : Order {ordering=LIFO}",
+        ]
+    );
+    let flows = relationships(&back);
+    for flow in [
+        "flow \"\" items → cart []",
+        "flow \"\" cart → Notify []",
+        "flow \"\" Notify → A []",
+        "flow \"\" B → Paid []",
+        "flow \"\" Wait → Pay order []",
+        "flow \"\" input → order []",
+    ] {
+        assert!(flows.contains(flow), "{flow} not in {flows:#?}");
+    }
+
+    // Pins stay on their side of the action, the parameter on the frame.
+    let diagram =
+        back.elements().find(|e| e.name() == "Checkout" && e.kind().as_diagram().is_some());
+    let diagram = diagram.unwrap().id();
+    let scene = scene::build(&back, diagram, &Preview::default(), &measure);
+    let find = |name: &str| {
+        scene
+            .nodes
+            .iter()
+            .find(|node| node.element.is_some_and(|e| back.get(e).unwrap().name() == name))
+            .unwrap()
+    };
+    for (pin, side) in &pins_before {
+        let action = find("Pick").rect.inflate(7.5);
+        let at = find(pin).rect.center();
+        assert_eq!(umlcraft_notation::composite::side_on(&[action], at), Some(*side), "{pin}");
+    }
+    let frame = scene.nodes.iter().find(|node| node.element == Some(diagram)).unwrap().rect;
+    let parameter = find("input").rect.center();
+    assert!((parameter.x - frame.x).abs() < 1.0, "{parameter:?} on {frame:?}");
+}
+
+#[test]
+fn submachine_states_through_astah() {
+    use umlcraft_model::{PseudostateKind, StateProps};
+    use umlcraft_notation::edit;
+    use umlcraft_notation::palette::{self, EdgeTool, NodeTool};
+    let mut doc = Document::new(Model::new("Cars"));
+    let root = doc.model().root();
+    let measure = ApproxMeasure;
+    // The machine a submachine state stands for comes after it, so the export has to make its
+    // diagram first.
+    let (car, engine) = edit::apply(&mut doc, "diagrams", &measure, |tx| {
+        let car = edit::create_diagram(tx, root, DiagramKind::StateMachine, "Car")?;
+        let engine = edit::create_diagram(tx, root, DiagramKind::StateMachine, "Engine")?;
+        palette::create_node(tx, engine, NodeTool::State, Point::new(100.0, 100.0), "Idle")?;
+        Ok::<_, umlcraft_model::ModelError>((car, engine))
+    })
+    .unwrap();
+    let machine = doc.model().get(engine).unwrap().owner().unwrap();
+    let machine_name = doc.model().get(machine).unwrap().name().to_owned();
+    let mut nodes = BTreeMap::new();
+    let mut add = |doc: &mut Document, tool: NodeTool, name: &str, x: f32, y: f32| {
+        let made = edit::apply(doc, "node", &measure, |tx| {
+            let (element, node) = palette::create_node(tx, car, tool, Point::new(x, y), name)?;
+            tx.rename(element, name)?;
+            Ok((element, node))
+        })
+        .unwrap();
+        nodes.insert(name.to_owned(), made);
+        made
+    };
+    add(&mut doc, NodeTool::State, "Parked", 40.0, 100.0);
+    let (drive, drive_node) = add(&mut doc, NodeTool::SubmachineState, "Drive", 300.0, 100.0);
+    let r = doc.model().view(car).unwrap().get(drive_node).unwrap().bounds().unwrap();
+    add(&mut doc, NodeTool::EntryPoint, "start", r.x - 10.0, r.y + 10.0);
+    add(&mut doc, NodeTool::ExitPoint, "stop", r.right() - 10.0, r.y + 10.0);
+    add(&mut doc, NodeTool::StubState, "Halt", r.x + 10.0, r.bottom() - 30.0);
+    edit::apply(&mut doc, "details", &measure, |tx| {
+        tx.update(drive, |data| {
+            data.kind = ElementKind::State(StateProps {
+                entry: "start engine".into(),
+                submachine: Some(machine),
+                ..StateProps::default()
+            })
+        })?;
+        let node = |name: &str| nodes[name].1;
+        for (a, b) in [("Parked", "start"), ("stop", "Parked"), ("Parked", "Drive")] {
+            palette::connect(tx, car, EdgeTool::Transition, node(a), node(b))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let kinds: Vec<PseudostateKind> = ["start", "stop", "Halt"]
+        .iter()
+        .map(|n| match doc.model().get(nodes[*n].0).unwrap().kind() {
+            ElementKind::Pseudostate(p) => p.pseudostate,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [PseudostateKind::EntryPoint, PseudostateKind::ExitPoint, PseudostateKind::StubState]
+    );
+    doc.model().check().unwrap();
+
+    let Some((back, report)) = through_astah_reporting(doc.model(), "submachine-states") else {
+        return;
+    };
+    // The API makes submachine states, but no entry and exit points and no stub states; the
+    // transitions at them go too, with their lines.
+    let dropped: Vec<(&str, usize)> =
+        report.dropped.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(
+        dropped,
+        [
+            ("entryPoint", 1),
+            ("exitPoint", 1),
+            ("presentation", 2),
+            ("stubState", 1),
+            ("transition", 2)
+        ]
+    );
+    let drive = back.elements().find(|e| e.name() == "Drive").unwrap();
+    let ElementKind::State(p) = drive.kind() else { panic!("{:?}", drive.kind()) };
+    assert_eq!(p.entry, "start engine");
+    assert_eq!(p.submachine.map(|m| name(&back, m)), Some(machine_name));
+    assert!(
+        relationships(&back).iter().any(|r| r.contains("Parked → Drive")),
+        "{:#?}",
+        relationships(&back)
+    );
+    // It is drawn where it was, as a submachine state.
+    let diagram = back.elements().find(|e| e.name() == "Car" && e.kind().as_diagram().is_some());
+    let scene = scene::build(&back, diagram.unwrap().id(), &Preview::default(), &measure);
+    let node = scene.nodes.iter().find(|n| n.element == Some(drive.id())).unwrap();
+    assert!(
+        (node.rect.x - r.x).abs() < 1.0 && (node.rect.y - r.y).abs() < 1.0,
+        "{:?} {r:?}",
+        node.rect
+    );
+    assert!(matches!(node.figure, scene::Figure::State { submachine: Some(_), .. }));
+}
+
+#[test]
+fn state_invariants_and_terminations_through_astah() {
+    use umlcraft_model::{DurationConstraintProps, StateInvariantProps, TerminationProps};
+    use umlcraft_notation::edit;
+    use umlcraft_notation::palette::{self, EdgeTool, NodeTool};
+    use umlcraft_notation::sequence::Slot;
+    let mut doc = Document::new(Model::new("Shop"));
+    let root = doc.model().root();
+    let measure = ApproxMeasure;
+    let d = edit::apply(&mut doc, "diagram", &measure, |tx| {
+        edit::create_diagram(tx, root, DiagramKind::Sequence, "Timing")
+    })
+    .unwrap();
+    let interaction = doc.model().get(d).unwrap().owner().unwrap();
+    let lane = |doc: &mut Document, x: f32, name: &str| {
+        edit::apply(doc, "lifeline", &measure, |tx| {
+            let (element, node) =
+                palette::create_node(tx, d, NodeTool::Lifeline, Point::new(x, 40.0), name)?;
+            tx.rename(element, name)?;
+            Ok::<_, umlcraft_model::ModelError>(node)
+        })
+        .unwrap()
+    };
+    let (shop, store) = (lane(&mut doc, 40.0, "shop"), lane(&mut doc, 240.0, "store"));
+    let center =
+        |doc: &Document, lane: Id| match doc.model().view(d).unwrap().get(lane).unwrap().shape {
+            Shape::Lifeline { head, .. } => head.center().x,
+            ref other => panic!("{other:?}"),
+        };
+    // Each call answered, so that Astah takes the bars as they are.
+    let send = |doc: &mut Document, name: &str, y: f32| {
+        edit::apply(doc, "message", &measure, |tx| {
+            let slot = |y| Some(Slot { y, owner: interaction, index: 0 });
+            let p = palette::connect_message(tx, d, EdgeTool::Message, shop, store, slot(y))?;
+            let element = tx.model().view(d).unwrap().get(p).unwrap().element.unwrap();
+            tx.rename(element, name)?;
+            palette::connect_message(tx, d, EdgeTool::Reply, store, shop, slot(y + 40.0))?;
+            Ok::<_, umlcraft_model::ModelError>(p)
+        })
+        .unwrap()
+    };
+    let (check, save) = (send(&mut doc, "check", 120.0), send(&mut doc, "save", 220.0));
+    let at = Point::new(center(&doc, store), 300.0);
+    let shop_at = Point::new(center(&doc, shop), 100.0);
+    let (invariant, invariant_node) = edit::apply(&mut doc, "marks", &measure, |tx| {
+        let made = sequence_edit::create_on_lifeline(tx, d, false, at, "stock > 0")?;
+        sequence_edit::create_on_lifeline(tx, d, true, shop_at, "")?;
+        let duration = sequence_edit::constrain(tx, d, check, save)?;
+        let time = sequence_edit::constrain(tx, d, save, save)?;
+        for (p, text) in [(duration, "d..3*d"), (time, "t..t+3")] {
+            let element = tx.model().view(d).unwrap().get(p).unwrap().element.unwrap();
+            tx.rename(element, text)?;
+        }
+        Ok::<_, umlcraft_model::ModelError>(made)
+    })
+    .unwrap();
+    let before = doc.model().view(d).unwrap().get(invariant_node).unwrap().bounds().unwrap();
+    assert!(matches!(doc.model().get(invariant).unwrap().kind(), ElementKind::StateInvariant(_)));
+    let constraints = doc
+        .model()
+        .elements()
+        .filter(|e| {
+            matches!(e.kind(), ElementKind::DurationConstraint(DurationConstraintProps { .. }))
+        })
+        .count();
+    assert_eq!(constraints, 1);
+    doc.model().check().unwrap();
+
+    let Some((back, report)) = through_astah_reporting(doc.model(), "sequence-marks") else {
+        return;
+    };
+    // Astah's API makes state invariants and terminations, but no duration or time
+    // constraints.
+    let dropped: Vec<(&str, usize)> =
+        report.dropped.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(dropped, [("durationConstraint", 1), ("timeConstraint", 1)]);
+    let lifeline = |name: &str| {
+        back.elements()
+            .find(|e| e.name() == name && matches!(e.kind(), ElementKind::Lifeline(_)))
+            .unwrap()
+            .id()
+    };
+    let invariant = back
+        .elements()
+        .find(|e| matches!(e.kind(), ElementKind::StateInvariant(_)))
+        .expect("the state invariant");
+    assert_eq!(invariant.name(), "stock > 0");
+    assert_eq!(
+        invariant.kind(),
+        &ElementKind::StateInvariant(StateInvariantProps { lifeline: lifeline("store") })
+    );
+    let terminations: Vec<&ElementKind> = back
+        .elements()
+        .filter(|e| matches!(e.kind(), ElementKind::Termination(_)))
+        .map(|e| e.kind())
+        .collect();
+    assert_eq!(
+        terminations,
+        [&ElementKind::Termination(TerminationProps { lifeline: lifeline("shop") })]
+    );
+    // Both drawn where they were, relative to the heads.
+    let diagram = back.elements().find(|e| e.name() == "Timing" && e.kind().as_diagram().is_some());
+    let diagram = diagram.unwrap().id();
+    let view = back.view(diagram).unwrap();
+    let top = |model: &Model, d: Id| {
+        model
+            .view(d)
+            .unwrap()
+            .presentations()
+            .iter()
+            .filter_map(|p| match p.shape {
+                Shape::Lifeline { head, .. } => Some(head.y),
+                _ => None,
+            })
+            .fold(f32::MAX, f32::min)
+    };
+    let after = view.presentations_of(invariant.id()).next().unwrap().bounds().unwrap();
+    let (dy_before, dy_after) = (before.y - top(doc.model(), d), after.y - top(&back, diagram));
+    assert!((dy_before - dy_after).abs() < 1.0, "{dy_before} {dy_after} {before:?} {after:?}");
+    assert!((before.width - after.width).abs() < 1.0, "{before:?} {after:?}");
+    // The lifeline with the termination is not destroyed, and its cross ends it.
+    let cross = view
+        .presentations()
+        .iter()
+        .find(|p| {
+            p.element
+                .is_some_and(|e| matches!(back.get(e).unwrap().kind(), ElementKind::Termination(_)))
+        })
+        .and_then(|p| p.bounds())
+        .expect("the cross");
+    let shop_lane = sequence_edit::lane_of(view, lifeline("shop")).unwrap();
+    let Shape::Lifeline { head, length, destroyed } = view.get(shop_lane).unwrap().shape else {
+        panic!()
+    };
+    assert!(!destroyed);
+    assert!((cross.center().y - (head.bottom() + length)).abs() < 1.0, "{cross:?}");
+    // Tidying the import moves nothing.
+    let mut back = Document::new(back);
+    let model = back.model().clone();
+    back.edit("tidy", |tx| sequence_edit::tidy(tx, diagram)).unwrap();
+    let changed: Vec<(&Shape, &Shape)> = model
+        .view(diagram)
+        .unwrap()
+        .presentations()
+        .iter()
+        .zip(back.model().view(diagram).unwrap().presentations())
+        .map(|(a, b)| (&a.shape, &b.shape))
+        .filter(|(a, b)| a != b)
+        .collect();
+    assert!(changed.is_empty(), "{changed:#?}");
+}
+
+#[test]
+fn class_diagram_notations_through_astah() {
+    use umlcraft_model::SharedStyle;
+    use umlcraft_notation::edit;
+    use umlcraft_notation::palette::{self, EdgeTool, NodeTool};
+    let mut doc = Document::new(Model::new("School"));
+    let root = doc.model().root();
+    let measure = ApproxMeasure;
+    let d = edit::apply(&mut doc, "diagram", &measure, |tx| {
+        edit::create_diagram(tx, root, DiagramKind::Class, "Main")
+    })
+    .unwrap();
+    let node = |doc: &mut Document, tool, x: f32, y: f32, name: &str| {
+        edit::apply(doc, "node", &measure, |tx| {
+            let (element, node) = palette::create_node(tx, d, tool, Point::new(x, y), name)?;
+            tx.rename(element, name)?;
+            Ok::<_, umlcraft_model::ModelError>((element, node))
+        })
+        .unwrap()
+    };
+    let (student, n_student) = node(&mut doc, NodeTool::Class, 40.0, 40.0, "Student");
+    let (_, n_course) = node(&mut doc, NodeTool::Class, 400.0, 40.0, "Course");
+    let (_, n_person) = node(&mut doc, NodeTool::Class, 400.0, 300.0, "Person");
+    let (_, n_teacher) = node(&mut doc, NodeTool::Class, 300.0, 480.0, "Teacher");
+    let (_, n_pupil) = node(&mut doc, NodeTool::Class, 500.0, 480.0, "Pupil");
+    node(&mut doc, NodeTool::Boundary, 40.0, 640.0, "Screen");
+    let (_, n_rules) = node(&mut doc, NodeTool::Control, 200.0, 640.0, "Rules");
+    edit::apply(&mut doc, "details", &measure, |tx| {
+        let age = tx.create(student, ElementData::new("age", ElementKind::attribute(None)))?;
+        let enrol = tx.create(student, ElementData::new("enrol", ElementKind::operation(None)))?;
+        let enrolment = palette::connect(tx, d, EdgeTool::AssociationClass, n_student, n_course)?;
+        let teaches = palette::connect(tx, d, EdgeTool::Association, n_person, n_course)?;
+        let g1 = palette::connect(tx, d, EdgeTool::Generalization, n_teacher, n_person)?;
+        palette::connect(tx, d, EdgeTool::Generalization, n_pupil, n_person)?;
+        umlcraft_notation::shared::set_style(tx, d, g1, SharedStyle::Vertical)?;
+        let element = |tx: &umlcraft_model::Tx, p: Id| {
+            tx.model().view(d).unwrap().get(p).unwrap().element.unwrap()
+        };
+        let (enrolment, teaches, g1) =
+            (element(tx, enrolment), element(tx, teaches), element(tx, g1));
+        let class = match tx.model().get(enrolment).unwrap().kind() {
+            ElementKind::Association(a) => a.class.unwrap(),
+            other => panic!("{other:?}"),
+        };
+        tx.rename(class, "Enrolment")?;
+        tx.create(class, ElementData::new("since", ElementKind::attribute(None)))?;
+        for (id, constraints) in [
+            (age, vec!["age > 0", "age < 150"]),
+            (enrol, vec!["pre: open"]),
+            (class, vec!["ac c"]),
+            (teaches, vec!["xor"]),
+            (g1, vec!["complete"]),
+            (student, vec!["class c"]),
+        ] {
+            tx.update(id, |data| {
+                data.constraints = constraints.iter().map(|&c| c.into()).collect()
+            })?;
+        }
+        tx.update_presentation(d, n_rules, |p| p.style.iconic = false)?;
+        let teaches_edge = tx.model().shown_on(teaches)[0].1;
+        tx.update_presentation(d, teaches_edge, |p| p.style.hide_constraints = true)?;
+        tx.update_presentation(d, n_course, |p| p.style.hide_operation_constraints = true)?;
+        Ok::<_, umlcraft_model::ModelError>(())
+    })
+    .unwrap();
+    let Some((back, report)) = through_astah_reporting(doc.model(), "class-notations") else {
+        return;
+    };
+    // Astah's API cannot share generalizations' triangles: the lines keep their course.
+    assert_eq!(report.dropped.get("sharedGeneralization"), Some(&2), "{:?}", report.dropped);
+    assert_eq!(report.dropped.len(), 1, "{:?}", report.dropped);
+
+    let find = |name: &str| back.elements().find(|e| e.name() == name).unwrap();
+    let constraints = |name: &str| find(name).data().constraints.clone();
+    assert_eq!(constraints("age"), ["age > 0", "age < 150"]);
+    assert_eq!(constraints("enrol"), ["pre: open"]);
+    assert_eq!(constraints("Enrolment"), ["ac c"]);
+    assert_eq!(constraints("Student"), ["class c"]);
+    let association_class = back
+        .elements()
+        .find_map(|e| match e.kind() {
+            ElementKind::Association(a) if a.class.is_some() => Some((e, a.clone())),
+            _ => None,
+        })
+        .expect("an association class");
+    let class = back.get(association_class.1.class.unwrap()).unwrap();
+    assert_eq!(class.name(), "Enrolment");
+    let members: Vec<String> = back.children(class.id()).iter().map(|&c| name(&back, c)).collect();
+    assert_eq!(members, ["since"]);
+    let ends: Vec<String> =
+        association_class.1.ends.iter().map(|e| name(&back, e.participant)).collect();
+    assert_eq!(ends, ["Student", "Course"]);
+    let other = back
+        .elements()
+        .find(|e| {
+            matches!(e.kind(), ElementKind::Association(a) if a.class.is_none())
+                && e.data().constraints == ["xor"]
+        })
+        .expect("the association with its constraint");
+    let generalization = back
+        .elements()
+        .find(|e| {
+            matches!(e.kind(), ElementKind::Generalization(_)) && !e.data().constraints.is_empty()
+        })
+        .unwrap();
+    assert_eq!(generalization.data().constraints, ["complete"]);
+
+    // The class box and the line, and the dashed line between them drawn from those.
+    let diagram =
+        back.elements().find(|e| e.kind().as_diagram() == Some(DiagramKind::Class)).unwrap();
+    let view = back.view(diagram.id()).unwrap();
+    let style_of = |id: Id| {
+        let (_, p) = back.shown_on(id)[0];
+        view.get(p).unwrap().style.clone()
+    };
+    assert_eq!(back.shown_on(class.id()).len(), 1);
+    assert_eq!(back.shown_on(association_class.0.id()).len(), 1);
+    assert!(style_of(other.id()).hide_constraints);
+    assert!(style_of(find("Course").id()).hide_operation_constraints);
+    assert!(style_of(find("Screen").id()).iconic);
+    assert!(!style_of(find("Rules").id()).iconic);
+    assert_eq!(find("Rules").data().stereotypes, ["control"]);
+    // The generalizations still run over one common line.
+    let commons: Vec<f32> = back
+        .elements()
+        .filter(|e| matches!(e.kind(), ElementKind::Generalization(_)))
+        .map(|e| match &view.get(back.shown_on(e.id())[0].1).unwrap().shape {
+            Shape::Edge { waypoints, .. } => {
+                assert_eq!(waypoints.len(), 2, "{waypoints:?}");
+                assert!((waypoints[0].y - waypoints[1].y).abs() < 0.5, "{waypoints:?}");
+                waypoints[0].y
+            }
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(commons.len(), 2);
+    assert!((commons[0] - commons[1]).abs() < 0.5, "{commons:?}");
+    let scene = scene::build(&back, diagram.id(), &Preview::default(), &ApproxMeasure);
+    let dashed =
+        scene.edges.iter().filter(|e| e.line == scene::LineStyle::ShortDashed && e.fixed).count();
+    assert_eq!(dashed, 1, "the dashed line to the association class");
 }

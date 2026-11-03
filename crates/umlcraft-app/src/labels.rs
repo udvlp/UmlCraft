@@ -10,7 +10,9 @@ pub fn kind_label(e: &Element) -> String {
     let key = match e.kind() {
         ElementKind::ActivityNode(p) => NodeTool::for_activity_node(p.node).key(),
         ElementKind::Pseudostate(p) => NodeTool::for_pseudostate(p.pseudostate).key(),
+        ElementKind::State(p) if p.submachine.is_some() => NodeTool::SubmachineState.key(),
         ElementKind::Instance(p) => NodeTool::for_instance(p.instance).key(),
+        ElementKind::Association(p) if p.class.is_some() => "associationClass",
         _ if umlcraft_notation::palette::is_subsystem(e) => NodeTool::Subsystem.key(),
         kind => kind.type_name(),
     };

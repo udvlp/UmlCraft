@@ -59,6 +59,11 @@ pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
             composite::PART_OUTSIDE => t!("error.part_outside"),
             composite::PORT_OUTSIDE => t!("error.port_outside"),
             composite::PORT_ON_UNTYPED_PART => t!("error.port_on_untyped_part"),
+            umlcraft_notation::activity::PIN_OUTSIDE => t!("error.pin_outside"),
+            umlcraft_notation::state_edit::STUB_OUTSIDE => t!("error.stub_outside"),
+            umlcraft_notation::sequence_edit::NOT_ON_LIFELINE => t!("error.not_on_lifeline"),
+            umlcraft_notation::sequence_edit::LIFELINE_ENDED => t!("error.lifeline_ended"),
+            umlcraft_notation::sequence_edit::NOT_ON_MESSAGE => t!("error.not_on_message"),
             _ => t!("error.invalid", detail = detail),
         },
     }

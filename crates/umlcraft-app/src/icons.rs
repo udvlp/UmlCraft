@@ -4,9 +4,7 @@
 use std::borrow::Cow;
 
 use gpui_kit::{AssetSource, Result, SharedString};
-use umlcraft_model::{
-    ActivityNodeKind, DiagramKind, ElementKind, InstanceKind, MessageSort, PseudostateKind,
-};
+use umlcraft_model::{DiagramKind, ElementKind, InstanceKind, MessageSort};
 use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
 
 #[derive(rust_embed::RustEmbed)]
@@ -129,30 +127,17 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
         }),
         ElementKind::CombinedFragment(_) => node(N::CombinedFragment),
         ElementKind::InteractionUse(_) => node(N::InteractionUse),
-        ElementKind::ActivityNode(p) => node(match p.node {
-            ActivityNodeKind::Action => N::Action,
-            ActivityNodeKind::Initial => N::InitialNode,
-            ActivityNodeKind::ActivityFinal => N::ActivityFinal,
-            ActivityNodeKind::FlowFinal => N::FlowFinal,
-            ActivityNodeKind::Decision => N::Decision,
-            ActivityNodeKind::Merge => N::Merge,
-            ActivityNodeKind::Fork => N::Fork,
-            ActivityNodeKind::Join => N::Join,
-            ActivityNodeKind::Object => N::ObjectNode,
-        }),
+        ElementKind::StateInvariant(_) => node(N::StateInvariant),
+        ElementKind::Termination(_) => node(N::Termination),
+        ElementKind::DurationConstraint(_) => edge(E::DurationConstraint),
+        ElementKind::TimeConstraint(_) => edge(E::TimeConstraint),
+        ElementKind::ActivityNode(p) => node(NodeTool::for_activity_node(p.node)),
         ElementKind::ActivityEdge(_) => edge(E::Flow),
         ElementKind::Partition => node(N::Partition),
+        ElementKind::State(p) if p.submachine.is_some() => node(N::SubmachineState),
         ElementKind::State(_) => node(N::State),
         ElementKind::FinalState => node(N::FinalState),
-        ElementKind::Pseudostate(p) => node(match p.pseudostate {
-            PseudostateKind::Initial => N::InitialPseudostate,
-            PseudostateKind::Choice => N::Choice,
-            PseudostateKind::Junction => N::Junction,
-            PseudostateKind::Fork => N::ForkPseudostate,
-            PseudostateKind::Join => N::JoinPseudostate,
-            PseudostateKind::ShallowHistory => N::ShallowHistory,
-            PseudostateKind::DeepHistory => N::DeepHistory,
-        }),
+        ElementKind::Pseudostate(p) => node(NodeTool::for_pseudostate(p.pseudostate)),
         ElementKind::Transition(_) | ElementKind::InternalTransition(_) => edge(E::Transition),
         ElementKind::Association(_) => edge(E::Association),
         ElementKind::Link(_) => edge(E::Link),

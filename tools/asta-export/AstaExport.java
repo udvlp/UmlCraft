@@ -41,8 +41,11 @@ import com.change_vision.jude.api.inf.editor.TransactionManager;
 import com.change_vision.jude.api.inf.editor.UseCaseDiagramEditor;
 import com.change_vision.jude.api.inf.editor.UseCaseModelEditor;
 import com.change_vision.jude.api.inf.exception.InvalidEditingException;
+import com.change_vision.jude.api.inf.model.IAction;
+import com.change_vision.jude.api.inf.model.IActivity;
 import com.change_vision.jude.api.inf.model.IActivityDiagram;
 import com.change_vision.jude.api.inf.model.IAssociation;
+import com.change_vision.jude.api.inf.model.IAssociationClass;
 import com.change_vision.jude.api.inf.model.IAttribute;
 import com.change_vision.jude.api.inf.model.IClass;
 import com.change_vision.jude.api.inf.model.IClassifierTemplateParameter;
@@ -170,6 +173,9 @@ public final class AstaExport {
     private final Map<String, ITemplateBinding> bindings = new HashMap<>();
     private final List<String> features = new ArrayList<>();
     private final List<String> relationships = new ArrayList<>();
+    /// The class of each association class → its association. Astah has one element for both,
+    /// created once the classes at its ends exist.
+    private final Map<String, String> associationClasses = new LinkedHashMap<>();
     private final List<String> diagrams = new ArrayList<>();
     private final Set<String> shownComments = new HashSet<>();
     private final Set<String> shownBoundaries = new HashSet<>();
@@ -181,6 +187,13 @@ public final class AstaExport {
     private final Map<String, ISequenceDiagram> sequenceDiagrams = new HashMap<>();
     /// Interaction uses and the UmlCraft interaction they refer to, set once all diagrams exist.
     private final Map<IInteractionUse, String> references = new LinkedHashMap<>();
+    /// UmlCraft activity → the Astah activity its diagram brought along.
+    private final Map<String, IActivity> activities = new HashMap<>();
+    /// Call behavior actions and the UmlCraft activity they call, set once all diagrams exist.
+    private final Map<IAction, String> calls = new LinkedHashMap<>();
+    /// UmlCraft state machine → the Astah diagram that brought it along. Submachine states
+    /// refer to it when they are created, so the diagrams of machines go first.
+    private final Map<String, IStateMachineDiagram> machineDiagrams = new HashMap<>();
     private final TreeMap<String, Integer> dropped = new TreeMap<>();
     private final List<String> problems = new ArrayList<>();
 
@@ -196,6 +209,9 @@ public final class AstaExport {
             elements.put(id, element);
             for (Object child : list(element.get("children"))) {
                 owners.put((String) child, id);
+            }
+            if ("association".equals(type(element)) && element.get("class") instanceof String c) {
+                associationClasses.put(c, id);
             }
         }
         Map<String, List<Map<String, Object>>> v = (Map<String, List<Map<String, Object>>>) file.get("views");
@@ -255,6 +271,9 @@ public final class AstaExport {
         created.put(root, project);
 
         structure(root);
+        for (String id : associationClasses.keySet()) {
+            attempt(id, () -> associationClass(id));
+        }
         // Before the features, whose types may name them.
         for (String id : templateParameters) {
             attempt(id, () -> templateParameter(id));
@@ -276,8 +295,22 @@ public final class AstaExport {
                 return null;
             });
         }
-        for (String id : diagrams) {
+        for (String id : submachinesFirst(diagrams)) {
             attempt(id, () -> diagram(id));
+        }
+        // Call behavior actions call activities, which exist once their diagrams do.
+        for (Map.Entry<IAction, String> c : calls.entrySet()) {
+            IActivity target = activities.get(c.getValue());
+            if (target == null) {
+                drop("calledActivity");
+                continue;
+            }
+            try {
+                c.getKey().setCallingActivity(target);
+            } catch (Exception x) {
+                drop("calledActivity");
+                problem("call behavior action \"" + c.getKey().getName() + "\"", x);
+            }
         }
         // Astah's interaction uses refer to sequence diagrams.
         for (Map.Entry<IInteractionUse, String> r : references.entrySet()) {
@@ -326,6 +359,10 @@ public final class AstaExport {
         for (String child : children(id)) {
             Map<String, Object> e = elements.get(child);
             String type = type(e);
+            // An association class comes with its association (see `associationClass`).
+            if ("class".equals(type) && associationClasses.containsKey(child)) {
+                continue;
+            }
             switch (type) {
                 case "package", "class", "interface", "enumeration", "dataType", "actor", "useCase",
                         "extensionPoint", "enumerationLiteral", "component", "artifact", "node" -> {
@@ -418,6 +455,33 @@ public final class AstaExport {
             drop("nestedComponent");
         }
         common(id, (IElement) made, "package".equals(type) ? Set.of("subsystem") : Set.of());
+        return made;
+    }
+
+    /// An association class: Astah makes the class and its association in one, between the
+    /// classes at the association's ends. Its features and nested elements follow as usual; the
+    /// ends get their details with the association's other relationships.
+    private Object associationClass(String id) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        Map<String, Object> association = elements.get(associationClasses.get(id));
+        List<Object> ends = list(association.get("ends"));
+        Map<String, Object> end0 = (Map<String, Object>) ends.get(0);
+        Map<String, Object> end1 = (Map<String, Object>) ends.get(1);
+        IClass a = classifier(end0.get("participant"));
+        IClass b = classifier(end1.get("participant"));
+        IAssociationClass made = (IAssociationClass) named(id,
+            n -> basic.createAssociationClass(a, b, n, text(end0, "role"), text(end1, "role")));
+        // Astah puts it where it likes (next to its first end); UmlCraft's owner is lost.
+        Object owner = created.get(owners.get(id));
+        if (owner != null && made.getOwner() != owner) {
+            drop("associationClassOwner");
+        }
+        made.setAbstract(flag(e, "isAbstract"));
+        made.setLeaf(flag(e, "isLeaf"));
+        made.setActive(flag(e, "isActive"));
+        common(id, made, Set.of());
+        created.put(id, made);
+        structure(id);
         return made;
     }
 
@@ -651,14 +715,32 @@ public final class AstaExport {
                 Map<String, Object> end1 = (Map<String, Object>) ends.get(1);
                 IClass a = classifier(end0.get("participant"));
                 IClass b = classifier(end1.get("participant"));
-                IAssociation association =
-                    basic.createAssociation(a, b, name, text(end0, "role"), text(end1, "role"));
+                // An association class exists already, with its class; its name, stereotypes
+                // and the rest are the class's, the association adds only its constraints.
+                IAssociationClass associationClass = null;
+                if (e.get("class") instanceof String c) {
+                    if (!(created.get(c) instanceof IAssociationClass ac)) {
+                        throw new IllegalStateException("association class " + c + " was not exported");
+                    }
+                    associationClass = ac;
+                    if (!name.isEmpty() || !list(e.get("stereotypes")).isEmpty()
+                            || !list(e.get("taggedValues")).isEmpty() || !text(e, "documentation").isEmpty()) {
+                        drop("associationClassDetails");
+                    }
+                }
+                IAssociation association = associationClass != null ? associationClass
+                    : basic.createAssociation(a, b, name, text(end0, "role"), text(end1, "role"));
                 IAttribute[] members = association.getMemberEnds();
                 boolean swapped = a != b && members[0].getType() != a;
                 IAttribute first = swapped ? members[1] : members[0];
                 IAttribute second = swapped ? members[0] : members[1];
                 end(first, second, end0);
                 end(second, first, end1);
+                if (associationClass != null) {
+                    constraints(id, associationClass);
+                    created.put(id, associationClass);
+                    return;
+                }
                 made = association;
             }
             case "generalization" -> made =
@@ -862,6 +944,7 @@ public final class AstaExport {
                     d.getActivity().setName(activityName);
                 }
                 common(activity, d.getActivity(), Set.of());
+                activities.put(activity, d.getActivity());
                 frame(id, d);
                 activityDiagram(id, activity, ad);
                 diagram = d;
@@ -879,6 +962,7 @@ public final class AstaExport {
                     d.getStateMachine().setName(machineName);
                 }
                 common(machine, d.getStateMachine(), Set.of());
+                machineDiagrams.put(machine, d);
                 frame(id, d);
                 stateDiagram(id, machine, sm);
                 diagram = d;
@@ -980,6 +1064,10 @@ public final class AstaExport {
                 continue;
             } else if ("instance".equals(type) && editor instanceof ClassDiagramEditor cd) {
                 node = (INodePresentation) attempt(element, () -> instance(cd, element, at));
+            } else if (associationClasses.containsKey(element) && editor instanceof ClassDiagramEditor cd
+                    && associationLine(diagram, element, shown) != null) {
+                // Drawn with its association's line, once both ends are there.
+                continue;
             } else if (created.get(element) instanceof IElement model
                     && !(model instanceof IAttribute) && !(model instanceof IOperation)) {
                 node = (INodePresentation) attempt(element, () -> editor.createNodePresentation(model, at));
@@ -989,26 +1077,95 @@ public final class AstaExport {
             if (node == null) {
                 continue;
             }
-            // The shape stands; a failure in its looks costs only them, not the diagram.
-            INodePresentation shape = node;
-            attempt(element, () -> {
-                // Switching the notation resets the size, so the style goes first.
-                style(shape, p, type);
-                // Instances get their place when they are created and cannot be moved afterwards.
-                if (!"instance".equals(type)) {
-                    shape.setLocation(at);
-                }
-                resize(shape, num(r, "width"), num(r, "height"));
-                // Boxes sized by their content stay so in Astah, which sizes them by the same rule.
-                if (p.get("style") instanceof Map<?, ?> s && Boolean.TRUE.equals(s.get("autoSize"))
-                        && shape.getProperties().containsKey("auto_resize")) {
-                    shape.setProperty("auto_resize", "true");
-                }
-                return null;
-            });
+            decorate(diagram, node, p, type);
             shown.put((String) p.get("id"), node);
         }
+        if (editor instanceof ClassDiagramEditor cd) {
+            associationClassShapes(cd, diagram, presentations, shown);
+        }
         edges(editor, diagram, presentations, shown);
+    }
+
+    /// The looks, place and size of a node just created. The shape stands; a failure in its
+    /// looks costs only them, not the diagram.
+    private void decorate(String diagram, INodePresentation shape, Map<String, Object> p, String type) {
+        Map<String, Object> r = rect(diagram, p);
+        attempt((String) p.get("element"), () -> {
+            // Switching the notation resets the size, so the style goes first.
+            style(shape, p, type);
+            // Instances get their place when they are created and cannot be moved afterwards.
+            if (!"instance".equals(type)) {
+                shape.setLocation(new Point2D.Double(num(r, "x"), num(r, "y")));
+            }
+            resize(shape, num(r, "width"), num(r, "height"));
+            // Boxes sized by their content stay so in Astah, which sizes them by the same rule.
+            if (p.get("style") instanceof Map<?, ?> s && Boolean.TRUE.equals(s.get("autoSize"))
+                    && shape.getProperties().containsKey("auto_resize")) {
+                shape.setProperty("auto_resize", "true");
+            }
+            return null;
+        });
+    }
+
+    /// The line of the association of an association class on the diagram, if both its ends
+    /// are drawn.
+    private Map<String, Object> associationLine(String diagram, String associationClass,
+            Map<String, IPresentation> shown) {
+        String association = associationClasses.get(associationClass);
+        Set<String> nodes = new HashSet<>();
+        for (Map<String, Object> p : view(diagram)) {
+            if ("node".equals(p.get("shape"))) {
+                nodes.add((String) p.get("id"));
+            }
+        }
+        for (Map<String, Object> p : view(diagram)) {
+            if ("edge".equals(p.get("shape")) && association.equals(p.get("element"))
+                    && nodes.contains(p.get("source")) && nodes.contains(p.get("target"))) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /// Association classes and their lines: Astah draws the box, the line and the dashed line
+    /// between them in one.
+    private void associationClassShapes(ClassDiagramEditor editor, String diagram,
+            List<Map<String, Object>> presentations, Map<String, IPresentation> shown) {
+        for (Map<String, Object> p : presentations) {
+            if (!"node".equals(p.get("shape")) || !(p.get("element") instanceof String element)
+                    || !associationClasses.containsKey(element) || shown.containsKey(p.get("id"))) {
+                continue;
+            }
+            Map<String, Object> line = associationLine(diagram, element, shown);
+            if (line == null || shown.containsKey(line.get("id"))) {
+                continue;
+            }
+            IPresentation source = shown.get(line.get("source"));
+            IPresentation target = shown.get(line.get("target"));
+            if (!(created.get(element) instanceof IAssociationClass model)
+                    || !(source instanceof INodePresentation s) || !(target instanceof INodePresentation t)) {
+                drop("presentation");
+                continue;
+            }
+            IPresentation[] made = (IPresentation[]) attempt(element,
+                () -> editor.createAssociationClassPresentation(model, s, t));
+            if (made == null) {
+                continue;
+            }
+            // The API hands back the box and the association's line.
+            for (IPresentation part : made) {
+                if (part instanceof INodePresentation node && !shown.containsKey(p.get("id"))) {
+                    decorate(diagram, node, p, "class");
+                    shown.put((String) p.get("id"), node);
+                } else if (part instanceof ILinkPresentation link && !shown.containsKey(line.get("id"))) {
+                    attempt(element, () -> {
+                        lineDetails(link, s, t, diagram, line);
+                        return null;
+                    });
+                    shown.put((String) line.get("id"), link);
+                }
+            }
+        }
     }
 
     // ----- Composite structure diagrams -------------------------------------------------------
@@ -1235,35 +1392,59 @@ public final class AstaExport {
         Map<String, IPresentation> shown = new HashMap<>();
         List<Map<String, Object>> presentations = view(diagram);
         partitions(diagram, activity, null, editor, presentations, shown);
-        for (Map<String, Object> p : presentations) {
-            if (!"node".equals(p.get("shape")) || !(p.get("element") instanceof String element)
-                    || created.containsKey(element) && !"comment".equals(type(elements.get(element)))) {
-                continue;
+        // Pins after the actions they sit on.
+        for (boolean pins : new boolean[] {false, true}) {
+            for (Map<String, Object> p : presentations) {
+                if (!"node".equals(p.get("shape")) || !(p.get("element") instanceof String element)
+                        || created.containsKey(element) && !"comment".equals(type(elements.get(element)))
+                        || isPin(elements.get(element)) != pins) {
+                    continue;
+                }
+                Map<String, Object> r = rect(diagram, p);
+                Point2D at = new Point2D.Double(num(r, "x"), num(r, "y"));
+                Map<String, Object> e = elements.get(element);
+                INodePresentation node;
+                if ("comment".equals(type(e))) {
+                    node = note(editor, element, at);
+                } else if (pins) {
+                    INodePresentation action = actionOf(element, presentations, shown);
+                    if (action == null) {
+                        drop("pin");
+                        continue;
+                    }
+                    node = (INodePresentation) attempt(element, () -> pin(editor, element, action, at));
+                } else if ("activityNode".equals(type(e))) {
+                    node = (INodePresentation) attempt(element, () -> activityNode(editor, element, at));
+                } else {
+                    continue;
+                }
+                if (node == null) {
+                    continue;
+                }
+                try {
+                    node.setLocation(at);
+                } catch (InvalidEditingException x) {
+                    drop("position");
+                }
+                // Astah sizes pins and connectors itself.
+                if (!pins && !"connector".equals(text(e, "node"))) {
+                    resize(node, num(r, "width"), num(r, "height"));
+                }
+                fill(node, p);
+                shown.put((String) p.get("id"), node);
             }
-            Map<String, Object> r = rect(diagram, p);
-            Point2D at = new Point2D.Double(num(r, "x"), num(r, "y"));
-            Map<String, Object> e = elements.get(element);
-            INodePresentation node;
-            if ("comment".equals(type(e))) {
-                node = note(editor, element, at);
-            } else if ("activityNode".equals(type(e))) {
-                node = (INodePresentation) attempt(element, () -> activityNode(editor, element, at));
-            } else {
-                continue;
-            }
-            if (node == null) {
-                continue;
-            }
-            node.setLocation(at);
-            resize(node, num(r, "width"), num(r, "height"));
-            fill(node, p);
-            shown.put((String) p.get("id"), node);
         }
         edges(editor, diagram, presentations, shown);
         for (String child : children(activity)) {
             String type = type(elements.get(child));
             if (!created.containsKey(child) && !"diagram".equals(type)) {
                 drop(type);
+            }
+            // Pins not shown with their action.
+            for (String pin : children(child)) {
+                if (!created.containsKey(pin) && isPin(elements.get(pin))) {
+                    drop("pin");
+                }
             }
         }
     }
@@ -1345,10 +1526,98 @@ public final class AstaExport {
         }
     }
 
+    private static boolean isPin(Map<String, Object> e) {
+        return e != null && "activityNode".equals(type(e))
+            && ("inputPin".equals(text(e, "node")) || "outputPin".equals(text(e, "node")));
+    }
+
+    /// The node of the action the pin `id` belongs to on this diagram, the one nearest the pin.
+    private INodePresentation actionOf(String id, List<Map<String, Object>> presentations,
+            Map<String, IPresentation> shown) {
+        String action = owners.get(id);
+        for (Map<String, Object> p : presentations) {
+            if (action != null && action.equals(p.get("element"))
+                    && shown.get(p.get("id")) instanceof INodePresentation node) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    /// A pin on `action`, with the object node's type and properties.
+    private INodePresentation pin(ActivityDiagramEditor editor, String id, INodePresentation action, Point2D at)
+            throws Exception {
+        Map<String, Object> e = elements.get(id);
+        IClass base = objectType(e);
+        boolean input = "inputPin".equals(text(e, "node"));
+        INodePresentation pin =
+            (INodePresentation) named(id, n -> editor.createPin(n, base, input, action, at));
+        objectProperties(e, (IObjectNode) pin.getModel());
+        created.put(id, pin.getModel());
+        common(id, (IElement) pin.getModel(), Set.of());
+        return pin;
+    }
+
+    /// The class an object node, pin or activity parameter is typed by; another type is
+    /// reported, as Astah types them by classes only.
+    private IClass objectType(Map<String, Object> e) {
+        Object t = e.get("typeRef") == null ? null : type(e.get("typeRef"));
+        IClass base = t instanceof IClass c ? c : null;
+        if (t != null && base == null) {
+            drop("objectNodeType");
+        }
+        return base;
+    }
+
+    /// State, ordering, upper bound and stream of an object node, pin or activity parameter.
+    private void objectProperties(Map<String, Object> e, IObjectNode node) throws InvalidEditingException {
+        if (!text(e, "inState").isEmpty()) {
+            node.setInState(text(e, "inState"));
+        }
+        // UmlCraft's names of the orderings and Astah's.
+        String ordering = switch (text(e, "ordering")) {
+            case "unordered" -> "unordered";
+            case "ordered" -> "ordered";
+            case "lifo" -> "LIFO";
+            case "fifo" -> "FIFO";
+            default -> null;
+        };
+        if (ordering != null) {
+            node.setOrdering(ordering);
+        }
+        if (!text(e, "upperBound").isEmpty()) {
+            node.setUpperBound(text(e, "upperBound"));
+        }
+        if (flag(e, "isStream")) {
+            node.setStream("stream");
+        }
+    }
+
     private INodePresentation activityNode(ActivityDiagramEditor editor, String id, Point2D at) throws Exception {
         Map<String, Object> e = elements.get(id);
         INodePresentation node = switch (text(e, "node")) {
             case "", "action" -> (INodePresentation) named(id, n -> editor.createAction(n, at));
+            case "sendSignal" -> (INodePresentation) named(id, n -> editor.createSendSignalAction(n, at));
+            case "acceptEvent" -> (INodePresentation) named(id, n -> editor.createAcceptEventAction(n, at));
+            case "acceptTimeEvent" ->
+                (INodePresentation) named(id, n -> editor.createAcceptTimeEventAction(n, at));
+            case "callBehavior" -> {
+                // The activity called is set once every activity exists.
+                INodePresentation call =
+                    (INodePresentation) named(id, n -> editor.createCallBehaviorAction(n, null, at));
+                if (e.get("behavior") instanceof String called) {
+                    calls.put((IAction) call.getModel(), called);
+                }
+                yield call;
+            }
+            case "connector" -> (INodePresentation) named(id, n -> editor.createConnector(n, at));
+            case "activityParameter" -> {
+                IClass base = objectType(e);
+                INodePresentation parameter =
+                    (INodePresentation) named(id, n -> editor.createActivityParameterNode(n, base, at));
+                objectProperties(e, (IObjectNode) parameter.getModel());
+                yield parameter;
+            }
             case "initial" -> editor.createInitialNode(controlName(e, "InitialNode"), at);
             case "activityFinal" -> editor.createFinalNode(controlName(e, "ActivityFinal"), at);
             case "flowFinal" -> editor.createFlowFinalNode(controlName(e, "FlowFinal"), at);
@@ -1361,16 +1630,10 @@ public final class AstaExport {
             case "fork" -> editor.createForkNode(null, at);
             case "join" -> editor.createJoinNode(null, at);
             case "object" -> {
-                Object t = e.get("typeRef") == null ? null : type(e.get("typeRef"));
-                IClass base = t instanceof IClass c ? c : null;
-                if (t != null && base == null) {
-                    drop("objectNodeType");
-                }
+                IClass base = objectType(e);
                 INodePresentation object =
                     (INodePresentation) named(id, n -> editor.createObjectNode(n, base, at));
-                if (!text(e, "inState").isEmpty()) {
-                    ((IObjectNode) object.getModel()).setInState(text(e, "inState"));
-                }
+                objectProperties(e, (IObjectNode) object.getModel());
                 yield object;
             }
             default -> throw new IllegalStateException(text(e, "node"));
@@ -1413,6 +1676,10 @@ public final class AstaExport {
             INodePresentation node;
             if ("comment".equals(type(e))) {
                 node = note(editor, element, at);
+            } else if (unmade(e)) {
+                // The API makes no entry and exit points and no stub states; they are counted
+                // below, with what the diagram does not show.
+                continue;
             } else if (Set.of("state", "finalState", "pseudostate").contains(type(e)) && !created.containsKey(element)) {
                 // In a region, the vertex goes into the state that holds the regions, created
                 // first inside the right region (Astah picks it by place) and then moved.
@@ -1434,8 +1701,9 @@ public final class AstaExport {
             node.setLocation(at);
             // Astah keeps room for entry, do and exit, which makes a state at least 81 high;
             // a state without them does not need it.
+            // Submachine states keep no such room.
             if ("state".equals(type(e)) && text(e, "entry").isEmpty() && text(e, "doActivity").isEmpty()
-                    && text(e, "exit").isEmpty()) {
+                    && text(e, "exit").isEmpty() && !(node.getModel() instanceof IState s && s.isSubmachineState())) {
                 node.setProperty("action_visibility", "false");
             }
             resize(node, num(r, "width"), num(r, "height"));
@@ -1466,16 +1734,65 @@ public final class AstaExport {
             String type = type(elements.get(child));
             if (!created.containsKey(child)
                     && Set.of("state", "finalState", "pseudostate", "transition", "internalTransition").contains(type)) {
-                drop(type);
+                drop(unmade(elements.get(child)) ? text(elements.get(child), "pseudostate") : type);
             }
         }
+    }
+
+    /// Whether `e` is a vertex the API cannot make: an entry or exit point, a stub state.
+    private static boolean unmade(Map<String, Object> e) {
+        return "pseudostate".equals(type(e))
+            && Set.of("entryPoint", "exitPoint", "stubState").contains(text(e, "pseudostate"));
+    }
+
+    /// `diagrams` with the diagram of every state machine a submachine state stands for before
+    /// the diagram of that state, as far as they do not refer to each other in a circle.
+    private List<String> submachinesFirst(List<String> diagrams) {
+        Map<String, String> diagramOf = new HashMap<>();
+        for (String d : diagrams) {
+            diagramOf.putIfAbsent(owners.get(d), d);
+        }
+        List<String> result = new ArrayList<>();
+        Set<String> visited = new HashSet<>();
+        for (String d : diagrams) {
+            submachinesFirst(d, diagramOf, visited, result);
+        }
+        return result;
+    }
+
+    private void submachinesFirst(String diagram, Map<String, String> diagramOf, Set<String> visited,
+            List<String> result) {
+        if (!visited.add(diagram)) {
+            return;
+        }
+        String machine = owners.get(diagram);
+        if ("stateMachine".equals(text(elements.get(diagram), "diagram")) && machine != null) {
+            for (String child : subtree(machine)) {
+                String target = diagramOf.get(text(elements.get(child), "submachine"));
+                if ("state".equals(type(elements.get(child))) && target != null) {
+                    submachinesFirst(target, diagramOf, visited, result);
+                }
+            }
+        }
+        result.add(diagram);
     }
 
     private INodePresentation vertex(StateMachineDiagramEditor editor, String id, INodePresentation parent, Point2D at,
             Map<String, Object> r) throws Exception {
         Map<String, Object> e = elements.get(id);
         INodePresentation node = switch (type(e)) {
-            case "state" -> (INodePresentation) named(id, n -> editor.createState(n, parent, at));
+            case "state" -> {
+                // A submachine state needs the diagram of its machine, made before this one; a
+                // state whose machine has none (or comes later) loses the reference.
+                String submachine = text(e, "submachine");
+                IStateMachineDiagram target = machineDiagrams.get(submachine);
+                if (!submachine.isEmpty() && target == null) {
+                    drop("submachine");
+                }
+                yield target != null
+                    ? editor.createSubmachineState(parent, target, at)
+                    : (INodePresentation) named(id, n -> editor.createState(n, parent, at));
+            }
             case "finalState" -> editor.createFinalState(parent, at);
             default -> switch (text(e, "pseudostate")) {
                 case "", "initial" -> editor.createInitialPseudostate(parent, at);
@@ -1828,23 +2145,38 @@ public final class AstaExport {
                 drop("presentation");
                 return null;
             }
-            // The line style goes first: Astah drops the waypoints of a line set to "line" and
-            // turns them into corners of its own for right angles, but keeps points set later.
-            String shape = lineShape(p);
-            if (shape != null) {
-                link.setProperty("line.shape", shape);
-            }
-            if (!route(link, source, target, p, corners(diagram, p))) {
-                drop("edgeRoute");
-            }
-            labels(link, source, diagram, p);
-            if (p.get("style") instanceof Map<?, ?> style) {
-                ink(link, (Map<String, Object>) style);
-            }
+            lineDetails(link, source, target, diagram, p);
             return link;
         });
         if (made instanceof ILinkPresentation link) {
             shown.put((String) p.get("id"), link);
+        }
+    }
+
+    /// The route, labels and looks of a line just created.
+    private void lineDetails(ILinkPresentation link, IPresentation source, IPresentation target, String diagram,
+            Map<String, Object> p) throws InvalidEditingException {
+        // The line style goes first: Astah drops the waypoints of a line set to "line" and
+        // turns them into corners of its own for right angles, but keeps points set later.
+        String shape = lineShape(p);
+        if (shape != null) {
+            link.setProperty("line.shape", shape);
+        }
+        if (!route(link, source, target, p, corners(diagram, p))) {
+            drop("edgeRoute");
+        }
+        labels(link, source, diagram, p);
+        if (p.get("style") instanceof Map<?, ?> s) {
+            Map<String, Object> style = (Map<String, Object>) s;
+            ink(link, style);
+            if (Boolean.TRUE.equals(style.get("hideConstraints"))) {
+                option(link, "constraint_visibility", "false");
+            }
+            // Astah keeps its shared style to itself (`is_shared` is read-only): the line keeps
+            // its course over the common line, with a triangle of its own.
+            if (style.get("shared") instanceof String shared && !"separate".equals(shared)) {
+                drop("sharedGeneralization");
+            }
         }
     }
 
@@ -1963,13 +2295,18 @@ public final class AstaExport {
 
     private void style(INodePresentation node, Map<String, Object> p, String type) throws InvalidEditingException {
         Map<String, Object> style = (Map<String, Object>) p.get("style");
+        boolean iconic = style != null && Boolean.TRUE.equals(style.get("iconic"));
         if ("interface".equals(type)) {
-            boolean iconic = style != null && Boolean.TRUE.equals(style.get("iconic"));
             node.setProperty("notation_type", iconic ? "icon" : "normal");
             // Astah draws a socket only for a port's usage (`portInterfaces`), not here.
             if (iconic && Boolean.TRUE.equals(style.get("socket"))) {
                 drop("socket");
             }
+        }
+        // A class whose first stereotype is «boundary», «control» or «entity» starts out as
+        // its robustness icon in Astah; UmlCraft says which.
+        if ("class".equals(type) && robustness((String) p.get("element"))) {
+            node.setProperty("notation_type", iconic ? "icon" : "normal");
         }
         // Without a color of its own a node gets Astah's usual default, not the API's white.
         String fill = ownFill(style);
@@ -1994,6 +2331,12 @@ public final class AstaExport {
         if (Boolean.TRUE.equals(style.get("hideOperations"))) {
             node.setProperty("operation_compartment_visibility", "false");
         }
+        if (Boolean.TRUE.equals(style.get("hideAttributeConstraints"))) {
+            option(node, "attribute_constraint_visibility", "false");
+        }
+        if (Boolean.TRUE.equals(style.get("hideOperationConstraints"))) {
+            option(node, "operation_constraint_visibility", "false");
+        }
         // The API refuses every value of `font.size`.
         if (style.get("fontSize") != null) {
             drop("fontSize");
@@ -2006,6 +2349,13 @@ public final class AstaExport {
                 || "dataType".equals(type)) {
             members(node, style, (String) p.get("element"));
         }
+    }
+
+    /// Whether the element's first stereotype is one of the robustness stereotypes.
+    private boolean robustness(String element) {
+        List<Object> stereotypes = list(elements.get(element) == null ? null : elements.get(element).get("stereotypes"));
+        return !stereotypes.isEmpty()
+            && Set.of("boundary", "control", "entity").contains(((String) stereotypes.get(0)).toLowerCase());
     }
 
     /// What a classifier box leaves out of its members, under the names of Astah's API.
@@ -2183,8 +2533,9 @@ public final class AstaExport {
             displayAll();
 
             // Astah grows bars itself, mostly as UmlCraft does; what it can be told is kept.
+            // Astah refuses to set any bar's height, so only a bar it made differently counts.
             for (Bar bar : bars) {
-                if (bar.astah != null) {
+                if (bar.astah != null && Math.abs(bar.astah.getHeight() - (bar.bottom - bar.top)) > 0.5) {
                     try {
                         bar.astah.setHeight(bar.bottom - bar.top);
                     } catch (InvalidEditingException e) {
@@ -2192,13 +2543,25 @@ public final class AstaExport {
                     }
                 }
             }
-            for (Map.Entry<String, INodePresentation> lane : lanes.entrySet()) {
-                double length = num(laneShapes.get(lane.getKey()), "length");
-                try {
-                    lane.getValue().setProperty("lifeline_length", Double.toString(length));
-                } catch (InvalidEditingException e) {
-                    // Astah keeps lifelines long enough for what lies on them.
-                    drop("lifelineLength");
+            lengths(true);
+            // State invariants, once the lifelines have their length, then the terminations,
+            // which Astah puts where their lifeline ends. Astah fits the lifelines anew after
+            // each (15 below an invariant), so the lengths are set again.
+            for (String kind : new String[] {"stateInvariant", "termination"}) {
+                for (Map<String, Object> p : presentations) {
+                    if (p.get("element") instanceof String element && "node".equals(p.get("shape"))
+                            && kind.equals(type(elements.get(element)))) {
+                        attempt(element, () -> mark(element, elements.get(element), p));
+                    }
+                }
+                lengths(false);
+            }
+            // Astah's API has no way to make duration or time constraints.
+            for (Map<String, Object> p : presentations) {
+                String type = p.get("element") instanceof String element ? type(elements.get(element)) : "";
+                if ("node".equals(p.get("shape"))
+                        && ("durationConstraint".equals(type) || "timeConstraint".equals(type))) {
+                    drop(type);
                 }
             }
             for (Map<String, Object> p : presentations) {
@@ -2216,6 +2579,50 @@ public final class AstaExport {
 
         private Map<String, Object> head(Map<String, Object> lifeline) {
             return (Map<String, Object>) lifeline.get("head");
+        }
+
+        /// Gives every lifeline its length; `report` counts those Astah refuses.
+        private void lengths(boolean report) {
+            for (Map.Entry<String, INodePresentation> lane : lanes.entrySet()) {
+                double length = num(laneShapes.get(lane.getKey()), "length");
+                try {
+                    lane.getValue().setProperty("lifeline_length", Double.toString(length));
+                } catch (InvalidEditingException e) {
+                    // Astah keeps lifelines long enough for what lies on them.
+                    if (report) {
+                        drop("lifelineLength");
+                    }
+                }
+            }
+        }
+
+        /// The Astah lifeline showing the UmlCraft lifeline element `lifeline`.
+        private INodePresentation laneOf(Object lifeline) {
+            for (Map.Entry<String, Map<String, Object>> lane : laneShapes.entrySet()) {
+                if (lifeline != null && lifeline.equals(lane.getValue().get("element"))) {
+                    return lanes.get(lane.getKey());
+                }
+            }
+            return null;
+        }
+
+        /// A state invariant where UmlCraft draws it, or a termination: Astah puts its cross
+        /// where the lifeline ends, as UmlCraft does.
+        private INodePresentation mark(String id, Map<String, Object> e, Map<String, Object> p) throws Exception {
+            INodePresentation lane = laneOf(e.get("lifeline"));
+            if (lane == null) {
+                drop(type(e));
+                return null;
+            }
+            if ("termination".equals(type(e))) {
+                return editor.createTermination(lane);
+            }
+            // Astah puts its top at the height given, centered on the lifeline, and refuses
+            // to move it elsewhere. Its width is fixed; its height follows the text.
+            Map<String, Object> r = rect(diagram, p);
+            INodePresentation node = editor.createStateInvariant(lane, name(e), y(num(r, "y")));
+            common(id, node.getModel(), Set.of());
+            return node;
         }
 
         /// Creates the messages of an interaction or operand from top to bottom and collects the
@@ -2704,6 +3111,26 @@ public final class AstaExport {
             drop("details");
             if (problems.size() < 20) {
                 problems.add(oneLine(type(e) + " \"" + name(e) + "\": " + describe(x)));
+            }
+        }
+        constraints(id, target);
+    }
+
+    /// The element's constraints; Astah names each by its text and keeps the text as its
+    /// specification.
+    private void constraints(String id, IElement target) {
+        Map<String, Object> e = elements.get(id);
+        for (Object c : list(e.get("constraints"))) {
+            try {
+                if (!(target instanceof INamedElement n)) {
+                    throw new IllegalStateException("no named element");
+                }
+                basic.createConstraint(n, (String) c);
+            } catch (Exception x) {
+                drop("constraint");
+                if (problems.size() < 20) {
+                    problems.add(oneLine(type(e) + " \"" + name(e) + "\" constraint: " + describe(x)));
+                }
             }
         }
     }

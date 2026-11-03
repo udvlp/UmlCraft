@@ -973,6 +973,7 @@ impl Builder<'_, '_> {
             node: Object,
             type_ref: None,
             in_state: "sent".into(),
+            ..Default::default()
         });
         let mut nodes = Vec::new();
         for (name, kind, (x, y, w, h)) in [
@@ -1077,6 +1078,7 @@ impl Builder<'_, '_> {
                 entry: entry.into(),
                 do_activity: activity.into(),
                 exit: exit.into(),
+                submachine: None,
             })
         };
         let pseudo = ElementKind::pseudostate;

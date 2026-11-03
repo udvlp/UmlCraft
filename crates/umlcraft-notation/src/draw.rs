@@ -207,6 +207,49 @@ fn head(head: Rect, icon: HeadIcon) -> Vec<Primitive> {
 }
 
 /// The outline of a node, in drawing order.
+/// A class drawn as its robustness icon, as Astah draws it on class diagrams (2 px lines,
+/// filled circles of radius 20) in the middle of the box: a boundary's T on its side 7.5 from
+/// its left, 24 high, reaching to the circle; a control's arrow head of 5 on top, pointing
+/// left; an entity's line under the circle, as wide as it.
+fn robustness(r: Rect, icon: HeadIcon) -> Vec<Primitive> {
+    const RADIUS: f32 = 20.0;
+    let size = crate::scene::robustness_size(icon);
+    let c = r.center();
+    let circle = |center: Point| Primitive::Ellipse {
+        center,
+        rx: RADIUS,
+        ry: RADIUS,
+        fill: Paint::Fill,
+        width: 2.0,
+    };
+    match icon {
+        HeadIcon::Boundary => {
+            let left = c.x - size.width / 2.0;
+            let bar = left + 7.5;
+            vec![
+                thick(vec![Point::new(bar, c.y), Point::new(left + 20.0, c.y)]),
+                thick(vec![Point::new(bar, c.y - 12.0), Point::new(bar, c.y + 12.0)]),
+                circle(Point::new(left + 40.0, c.y)),
+            ]
+        }
+        HeadIcon::Control => {
+            let top = c.y - RADIUS;
+            vec![
+                circle(c),
+                thick(vec![Point::new(c.x + 5.0, top - 5.0), Point::new(c.x, top)]),
+                thick(vec![Point::new(c.x, top), Point::new(c.x + 5.0, top + 5.0)]),
+            ]
+        }
+        _ => {
+            let bottom = c.y + RADIUS;
+            vec![
+                circle(c),
+                thick(vec![Point::new(c.x - RADIUS, bottom), Point::new(c.x + RADIUS, bottom)]),
+            ]
+        }
+    }
+}
+
 pub fn figure(node: &NodeShape) -> Vec<Primitive> {
     let r = node.rect;
     let solid = LineStyle::Solid;
@@ -332,6 +375,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                 thick(vec![Point::new(cx, hip), Point::new(cx + half, feet)]),
             ]
         }
+        Figure::Robustness(icon) => robustness(r, *icon),
         Figure::UseCase { separator } => {
             // Astah: a 2 px ellipse; the line below the name spans the rectangle inscribed in
             // the ellipse.
@@ -367,6 +411,33 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             vec![line(vec![Point::new(r.x, r.y), Point::new(r.x, r.bottom())], solid)]
         }
         Figure::Activation => vec![frame(r, Paint::Fill)],
+        // Astah's rounded rectangle with arcs of 20 × 40, a 2 px border.
+        Figure::StateInvariant => vec![Primitive::Frame {
+            rect: r,
+            width: 2.0,
+            radius: 10.0_f32.min(r.height / 2.0).min(r.width / 2.0),
+            fill: Paint::Fill,
+            border: Paint::Line,
+            style: solid,
+        }],
+        Figure::Termination => cross(r.center()),
+        Figure::Duration { x, top, bottom } => {
+            let (x, top, bottom) = (*x, *top, *bottom);
+            let half = crate::sequence_edit::CROSS / 2.0;
+            let mut result = vec![line(vec![Point::new(x, top), Point::new(x, bottom)], solid)];
+            // Open arrows pointing at both messages, bars along them.
+            for (tip, from) in [(top, bottom), (bottom, top)] {
+                result.extend(marker(
+                    Point::new(x, tip),
+                    Point::new(x, from),
+                    EndMarker::OpenArrow,
+                ));
+                result
+                    .push(line(vec![Point::new(x + half, tip), Point::new(x - half, tip)], solid));
+            }
+            result
+        }
+        Figure::TimeTick { from, to } => vec![line(vec![*from, *to], solid)],
         Figure::Frame { tab } => vec![frame(r, Paint::None), tab_line(*tab, 1.0)],
         Figure::Fragment { tab, separators, filled } => {
             let fill = if *filled { Paint::Fill } else { Paint::None };
@@ -462,6 +533,76 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             style: solid,
         }],
         Figure::Rectangle => vec![frame(r, Paint::Fill)],
+        // Astah: a pentagon pointing 18 to the right, outlined 2 px wide.
+        Figure::SendSignal => {
+            let tip = SIGNAL_POINT.min(r.width / 2.0);
+            outlined(vec![
+                r.origin(),
+                Point::new(r.x, r.bottom()),
+                Point::new(r.right() - tip, r.bottom()),
+                Point::new(r.right(), r.center().y),
+                Point::new(r.right() - tip, r.y),
+            ])
+        }
+        // Astah: a box with a notch of 17 on its left, outlined 2 px wide.
+        Figure::AcceptEvent => {
+            let notch = SIGNAL_NOTCH.min(r.width / 2.0);
+            outlined(vec![
+                r.origin(),
+                Point::new(r.x + notch, r.center().y),
+                Point::new(r.x, r.bottom()),
+                Point::new(r.right(), r.bottom()),
+                Point::new(r.right(), r.y),
+            ])
+        }
+        // Astah: two triangles meeting in the middle, 1 px.
+        Figure::Hourglass => vec![Primitive::Polygon {
+            points: vec![
+                r.origin(),
+                Point::new(r.right(), r.bottom()),
+                Point::new(r.x, r.bottom()),
+                Point::new(r.right(), r.y),
+            ],
+            fill: Paint::Fill,
+        }],
+        // An action with Astah's rake, 2 px, in its bottom right corner: a stem and two prongs
+        // 11 apart, 3 above the bottom.
+        Figure::CallBehavior => {
+            let (right, bottom) = (r.right(), r.bottom());
+            let (stem, bar, foot) = (bottom - 12.0, bottom - 7.5, bottom - 3.0);
+            let mid = right - 17.5;
+            vec![
+                Primitive::Frame {
+                    rect: r,
+                    width: 1.0,
+                    radius: ACTION_RADIUS.min(r.height / 2.0).min(r.width / 2.0),
+                    fill: Paint::Fill,
+                    border: Paint::Line,
+                    style: solid,
+                },
+                thick(vec![Point::new(mid, foot), Point::new(mid, stem)]),
+                thick(vec![
+                    Point::new(right - 12.0, foot),
+                    Point::new(right - 12.0, bar),
+                    Point::new(right - 23.0, bar),
+                    Point::new(right - 23.0, foot),
+                ]),
+            ]
+        }
+        // Astah outlines pins 2 px wide; the arrow of a pin without flows is 1 px with a head
+        // 5.2 long and 6 wide.
+        Figure::Pin { arrow } => {
+            let mut result = vec![thick_frame(r)];
+            if let Some([from, to]) = *arrow {
+                let length = from.distance(to).max(0.01);
+                let (ux, uy) = ((to.x - from.x) / length, (to.y - from.y) / length);
+                let back = to.offset(-ux * 5.2, -uy * 5.2);
+                result.push(line(vec![from, to], solid));
+                result.push(line(vec![back.offset(-uy * 3.0, ux * 3.0), to], solid));
+                result.push(line(vec![back.offset(uy * 3.0, -ux * 3.0), to], solid));
+            }
+            result
+        }
         // Astah outlines ports 2 px wide, like parts.
         Figure::Part | Figure::Port { .. } => vec![thick_frame(r)],
         // Drawn like a class box: 2 px around, 1 px below the name.
@@ -469,7 +610,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             thick_frame(r),
             line(vec![Point::new(r.x, *separator), Point::new(r.right(), *separator)], solid),
         ],
-        Figure::State { separator, regions, vertical } => {
+        Figure::State { separator, regions, vertical, submachine } => {
             // Astah outlines states 2 px wide.
             let mut result = vec![Primitive::Frame {
                 rect: r,
@@ -480,8 +621,30 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                 style: solid,
             }];
             result.extend(
-                separator.map(|y| line(vec![Point::new(r.x, y), Point::new(r.right(), y)], solid)),
+                separator
+                    .iter()
+                    .chain(submachine)
+                    .map(|&y| line(vec![Point::new(r.x, y), Point::new(r.right(), y)], solid)),
             );
+            // Astah's submachine icon: two rounded boxes joined by a line, 2 px, 5 from the
+            // bottom right corner.
+            if submachine.is_some() {
+                let (right, bottom) = (r.right(), r.bottom());
+                let link = |x: f32| Primitive::Frame {
+                    rect: Rect::new(x, bottom - 13.0, 15.0, 8.0),
+                    width: 2.0,
+                    radius: 4.0,
+                    fill: Paint::None,
+                    border: Paint::Line,
+                    style: solid,
+                };
+                result.push(link(right - 45.0));
+                result.push(link(right - 20.0));
+                result.push(thick(vec![
+                    Point::new(right - 30.0, bottom - 9.0),
+                    Point::new(right - 20.0, bottom - 9.0),
+                ]));
+            }
             // Dashed lines between the regions.
             result.extend(regions.iter().skip(1).map(|region| {
                 let a = region.rect;
@@ -495,6 +658,29 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             result
         }
         Figure::Circle => vec![ellipse(r.center(), r.width / 2.0, r.height / 2.0)],
+        // Astah: circles outlined 2 px; an exit point is crossed out at 45°, 0.9 of the way to
+        // the outline.
+        Figure::EntryPoint | Figure::ExitPoint => {
+            let c = r.center();
+            let (rx, ry) = (r.width / 2.0, r.height / 2.0);
+            let mut result =
+                vec![Primitive::Ellipse { center: c, rx, ry, fill: Paint::Fill, width: 2.0 }];
+            if matches!(node.figure, Figure::ExitPoint) {
+                let (dx, dy) = (rx * FRAC_1_SQRT_2 * 0.9, ry * FRAC_1_SQRT_2 * 0.9);
+                result.push(thick(vec![c.offset(-dx, dy), c.offset(dx, -dy)]));
+                result.push(thick(vec![c.offset(dx, dy), c.offset(-dx, -dy)]));
+            }
+            result
+        }
+        // Astah: a bar 3 high across the top, filled and outlined 2 px; the name is below it.
+        Figure::Stub => vec![Primitive::Frame {
+            rect: Rect::new(r.x, r.y, r.width, 3.0),
+            width: 2.0,
+            radius: 0.0,
+            fill: Paint::Line,
+            border: Paint::Line,
+            style: solid,
+        }],
         Figure::Component { icon } => {
             // UML's component icon: a box with two small tabs sticking out 2 on its left.
             let body = Rect::new(icon.x + 2.0, icon.y, icon.width - 2.0, icon.height);
@@ -577,6 +763,17 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
 
 /// Corner radius of actions, as far as their size allows.
 const ACTION_RADIUS: f32 = 12.0;
+/// How far a send signal action's point and an accept event action's notch reach, measured
+/// in Astah.
+const SIGNAL_POINT: f32 = 18.0;
+const SIGNAL_NOTCH: f32 = 17.0;
+
+/// A filled polygon outlined 2 px wide, as Astah draws signal actions.
+fn outlined(points: Vec<Point>) -> Vec<Primitive> {
+    let mut closed = points.clone();
+    closed.extend(points.iter().take(2).copied());
+    vec![Primitive::Polygon { points, fill: Paint::Fill }, thick(closed)]
+}
 /// Corner radius of states, measured in Astah: 4 plus a twentieth of the height.
 fn state_radius(r: Rect) -> f32 {
     4.0 + r.height / 20.0
@@ -704,12 +901,19 @@ pub fn sequence(layout: &SequenceLayout) -> Vec<Primitive> {
         .iter()
         .map(|&center| Primitive::Ellipse { center, rx: r, ry: r, fill: Paint::Line, width: 1.0 })
         .collect();
-    let d = 10.0;
     for &p in &layout.destructions {
-        result.push(thick(vec![p.offset(d, -d), p.offset(-d, d)]));
-        result.push(thick(vec![p.offset(-d, -d), p.offset(d, d)]));
+        result.extend(cross(p));
     }
     result
+}
+
+/// The cross that ends a lifeline at `p`, 20 px wide with 2 px lines.
+fn cross(p: Point) -> Vec<Primitive> {
+    let d = crate::sequence_edit::CROSS / 2.0;
+    vec![
+        thick(vec![p.offset(d, -d), p.offset(-d, d)]),
+        thick(vec![p.offset(-d, -d), p.offset(d, d)]),
+    ]
 }
 
 /// The line box an edge label is drawn in; its alignment does the actual placement.

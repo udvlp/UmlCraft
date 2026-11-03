@@ -433,6 +433,45 @@ pub(crate) fn arrange(
                 node.figure = Figure::Fragment { tab, separators: Vec::new(), filled: true };
                 node.rows = vec![tab_row("ref", r, ROW_18, id), name];
             }
+            Shape::Node { .. } => {
+                let Some(e) = p.element.and_then(|e| model.get(e)) else { continue };
+                match e.kind() {
+                    ElementKind::StateInvariant(_) => {
+                        (node.rect, node.rows) = invariant(e.id(), e.name(), node.rect, measure);
+                        node.figure = Figure::StateInvariant;
+                    }
+                    ElementKind::Termination(_) => {
+                        node.figure = Figure::Termination;
+                        node.rows = Vec::new();
+                    }
+                    ElementKind::DurationConstraint(c) => {
+                        let y_of = |m: Id| {
+                            view.presentations_of(m).find_map(|p| match p.shape {
+                                Shape::Message { y, .. } => Some(y),
+                                _ => None,
+                            })
+                        };
+                        let r = node.rect;
+                        let (top, bottom) = match (y_of(c.from), y_of(c.to)) {
+                            (Some(a), Some(b)) => (a.min(b), a.max(b)),
+                            _ => (r.y, r.bottom()),
+                        };
+                        let x = r.center().x;
+                        node.figure = Figure::Duration { x, top, bottom };
+                        let at = Point::new(x + DURATION_LABEL, (top + bottom) / 2.0);
+                        node.rows = constraint_row(e, at, LabelAlign::Center, measure);
+                        let line = Rect::new(x - BAR, top, 2.0 * BAR, bottom - top);
+                        node.rect = node.rows.iter().fold(line, |a, row| a.union(&row.rect));
+                    }
+                    // Placed once the messages are laid out.
+                    ElementKind::TimeConstraint(_) => {
+                        node.figure =
+                            Figure::TimeTick { from: node.rect.origin(), to: node.rect.origin() };
+                        node.rows = Vec::new();
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -535,7 +574,7 @@ pub(crate) fn arrange(
         Some(ElementKind::Diagram(p)) if p.hide_return_values
     );
     let returns = if hide_returns { HashMap::new() } else { returns(model, &messages, &lanes) };
-    let edges = messages
+    let edges: Vec<EdgeShape> = messages
         .iter()
         .map(|m| {
             let label = Label {
@@ -545,11 +584,111 @@ pub(crate) fn arrange(
             message_edge(model, m, &lanes, frame, label, measure, &mut layout)
         })
         .collect();
+    time_constraints(model, view, &edges, nodes, measure);
 
     layout.slots = slots(model, diagram, view);
     layout.left = lanes.values().map(|l| l.head.x).reduce(f32::min).unwrap_or(0.0);
     layout.right = lanes.values().map(|l| l.head.right()).reduce(f32::max).unwrap_or(0.0);
     (layout, edges)
+}
+
+/// A duration constraint's label is centered this far right of its line.
+const DURATION_LABEL: f32 = 9.0;
+/// Constraint labels are as high as Astah's edge labels and centered on their point.
+const CONSTRAINT_LABEL: f32 = 15.093_75;
+/// A state invariant's text: one line centered with its baseline 15.52 below the top, several
+/// lines 10 in from the left, the first baseline 14.58 below the top, one per 15.09.
+const INVARIANT_BASELINE: f32 = 15.52;
+const INVARIANT_FIRST_BASELINE: f32 = 14.58;
+const INVARIANT_PITCH: f32 = 15.093_75;
+const INVARIANT_PAD: f32 = 10.0;
+
+/// A state invariant in `r`: its condition broken into lines as wide as the box leaves room
+/// for, and the box, grown to hold them.
+fn invariant(id: Id, text: &str, r: Rect, measure: &dyn TextMeasure) -> (Rect, Vec<Row>) {
+    let lines = if text.is_empty() {
+        Vec::new()
+    } else {
+        break_lines(text, r.width - 2.0 * INVARIANT_PAD, measure)
+    };
+    let n = lines.len().max(1);
+    let needed = crate::sequence_edit::INVARIANT_HEIGHT
+        + crate::sequence_edit::INVARIANT_LINE * (n - 1) as f32;
+    let rect = Rect::new(r.x, r.y, r.width, r.height.max(needed));
+    let h = line_height(FONT_SIZE);
+    let rows = lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let w = measure.width(&line, FONT_SIZE, false);
+            let (x, baseline) = if n == 1 {
+                (r.center().x - w / 2.0, r.y + INVARIANT_BASELINE)
+            } else {
+                (r.x + INVARIANT_PAD, r.y + INVARIANT_FIRST_BASELINE + i as f32 * INVARIANT_PITCH)
+            };
+            Row {
+                rect: Rect::new(x, baseline - crate::draw::baseline(FONT_SIZE), w, h),
+                role: RowRole::Name,
+                ..plain_row(line, id)
+            }
+        })
+        .collect();
+    (rect, rows)
+}
+
+/// The label `{constraint}` of a duration or time constraint `e`, centered on `at` or starting
+/// or ending there; none for an empty constraint.
+fn constraint_row(
+    e: &umlcraft_model::Element,
+    at: Point,
+    align: LabelAlign,
+    measure: &dyn TextMeasure,
+) -> Vec<Row> {
+    if e.name().trim().is_empty() {
+        return Vec::new();
+    }
+    let text = format!("{{{}}}", e.name());
+    let w = measure.width(&text, FONT_SIZE, false);
+    let left = match align {
+        LabelAlign::Left => at.x,
+        LabelAlign::Center => at.x - w / 2.0,
+        LabelAlign::Right => at.x - w,
+    };
+    let top = at.y - CONSTRAINT_LABEL / 2.0 + LABEL_TO_ROW;
+    vec![Row {
+        rect: Rect::new(left, top, w, line_height(FONT_SIZE)),
+        role: RowRole::Name,
+        ..plain_row(text, e.id())
+    }]
+}
+
+/// Puts time constraints where Astah does: a line going on 30 beyond their message's
+/// arrowhead, the label after its end.
+fn time_constraints(
+    model: &Model,
+    view: &View,
+    edges: &[EdgeShape],
+    nodes: &mut [NodeShape],
+    measure: &dyn TextMeasure,
+) {
+    for node in nodes.iter_mut() {
+        let Some(e) = node.element.and_then(|e| model.get(e)) else { continue };
+        let ElementKind::TimeConstraint(c) = e.kind() else { continue };
+        let edge = view
+            .presentations_of(c.message)
+            .find(|p| matches!(p.shape, Shape::Message { .. }))
+            .and_then(|p| edges.iter().find(|edge| edge.id == p.id));
+        let Some(edge) = edge else { continue };
+        let n = edge.points.len();
+        let (tip, before) = (edge.points[n - 1], edge.points[n - 2]);
+        let dir = if tip.x < before.x { -1.0 } else { 1.0 };
+        let end = tip.offset(dir * crate::sequence_edit::TIME_TICK, 0.0);
+        node.figure = Figure::TimeTick { from: tip, to: end };
+        let align = if dir > 0.0 { LabelAlign::Left } else { LabelAlign::Right };
+        node.rows = constraint_row(e, end, align, measure);
+        let line = Rect::from_corners(tip, end).inflate(BAR / 2.0);
+        node.rect = node.rows.iter().fold(line, |a, row| a.union(&row.rect));
+    }
 }
 
 /// The icon a lifeline drawn as an icon gets: an actor, or the robustness stereotype of the

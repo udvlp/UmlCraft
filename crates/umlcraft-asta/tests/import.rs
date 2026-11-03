@@ -178,11 +178,22 @@ fn sample_project() {
         .into_iter()
         .filter(|&id| matches!(model.get(id).unwrap().kind(), ElementKind::Message(_)))
         .collect::<Vec<_>>();
-    // Ten between lifelines, a found and a lost message, and the destroy message behind the
-    // cross on ob2, which Astah does not draw.
-    assert_eq!(messages.len(), 12);
+    // Ten between lifelines and a found and a lost message. The destroy message from ob2 to
+    // itself that Astah draws as a cross only is a termination.
+    assert_eq!(messages.len(), 11);
     let drawn = messages.iter().filter(|&&m| view.presentations_of(m).any(|p| p.is_edge()));
     assert_eq!(drawn.count(), 11);
+    let termination = model
+        .subtree(interaction.id())
+        .into_iter()
+        .find_map(|id| match model.get(id).unwrap().kind() {
+            ElementKind::Termination(p) => Some((id, p.lifeline)),
+            _ => None,
+        })
+        .expect("a termination");
+    assert_eq!(model.get(termination.1).unwrap().name(), "ob2");
+    let cross = view.presentations_of(termination.0).next().and_then(|p| p.bounds()).unwrap();
+    assert_eq!((cross.width, cross.height), (20.0, 20.0));
     let fragment = interaction
         .children()
         .iter()
@@ -190,17 +201,16 @@ fn sample_project() {
         .find(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)))
         .unwrap();
     assert_eq!(fragment.children().len(), 2, "two operands");
-    // Astah's geometry: the frame at the back, the alt fragment with one separator, a lifeline
-    // ending in a cross, and bars on the lifelines.
+    // Astah's geometry: the frame at the back, the alt fragment with one separator, the
+    // lifeline of the termination ending at its cross, and bars on the lifelines.
     assert_eq!(view.presentations()[0].element, Some(example.id()));
     let alt = view.presentations_of(fragment.id()).next().unwrap();
     let Shape::Fragment { separators, .. } = &alt.shape else { panic!("{alt:?}") };
     assert_eq!(separators.len(), 1);
-    assert!(
-        view.presentations()
-            .iter()
-            .any(|p| matches!(p.shape, Shape::Lifeline { destroyed: true, .. }))
-    );
+    let lane = view.presentations_of(termination.1).next().unwrap();
+    let Shape::Lifeline { head, length, destroyed } = lane.shape else { panic!("{lane:?}") };
+    assert!(!destroyed);
+    assert!((head.bottom() + length - cross.center().y).abs() < 1.0, "{cross:?}");
     let bars = view.presentations().iter().filter(|p| matches!(p.shape, Shape::Activation { .. }));
     // Astah also keeps the two gates on the frame as bars; those are not drawn.
     assert_eq!(bars.count(), 6);

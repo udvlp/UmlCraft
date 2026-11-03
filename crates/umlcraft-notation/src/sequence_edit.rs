@@ -14,8 +14,9 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    Document, ElementKind, Id, MessageGate, MessageSort, Model, ModelError, Presentation, Rect,
-    Result, Shape, Tx, View,
+    Document, DurationConstraintProps, ElementKind, Id, MessageGate, MessageSort, Model,
+    ModelError, Presentation, Rect, Result, Shape, StateInvariantProps, TerminationProps,
+    TimeConstraintProps, Tx, View,
 };
 
 use crate::sequence::SELF_DROP;
@@ -121,6 +122,48 @@ struct Frame {
     separators: Vec<f32>,
 }
 
+/// A state invariant or a termination on the lifeline presentation `lane`.
+#[derive(Clone, Copy)]
+struct Mark {
+    id: Id,
+    element: Id,
+    lane: Id,
+    rect: Rect,
+    termination: bool,
+}
+
+impl Mark {
+    /// Where it lies on its lifeline: an invariant's top, a cross's center.
+    fn y(&self) -> f32 {
+        if self.termination { self.rect.center().y } else { self.rect.y }
+    }
+}
+
+/// The node of a duration or time constraint.
+#[derive(Clone, Copy)]
+struct Constraint {
+    id: Id,
+    element: Id,
+    rect: Rect,
+}
+
+/// Size of a termination's cross.
+pub const CROSS: f32 = 20.0;
+/// State invariants: Astah's box, as wide whatever it reads (longer text wraps), and its height
+/// for one line of text and for each further line.
+pub const INVARIANT_WIDTH: f32 = 74.044_92;
+pub const INVARIANT_HEIGHT: f32 = 21.0;
+pub const INVARIANT_LINE: f32 = 14.1875;
+/// Time constraints: how far the line goes on beyond the message's arrowhead.
+pub const TIME_TICK: f32 = 30.0;
+/// Edge labels' height, by which constraint labels are centered on their point.
+const CONSTRAINT_LABEL: f32 = 15.093_75;
+
+/// Refusals of the tools that put things on lifelines and messages.
+pub const NOT_ON_LIFELINE: &str = "a state invariant or termination goes on a lifeline";
+pub const LIFELINE_ENDED: &str = "the lifeline ends already";
+pub const NOT_ON_MESSAGE: &str = "a duration or time constraint goes on messages";
+
 /// The stored geometry of a sequence diagram.
 struct Geometry {
     lanes: Vec<Lane>,
@@ -131,6 +174,10 @@ struct Geometry {
     /// The diagram frame.
     diagram_frame: Option<(Id, Rect)>,
     notes: Vec<Rect>,
+    /// State invariants and terminations.
+    marks: Vec<Mark>,
+    /// Duration and time constraints.
+    constraints: Vec<Constraint>,
 }
 
 impl Geometry {
@@ -143,6 +190,8 @@ impl Geometry {
             frames: Vec::new(),
             diagram_frame: None,
             notes: Vec::new(),
+            marks: Vec::new(),
+            constraints: Vec::new(),
         };
         for p in view.presentations() {
             match &p.shape {
@@ -189,13 +238,40 @@ impl Geometry {
                     g.diagram_frame = Some((p.id, *bounds));
                 }
                 Shape::Node { bounds, .. } => {
-                    match p.element.and_then(|e| model.get(e)).map(|e| e.kind()) {
+                    let element = p.element.and_then(|e| model.get(e));
+                    match element.map(|e| e.kind()) {
                         Some(ElementKind::InteractionUse(_)) => g.frames.push(Frame {
                             id: p.id,
                             element: p.element.expect("matched"),
                             rect: *bounds,
                             separators: Vec::new(),
                         }),
+                        Some(
+                            ElementKind::StateInvariant(StateInvariantProps { lifeline })
+                            | ElementKind::Termination(TerminationProps { lifeline }),
+                        ) => {
+                            if let Some(lane) = lane_of(view, *lifeline) {
+                                g.marks.push(Mark {
+                                    id: p.id,
+                                    element: p.element.expect("matched"),
+                                    lane,
+                                    rect: *bounds,
+                                    termination: matches!(
+                                        element.map(|e| e.kind()),
+                                        Some(ElementKind::Termination(_))
+                                    ),
+                                });
+                            }
+                        }
+                        Some(
+                            ElementKind::DurationConstraint(_) | ElementKind::TimeConstraint(_),
+                        ) => {
+                            g.constraints.push(Constraint {
+                                id: p.id,
+                                element: p.element.expect("matched"),
+                                rect: *bounds,
+                            });
+                        }
                         _ => g.notes.push(*bounds),
                     }
                 }
@@ -208,6 +284,29 @@ impl Geometry {
 
     fn lane(&self, id: Id) -> Option<&Lane> {
         self.lanes.iter().find(|l| l.id == id)
+    }
+
+    /// The lifeline whose line runs at `x`: under its head, the nearest one.
+    fn lane_at(&self, x: f32) -> Option<&Lane> {
+        self.lanes
+            .iter()
+            .filter(|l| l.head.x - 0.5 <= x && x <= l.head.right() + 0.5)
+            .min_by(|a, b| (a.center() - x).abs().total_cmp(&(b.center() - x).abs()))
+    }
+
+    /// The cross that ends `lane` without a destroy message, if any.
+    fn termination(&self, lane: Id) -> Option<&Mark> {
+        self.marks.iter().find(|m| m.termination && m.lane == lane)
+    }
+
+    /// The state invariants on `lane`.
+    fn invariants(&self, lane: Id) -> impl Iterator<Item = &Mark> {
+        self.marks.iter().filter(move |m| !m.termination && m.lane == lane)
+    }
+
+    /// The message presentation showing the message `element`, if this diagram shows it.
+    fn message_of(&self, element: Id) -> Option<&Msg> {
+        self.messages.iter().find(|m| m.element == Some(element))
     }
 
     /// The innermost bar on `lane` at `y`.
@@ -295,6 +394,9 @@ impl Geometry {
             {
                 most = most.min(cross - MESSAGE_GAP);
             }
+            if let Some(t) = self.termination(lane) {
+                most = most.min(t.y() - MESSAGE_GAP);
+            }
             if sort != MessageSort::Create || lane != target {
                 least = least.max(l.line_top() + MESSAGE_GAP);
             }
@@ -334,7 +436,8 @@ impl Geometry {
         let messages = self.messages.iter().map(|m| m.end());
         let bars = self.bars.iter().map(|b| b.bottom);
         let frames = self.frames.iter().map(|f| f.rect.bottom());
-        messages.chain(bars).chain(frames).reduce(f32::max)
+        let invariants = self.marks.iter().filter(|m| !m.termination).map(|m| m.rect.bottom());
+        messages.chain(bars).chain(frames).chain(invariants).reduce(f32::max)
     }
 }
 
@@ -404,7 +507,7 @@ pub fn add_lifeline(tx: &mut Tx<'_>, diagram: Id, lifeline: Id, x: f32, y: f32) 
     let length = g
         .lanes
         .iter()
-        .filter(|l| !l.destroyed)
+        .filter(|l| !l.destroyed && g.termination(l.id).is_none())
         .map(|l| l.bottom())
         .reduce(f32::max)
         .map_or(LIFELINE_LENGTH, |bottom| (bottom - head.bottom()).max(MIN_LIFELINE));
@@ -627,6 +730,147 @@ pub fn add_fragment(
     let id = tx.add_presentation(diagram, presentation)?;
     tidy(tx, diagram)?;
     Ok(id)
+}
+
+/// Creates a state invariant reading `name` (`termination` false) or a termination on the
+/// lifeline drawn at `at`, and shows it there (see [`add_mark`]). Refused off a lifeline
+/// ([`NOT_ON_LIFELINE`]) and for a termination on a lifeline that ends already
+/// ([`LIFELINE_ENDED`]). Returns (element, presentation).
+pub fn create_on_lifeline(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    termination: bool,
+    at: umlcraft_model::Point,
+    name: &str,
+) -> Result<(Id, Id)> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let g = Geometry::read(model, diagram)?;
+    let lane = g.lane_at(at.x).ok_or_else(|| ModelError::Invalid(NOT_ON_LIFELINE.into()))?;
+    let lifeline =
+        view.get(lane.id).and_then(|p| p.element).ok_or(ModelError::NotFound(lane.id))?;
+    let interaction = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
+    let (kind, name) = if termination {
+        (ElementKind::Termination(TerminationProps { lifeline }), "")
+    } else {
+        (ElementKind::StateInvariant(StateInvariantProps { lifeline }), name)
+    };
+    let element = tx.create(interaction, umlcraft_model::ElementData::new(name, kind))?;
+    let node = add_mark(tx, diagram, element, at.y)?;
+    Ok((element, node))
+}
+
+/// The point on the lifeline drawn as `lane` for [`create_on_lifeline`]: at height `y`, or
+/// without one below everything drawn so far.
+pub fn spot_on_lifeline(
+    model: &Model,
+    diagram: Id,
+    lane: Id,
+    y: Option<f32>,
+) -> Result<umlcraft_model::Point> {
+    let g = Geometry::read(model, diagram)?;
+    let lane = g.lane(lane).ok_or_else(|| ModelError::Invalid(NOT_ON_LIFELINE.into()))?;
+    let below = g.content_bottom().map_or(lane.line_top(), |b| b + MESSAGE_GAP);
+    Ok(umlcraft_model::Point::new(lane.center(), y.unwrap_or(below)))
+}
+
+/// Shows the state invariant or termination `element` on its lifeline at height `y`: an
+/// invariant with its top there, centered on the line; a termination's cross ends the lifeline
+/// there, though not above what happens on it. A lifeline ends once ([`LIFELINE_ENDED`]).
+pub fn add_mark(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<Id> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let e = model.element(element)?;
+    let (lifeline, termination) = match e.kind() {
+        ElementKind::StateInvariant(p) => (p.lifeline, false),
+        ElementKind::Termination(p) => (p.lifeline, true),
+        _ => return Err(ModelError::Invalid(NOT_ON_LIFELINE.into())),
+    };
+    let lane =
+        lane_of(view, lifeline).ok_or_else(|| ModelError::Invalid(NOT_ON_LIFELINE.into()))?;
+    let g = Geometry::read(model, diagram)?;
+    let lane = *g.lane(lane).ok_or(ModelError::NotFound(lane))?;
+    let bounds = if termination {
+        if lane.destroyed || g.termination(lane.id).is_some() {
+            return Err(ModelError::Invalid(LIFELINE_ENDED.into()));
+        }
+        // `fit_lifelines` keeps it below what is on the lifeline.
+        let y = y.max(lane.line_top() + MESSAGE_GAP);
+        Rect::new(lane.center() - CROSS / 2.0, y - CROSS / 2.0, CROSS, CROSS)
+    } else {
+        let width = INVARIANT_WIDTH;
+        let y = y.max(lane.line_top());
+        Rect::new(lane.center() - width / 2.0, y, width, INVARIANT_HEIGHT)
+    };
+    let id = tx.add_presentation(diagram, Presentation::node(Some(element), bounds))?;
+    tidy(tx, diagram)?;
+    Ok(id)
+}
+
+/// Puts a duration constraint between the message presentations `source` and `target`, or a
+/// time constraint on `source` when both are the same, and shows it. The element is unnamed:
+/// its name is the constraint. Refused for anything but messages ([`NOT_ON_MESSAGE`]). Returns
+/// the new presentation.
+pub fn constrain(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<Id> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let message = |p: Id| {
+        view.get(p)
+            .filter(|p| matches!(p.shape, Shape::Message { .. }))
+            .and_then(|p| p.element)
+            .ok_or_else(|| ModelError::Invalid(NOT_ON_MESSAGE.into()))
+    };
+    let (from, to) = (message(source)?, message(target)?);
+    let kind = if from == to {
+        ElementKind::TimeConstraint(TimeConstraintProps { message: from })
+    } else {
+        ElementKind::DurationConstraint(DurationConstraintProps { from, to })
+    };
+    let interaction = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
+    let element = tx.create(interaction, umlcraft_model::ElementData::new("", kind))?;
+    add_constraint(tx, diagram, element)
+}
+
+/// Shows the duration or time constraint `element` on `diagram`, which must show its
+/// messages. A duration's line goes through the middle of its first message, as Astah puts it.
+pub fn add_constraint(tx: &mut Tx<'_>, diagram: Id, element: Id) -> Result<Id> {
+    let model = tx.model();
+    let g = Geometry::read(model, diagram)?;
+    let shown = |m: Id| g.message_of(m).ok_or_else(|| ModelError::Invalid(NOT_ON_MESSAGE.into()));
+    let bounds = match model.element(element)?.kind() {
+        ElementKind::DurationConstraint(p) => {
+            let (a, b) = (*shown(p.from)?, *shown(p.to)?);
+            let center = |lane: Id| g.lane(lane).map_or(0.0, |l| l.center());
+            let x = if a.source == a.target {
+                center(a.source) + crate::sequence::BAR / 2.0 + 20.0
+            } else {
+                (center(a.source) + center(a.target)) / 2.0
+            };
+            duration_bounds(x, a.y, b.y)
+        }
+        ElementKind::TimeConstraint(p) => time_bounds(&g, shown(p.message)?),
+        _ => return Err(ModelError::Invalid(NOT_ON_MESSAGE.into())),
+    };
+    let id = tx.add_presentation(diagram, Presentation::node(Some(element), bounds))?;
+    tidy(tx, diagram)?;
+    Ok(id)
+}
+
+/// The node of a duration constraint: its line at `x` from one message's height to the other's,
+/// as wide as the bars at its ends.
+fn duration_bounds(x: f32, a: f32, b: f32) -> Rect {
+    Rect::new(x - CROSS / 2.0, a.min(b), CROSS, (a - b).abs())
+}
+
+/// Where a time constraint's line goes, roughly: on from the arrowhead of `m`, away from the
+/// sender. The layout places it exactly.
+fn time_bounds(g: &Geometry, m: &Msg) -> Rect {
+    let center = |lane: Id| g.lane(lane).map_or(0.0, |l| l.center());
+    let (from, to) = (center(m.source), center(m.target));
+    let dir = if m.source != m.target && to >= from { 1.0 } else { -1.0 };
+    let tip = to - dir * crate::sequence::BAR / 2.0;
+    let end = tip + dir * TIME_TICK;
+    Rect::new(tip.min(end), m.end() - CONSTRAINT_LABEL / 2.0, TIME_TICK, CONSTRAINT_LABEL)
 }
 
 /// The lifelines a combined fragment or interaction use covers, by its `covered` list.
@@ -873,6 +1117,11 @@ pub fn set_lifeline_end(tx: &mut Tx<'_>, diagram: Id, presentation: Id, bottom: 
     if lane.destroyed {
         return Ok(());
     }
+    // A terminated one takes its cross along.
+    if let Some(t) = g.termination(lane.id) {
+        let rect = t.rect.translate(0.0, bottom - t.y());
+        tx.set_bounds(diagram, t.id, rect)?;
+    }
     let length = (bottom - lane.line_top()).max(RECEIVER_BAR);
     tx.update_presentation(diagram, presentation, |p| {
         if let Shape::Lifeline { length: l, .. } = &mut p.shape {
@@ -1028,6 +1277,9 @@ fn movable(g: &Geometry, bars: &HashSet<Id>, messages: &HashSet<Id>, dy: f32) ->
             if let Some(d) = cross {
                 most = most.min(d.end() - MESSAGE_GAP - y);
             }
+            if let Some(t) = g.termination(lane) {
+                most = most.min(t.y() - MESSAGE_GAP - y);
+            }
         }
     }
     // A destroy message stays below what else happens on the lifeline it ends.
@@ -1132,10 +1384,79 @@ fn end_at_reply(tx: &mut Tx<'_>, diagram: Id, bar: Bar, reply: Id) -> Result<()>
 pub fn tidy(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     drop_idle_bars(tx, diagram)?;
     fit_bars(tx, diagram)?;
+    fit_invariants(tx, diagram)?;
     fit_fragments(tx, diagram)?;
     fit_lifelines(tx, diagram)?;
+    place_terminations(tx, diagram)?;
+    fit_constraints(tx, diagram)?;
     fit_frame(tx, diagram)?;
     sync_order(tx, diagram)
+}
+
+/// Whether two rectangles are the same but for rounding.
+fn same_rect(a: Rect, b: Rect) -> bool {
+    [a.x - b.x, a.y - b.y, a.width - b.width, a.height - b.height].iter().all(|d| d.abs() < 0.01)
+}
+
+/// Keeps state invariants centered on their lifeline, below its head.
+fn fit_invariants(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    for m in g.marks.iter().filter(|m| !m.termination) {
+        let Some(lane) = g.lane(m.lane) else { continue };
+        let wanted = Rect::new(
+            lane.center() - m.rect.width / 2.0,
+            m.rect.y.max(lane.line_top()),
+            m.rect.width,
+            m.rect.height,
+        );
+        if !same_rect(wanted, m.rect) {
+            tx.set_bounds(diagram, m.id, wanted)?;
+        }
+    }
+    Ok(())
+}
+
+/// Puts the cross of every termination where its lifeline ends.
+fn place_terminations(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    for m in g.marks.iter().filter(|m| m.termination) {
+        let Some(lane) = g.lane(m.lane) else { continue };
+        let wanted =
+            Rect::new(lane.center() - CROSS / 2.0, lane.bottom() - CROSS / 2.0, CROSS, CROSS);
+        if !same_rect(wanted, m.rect) {
+            tx.set_bounds(diagram, m.id, wanted)?;
+        }
+    }
+    Ok(())
+}
+
+/// Lets duration constraints reach from one of their messages to the other where these are
+/// now, keeping the line's x, and time constraints go on from their message's arrowhead.
+fn fit_constraints(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    let mut changed = Vec::new();
+    for c in &g.constraints {
+        let wanted = match tx.model().get(c.element).map(|e| e.kind()) {
+            Some(ElementKind::DurationConstraint(p)) => {
+                let (Some(a), Some(b)) = (g.message_of(p.from), g.message_of(p.to)) else {
+                    continue;
+                };
+                duration_bounds(c.rect.center().x, a.y, b.y)
+            }
+            Some(ElementKind::TimeConstraint(p)) => {
+                let Some(m) = g.message_of(p.message) else { continue };
+                time_bounds(&g, m)
+            }
+            _ => continue,
+        };
+        if !same_rect(wanted, c.rect) {
+            changed.push((c.id, wanted));
+        }
+    }
+    for (id, rect) in changed {
+        tx.set_bounds(diagram, id, rect)?;
+    }
+    Ok(())
 }
 
 /// Tidies every sequence diagram, e.g. after deleting elements that may have been shown there.
@@ -1310,9 +1631,15 @@ fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                 .iter()
                 .filter(|o| o.id != f.id && inside(o.rect.x, o.rect.y))
                 .map(|o| o.rect.bottom());
+            let invariants = g
+                .marks
+                .iter()
+                .filter(|m| !m.termination && inside(center(m.lane), m.rect.y))
+                .map(|m| m.rect.bottom());
             let need = bars
                 .chain(messages)
                 .chain(frames)
+                .chain(invariants)
                 .fold(r.bottom(), |n, b| n.max(b + FRAGMENT_PADDING));
             // The last operand keeps room below its line, e.g. when the frame is made smaller.
             let need = f.separators.last().map_or(need, |s| need.max(s + NEXT / 2.0));
@@ -1411,7 +1738,24 @@ fn fit_lifelines(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             .iter()
             .filter(|f| f.rect.x <= lane.center() && lane.center() <= f.rect.right())
             .map(|f| f.rect.bottom());
-        let Some(last) = bars.chain(messages).chain(frames).reduce(f32::max) else { continue };
+        let invariants = g.invariants(lane.id).map(|m| m.rect.bottom());
+        let last = bars.chain(messages).chain(frames).chain(invariants).reduce(f32::max);
+        // A terminated lifeline ends at its cross, below what is on it.
+        if let Some(t) = g.termination(lane.id).filter(|_| !lane.destroyed) {
+            let end = last
+                .map_or(t.y(), |last| t.y().max(last + LIFELINE_MARGIN))
+                .max(lane.line_top() + MESSAGE_GAP);
+            let length = end - lane.line_top();
+            if (lane.length - length).abs() > 0.01 {
+                tx.update_presentation(diagram, lane.id, |p| {
+                    if let Shape::Lifeline { length: l, .. } = &mut p.shape {
+                        *l = length;
+                    }
+                })?;
+            }
+            continue;
+        }
+        let Some(last) = last else { continue };
         let need = last + LIFELINE_MARGIN;
         if need > lane.bottom() + 0.01 {
             let length = need - lane.line_top();
@@ -1431,8 +1775,9 @@ fn fit_frame(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     let lanes =
         g.lanes.iter().map(|l| Rect::new(l.head.x, l.head.y, l.head.width, l.bottom() - l.head.y));
     let frames = g.frames.iter().map(|f| f.rect);
+    let marks = g.marks.iter().map(|m| m.rect);
     let Some(content) =
-        lanes.chain(frames).chain(g.notes.iter().copied()).reduce(|a, b| a.union(&b))
+        lanes.chain(frames).chain(marks).chain(g.notes.iter().copied()).reduce(|a, b| a.union(&b))
     else {
         return Ok(());
     };
@@ -1485,6 +1830,11 @@ pub fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     for f in &g.frames {
         let (left, right) = (f.rect.x, f.rect.right());
         items.push(Item { element: f.element, y: f.rect.y, left, right, own: Some(f.id) });
+    }
+    // State invariants and terminations take their place on the lifeline.
+    for m in &g.marks {
+        let x = center(m.lane);
+        items.push(Item { element: m.element, y: m.y(), left: x, right: x, own: None });
     }
     let mut wanted: HashMap<Id, Vec<(f32, Id)>> = HashMap::new();
     for &Item { element, y, left, right, own } in &items {
@@ -2375,6 +2725,165 @@ mod tests {
         .unwrap();
         assert!(!lane(&doc).2);
         assert!(scene_of(&doc, d).sequence.unwrap().destructions.is_empty());
+    }
+
+    /// The center of the lifeline drawn as `lane`, and where its line ends.
+    fn lane_of(doc: &Document, d: Id, lane: Id) -> (f32, f32) {
+        match doc.model().view(d).unwrap().get(lane).unwrap().shape {
+            Shape::Lifeline { head, length, .. } => (head.center().x, head.bottom() + length),
+            ref other => panic!("{other:?}"),
+        }
+    }
+
+    fn bounds_of(doc: &Document, d: Id, presentation: Id) -> Rect {
+        doc.model().view(d).unwrap().get(presentation).unwrap().bounds().unwrap()
+    }
+
+    fn presentation_of(doc: &Document, d: Id, element: Id) -> Id {
+        doc.model().view(d).unwrap().presentations_of(element).next().unwrap().id
+    }
+
+    fn on_lifeline(doc: &mut Document, d: Id, termination: bool, at: Point) -> (Id, Id) {
+        doc.edit("mark", |tx| super::create_on_lifeline(tx, d, termination, at, "x > 0")).unwrap()
+    }
+
+    #[test]
+    fn state_invariants_sit_on_their_lifeline_in_the_order_of_the_drawing() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let call = draw(&mut doc, d, EdgeTool::AsyncMessage, a, b, 150.0);
+        let (center, _) = lane_of(&doc, d, b);
+        // Clicked off center, it goes on the middle of the lifeline.
+        let (invariant, node) = on_lifeline(&mut doc, d, false, Point::new(center + 15.0, 200.0));
+        let r = bounds_of(&doc, d, node);
+        assert!((r.center().x - center).abs() < 0.01, "{r:?}");
+        assert_eq!((r.y, r.height), (200.0, super::INVARIANT_HEIGHT));
+        assert_eq!(r.width, super::INVARIANT_WIDTH);
+        let interaction = doc.model().get(d).unwrap().owner().unwrap();
+        let order = |doc: &Document| doc.model().children(interaction).to_vec();
+        let items = |doc: &Document| -> Vec<Id> {
+            order(doc).into_iter().filter(|&c| c == call || c == invariant).collect()
+        };
+        assert_eq!(items(&doc), [call, invariant]);
+        // Moved below it, the message comes after it.
+        doc.edit("move", |tx| super::move_item(tx, d, call, 260.0)).unwrap();
+        assert_eq!(items(&doc), [invariant, call]);
+        let before = doc.model().clone();
+        doc.edit("tidy", |tx| super::tidy(tx, d)).unwrap();
+        assert_eq!(*doc.model(), before);
+        // Off every lifeline it is refused.
+        let off = doc.edit("mark", |tx| {
+            super::create_on_lifeline(tx, d, false, Point::new(center + 400.0, 200.0), "y")
+        });
+        assert!(off.is_err());
+        let scene = scene_of(&doc, d);
+        let drawn = scene.node(node).unwrap();
+        assert!(matches!(drawn.figure, Figure::StateInvariant));
+        assert_eq!(drawn.rows.first().map(|r| r.text.as_str()), Some("x > 0"));
+    }
+
+    #[test]
+    fn a_termination_ends_its_lifeline_below_what_happens_on_it() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let call = draw(&mut doc, d, EdgeTool::AsyncMessage, a, b, 150.0);
+        let (center, _) = lane_of(&doc, d, b);
+        let (_, cross) = on_lifeline(&mut doc, d, true, Point::new(center, 100.0));
+        let ends = |doc: &Document| {
+            let (_, end) = lane_of(doc, d, b);
+            let r = bounds_of(doc, d, cross);
+            assert_eq!(r.center().y, end, "the cross sits where the line ends");
+            assert_eq!(r.width, super::CROSS);
+            end
+        };
+        // 30 below the bar the message starts on the lifeline.
+        assert_eq!(ends(&doc), 205.0);
+        let y = |doc: &Document| match message(doc, d, call) {
+            Shape::Message { y, .. } => y,
+            other => panic!("{other:?}"),
+        };
+        // Moved down, the message stops above the cross, which keeps below its bar.
+        doc.edit("move", |tx| super::move_item(tx, d, call, 300.0)).unwrap();
+        assert_eq!(y(&doc), 185.0);
+        assert_eq!(ends(&doc), 240.0);
+        // Dragged longer, the lifeline keeps its length, and there is room above the cross.
+        doc.edit("longer", |tx| super::set_lifeline_end(tx, d, b, 400.0)).unwrap();
+        assert_eq!(ends(&doc), 400.0);
+        doc.edit("move", |tx| super::move_item(tx, d, call, 300.0)).unwrap();
+        assert_eq!((y(&doc), ends(&doc)), (300.0, 400.0));
+        // A lifeline ends once.
+        let again = doc.edit("again", |tx| {
+            super::create_on_lifeline(tx, d, true, Point::new(center, 500.0), "")
+        });
+        assert!(again.is_err());
+        let before = doc.model().clone();
+        doc.edit("tidy", |tx| super::tidy(tx, d)).unwrap();
+        assert_eq!(*doc.model(), before);
+        // A termination is no destroy message: the lifeline itself is not destroyed.
+        assert!(matches!(
+            doc.model().view(d).unwrap().get(b).unwrap().shape,
+            Shape::Lifeline { destroyed: false, .. }
+        ));
+        let scene = scene_of(&doc, d);
+        assert!(matches!(scene.node(cross).unwrap().figure, Figure::Termination));
+    }
+
+    #[test]
+    fn duration_and_time_constraints_follow_their_messages() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let first = draw(&mut doc, d, EdgeTool::AsyncMessage, a, b, 150.0);
+        let second = draw(&mut doc, d, EdgeTool::AsyncMessage, a, b, 250.0);
+        let (p1, p2) = (presentation_of(&doc, d, first), presentation_of(&doc, d, second));
+        let duration = doc.edit("duration", |tx| super::constrain(tx, d, p1, p2)).unwrap();
+        let time = doc.edit("time", |tx| super::constrain(tx, d, p2, p2)).unwrap();
+        let element = |doc: &Document, p: Id| doc.model().view(d).unwrap().get(p).unwrap().element;
+        let (de, te) = (element(&doc, duration).unwrap(), element(&doc, time).unwrap());
+        let kinds: Vec<ElementKind> =
+            [de, te].map(|e| doc.model().get(e).unwrap().kind().clone()).into();
+        assert_eq!(
+            kinds,
+            [
+                ElementKind::DurationConstraint(umlcraft_model::DurationConstraintProps {
+                    from: first,
+                    to: second
+                }),
+                ElementKind::TimeConstraint(umlcraft_model::TimeConstraintProps {
+                    message: second
+                }),
+            ]
+        );
+        let (ca, cb) = (lane_of(&doc, d, a).0, lane_of(&doc, d, b).0);
+        let r = bounds_of(&doc, d, duration);
+        assert_eq!((r.center().x, r.y, r.bottom()), ((ca + cb) / 2.0, 150.0, 250.0));
+        // Moved, the messages take the line's ends along; it keeps its x.
+        doc.edit("move", |tx| super::move_item(tx, d, second, 320.0)).unwrap();
+        let moved = bounds_of(&doc, d, duration);
+        assert_eq!((moved.center().x, moved.y, moved.bottom()), (r.center().x, 150.0, 320.0));
+        let before = doc.model().clone();
+        doc.edit("tidy", |tx| super::tidy(tx, d)).unwrap();
+        assert_eq!(*doc.model(), before);
+        // Named, they read in braces; the time constraint's line goes on from the arrowhead.
+        doc.edit("name", |tx| {
+            tx.rename(de, "d..3*d".to_owned())?;
+            tx.rename(te, "t..t+3".to_owned())
+        })
+        .unwrap();
+        let scene = scene_of(&doc, d);
+        let node = scene.node(duration).unwrap();
+        assert!(matches!(node.figure, Figure::Duration { top: 150.0, bottom: 320.0, .. }));
+        assert_eq!(node.rows.first().map(|r| r.text.as_str()), Some("{d..3*d}"));
+        let node = scene.node(time).unwrap();
+        let Figure::TimeTick { from, to } = node.figure else { panic!("no time tick") };
+        assert_eq!((from.y, to.y), (320.0, 320.0));
+        assert!(from.x < cb && to.x - from.x == super::TIME_TICK, "{from:?} {to:?}");
+        assert_eq!(node.rows.first().map(|r| r.text.as_str()), Some("{t..t+3}"));
+        // Not on a message, refused; without its message, gone.
+        assert!(doc.edit("off", |tx| super::constrain(tx, d, a, p1)).is_err());
+        doc.edit("delete", |tx| {
+            tx.delete(second)?;
+            super::tidy_all(tx)
+        })
+        .unwrap();
+        let view = doc.model().view(d).unwrap();
+        assert!(view.get(duration).is_none() && view.get(time).is_none());
     }
 
     #[test]

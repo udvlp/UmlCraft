@@ -9,6 +9,7 @@
 //! - [`labels`] moves labels not placed by hand off the nodes, lines and labels they cover.
 //! - [`draw`] turns a scene's figures into drawing primitives; [`svg`] writes them as an image.
 
+pub mod activity;
 pub mod autoroute;
 pub mod clipboard;
 pub mod composite;
@@ -25,5 +26,6 @@ pub mod route;
 pub mod scene;
 pub mod sequence;
 pub mod sequence_edit;
+pub mod shared;
 pub mod state_edit;
 pub mod svg;

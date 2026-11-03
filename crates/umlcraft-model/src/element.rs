@@ -26,6 +26,11 @@ pub struct ElementData {
     pub tagged_values: Vec<TaggedValue>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub documentation: String,
+    /// Constraints on the element, without braces, e.g. `age >= 0` for `{age >= 0}`. Attributes
+    /// and operations show them after their text, lines below their name; classes keep them
+    /// without showing them, as Astah does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<String>,
     #[serde(flatten)]
     pub kind: ElementKind,
 }
@@ -38,6 +43,7 @@ impl ElementData {
             stereotypes: Vec::new(),
             tagged_values: Vec::new(),
             documentation: String::new(),
+            constraints: Vec::new(),
             kind,
         }
     }
@@ -427,6 +433,40 @@ pub struct MessageProps {
     pub guard: String,
 }
 
+/// A condition that holds on a lifeline at one point of the interaction, drawn on the lifeline
+/// as a rounded box. The condition is the element's name, as in Astah.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StateInvariantProps {
+    /// The lifeline it holds on.
+    pub lifeline: Id,
+}
+
+/// The end of a lifeline without a destroy message, drawn as a cross where its line ends.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminationProps {
+    /// The lifeline it ends.
+    pub lifeline: Id,
+}
+
+/// How long it may take from one message to another (`{d..3*d}`), drawn as a line with an
+/// arrow at both ends between their heights. The constraint is the element's name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DurationConstraintProps {
+    pub from: Id,
+    pub to: Id,
+}
+
+/// When a message may arrive (`{t..t+3}`), written beside its arrowhead. The constraint is the
+/// element's name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeConstraintProps {
+    pub message: Id,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InteractionOperator {
@@ -555,6 +595,11 @@ pub struct Qualifier {
 #[serde(rename_all = "camelCase")]
 pub struct AssociationProps {
     pub ends: [AssociationEnd; 2],
+    /// The class of an association class: the class box drawn with a dashed line to the
+    /// middle of the association's line. UML has one element for both; UmlCraft keeps the
+    /// class's name, members and constraints on the class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<Id>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -616,6 +661,57 @@ pub enum ActivityNodeKind {
     Join,
     /// Objects passed along object flows.
     Object,
+    /// An action that sends a signal, drawn as a pentagon pointing right.
+    SendSignal,
+    /// An action that waits for an event, drawn with a notch on its left.
+    AcceptEvent,
+    /// An action that waits for a point in time, drawn as an hourglass.
+    AcceptTimeEvent,
+    /// An action that calls another activity ([`ActivityNodeProps::behavior`]), drawn with a
+    /// rake.
+    CallBehavior,
+    /// Continues a flow elsewhere: a small circle with a label, the flow going on from the
+    /// connector of the same name.
+    Connector,
+    /// An object node on the border of an action, for what the action takes. Owned by the
+    /// action.
+    InputPin,
+    /// An object node on the border of an action, for what the action gives. Owned by the
+    /// action.
+    OutputPin,
+    /// An object node on the border of the activity's frame: an input or output of the whole
+    /// activity.
+    ActivityParameter,
+}
+
+/// The order in which an object node hands on the objects it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjectOrdering {
+    Unordered,
+    Ordered,
+    /// Last in, first out.
+    Lifo,
+    /// First in, first out, UML's default.
+    Fifo,
+}
+
+impl ObjectOrdering {
+    pub const ALL: [Self; 4] = [Self::Unordered, Self::Ordered, Self::Lifo, Self::Fifo];
+
+    /// The name as UML and Astah write it (`{ordering=FIFO}`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unordered => "unordered",
+            Self::Ordered => "ordered",
+            Self::Lifo => "LIFO",
+            Self::Fifo => "FIFO",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|o| o.as_str().eq_ignore_ascii_case(text.trim()))
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,24 +719,83 @@ pub enum ActivityNodeKind {
 pub struct ActivityNodeProps {
     #[serde(default, skip_serializing_if = "is_default")]
     pub node: ActivityNodeKind,
-    /// Object nodes: the type of the objects.
+    /// Object nodes, pins and activity parameters: the type of the objects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub type_ref: Option<TypeRef>,
     /// Object nodes: the state the objects are in (`filled` in `Order [filled]`); empty for
     /// none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub in_state: String,
+    /// Object nodes: the order objects leave in; unset, none is shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordering: Option<ObjectOrdering>,
+    /// Object nodes: how many objects the node holds at most, as written (`3`, `*`); empty
+    /// for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub upper_bound: String,
+    /// Object nodes: objects flow in and out while the action runs (`{stream}`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub is_stream: bool,
+    /// Call behavior actions: the activity called.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<Id>,
 }
 
 impl ActivityNodeKind {
     /// Whether flows may leave a node of this kind.
     pub fn has_outgoing(self) -> bool {
-        !matches!(self, Self::ActivityFinal | Self::FlowFinal)
+        !matches!(self, Self::ActivityFinal | Self::FlowFinal | Self::InputPin)
     }
 
     /// Whether flows may enter a node of this kind.
     pub fn has_incoming(self) -> bool {
-        self != Self::Initial
+        !matches!(self, Self::Initial | Self::OutputPin)
+    }
+
+    /// Actions of every kind: what pins sit on.
+    pub fn is_action(self) -> bool {
+        matches!(
+            self,
+            Self::Action
+                | Self::SendSignal
+                | Self::AcceptEvent
+                | Self::AcceptTimeEvent
+                | Self::CallBehavior
+        )
+    }
+
+    pub fn is_pin(self) -> bool {
+        matches!(self, Self::InputPin | Self::OutputPin)
+    }
+
+    /// Nodes that hold objects: object nodes, pins and activity parameters, which have a
+    /// type, a state and the object node properties.
+    pub fn is_object(self) -> bool {
+        matches!(self, Self::Object | Self::InputPin | Self::OutputPin | Self::ActivityParameter)
+    }
+
+    /// Whether nodes of this kind have a name of their own: actions, object nodes and
+    /// connectors. Control nodes stay unnamed.
+    pub fn is_named(self) -> bool {
+        self.is_action() || self.is_object() || self == Self::Connector
+    }
+}
+
+impl ActivityNodeProps {
+    /// The object node properties as UML writes them below the node: `{ordering=FIFO}`,
+    /// `{upperBound=3}`, `{stream}`, in Astah's order.
+    pub fn property_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if let Some(o) = self.ordering {
+            lines.push(format!("{{ordering={}}}", o.as_str()));
+        }
+        if !self.upper_bound.is_empty() {
+            lines.push(format!("{{upperBound={}}}", self.upper_bound));
+        }
+        if self.is_stream {
+            lines.push("{stream}".to_owned());
+        }
+        lines
     }
 }
 
@@ -656,7 +811,8 @@ pub struct ActivityEdgeProps {
     pub guard: String,
 }
 
-/// Internal activities of a state, as `entry / …`, `do / …` and `exit / …`.
+/// Internal activities of a state, as `entry / …`, `do / …` and `exit / …`, and the state
+/// machine a submachine state stands for.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateProps {
@@ -666,6 +822,10 @@ pub struct StateProps {
     pub do_activity: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub exit: String,
+    /// Submachine states: the state machine whose states this state stands for. Such a state
+    /// has no substates of its own, only stub states and entry and exit points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submachine: Option<Id>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -679,6 +839,28 @@ pub enum PseudostateKind {
     Join,
     ShallowHistory,
     DeepHistory,
+    /// Where transitions enter a composite state, a submachine state or the state machine: a
+    /// small circle on its border, owned by it.
+    EntryPoint,
+    /// Where transitions leave a composite state, a submachine state or the state machine: a
+    /// crossed circle on its border, owned by it.
+    ExitPoint,
+    /// Astah's stub state: a named bar inside a submachine state, owned by it, standing for a
+    /// state of the submachine that transitions lead to or come from.
+    StubState,
+}
+
+impl PseudostateKind {
+    /// Entry and exit points, which sit on the border of their state or of the frame.
+    pub fn is_border_point(self) -> bool {
+        matches!(self, Self::EntryPoint | Self::ExitPoint)
+    }
+
+    /// Whether pseudostates of this kind show their name: entry and exit points and stub
+    /// states do, the other kinds stay unnamed.
+    pub fn is_named(self) -> bool {
+        matches!(self, Self::EntryPoint | Self::ExitPoint | Self::StubState)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -947,6 +1129,14 @@ pub enum ElementKind {
     CombinedFragment(CombinedFragmentProps),
     InteractionOperand(InteractionOperandProps),
     InteractionUse(InteractionUseProps),
+    /// Sequence diagrams: a condition on a lifeline at a point in time.
+    StateInvariant(StateInvariantProps),
+    /// Sequence diagrams: a lifeline's end (×) without a destroy message.
+    Termination(TerminationProps),
+    /// Sequence diagrams: a constraint on the time between two messages.
+    DurationConstraint(DurationConstraintProps),
+    /// Sequence diagrams: a constraint on the time a message arrives.
+    TimeConstraint(TimeConstraintProps),
     /// Owns the nodes, flows and partitions of activity diagrams.
     Activity,
     ActivityNode(ActivityNodeProps),
@@ -1012,6 +1202,16 @@ pub enum RefRole {
     ConnectorEnd,
     /// The part through which a connector reaches the port of the part's type.
     PartWithPort,
+    /// The activity a call behavior action calls.
+    Calls,
+    /// The state machine a submachine state stands for.
+    Submachine,
+    /// The lifeline a state invariant holds on or a termination ends.
+    OnLifeline,
+    /// The messages a duration or time constraint applies to.
+    Constrained,
+    /// The class of an association class.
+    AssociationClass,
 }
 
 impl RefRole {
@@ -1035,6 +1235,8 @@ impl RefRole {
                 | Self::LinkEnd
                 | Self::DefiningAttribute
                 | Self::ConnectorEnd
+                | Self::OnLifeline
+                | Self::Constrained
         )
     }
 
@@ -1052,7 +1254,10 @@ impl RefRole {
             Self::Including | Self::Addition | Self::Extension | Self::Extended => {
                 matches!(target, ElementKind::UseCase(_))
             }
-            Self::MessageEnd | Self::Covered => matches!(target, ElementKind::Lifeline(_)),
+            Self::MessageEnd | Self::Covered | Self::OnLifeline => {
+                matches!(target, ElementKind::Lifeline(_))
+            }
+            Self::Constrained => matches!(target, ElementKind::Message(_)),
             Self::Operation => matches!(target, ElementKind::Operation(_)),
             Self::ExtensionPoint => matches!(target, ElementKind::ExtensionPoint),
             Self::FlowEnd => matches!(target, ElementKind::ActivityNode(_)),
@@ -1065,6 +1270,9 @@ impl RefRole {
                 matches!(target, ElementKind::Attribute(_) | ElementKind::Port(_))
             }
             Self::PartWithPort => matches!(target, ElementKind::Attribute(_)),
+            Self::Calls => matches!(target, ElementKind::Activity),
+            Self::AssociationClass => matches!(target, ElementKind::Class(_)),
+            Self::Submachine => matches!(target, ElementKind::StateMachine),
             Self::Client | Self::Supplier | Self::Annotated => !matches!(
                 target,
                 ElementKind::Model | ElementKind::Diagram(_) | ElementKind::Structogram(_)
@@ -1101,6 +1309,7 @@ impl ElementKind {
     pub fn association(a: Id, b: Id) -> Self {
         Self::Association(AssociationProps {
             ends: [AssociationEnd::new(a), AssociationEnd::new(b)],
+            class: None,
         })
     }
 
@@ -1205,6 +1414,10 @@ impl ElementKind {
             Self::CombinedFragment(_) => "combinedFragment",
             Self::InteractionOperand(_) => "interactionOperand",
             Self::InteractionUse(_) => "interactionUse",
+            Self::StateInvariant(_) => "stateInvariant",
+            Self::Termination(_) => "termination",
+            Self::DurationConstraint(_) => "durationConstraint",
+            Self::TimeConstraint(_) => "timeConstraint",
             Self::Activity => "activity",
             Self::ActivityNode(_) => "activityNode",
             Self::ActivityEdge(_) => "activityEdge",
@@ -1301,14 +1514,29 @@ impl ElementKind {
             K::ExtensionPoint => matches!(self, K::UseCase(_)),
             K::Interaction => self.is_namespace() || matches!(self, K::Class(_) | K::UseCase(_)),
             K::Lifeline(_) => matches!(self, K::Interaction),
-            K::Message(_) | K::CombinedFragment(_) | K::InteractionUse(_) => {
-                matches!(self, K::Interaction | K::InteractionOperand(_))
-            }
+            K::Message(_)
+            | K::CombinedFragment(_)
+            | K::InteractionUse(_)
+            | K::StateInvariant(_)
+            | K::Termination(_) => matches!(self, K::Interaction | K::InteractionOperand(_)),
+            K::DurationConstraint(_) | K::TimeConstraint(_) => matches!(self, K::Interaction),
             K::InteractionOperand(_) => matches!(self, K::CombinedFragment(_)),
             K::Activity => self.is_namespace() || matches!(self, K::Class(_) | K::UseCase(_)),
+            // Pins belong to their action, other nodes to the activity.
+            K::ActivityNode(n) if n.node.is_pin() => {
+                matches!(self, K::ActivityNode(a) if a.node.is_action())
+            }
             K::ActivityNode(_) | K::ActivityEdge(_) => matches!(self, K::Activity),
             K::Partition => matches!(self, K::Activity | K::Partition),
             K::StateMachine => self.is_namespace() || matches!(self, K::Class(_) | K::UseCase(_)),
+            // Entry and exit points belong to the state (or state machine) on whose border they
+            // sit, stub states to their submachine state; neither goes into a region.
+            K::Pseudostate(p) if p.pseudostate.is_border_point() => {
+                matches!(self, K::StateMachine | K::State(_))
+            }
+            K::Pseudostate(p) if p.pseudostate == PseudostateKind::StubState => {
+                matches!(self, K::State(_))
+            }
             K::State(_) | K::FinalState | K::Pseudostate(_) => {
                 matches!(self, K::StateMachine | K::State(_) | K::Region)
             }
@@ -1411,11 +1639,22 @@ impl ElementKind {
                 p.refers_to.iter().for_each(|&id| f(id, RefRole::RefersTo));
                 p.covered.iter().for_each(|&id| f(id, RefRole::Covered));
             }
-            Self::ActivityNode(p) => p.type_ref.iter().for_each(|t| types(t, f)),
+            Self::StateInvariant(StateInvariantProps { lifeline })
+            | Self::Termination(TerminationProps { lifeline }) => f(*lifeline, RefRole::OnLifeline),
+            Self::DurationConstraint(p) => {
+                f(p.from, RefRole::Constrained);
+                f(p.to, RefRole::Constrained);
+            }
+            Self::TimeConstraint(p) => f(p.message, RefRole::Constrained),
+            Self::ActivityNode(p) => {
+                p.type_ref.iter().for_each(|t| types(t, f));
+                p.behavior.iter().for_each(|&id| f(id, RefRole::Calls));
+            }
             Self::ActivityEdge(p) => {
                 f(p.source, RefRole::FlowEnd);
                 f(p.target, RefRole::FlowEnd);
             }
+            Self::State(p) => p.submachine.iter().for_each(|&id| f(id, RefRole::Submachine)),
             Self::Transition(p) => {
                 f(p.source, RefRole::TransitionEnd);
                 f(p.target, RefRole::TransitionEnd);
@@ -1424,6 +1663,7 @@ impl ElementKind {
                 p.ends.iter().for_each(|end| f(end.participant, RefRole::AssociationEnd));
                 let qualifiers = p.ends.iter().flat_map(|end| &end.qualifiers);
                 qualifiers.filter_map(|q| q.type_ref.as_ref()).for_each(|t| types(t, f));
+                p.class.iter().for_each(|&id| f(id, RefRole::AssociationClass));
             }
             Self::Generalization(p) => {
                 f(p.specific, RefRole::Specific);
@@ -1494,11 +1734,22 @@ impl ElementKind {
                 p.refers_to.iter_mut().for_each(&mut f);
                 p.covered.iter_mut().for_each(f);
             }
-            Self::ActivityNode(p) => type_ref(&mut p.type_ref, &mut f),
+            Self::StateInvariant(StateInvariantProps { lifeline })
+            | Self::Termination(TerminationProps { lifeline }) => f(lifeline),
+            Self::DurationConstraint(p) => {
+                f(&mut p.from);
+                f(&mut p.to);
+            }
+            Self::TimeConstraint(p) => f(&mut p.message),
+            Self::ActivityNode(p) => {
+                type_ref(&mut p.type_ref, &mut f);
+                p.behavior.iter_mut().for_each(f);
+            }
             Self::ActivityEdge(p) => {
                 f(&mut p.source);
                 f(&mut p.target);
             }
+            Self::State(p) => p.submachine.iter_mut().for_each(f),
             Self::Transition(p) => {
                 f(&mut p.source);
                 f(&mut p.target);
@@ -1508,6 +1759,7 @@ impl ElementKind {
                 for q in p.ends.iter_mut().flat_map(|end| &mut end.qualifiers) {
                     type_ref(&mut q.type_ref, &mut f);
                 }
+                p.class.iter_mut().for_each(f);
             }
             Self::Generalization(p) => {
                 f(&mut p.specific);
@@ -1587,7 +1839,7 @@ impl ElementKind {
                 unlink_type(&mut p.default) || changed
             }
             Self::Association(p) => {
-                let mut changed = false;
+                let mut changed = unlink_opt(&mut p.class);
                 for q in p.ends.iter_mut().flat_map(|end| &mut end.qualifiers) {
                     changed |= unlink_type(&mut q.type_ref);
                 }
@@ -1607,7 +1859,11 @@ impl ElementKind {
                 let refers = unlink_opt(&mut p.refers_to);
                 unlink_vec(&mut p.covered) || refers
             }
-            Self::ActivityNode(p) => unlink_type(&mut p.type_ref),
+            Self::ActivityNode(p) => {
+                let behavior = unlink_opt(&mut p.behavior);
+                unlink_type(&mut p.type_ref) || behavior
+            }
+            Self::State(p) => unlink_opt(&mut p.submachine),
             Self::Extend(p) => unlink_vec(&mut p.extension_points),
             Self::Comment(p) => unlink_vec(&mut p.annotated),
             Self::Structogram(p) => unlink_opt(&mut p.operation),
@@ -1719,7 +1975,12 @@ mod tests {
             ElementKind::ActivityNode(ActivityNodeProps {
                 node: ActivityNodeKind::Object,
                 type_ref: Some(TypeRef::Element(a)),
-                in_state: String::new(),
+                ..Default::default()
+            }),
+            ElementKind::ActivityNode(ActivityNodeProps {
+                node: ActivityNodeKind::CallBehavior,
+                behavior: Some(a),
+                ..Default::default()
             }),
             ElementKind::attribute(Some(list_of(b, a))),
             ElementKind::port(Some(list_of(b, a))),
@@ -1762,6 +2023,21 @@ mod tests {
         assert!(!ElementKind::Package.can_own(&action));
         assert!(ElementKind::Partition.can_own(&ElementKind::Partition));
         assert!(!ElementKind::Partition.can_own(&action));
+        // Pins belong to actions of any kind, not to the activity or to object nodes.
+        let pin = ElementKind::activity_node(ActivityNodeKind::InputPin);
+        assert!(action.can_own(&pin) && !ElementKind::Activity.can_own(&pin));
+        assert!(ElementKind::activity_node(ActivityNodeKind::SendSignal).can_own(&pin));
+        assert!(!ElementKind::activity_node(ActivityNodeKind::Object).can_own(&pin));
+        assert!(!action.can_own(&action));
+        let parameter = ElementKind::activity_node(ActivityNodeKind::ActivityParameter);
+        assert!(ElementKind::Activity.can_own(&parameter));
+        let call = ElementKind::ActivityNode(ActivityNodeProps {
+            node: ActivityNodeKind::CallBehavior,
+            behavior: Some(Id::from_u128(7)),
+            ..Default::default()
+        });
+        assert_eq!(call.references(), [(Id::from_u128(7), RefRole::Calls)]);
+        assert!(RefRole::Calls.accepts(&ElementKind::Activity) && !RefRole::Calls.is_strong());
         assert!(ElementKind::Activity.can_own(&ElementKind::diagram(DiagramKind::Activity)));
         let state = ElementKind::State(StateProps::default());
         assert!(ElementKind::StateMachine.can_own(&state));
@@ -1772,6 +2048,29 @@ mod tests {
         assert!(!ElementKind::StateMachine.can_own(&ElementKind::Region));
         let internal = ElementKind::InternalTransition(InternalTransitionProps::default());
         assert!(state.can_own(&internal) && !ElementKind::Region.can_own(&internal));
+        // Entry and exit points belong to a state or the machine, stub states to a state;
+        // neither goes into a region.
+        let entry = ElementKind::pseudostate(PseudostateKind::EntryPoint);
+        assert!(state.can_own(&entry) && ElementKind::StateMachine.can_own(&entry));
+        assert!(!ElementKind::Region.can_own(&entry));
+        let stub = ElementKind::pseudostate(PseudostateKind::StubState);
+        assert!(state.can_own(&stub) && !ElementKind::StateMachine.can_own(&stub));
+        assert!(!ElementKind::Region.can_own(&stub));
+        assert!(
+            PseudostateKind::ExitPoint.is_border_point() && PseudostateKind::StubState.is_named()
+        );
+        assert!(!PseudostateKind::Initial.is_named());
+        // A submachine state refers to its state machine weakly.
+        let submachine = ElementKind::State(StateProps {
+            submachine: Some(Id::from_u128(9)),
+            ..Default::default()
+        });
+        assert_eq!(submachine.references(), [(Id::from_u128(9), RefRole::Submachine)]);
+        assert!(RefRole::Submachine.accepts(&ElementKind::StateMachine));
+        assert!(!RefRole::Submachine.is_strong() && !RefRole::Submachine.accepts(&state));
+        let mut unlinked = submachine.clone();
+        assert!(unlinked.unlink(Id::from_u128(9), "M"));
+        assert_eq!(unlinked, state);
         let node = ElementKind::Node(ClassifierProps::default());
         let component = ElementKind::Component(ClassifierProps::default());
         assert!(node.can_own(&node), "nested nodes");

@@ -22,12 +22,12 @@ between releases is in the [changelog](CHANGELOG.md).
 
 | Diagram | What it covers |
 | --- | --- |
-| Class | Classes, interfaces (also as a circle), enumerations, packages and subsystems; attributes, operations and template parameters with bounds and defaults; associations with roles, multiplicities, navigability, aggregation, qualifiers and static ends; generalization, realization, dependency; containment lines (⊕) to nested classes; bound templates such as `Box<Holder, 20>`, also drawn as bound classes with their «bind» line |
+| Class | Classes, interfaces (also as a circle), enumerations, packages and subsystems; attributes, operations and template parameters with bounds and defaults; associations with roles, multiplicities, navigability, aggregation, qualifiers and static ends; generalization, realization, dependency; association classes, joined to their association by a dashed line; constraints (`{age > 0}`) on attributes, operations and lines; generalizations sharing one triangle (shared style, vertical or horizontal); «boundary», «control» and «entity» classes as their robustness icons; containment lines (⊕) to nested classes; bound templates such as `Box<Holder, 20>`, also drawn as bound classes with their «bind» line |
 | Object | Objects `name : Class` with a slot for every attribute of the class, inherited ones included; links with roles, navigability and aggregation, as instances of associations. They are drawn on class diagrams; an object diagram is a class diagram whose ribbon starts with Object and Link |
 | Use case | Actors, use cases with extension points, system boundary, include and extend with condition, notes on lines |
-| Sequence | Lifelines, synchronous, asynchronous, reply, create (the new lifeline with a bar for its constructor), destroy, self, found and lost messages (one click on the lifeline; drag the dot to change length and side; lost ones start as replies), activation bars (a caller's lasts as long as its call), message numbers, combined fragments (alt, opt, loop, par, …) with operands and guards, interaction uses |
-| Activity | Actions, initial and final nodes, decision, merge, fork and join, object nodes (also in a state, `Order [filled]`), flows with guards, partitions (also nested) |
-| State machine | States with entry, do, exit and internal transitions, composite states, orthogonal states with regions one below the other or side by side, final states, initial, choice, junction, fork, join and history pseudostates, transitions labeled `trigger [guard] / effect`. A state dragged into another state or region becomes part of it |
+| Sequence | Lifelines, synchronous, asynchronous, reply, create (the new lifeline with a bar for its constructor), destroy, self, found and lost messages (one click on the lifeline; drag the dot to change length and side; lost ones start as replies), activation bars (a caller's lasts as long as its call), message numbers, combined fragments (alt, opt, loop, par, …) with operands and guards, interaction uses, state invariants, terminations (the × that ends a lifeline), duration constraints (`{d..3*d}`, dragged from one message to another) and time constraints (`{t..t+3}`, one click on a message) |
+| Activity | Actions, call behavior actions (calling another activity), send signal, accept event and accept time event actions, initial and final nodes, decision, merge, fork and join, object nodes (also in a state, `Order [filled]`, with ordering, upper bound and stream), input and output pins on the border of their action, activity parameter nodes on the frame, connectors, flows with guards, partitions (also nested) |
+| State machine | States with entry, do, exit and internal transitions, composite states, orthogonal states with regions one below the other or side by side, final states, initial, choice, junction, fork, join and history pseudostates, submachine states standing for another state machine (`include / Machine`), entry and exit points on the border of a state or the frame, stub states in submachine states, transitions labeled `trigger [guard] / effect`. A state dragged into another state or region becomes part of it |
 | Component and deployment | Components, artifacts and nodes with their icons, objects and instances, deployments |
 | Composite structure | The inside of a class or component: parts `name : Type [m]` drawn in it, ports on the border of the class and of typed parts, connectors between parts and ports, realizations and dependencies from ports to interfaces, which can be drawn as a circle or, when required, as a socket. A part dragged over its class's border takes the border along, and ports stay on their border when it moves or changes size |
 
@@ -195,11 +195,23 @@ can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
   diagram frame, lines between two interfaces and untyped parts of components are left out
 - More than two regions per state in the `.asta` export, because the API divides a state only
   once
+- Entry and exit points and stub states in the `.asta` export, because the API cannot create
+  them (they are imported); a submachine state whose state machine has no diagram is exported
+  as a plain state
+- Duration and time constraints in the `.asta` export, because the API cannot create them
+  (they are imported)
+- In activity diagrams: value pins, exception and control pins, expansion and interruptible
+  regions, exception handlers, and signals as model elements of their own (a send signal or
+  accept event action names its signal); pins not shown on a diagram are left out of the
+  `.asta` export
 - Data flow diagrams, flowcharts, communication, timing, requirement, ER
   and mind map diagrams and matrices in `.asta` files (skipped on import)
 - Component and deployment diagrams are exported to `.asta` as class diagrams, because the API
   has no editors for them
 - Containment lines in the `.asta` export, which the API cannot draw (they are imported)
+- Generalizations sharing one triangle in the `.asta` export, because the API cannot set the
+  shared style (they are imported); each line keeps its course over the common line
+- Constraints of a class itself are kept but not drawn, as in Astah
 - In the Python import: attributes assigned outside `__init__`, `@property` as an attribute,
   functions and variables outside classes (functions get structograms, but no element of the
   model)

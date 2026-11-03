@@ -8,7 +8,7 @@ use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Color, DiagramKind,
     EdgeLabels, Element, ElementKind, Id, InstanceKind, LineShape, LinkEnd, MessageSort, Model,
     Navigability, Point, Presentation, PseudostateKind, Qualifier, Rect, Regions, Shape, Size,
-    StateProps, Style, TransitionProps,
+    StateProps, Style, TransitionProps, View,
 };
 
 use crate::labels::{self, FreeLabel, LabelKind};
@@ -107,7 +107,7 @@ impl NodeShape {
     /// below the figure, so that a line from below stops under the name instead of crossing it.
     pub fn clip_rect(&self) -> Rect {
         let r = self.rect;
-        if !matches!(self.figure, Figure::Actor) {
+        if !matches!(self.figure, Figure::Actor | Figure::Robustness(_)) {
             return r;
         }
         let bottom = self.rows.iter().map(|row| row.rect.bottom()).fold(r.bottom(), f32::max);
@@ -164,6 +164,9 @@ impl NodeShape {
                 | Figure::Activation
                 | Figure::Frame { .. }
                 | Figure::Port { .. }
+                | Figure::Pin { .. }
+                | Figure::EntryPoint
+                | Figure::ExitPoint
         )
     }
 }
@@ -255,6 +258,9 @@ pub enum Figure {
         subsystem: bool,
     },
     Actor,
+    /// A class drawn as the icon of its robustness stereotype (boundary, control or entity) in
+    /// the middle of its box, its name below.
+    Robustness(HeadIcon),
     /// Ellipse; with extension points, a line at `separator` divides name and points.
     UseCase {
         separator: Option<f32>,
@@ -270,6 +276,22 @@ pub enum Figure {
     },
     /// Activation bar on a lifeline.
     Activation,
+    /// Sequence diagrams: a state invariant, a box with round ends across its lifeline.
+    StateInvariant,
+    /// Sequence diagrams: the cross that ends a lifeline without a destroy message.
+    Termination,
+    /// Sequence diagrams: a duration constraint's line at `x` from `top` to `bottom`, with an
+    /// open arrow and a bar across it at both ends.
+    Duration {
+        x: f32,
+        top: f32,
+        bottom: f32,
+    },
+    /// Sequence diagrams: a time constraint's line, going on from a message's arrowhead.
+    TimeTick {
+        from: Point,
+        to: Point,
+    },
     /// The frame around a diagram, with its kind and name in a tab at the top left.
     Frame {
         tab: Rect,
@@ -296,6 +318,19 @@ pub enum Figure {
     Bar,
     /// Object node.
     Rectangle,
+    /// Send signal action: a pentagon pointing right.
+    SendSignal,
+    /// Accept event action: a box with a notch on its left.
+    AcceptEvent,
+    /// Accept time event action: an hourglass.
+    Hourglass,
+    /// Call behavior action: an action with a rake in its bottom right corner.
+    CallBehavior,
+    /// A pin on the border of an action. Without flows it shows which way objects go: an
+    /// arrow from the first point to the second.
+    Pin {
+        arrow: Option<[Point; 2]>,
+    },
     /// Swimlane with its name above a line at `header`. Hollow like a system boundary.
     Partition {
         header: f32,
@@ -303,11 +338,20 @@ pub enum Figure {
     /// State machines: a state with rounded corners; a line at `separator` divides the name
     /// from the internal activities or substates. An orthogonal state has its regions in order,
     /// divided by dashed lines: horizontal ones, or `vertical` ones from the separator down.
+    /// A submachine state has a second line at `submachine`, below `include / Machine`, and
+    /// Astah's submachine icon in its bottom right corner.
     State {
         separator: Option<f32>,
         regions: Vec<RegionShape>,
         vertical: bool,
+        submachine: Option<f32>,
     },
+    /// Entry point: a circle on the border of a state or the frame.
+    EntryPoint,
+    /// Exit point: a crossed circle on the border of a state or the frame.
+    ExitPoint,
+    /// Stub state: a filled bar at the top of its box, its name below it.
+    Stub,
     /// History pseudostate: a circle around its letter.
     Circle,
     /// Component: a box with the component icon in `icon`.
@@ -366,6 +410,8 @@ impl Figure {
             | Self::ActivityFinal
             | Self::FlowFinal
             | Self::Circle
+            | Self::EntryPoint
+            | Self::ExitPoint
             | Self::Lollipop
             | Self::Socket { .. }
             | Self::UseCase { .. } => Outline::Ellipse,
@@ -932,6 +978,12 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         (Some(layout), messages)
     } else {
         package_frame(model, diagram, &mut nodes, measure);
+        if kind == Some(DiagramKind::Activity) {
+            activity_borders(model, diagram, view, preview, &mut nodes);
+        }
+        if kind == Some(DiagramKind::StateMachine) {
+            state_borders(model, diagram, view, preview, &mut nodes);
+        }
         (None, Vec::new())
     };
     let mut rects: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
@@ -939,6 +991,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
     let clips: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.clip_rect())).collect();
     let mut outlines: HashMap<Id, Outline> =
         nodes.iter().map(|n| (n.id, n.figure.outline())).collect();
+    let common_lines = crate::shared::common_lines(model, view, &rects);
     let is_message = |p: &Presentation| {
         p.element
             .and_then(|e| model.get(e))
@@ -983,7 +1036,42 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             if source == target && points.is_empty() {
                 points = self_loop(source_rect);
             }
+            // Shared generalizations run over their group's common line.
+            let dragged = matches!(&preview.route, Some((id, _)) if *id == p.id);
+            if !p.style.shared.is_separate()
+                && !dragged
+                && let Some((general, _)) = crate::shared::ends(model, view, p)
+                && let Some(&at) = common_lines.get(&(general, p.style.shared))
+            {
+                let from = route::anchor_point(source_rect, anchors[0]);
+                let to = route::anchor_point(target_rect, anchors[1]);
+                points = if general == *target {
+                    crate::shared::waypoints(from, to, at, p.style.shared)
+                } else {
+                    let mut w = crate::shared::waypoints(to, from, at, p.style.shared);
+                    w.reverse();
+                    w
+                };
+                points.dedup();
+            }
             let element = p.element.and_then(|e| model.get(e));
+            // An association class's line shows the class's name and constraints, as Astah
+            // draws its one element.
+            let class = match element.map(|e| e.kind()) {
+                Some(ElementKind::Association(a)) => a.class.and_then(|c| model.get(c)),
+                _ => None,
+            };
+            let name = |e: &Element| match class {
+                Some(c) if e.name().is_empty() => c.name().to_owned(),
+                _ => e.name().to_owned(),
+            };
+            let constraints: Vec<String> = match element {
+                Some(e) if !p.style.hide_constraints => {
+                    let own = e.data().constraints.iter();
+                    own.chain(class.iter().flat_map(|c| &c.data().constraints)).cloned().collect()
+                }
+                _ => Vec::new(),
+            };
             // A bound class's «bind» stands above the line like «include», what it
             // substitutes below it in place of a name.
             let binding = element.and_then(|e| match e.kind() {
@@ -1005,9 +1093,10 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                     .filter(|s| !to_socket || *s != "use")
                     .collect();
                 let stereotypes = stereotypes.join(", ");
+                let name = name(e);
                 let parts: Vec<String> = [
                     (!stereotypes.is_empty()).then(|| format!("<<{stereotypes}>>")),
-                    (!e.name().is_empty()).then(|| e.name().to_owned()),
+                    (!name.is_empty()).then_some(name),
                     binding.clone(),
                 ]
                 .into_iter()
@@ -1040,7 +1129,8 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 anchors,
                 p.style.line_shape,
                 &points,
-                (label, element.is_some_and(|e| !e.name().is_empty()), keyword),
+                (label, element.is_some_and(|e| !name(e).is_empty()), keyword),
+                &constraints,
                 to_lollipop,
                 labels,
                 &p.style,
@@ -1065,6 +1155,8 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             .filter_map(|p| edge_shape(p, &rects, &outlines)),
     );
     keywords_away_from_notes(&candidates, &built, &mut edges, measure);
+    let anchors = association_class_anchors(model, view, &nodes, &edges);
+    edges.extend(anchors);
     edges.extend(view.presentations().iter().filter_map(|p| free_line(p, preview)));
     edges.extend(messages);
     for label in edges.iter_mut().flat_map(|e| &mut e.labels) {
@@ -1072,6 +1164,58 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
     }
     labels::place(&nodes, &mut edges, measure);
     Scene { nodes, edges, sequence }
+}
+
+/// The dashed lines from association classes to the middle of their association's line, as
+/// Astah draws them: from the middle of the line's visible part toward the center of the class
+/// box, ending at its border. They are not stored; each takes the id of its class box, so a
+/// click on it selects the class.
+fn association_class_anchors(
+    model: &Model,
+    view: &umlcraft_model::View,
+    nodes: &[NodeShape],
+    edges: &[EdgeShape],
+) -> Vec<EdgeShape> {
+    let mut anchors = Vec::new();
+    for p in view.presentations() {
+        let Some(ElementKind::Association(a)) =
+            p.element.and_then(|e| model.get(e)).map(|e| e.kind())
+        else {
+            continue;
+        };
+        let (Some(class), Some(edge)) = (a.class, edges.iter().find(|e| e.id == p.id)) else {
+            continue;
+        };
+        let (a, b) = route::middle_segment(&edge.points, edge.shape.is_curve());
+        let at = middle(a, b);
+        for node in nodes.iter().filter(|n| n.element == Some(class)) {
+            let rect = node.clip_rect();
+            if rect.contains(at) {
+                continue;
+            }
+            let from = border_point_from(rect, rect.center(), at);
+            anchors.push(EdgeShape {
+                id: node.id,
+                points: vec![from, at],
+                line: LineStyle::ShortDashed,
+                shape: LineShape::Line,
+                source_marker: EndMarker::None,
+                target_marker: EndMarker::None,
+                labels: Vec::new(),
+                fixed: true,
+                ends: [node.rect, Rect::new(at.x, at.y, 0.0, 0.0)],
+                anchors: [None, None],
+                name_arrow: None,
+                qualifiers: Vec::new(),
+                node_tips: [from, at],
+                free_labels: Vec::new(),
+                association: false,
+                end_labels: Vec::new(),
+                stroke: edge.stroke,
+            });
+        }
+    }
+    anchors
 }
 
 /// A free line, moved along while it is dragged.
@@ -1159,10 +1303,27 @@ fn keywords_away_from_notes(
 fn package_frame(model: &Model, diagram: Id, nodes: &mut [NodeShape], measure: &dyn TextMeasure) {
     const MARGIN: f32 = 15.0;
     let Some(index) = nodes.iter().position(|n| n.element == Some(diagram)) else { return };
+    let activity =
+        model.get(diagram).and_then(|d| d.kind().as_diagram()) == Some(DiagramKind::Activity);
+    // Activity parameter nodes and the entry and exit points of a state machine sit on the
+    // frame, wherever it ends.
+    let on_frame = |n: &NodeShape| {
+        n.element.and_then(|e| model.get(e)).is_some_and(|e| match e.kind() {
+            ElementKind::ActivityNode(p) => p.node == ActivityNodeKind::ActivityParameter,
+            ElementKind::Pseudostate(p) => {
+                p.pseudostate.is_border_point()
+                    && e.owner()
+                        .and_then(|o| model.get(o))
+                        .is_some_and(|o| matches!(o.kind(), ElementKind::StateMachine))
+            }
+            _ => false,
+        })
+    };
     let content = nodes
         .iter()
-        .filter(|n| n.element != Some(diagram))
-        .map(|n| n.rect)
+        .filter(|n| n.element != Some(diagram) && !on_frame(n))
+        // Astah's activity frames hold the texts below object nodes and pins too.
+        .map(|n| if activity { n.extent() } else { n.rect })
         .reduce(|a, b| a.union(&b));
     let frame = &mut nodes[index];
     let mut r = frame.rect;
@@ -1294,6 +1455,26 @@ fn layout_element(
             };
             (r, figure, vec![row])
         }
+        ElementKind::Class(_) if style.iconic && robustness_icon(e).is_some() => {
+            // Astah: the icon (60 × 40 for a boundary, 40 × 40 otherwise) in the middle of the
+            // box, the bold name centered below it, its baseline 13 below the box.
+            let icon = robustness_icon(e).unwrap_or(HeadIcon::Entity);
+            let size = robustness_size(icon);
+            let r = Rect::new(
+                bounds.x,
+                bounds.y,
+                bounds.width.max(size.width),
+                bounds.height.max(size.height),
+            );
+            let line = name_line(FONT_SIZE, true);
+            let w = line.width(measure).max(r.width) + 8.0;
+            let top = r.bottom() + 13.0 - crate::draw::baseline(FONT_SIZE);
+            let row = line.place(
+                Rect::new(r.center().x - w / 2.0, top, w, line_height(FONT_SIZE)),
+                LabelAlign::Center,
+            );
+            (r, Figure::Robustness(icon), vec![row])
+        }
         kind if is_boxed_classifier(kind) => {
             layout_classifier(model, e, style, bounds, false, measure)
         }
@@ -1407,13 +1588,46 @@ fn layout_element(
                 PseudostateKind::Choice => Figure::Diamond,
                 PseudostateKind::Fork | PseudostateKind::Join => Figure::Bar,
                 PseudostateKind::ShallowHistory | PseudostateKind::DeepHistory => Figure::Circle,
+                PseudostateKind::EntryPoint => Figure::EntryPoint,
+                PseudostateKind::ExitPoint => Figure::ExitPoint,
+                PseudostateKind::StubState => Figure::Stub,
             };
+            let h = line_height(FONT_SIZE);
+            match p.pseudostate {
+                // Astah: the name centered below the circle; `state_borders` puts it above a
+                // point on the top of its state.
+                PseudostateKind::EntryPoint | PseudostateKind::ExitPoint => {
+                    let line = name_line(FONT_SIZE, false);
+                    let w = line.width(measure).max(bounds.width);
+                    let row = line.place(
+                        Rect::new(bounds.center().x - w / 2.0, bounds.bottom(), w, h),
+                        LabelAlign::Center,
+                    );
+                    return (bounds, figure, vec![row]);
+                }
+                // Astah: a bar 3 high as wide as the name and 10 on each side, the name 3
+                // below it.
+                PseudostateKind::StubState => {
+                    let line = name_line(FONT_SIZE, false);
+                    let r = Rect::new(
+                        bounds.x,
+                        bounds.y,
+                        bounds.width.max(line.width(measure) + 2.0 * STUB_PAD_X),
+                        bounds.height.max(STUB_BAR + 2.0 * STUB_GAP + h),
+                    );
+                    let row = line.place(
+                        Rect::new(r.x, r.y + STUB_BAR + STUB_GAP, r.width, h),
+                        LabelAlign::Center,
+                    );
+                    return (r, figure, vec![row]);
+                }
+                _ => {}
+            }
             let letter = match p.pseudostate {
                 PseudostateKind::ShallowHistory => "H",
                 PseudostateKind::DeepHistory => "H*",
                 _ => return (bounds, figure, Vec::new()),
             };
-            let h = line_height(FONT_SIZE);
             let row = Line::new(letter, FONT_SIZE, RowRole::Stereotype, Some(id)).place(
                 Rect::new(bounds.x, bounds.center().y - h / 2.0, bounds.width, h),
                 LabelAlign::Center,
@@ -1492,6 +1706,7 @@ fn layout_activity_node(
     const PAD_X: f32 = 10.0;
     const PAD_Y: f32 = 4.0;
     let id = e.id();
+    let h = line_height(FONT_SIZE);
     let figure = match props.node {
         ActivityNodeKind::Action => Figure::Action,
         ActivityNodeKind::Object => Figure::Rectangle,
@@ -1500,50 +1715,278 @@ fn layout_activity_node(
         ActivityNodeKind::FlowFinal => Figure::FlowFinal,
         ActivityNodeKind::Decision | ActivityNodeKind::Merge => Figure::Diamond,
         ActivityNodeKind::Fork | ActivityNodeKind::Join => Figure::Bar,
+        ActivityNodeKind::SendSignal => Figure::SendSignal,
+        ActivityNodeKind::AcceptEvent => Figure::AcceptEvent,
+        ActivityNodeKind::AcceptTimeEvent => Figure::Hourglass,
+        ActivityNodeKind::CallBehavior => Figure::CallBehavior,
+        ActivityNodeKind::Connector => Figure::Circle,
+        // Where a pin's texts go depends on the side of its action; `activity_borders` moves them.
+        ActivityNodeKind::InputPin | ActivityNodeKind::OutputPin => Figure::Pin { arrow: None },
+        ActivityNodeKind::ActivityParameter => Figure::Part,
     };
-    if !matches!(figure, Figure::Action | Figure::Rectangle) {
-        return (bounds, figure, Vec::new());
-    }
-    let text = match props.type_ref.as_ref() {
-        Some(t) if props.node == ActivityNodeKind::Object => {
-            let type_name = crate::member::type_label(model, &Some(t.clone()));
-            match type_name.filter(|t| !t.is_empty()) {
-                Some(t) if e.name().is_empty() => format!(": {t}"),
-                Some(t) => format!("{} : {t}", e.name()),
-                None => e.name().to_owned(),
-            }
+    // A centered line of `text` whose top is at `top`, at least as wide as `r`.
+    let below = |text: String, role: RowRole, element: Option<Id>, r: Rect, top: f32| {
+        let w = measure.width(&text, FONT_SIZE, false).max(r.width);
+        Line::new(text, FONT_SIZE, role, element)
+            .place(Rect::new(r.center().x - w / 2.0, top, w, h), LabelAlign::Center)
+    };
+    // Object node properties (`{ordering=FIFO}` …), one per line.
+    let properties = || {
+        props.property_lines().into_iter().map(|t| (t, RowRole::Member, None)).collect::<Vec<(
+            String,
+            RowRole,
+            Option<Id>,
+        )>>()
+    };
+    match props.node {
+        ActivityNodeKind::Initial
+        | ActivityNodeKind::ActivityFinal
+        | ActivityNodeKind::FlowFinal
+        | ActivityNodeKind::Decision
+        | ActivityNodeKind::Merge
+        | ActivityNodeKind::Fork
+        | ActivityNodeKind::Join => return (bounds, figure, Vec::new()),
+        // Astah: an hourglass of 20 × 25, the name centered 2 below it.
+        ActivityNodeKind::AcceptTimeEvent => {
+            let row =
+                below(e.name().to_owned(), RowRole::Name, Some(id), bounds, bounds.bottom() + 2.0);
+            return (bounds, figure, vec![row]);
         }
+        // Astah: a circle around the name, as wide as the name's box divided by 0.7.
+        ActivityNodeKind::Connector => {
+            let w = measure.astah_width(e.name(), FONT_SIZE, false);
+            let d = w.max(CONNECTOR_TEXT_HEIGHT) / 0.7;
+            let side = bounds.width.max(bounds.height).max(d);
+            let r = Rect::new(bounds.x, bounds.y, side, side);
+            let row = Line::new(e.name(), FONT_SIZE, RowRole::Name, Some(id))
+                .place(Rect::new(r.x, r.center().y - h / 2.0, r.width, h), LabelAlign::Center);
+            return (r, figure, vec![row]);
+        }
+        // A pin keeps its size; its name, state and properties stand outside it, one per line.
+        ActivityNodeKind::InputPin | ActivityNodeKind::OutputPin => {
+            let mut lines = vec![(object_label(model, e, props), RowRole::Name, Some(id))];
+            if !props.in_state.is_empty() {
+                lines.push((format!("[{}]", props.in_state), RowRole::Member, None));
+            }
+            lines.extend(properties());
+            let rows = lines
+                .into_iter()
+                .enumerate()
+                .map(|(i, (t, role, element))| {
+                    below(t, role, element, bounds, bounds.bottom() + h * i as f32)
+                })
+                .collect();
+            return (bounds, figure, rows);
+        }
+        _ => {}
+    }
+    let text = match props.node {
+        n if n.is_object() => object_label(model, e, props),
+        // A call behavior action without a name of its own shows the activity it calls.
+        ActivityNodeKind::CallBehavior if e.name().is_empty() => props
+            .behavior
+            .and_then(|b| model.get(b))
+            .map(|b| b.name().to_owned())
+            .unwrap_or_default(),
         _ => e.name().to_owned(),
     };
-    let width = bounds.width.max(40.0);
-    let names = wrap(&text, width - 2.0 * PAD_X, FONT_SIZE, measure);
+    // Astah: signal actions are 20 wider than their texts on each side and show their kind
+    // as a stereotype above the name; a call behavior action keeps 12 below the name for its
+    // rake.
+    let (pad_x, min_width, icon) = match props.node {
+        ActivityNodeKind::SendSignal | ActivityNodeKind::AcceptEvent => (20.0, 40.0, 0.0),
+        ActivityNodeKind::CallBehavior => (PAD_X, 60.0, CALL_ICON_ROOM),
+        _ => (PAD_X, 40.0, 0.0),
+    };
+    let keyword = match props.node {
+        ActivityNodeKind::SendSignal => Some("<<signal sending>>"),
+        ActivityNodeKind::AcceptEvent => Some("<<signal receipt>>"),
+        _ => None,
+    };
+    let width = bounds.width.max(min_width);
+    let names = wrap(&text, width - 2.0 * pad_x, FONT_SIZE, measure);
     // Object nodes in a state show it as `[state]` in a line of its own below the name; the
     // line belongs to no element, so editing the name inline leaves the state alone.
-    let state = (props.node == ActivityNodeKind::Object && !props.in_state.is_empty())
+    let state = (props.node.is_object() && !props.in_state.is_empty())
         .then(|| format!("[{}]", props.in_state));
-    let h = line_height(FONT_SIZE);
-    let widest =
-        names.iter().chain(&state).map(|n| measure.width(n, FONT_SIZE, false)).fold(0.0, f32::max);
-    let block = h * (names.len() + state.iter().len()) as f32;
+    let widest = keyword
+        .map(str::to_owned)
+        .iter()
+        .chain(&names)
+        .chain(&state)
+        .map(|n| measure.width(n, FONT_SIZE, false))
+        .fold(0.0, f32::max);
+    let count = keyword.iter().len() + names.len() + state.iter().len();
+    let block = h * count as f32;
     let r = Rect::new(
         bounds.x,
         bounds.y,
-        width.max(widest + 2.0 * PAD_X),
-        bounds.height.max(block + 2.0 * PAD_Y),
+        width.max(widest + 2.0 * pad_x),
+        bounds.height.max(block + 2.0 * PAD_Y + icon),
     );
-    let top = r.center().y - block / 2.0;
-    let lines = names
+    // Astah puts a call behavior action's name 2.5 below the middle of what the rake leaves.
+    let top = r.y + (r.height - icon - block) / 2.0 + if icon > 0.0 { 2.5 } else { 0.0 };
+    let lines = keyword
+        .map(|k| (k.to_owned(), RowRole::Stereotype, None))
         .into_iter()
-        .map(|n| (n, RowRole::Name, Some(id)))
+        .chain(names.into_iter().map(|n| (n, RowRole::Name, Some(id))))
         .chain(state.map(|s| (s, RowRole::Member, None)));
-    let rows = lines
+    let mut rows: Vec<Row> = lines
         .enumerate()
         .map(|(i, (n, role, element))| {
             Line::new(n, FONT_SIZE, role, element)
                 .place(Rect::new(r.x, top + h * i as f32, r.width, h), LabelAlign::Center)
         })
         .collect();
+    // Astah writes an object node's properties below it, the first baseline 18 below it.
+    if props.node.is_object() {
+        let first = r.bottom() + OBJECT_PROPERTIES_GAP;
+        rows.extend(
+            properties()
+                .into_iter()
+                .enumerate()
+                .map(|(i, (t, role, element))| below(t, role, element, r, first + h * i as f32)),
+        );
+    }
     (r, figure, rows)
+}
+
+/// The height Astah gives a connector's name, which with the name's width sets the circle.
+const CONNECTOR_TEXT_HEIGHT: f32 = 15.09375;
+/// Room a call behavior action keeps below its name for the rake.
+const CALL_ICON_ROOM: f32 = 15.0;
+/// How far below an object node its first property line starts.
+const OBJECT_PROPERTIES_GAP: f32 = 5.0;
+/// Width and height of a pin's square, as Astah draws it.
+pub const PIN_SIZE: f32 = 15.0;
+
+/// `name : Type` of an object node, pin or activity parameter, or its name alone.
+fn object_label(model: &Model, e: &Element, props: &ActivityNodeProps) -> String {
+    let type_name = props
+        .type_ref
+        .as_ref()
+        .and_then(|t| crate::member::type_label(model, &Some(t.clone())))
+        .filter(|t| !t.is_empty());
+    match type_name {
+        Some(t) if e.name().is_empty() => format!(": {t}"),
+        Some(t) => format!("{} : {t}", e.name()),
+        None => e.name().to_owned(),
+    }
+}
+
+/// Moves pins and activity parameter nodes to where their action or the frame is drawn, and
+/// gives unconnected pins their arrow.
+fn activity_borders(
+    model: &Model,
+    diagram: Id,
+    view: &View,
+    preview: &Preview,
+    nodes: &mut [NodeShape],
+) {
+    let borne = crate::composite::borne_nodes(model, diagram);
+    if borne.is_empty() {
+        return;
+    }
+    // Nodes with a flow: their pins show no arrow, as in Astah.
+    let mut flowing: HashSet<Id> = HashSet::new();
+    for e in model.elements() {
+        if let ElementKind::ActivityEdge(p) = e.kind() {
+            flowing.extend([p.source, p.target]);
+        }
+    }
+    let drawn: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
+    let before = |id: Id| view.get(id).and_then(|p| Some(preview.rect(id, p.bounds()?)));
+    for node in nodes.iter_mut() {
+        let Some(&host) = borne.get(&node.id) else { continue };
+        let kind = node.element.and_then(|e| model.get(e)).map(|e| e.kind());
+        let Some(ElementKind::ActivityNode(props)) = kind else { continue };
+        let pin = props.node.is_pin();
+        // A pin's center keeps to a line half its size outside the action; an activity
+        // parameter's to the frame.
+        let reach = if pin { PIN_SIZE / 2.0 } else { 0.0 };
+        let track =
+            host.and_then(|h| Some((before(h)?.inflate(reach), drawn.get(&h)?.inflate(reach))));
+        let (place, side) = match track {
+            Some((was, now)) => {
+                let place = crate::composite::border_place(was, node.rect.center());
+                let at = crate::composite::border_point(now, place);
+                (Some(at), place.0)
+            }
+            None => (None, 2),
+        };
+        let old = node.rect;
+        if let Some(at) = place {
+            node.rect = crate::composite::centered(at, old);
+        }
+        let (dx, dy) = (node.rect.x - old.x, node.rect.y - old.y);
+        for row in &mut node.rows {
+            row.rect = row.rect.translate(dx, dy);
+        }
+        if !pin {
+            continue;
+        }
+        // The texts of a pin on the top of its action stand above it.
+        if side == 0 && !node.rows.is_empty() {
+            let height: f32 = node.rows.iter().map(|r| r.rect.height).sum();
+            let shift = -(height + node.rect.height);
+            node.rows.iter_mut().for_each(|r| r.rect = r.rect.translate(0.0, shift));
+        }
+        let arrow = node
+            .element
+            .filter(|e| !flowing.contains(e))
+            .map(|_| pin_arrow(node.rect, side, props.node == ActivityNodeKind::InputPin));
+        node.figure = Figure::Pin { arrow };
+    }
+}
+
+/// Moves entry and exit points to where their state or the frame is drawn, and the names of
+/// those on the top of their state above them.
+fn state_borders(
+    model: &Model,
+    diagram: Id,
+    view: &View,
+    preview: &Preview,
+    nodes: &mut [NodeShape],
+) {
+    let borne = crate::composite::borne_nodes(model, diagram);
+    if borne.is_empty() {
+        return;
+    }
+    let drawn: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
+    let before = |id: Id| view.get(id).and_then(|p| Some(preview.rect(id, p.bounds()?)));
+    for node in nodes.iter_mut() {
+        let Some(&host) = borne.get(&node.id) else { continue };
+        let track = host.and_then(|h| Some((before(h)?, *drawn.get(&h)?)));
+        let Some((was, now)) = track else { continue };
+        let place = crate::composite::border_place(was, node.rect.center());
+        let old = node.rect;
+        node.rect = crate::composite::centered(crate::composite::border_point(now, place), old);
+        let (dx, dy) = (node.rect.x - old.x, node.rect.y - old.y);
+        for row in &mut node.rows {
+            row.rect = row.rect.translate(dx, dy);
+        }
+        if place.0 == 0 {
+            let shift = -(node.rect.height + node.rows.iter().map(|r| r.rect.height).sum::<f32>());
+            node.rows.iter_mut().for_each(|r| r.rect = r.rect.translate(0.0, shift));
+        }
+    }
+}
+
+/// The arrow Astah draws in a pin without flows: 11 long through its middle, into the action
+/// for an input pin, out of it for an output pin. `side` is the side of the action the pin is
+/// on (0 top, 1 right, 2 bottom, 3 left).
+fn pin_arrow(r: Rect, side: u8, input: bool) -> [Point; 2] {
+    let c = r.center();
+    let half = r.width / 2.0 - 2.0;
+    // The direction away from the action.
+    let (ox, oy) = match side {
+        0 => (0.0, -1.0),
+        1 => (1.0, 0.0),
+        2 => (0.0, 1.0),
+        _ => (-1.0, 0.0),
+    };
+    let (ox, oy) = if input { (-ox, -oy) } else { (ox, oy) };
+    [c.offset(-ox * half, -oy * half), c.offset(ox * half, oy * half)]
 }
 
 /// Depth of a deployment node's cube.
@@ -1804,6 +2247,9 @@ fn layout_state(
     }));
     let name = Line::new(e.name(), FONT_SIZE, RowRole::Name, Some(id));
     let h = line_height(FONT_SIZE);
+    if props.submachine.is_some() {
+        return layout_submachine_state(model, props, name, activities, bounds, measure);
+    }
     let widest = activities.iter().chain([&name]).map(|l| l.width(measure)).fold(0.0, f32::max);
     let header = h + 2.0 * PAD_Y;
     let body = if activities.is_empty() { 0.0 } else { h * activities.len() as f32 + 2.0 * PAD_Y };
@@ -1830,8 +2276,81 @@ fn layout_state(
     let default_layout = Regions::default();
     let layout = layout.unwrap_or(&default_layout);
     let regions = region_shapes(r, r.y + header + body, layout, &regions);
-    (r, Figure::State { separator, regions, vertical: layout.vertical }, rows)
+    (r, Figure::State { separator, regions, vertical: layout.vertical, submachine: None }, rows)
 }
+
+/// Submachine states as Astah draws them: the name 2 below the top, a line, `include /
+/// Machine` centered, another line, then the internal activities, and room for the submachine
+/// icon in the bottom right corner. Stub states inside are drawn on their own.
+fn layout_submachine_state(
+    model: &Model,
+    props: &StateProps,
+    name: Line,
+    activities: Vec<Line>,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    let h = line_height(FONT_SIZE);
+    let machine = props.submachine.and_then(|m| model.get(m)).map_or("", |m| m.name());
+    let include = Line::new(format!("include / {machine}"), FONT_SIZE, RowRole::Stereotype, None);
+    let widest =
+        activities.iter().chain([&name, &include]).map(|l| l.width(measure)).fold(0.0, f32::max);
+    let first = SUBMACHINE_NAME_TOP + h + SUBMACHINE_NAME_BOTTOM;
+    let second = first + SUBMACHINE_NAME_TOP + h + SUBMACHINE_INCLUDE_BOTTOM;
+    let body = if activities.is_empty() {
+        SUBMACHINE_ICON_ROOM
+    } else {
+        SUBMACHINE_ACTIVITY_TOP + h * activities.len() as f32 + SUBMACHINE_ICON_GAP
+    };
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width.max(widest + 2.0 * SUBMACHINE_PAD_X).max(SUBMACHINE_MIN_WIDTH),
+        bounds.height.max(second + body),
+    );
+    let mut rows = vec![
+        name.place(Rect::new(r.x, r.y + SUBMACHINE_NAME_TOP, r.width, h), LabelAlign::Center),
+        include.place(
+            Rect::new(r.x, r.y + first + SUBMACHINE_NAME_TOP, r.width, h),
+            LabelAlign::Center,
+        ),
+    ];
+    for (i, line) in activities.into_iter().enumerate() {
+        let y = r.y + second + SUBMACHINE_ACTIVITY_TOP + h * i as f32;
+        let pad = SUBMACHINE_PAD_X;
+        rows.push(line.place(Rect::new(r.x + pad, y, r.width - 2.0 * pad, h), LabelAlign::Left));
+    }
+    let figure = Figure::State {
+        separator: Some(r.y + first),
+        regions: Vec::new(),
+        vertical: false,
+        submachine: Some(r.y + second),
+    };
+    (r, figure, rows)
+}
+
+/// Measured in Astah: a submachine state's name and `include / …` start 3 below the line (or
+/// edge) above them; the line below the name comes 3 after it, the one below `include` 2.01
+/// after it.
+const SUBMACHINE_NAME_TOP: f32 = 3.0;
+const SUBMACHINE_NAME_BOTTOM: f32 = 3.0;
+const SUBMACHINE_INCLUDE_BOTTOM: f32 = 2.01;
+/// Room below the second line without internal activities, for the icon.
+const SUBMACHINE_ICON_ROOM: f32 = 18.0;
+/// Where a submachine state's internal activities start below the second line, and the room
+/// below them, which the icon shares.
+const SUBMACHINE_ACTIVITY_TOP: f32 = 5.0;
+const SUBMACHINE_ICON_GAP: f32 = 13.01;
+const SUBMACHINE_PAD_X: f32 = 10.0;
+/// Wide enough for the icon.
+const SUBMACHINE_MIN_WIDTH: f32 = 55.0;
+/// A stub state's bar, the gap between bar and name (and below it) and the room beside the
+/// name, measured in Astah.
+const STUB_BAR: f32 = 3.0;
+const STUB_GAP: f32 = 3.0;
+const STUB_PAD_X: f32 = 10.0;
+/// Size of entry and exit points, as Astah draws them.
+pub const POINT_SIZE: f32 = 20.0;
 
 /// The smallest extent of a region across its dividing lines.
 pub const MIN_REGION: f32 = 20.0;
@@ -2111,6 +2630,28 @@ pub fn fitted_box(
 /// Radius of an interface drawn as a circle.
 pub const LOLLIPOP_RADIUS: f32 = 10.0;
 
+/// The robustness icon a class may be drawn as: Astah offers it when the class's first
+/// stereotype is «boundary», «control» or «entity».
+pub fn robustness_icon(e: &Element) -> Option<HeadIcon> {
+    if !matches!(e.kind(), ElementKind::Class(_)) {
+        return None;
+    }
+    match e.data().stereotypes.first()?.to_ascii_lowercase().as_str() {
+        "boundary" => Some(HeadIcon::Boundary),
+        "control" => Some(HeadIcon::Control),
+        "entity" => Some(HeadIcon::Entity),
+        _ => None,
+    }
+}
+
+/// The size of Astah's robustness icons.
+pub fn robustness_size(icon: HeadIcon) -> Size {
+    match icon {
+        HeadIcon::Boundary => Size::new(60.0, 40.0),
+        _ => Size::new(40.0, 40.0),
+    }
+}
+
 /// Astah's stick figure of an actor: from hand to hand and from head to feet. It keeps this
 /// size in boxes of any size.
 pub const ACTOR_FIGURE: Size = Size { width: 28.0, height: 55.0 };
@@ -2314,6 +2855,18 @@ fn layout_classifier(
                 {
                     text.push_str(" {readOnly}");
                 }
+                // Astah appends the constraints after a space, one brace pair each:
+                // `- x : int {x > 0}{x < 9}`.
+                let constraints = &c.data().constraints;
+                let hidden = match c.kind() {
+                    ElementKind::Attribute(_) => style.hide_attribute_constraints,
+                    ElementKind::Operation(_) => style.hide_operation_constraints,
+                    _ => true,
+                };
+                if !hidden && !constraints.is_empty() {
+                    text.push(' ');
+                    constraints.iter().for_each(|k| text.push_str(&format!("{{{k}}}")));
+                }
                 let mut line = Line::new(text, size, RowRole::Member, Some(c.id()));
                 match c.kind() {
                     ElementKind::Attribute(p) => line.underline = p.is_static,
@@ -2490,6 +3043,8 @@ fn edge_for(
     shape: LineShape,
     waypoints: &[Point],
     (name_label, has_name, bind_keyword): (Option<String>, bool, Option<String>),
+    // Constraints shown below the name, without braces.
+    constraints: &[String],
     to_lollipop: bool,
     placed: &EdgeLabels,
     style: &Style,
@@ -2714,14 +3269,64 @@ fn edge_for(
         let anchor = first.anchor.offset(0.0, line_height(FONT_SIZE));
         EdgeLabel { text, anchor, ..first.clone() }
     });
-    if name.is_some() {
-        let (index, lines) = (edge.labels.len(), 1 + usize::from(below.is_some()));
-        note_free(&mut edge.free_labels, index, placed.name.is_none(), LabelKind::Name, lines);
+    // Constraints stand below the name, one `{…}` per row, centered on the middle of the line
+    // (on the name when it was placed by hand): the first row's top 22.64 below the name's, or
+    // 9 below the middle without a name. They move along with the name; without one, a
+    // hand-placed name offset places them, and they stay where Astah puts them, across the
+    // line.
+    let constraint_rows: Vec<EdgeLabel> = {
+        const BELOW_NAME: f32 = 22.64;
+        const BELOW_MIDDLE: f32 = 9.0;
+        let rows = constraints.iter().map(|c| format!("{{{c}}}"));
+        let first_top = match (&name, placed.name) {
+            (Some(n), _) => {
+                let rows = 1 + usize::from(below.is_some());
+                Some(n.anchor.y + BELOW_NAME + (rows - 1) as f32 * LABEL_HEIGHT)
+            }
+            (None, Some(offset)) => Some(center.y + offset.y),
+            (None, None) => None,
+        };
+        let rows: Vec<String> = rows.collect();
+        let first_width = rows.first().map_or(0.0, |r| label_width(r, measure));
+        rows.into_iter()
+            .enumerate()
+            .map(|(i, text)| {
+                let width = label_width(&text, measure);
+                let (x, top) = match (&name, placed.name, first_top) {
+                    // Hand-placed: centered below the name, or on the first row, which starts
+                    // where the name would.
+                    (Some(n), Some(_), Some(top)) => {
+                        let middle = n.anchor.x + label_width(&n.text, measure) / 2.0;
+                        (middle - width / 2.0, top)
+                    }
+                    (None, Some(offset), Some(top)) => {
+                        (center.x + offset.x + (first_width - width) / 2.0, top)
+                    }
+                    (_, _, Some(top)) => (center.x - width / 2.0, top),
+                    _ => (center.x - width / 2.0, center.y + BELOW_MIDDLE),
+                };
+                EdgeLabel {
+                    text,
+                    anchor: Point::new(x, top + i as f32 * LABEL_HEIGHT),
+                    align: LabelAlign::Left,
+                    underline: false,
+                    keyword: false,
+                    color: None,
+                }
+            })
+            .collect()
+    };
+    if name.is_some() || !constraint_rows.is_empty() {
+        let lines = usize::from(name.is_some()) + usize::from(below.is_some());
+        let (index, lines) = (edge.labels.len(), lines + constraint_rows.len());
+        let free = placed.name.is_none() && name.is_some();
+        note_free(&mut edge.free_labels, index, free, LabelKind::Name, lines);
     }
     // Astah colors only the name, not the ends' roles and multiplicities.
     let colored = |l: EdgeLabel| EdgeLabel { color: style.font_color, ..l };
     edge.labels.extend(name.map(colored));
     edge.labels.extend(below.map(colored));
+    edge.labels.extend(constraint_rows);
     let [(source_role, source_mult, source_static), (target_role, target_mult, target_static)] =
         ends;
     let (source_tip, source_from) = (pts[0], pts[1]);
@@ -4586,6 +5191,7 @@ mod tests {
                 node: ActivityNodeKind::Object,
                 type_ref: Some(TypeRef::Element(ids.order)),
                 in_state: "filled".into(),
+                ..Default::default()
             });
             let object = tx.create(activity, ElementData::new("o", kind))?;
             tx.add_node(d, Some(object), Rect::new(500.0, 100.0, 100.0, 20.0))
@@ -4600,6 +5206,83 @@ mod tests {
         assert!(node.rows[1].rect.y >= node.rows[0].rect.bottom() - 0.01);
         assert!(node.rect.height >= 2.0 * line_height(FONT_SIZE));
         assert!((node.rows[0].rect.center().x - node.rows[1].rect.center().x).abs() < 0.01);
+    }
+
+    #[test]
+    fn object_node_properties_stand_below_it() {
+        let (mut doc, ids) = order_system();
+        let d = ids.activity_diagram;
+        let node = doc
+            .edit("object", |tx| {
+                let activity = tx.model().get(d).unwrap().owner().unwrap();
+                let kind = ElementKind::ActivityNode(ActivityNodeProps {
+                    node: ActivityNodeKind::Object,
+                    ordering: Some(umlcraft_model::ObjectOrdering::Fifo),
+                    upper_bound: "3".into(),
+                    is_stream: true,
+                    ..Default::default()
+                });
+                let object = tx.create(activity, ElementData::new("o", kind))?;
+                tx.add_node(d, Some(object), Rect::new(500.0, 100.0, 40.0, 25.0))
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let node = scene.node(node).unwrap();
+        let texts: Vec<&str> = node.rows.iter().map(|r| r.text.as_str()).collect();
+        // Astah's order and spelling.
+        assert_eq!(texts, ["o", "{ordering=FIFO}", "{upperBound=3}", "{stream}"]);
+        // Outside the box, the first 5 below it, centered on it; the box keeps its size.
+        assert_eq!(node.rect.height, 25.0);
+        assert!((node.rows[1].rect.y - (node.rect.bottom() + 5.0)).abs() < 0.01);
+        assert!((node.rows[2].rect.center().x - node.rect.center().x).abs() < 0.01);
+        assert!(node.extent().bottom() > node.rect.bottom() + 3.0 * line_height(FONT_SIZE));
+    }
+
+    #[test]
+    fn signal_time_call_and_connector_figures() {
+        let (mut doc, ids) = order_system();
+        let d = ids.activity_diagram;
+        let measure = ApproxMeasure;
+        let mut nodes = Vec::new();
+        for (i, tool) in [
+            crate::palette::NodeTool::SendSignal,
+            crate::palette::NodeTool::AcceptEvent,
+            crate::palette::NodeTool::AcceptTimeEvent,
+            crate::palette::NodeTool::CallBehavior,
+            crate::palette::NodeTool::ActivityConnector,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let at = Point::new(600.0, 100.0 + 80.0 * i as f32);
+            let (_, node) = crate::edit::apply(&mut doc, "node", &measure, |tx| {
+                crate::palette::create_node(tx, d, tool, at, "A")
+            })
+            .unwrap();
+            nodes.push(node);
+        }
+        let scene = build(doc.model(), d, &Preview::default(), &measure);
+        let node = |i: usize| scene.node(nodes[i]).unwrap();
+        // Signal actions say what they are above their name.
+        assert!(matches!(node(0).figure, Figure::SendSignal));
+        assert_eq!(node(0).rows[0].text, "<<signal sending>>");
+        assert_eq!(node(0).rows[0].role, RowRole::Stereotype);
+        assert_eq!(node(0).rows[1].text, "A1");
+        assert!(matches!(node(1).figure, Figure::AcceptEvent));
+        assert_eq!(node(1).rows[0].text, "<<signal receipt>>");
+        // The hourglass keeps Astah's size and has its name below it.
+        assert!(matches!(node(2).figure, Figure::Hourglass));
+        assert_eq!(node(2).rect.size(), Size::new(20.0, 25.0));
+        assert!(node(2).rows[0].rect.y >= node(2).rect.bottom());
+        // A call behavior action keeps room for its rake below the name.
+        assert!(matches!(node(3).figure, Figure::CallBehavior));
+        assert!(node(3).rows[0].rect.bottom() <= node(3).rect.bottom() - 12.0);
+        // A connector is a circle around its name, at least Astah's 21.5625 across.
+        assert!(matches!(node(4).figure, Figure::Circle));
+        assert!(node(4).rect.width >= 21.5 && node(4).rect.width == node(4).rect.height);
+        assert_eq!(node(4).rows[0].text, "A5");
+        let primitives = crate::draw::figure(node(3));
+        assert_eq!(primitives.len(), 3, "the action and its rake");
     }
 
     #[test]
@@ -4629,6 +5312,57 @@ mod tests {
         // Moving the composite state moves its substates.
         let moved = with_contents(doc.model(), &scene, &[open.id]);
         assert_eq!(moved.len(), 4, "the state, its initial pseudostate and two substates");
+    }
+
+    #[test]
+    fn submachine_states_entry_points_and_stubs() {
+        use crate::palette::NodeTool;
+        let (mut doc, ids) = order_system();
+        let d = ids.state_diagram;
+        let make = |doc: &mut umlcraft_model::Document, tool: NodeTool, at: Point, name: &str| {
+            crate::edit::apply(doc, "create", &ApproxMeasure, |tx| {
+                let made = crate::palette::create_node(tx, d, tool, at, name)?;
+                tx.rename(made.0, name)?;
+                Ok(made)
+            })
+            .unwrap()
+        };
+        let (_, sub) = make(&mut doc, NodeTool::SubmachineState, Point::new(900.0, 500.0), "Drive");
+        let r = doc.model().view(d).unwrap().get(sub).unwrap().bounds().unwrap();
+        let (_, entry) =
+            make(&mut doc, NodeTool::EntryPoint, Point::new(r.x - 10.0, r.y + 10.0), "start");
+        let (_, top) =
+            make(&mut doc, NodeTool::ExitPoint, Point::new(r.x + 30.0, r.y - 10.0), "up");
+        let (_, stub) =
+            make(&mut doc, NodeTool::StubState, Point::new(r.x + 5.0, r.bottom() - 30.0), "Halt");
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        // The name, a line, `include / machine`, a second line and room for the icon.
+        let state = scene.node(sub).unwrap();
+        let Figure::State { separator: Some(first), submachine: Some(second), .. } = state.figure
+        else {
+            panic!()
+        };
+        assert!(state.rows[0].rect.bottom() <= first && first < second);
+        assert!(state.rows[1].text.starts_with("include / "), "{}", state.rows[1].text);
+        assert!(state.rows[1].rect.y > first && state.rows[1].rect.bottom() <= second);
+        assert!(state.rect.bottom() >= second + SUBMACHINE_ICON_ROOM - 0.01);
+        // Points are circles on the border with their name beside: below on the left side,
+        // above on the top.
+        let entry = scene.node(entry).unwrap();
+        assert!(matches!(entry.figure, Figure::EntryPoint));
+        assert_eq!(entry.rect.size(), Size::new(POINT_SIZE, POINT_SIZE));
+        assert_eq!(entry.rect.center().x, state.rect.x);
+        assert_eq!(entry.rows[0].text, "start");
+        assert!(entry.rows[0].rect.y >= entry.rect.bottom());
+        let top = scene.node(top).unwrap();
+        assert!(matches!(top.figure, Figure::ExitPoint));
+        assert_eq!(top.rect.center().y, state.rect.y);
+        assert!(top.rows[0].rect.bottom() <= top.rect.y);
+        // A stub state is a bar with its name below it.
+        let stub = scene.node(stub).unwrap();
+        assert!(matches!(stub.figure, Figure::Stub));
+        assert_eq!(stub.rows[0].text, "Halt");
+        assert!(stub.rows[0].rect.y > stub.rect.y);
     }
 
     #[test]
@@ -4668,7 +5402,8 @@ mod tests {
             scene.nodes.iter().find(|n| n.rows.first().is_some_and(|r| r.text == name)).unwrap()
         };
         let open = node("Open");
-        let Figure::State { separator: Some(name_line), regions, vertical: false } = &open.figure
+        let Figure::State { separator: Some(name_line), regions, vertical: false, .. } =
+            &open.figure
         else {
             panic!()
         };
@@ -4759,5 +5494,197 @@ mod tests {
         // On the diagonal the diamond's edge is closer than the circle.
         let p = Outline::Diamond.border_point(r, center, Point::new(100.0, 100.0));
         assert!((p.x - 15.0).abs() < 0.01, "{p:?}");
+    }
+
+    /// A class diagram with the classes `names`, each drawn by `tool`, side by side.
+    fn class_diagram_with(
+        tools: &[(crate::palette::NodeTool, &str, Point)],
+    ) -> (umlcraft_model::Document, Id, Vec<(Id, Id)>) {
+        let mut doc = umlcraft_model::Document::new(umlcraft_model::Model::new("M"));
+        let root = doc.model().root();
+        let mut made = Vec::new();
+        let d = doc
+            .edit("setup", |tx| {
+                let d = tx.create(
+                    root,
+                    ElementData::new("D", ElementKind::diagram(DiagramKind::Class)),
+                )?;
+                for &(tool, name, at) in tools {
+                    let (e, n) = crate::palette::create_node(tx, d, tool, at, name)?;
+                    tx.rename(e, name)?;
+                    made.push((e, n));
+                }
+                Ok(d)
+            })
+            .unwrap();
+        (doc, d, made)
+    }
+
+    #[test]
+    fn constraints_follow_members_and_stand_below_a_line_s_name() {
+        use crate::palette::{EdgeTool, NodeTool};
+        let (mut doc, d, made) = class_diagram_with(&[
+            (NodeTool::Class, "A", Point::new(40.0, 40.0)),
+            (NodeTool::Class, "B", Point::new(440.0, 40.0)),
+        ]);
+        let [(a, na), (_, nb)] = made[..] else { panic!() };
+        let mut edge = Id::generate();
+        doc.edit("constrain", |tx| {
+            let x = tx.create(a, ElementData::new("x", ElementKind::attribute(None)))?;
+            tx.update(x, |data| data.constraints = vec!["x > 0".into(), "x < 9".into()])?;
+            edge = crate::palette::connect(tx, d, EdgeTool::Association, na, nb)?;
+            let association = tx.model().view(d).unwrap().get(edge).unwrap().element.unwrap();
+            tx.rename(association, "link")?;
+            tx.update(association, |data| data.constraints = vec!["xor".into(), "other".into()])?;
+            // Constraints of a class itself are not drawn, as in Astah.
+            tx.update(a, |data| data.constraints = vec!["class".into()])
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let node = scene.nodes.iter().find(|n| n.id == na).unwrap();
+        let texts: Vec<&str> = node.rows.iter().map(|r| r.text.as_str()).collect();
+        assert!(texts.contains(&"+ x {x > 0}{x < 9}"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.contains("class")), "{texts:?}");
+        let line = scene.edges.iter().find(|e| e.id == edge).unwrap();
+        let name = line.labels.iter().find(|l| l.text == "link").unwrap();
+        let rows: Vec<&EdgeLabel> =
+            line.labels.iter().filter(|l| l.text.starts_with('{')).collect();
+        assert_eq!(rows.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["{xor}", "{other}"]);
+        // 22.64 below the name, one row height apart, centered on the middle of the line.
+        assert!((rows[0].anchor.y - name.anchor.y - 22.64).abs() < 0.01);
+        assert!((rows[1].anchor.y - rows[0].anchor.y - LABEL_HEIGHT).abs() < 0.01);
+        let (p, q) = route::middle_segment(&line.points, false);
+        let middle = (p.x + q.x) / 2.0;
+        for row in &rows {
+            let center = row.anchor.x + label_width(&row.text, &ApproxMeasure) / 2.0;
+            assert!((center - middle).abs() < 0.01, "{center} vs {middle}");
+        }
+
+        // Hidden on the box and on the line.
+        doc.edit("hide", |tx| {
+            tx.update_presentation(d, na, |p| p.style.hide_attribute_constraints = true)?;
+            tx.update_presentation(d, edge, |p| p.style.hide_constraints = true)
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let node = scene.nodes.iter().find(|n| n.id == na).unwrap();
+        assert!(node.rows.iter().any(|r| r.text == "+ x"));
+        let line = scene.edges.iter().find(|e| e.id == edge).unwrap();
+        assert!(!line.labels.iter().any(|l| l.text.starts_with('{')));
+    }
+
+    #[test]
+    fn an_association_class_hangs_on_a_dashed_line_from_the_middle_of_its_association() {
+        use crate::palette::{EdgeTool, NodeTool};
+        let (mut doc, d, made) = class_diagram_with(&[
+            (NodeTool::Class, "A", Point::new(40.0, 40.0)),
+            (NodeTool::Class, "B", Point::new(440.0, 40.0)),
+        ]);
+        let [(_, na), (_, nb)] = made[..] else { panic!() };
+        let edge = doc
+            .edit("connect", |tx| {
+                crate::palette::connect(tx, d, EdgeTool::AssociationClass, na, nb)
+            })
+            .unwrap();
+        let model = doc.model();
+        let association = model.view(d).unwrap().get(edge).unwrap().element.unwrap();
+        let ElementKind::Association(a) = model.get(association).unwrap().kind() else { panic!() };
+        let class = a.class.expect("a class");
+        assert_eq!(model.association_of_class(class), Some(association));
+        let (_, class_node) = model.shown_on(class)[0];
+        let scene = build(model, d, &Preview::default(), &ApproxMeasure);
+        let line = scene.edges.iter().find(|e| e.id == edge).unwrap();
+        // The line carries the class's name.
+        assert!(line.labels.iter().any(|l| l.text == model.get(class).unwrap().name()));
+        let (p, q) = route::middle_segment(&line.points, false);
+        let middle = Point::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0);
+        let anchor = scene.edges.iter().find(|e| e.id == class_node).expect("the dashed line");
+        assert_eq!(anchor.line, LineStyle::ShortDashed);
+        assert!(anchor.fixed);
+        let node = scene.nodes.iter().find(|n| n.id == class_node).unwrap();
+        assert!(anchor.points[1].distance(middle) < 0.01);
+        let from = anchor.points[0];
+        let r = node.rect;
+        let on_border = (from.y - r.y).abs() < 0.01
+            || (from.y - r.bottom()).abs() < 0.01
+            || (from.x - r.x).abs() < 0.01
+            || (from.x - r.right()).abs() < 0.01;
+        assert!(on_border, "{from:?} on {r:?}");
+
+        // A second class for the same association is refused.
+        let again =
+            doc.edit("again", |tx| crate::palette::make_association_class(tx, d, edge, "X"));
+        assert!(again.is_err());
+        // Deleting the class leaves a plain association.
+        doc.edit("delete", |tx| tx.delete(class)).unwrap();
+        doc.model().check().unwrap();
+        let ElementKind::Association(a) = doc.model().get(association).unwrap().kind() else {
+            panic!()
+        };
+        assert_eq!(a.class, None);
+    }
+
+    #[test]
+    fn robustness_classes_are_drawn_as_their_icons_with_the_name_below() {
+        use crate::palette::NodeTool;
+        let (mut doc, d, made) = class_diagram_with(&[
+            (NodeTool::Boundary, "Screen", Point::new(40.0, 40.0)),
+            (NodeTool::Control, "Rules", Point::new(200.0, 40.0)),
+            (NodeTool::Entity, "Record", Point::new(360.0, 40.0)),
+        ]);
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        for (&(element, node), (icon, width)) in made.iter().zip([
+            (HeadIcon::Boundary, 60.0),
+            (HeadIcon::Control, 40.0),
+            (HeadIcon::Entity, 40.0),
+        ]) {
+            let shape = scene.nodes.iter().find(|n| n.id == node).unwrap();
+            assert!(matches!(shape.figure, Figure::Robustness(i) if i == icon));
+            assert_eq!((shape.rect.width, shape.rect.height), (width, 40.0));
+            let name = shape.rows.iter().find(|r| r.bold).unwrap();
+            assert_eq!(name.text, doc.model().get(element).unwrap().name());
+            assert!(name.rect.y >= shape.rect.bottom(), "{:?} below {:?}", name.rect, shape.rect);
+            // No «stereotype» in icon notation.
+            assert!(!shape.rows.iter().any(|r| r.text.starts_with("<<")));
+        }
+        // As a box, with its stereotype.
+        let (_, node) = made[1];
+        doc.edit("box", |tx| tx.update_presentation(d, node, |p| p.style.iconic = false)).unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let shape = scene.nodes.iter().find(|n| n.id == node).unwrap();
+        assert!(!matches!(shape.figure, Figure::Robustness(_)));
+        assert!(shape.rows.iter().any(|r| r.text == "<<control>>"));
+    }
+
+    #[test]
+    fn shared_generalizations_meet_on_one_common_line() {
+        use crate::palette::{EdgeTool, NodeTool};
+        let (mut doc, d, made) = class_diagram_with(&[
+            (NodeTool::Class, "General", Point::new(200.0, 40.0)),
+            (NodeTool::Class, "Left", Point::new(40.0, 300.0)),
+            (NodeTool::Class, "Right", Point::new(360.0, 300.0)),
+        ]);
+        let [(_, general), (_, left), (_, right)] = made[..] else { panic!() };
+        let lines = doc
+            .edit("share", |tx| {
+                let a = crate::palette::connect(tx, d, EdgeTool::Generalization, left, general)?;
+                let b = crate::palette::connect(tx, d, EdgeTool::Generalization, right, general)?;
+                crate::shared::set_style(tx, d, a, umlcraft_model::SharedStyle::Vertical)?;
+                Ok([a, b])
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let general_rect = scene.nodes.iter().find(|n| n.id == general).unwrap().rect;
+        let mut tips = Vec::new();
+        for line in lines {
+            let edge = scene.edges.iter().find(|e| e.id == line).unwrap();
+            // Up from the specific element, across on the common line, up to the general one.
+            assert_eq!(edge.points.len(), 4, "{:?}", edge.points);
+            assert!((edge.points[1].y - edge.points[2].y).abs() < 0.01);
+            tips.push(*edge.points.last().unwrap());
+        }
+        // One triangle: both lines end at the same point under the general element's middle.
+        assert!(tips[0].distance(tips[1]) < 0.01, "{tips:?}");
+        assert!((tips[0].x - general_rect.center().x).abs() < 0.01);
     }
 }

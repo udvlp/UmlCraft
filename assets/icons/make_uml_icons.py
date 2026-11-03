@@ -97,9 +97,23 @@ ICONS = {
     'actor': [circle(9.5, 4.5, 2),
               path('M9.5 6.5V12.5M5.5 8.5H13.5M9.5 12.5L6 17.5M9.5 12.5L13 17.5')],
     'useCase': [ellipse(10, 10, 7.5, 4.5)],
+    # Robustness analysis: a circle with a T on its side, with an arrow head on top, on a line.
+    'boundary': [path('M2.5 6V14M2.5 10H6.5'), circle(12, 10, 5.5)],
+    'control': [circle(10, 11, 6), path('M12.5 2.5L10 5L12.5 7.5')],
+    'entity': [circle(10, 9, 6), path('M4 15.5H16')],
     'lifeline': [rect(3.5, 2.5, 12, 5, 1), dashed('M9.5 8V17.5')],
     'systemBoundary': [rect(2.5, 2.5, 15, 15, 2), path('M4.5 5.5H9.5'),
                        ellipse(10, 11.5, 4.5, 3)],
+    # A condition on a lifeline: a rounded box across its dashed line.
+    'stateInvariant': [dashed('M10 7V2.5'), rect(3.5, 7, 13, 6, 3), dashed('M10 13V17.5')],
+    # A lifeline ending in a cross.
+    'termination': [dashed('M10 9V2.5'), path('M6.5 10.5L13.5 17.5M13.5 10.5L6.5 17.5')],
+    # Two messages and the time between them: an arrow at both ends.
+    'durationConstraint': [path('M2.5 3.5H17.5M2.5 16.5H17.5'), path('M10 6V14'),
+                           path('M7.5 8.5L10 6L12.5 8.5M7.5 11.5L10 14L12.5 11.5')],
+    # A message with the line written on beyond its head, and a clock.
+    'timeConstraint': [path('M2.5 5.5H8.5'), path('M8 3L11.5 5.5L8 8Z', FILL),
+                       path('M11.5 5.5H17.5'), circle(10, 13, 4.5), path('M10 10.5V13H12.5')],
     'combinedFragment': FRAGMENT + [dashed('M3 11.5H17')],
     'interactionUse': FRAGMENT + [path('M6.5 11.5H13.5')],
     'action': [rect(2.5, 5.5, 15, 9, 3.5)],
@@ -113,8 +127,37 @@ ICONS = {
     'fork': FORK,
     'join': JOIN,
     'objectNode': [rect(2.5, 5.5, 15, 9, 1)],
+    # Actions of their own kind: UML's pentagon, notch and hourglass, and the call behavior
+    # action's rake in an action.
+    'sendSignal': [path('M2.5 5.5H13L17.5 10L13 14.5H2.5Z')],
+    'acceptEvent': [path('M2.5 5.5H17.5V14.5H2.5L7 10Z')],
+    'acceptTimeEvent': [path('M5.5 2.5H14.5L5.5 17.5H14.5Z')],
+    'callBehavior': [rect(2.5, 4.5, 15, 11, 3.5), path('M11.5 13V9.5M8.5 13V11.5H14.5V13')],
+    # A flow ending in a connector circle.
+    'activityConnector': [circle(12.5, 10, 5), path('M2.5 10H7.5'), path('M5 7.5L7.5 10L5 12.5')],
+    # Pins: a square on an action's border, a flow going in or coming out.
+    'inputPin': [rect(10.5, 4.5, 7, 11, 2.5), rect(6.5, 8, 4, 4), path('M2.5 10H6.5')],
+    'outputPin': [rect(2.5, 4.5, 7, 11, 2.5), rect(9.5, 8, 4, 4), path('M13.5 10H17.5')],
+    # A box on the border of the activity's frame.
+    'activityParameter': [path('M17.5 2.5H7.5V7.5M7.5 12.5V17.5H17.5'), rect(2.5, 7.5, 10, 5, 1)],
     'partition': [rect(2.5, 2.5, 15, 15, 2), path('M2.5 6.5H17.5M9.5 2.5V17.5')],
     'state': [rect(2.5, 4.5, 15, 11, 3), path('M2.5 8.5H17.5')],
+    # A state with UML's submachine glyph: two rounded boxes joined by a line.
+    'submachineState': [rect(2.5, 4.5, 15, 11, 3), path('M2.5 8.5H17.5'),
+                        rect(4.5, 10.5, 4.5, 3, 1.5), rect(11, 10.5, 4.5, 3, 1.5),
+                        path('M9 12H11')],
+    # Points on the border of a state: a circle where a transition enters, a crossed one
+    # where it leaves.
+    'entryPoint': [path('M17.5 4.5H11.5C10.4 4.5 9.5 5.4 9.5 6.5'),
+                   path('M9.5 13.5C9.5 14.6 10.4 15.5 11.5 15.5H17.5'),
+                   circle(9.5, 10, 4), path('M2.5 10H5.5')],
+    'exitPoint': [path('M2.5 4.5H8.5C9.6 4.5 10.5 5.4 10.5 6.5'),
+                  path('M10.5 13.5C10.5 14.6 9.6 15.5 8.5 15.5H2.5'),
+                  circle(10.5, 10, 4), path('M8.2 7.7L12.8 12.3M12.8 7.7L8.2 12.3'),
+                  path('M14.5 10H17.5')],
+    # A submachine state with a stub state's bar in it.
+    'stubState': [rect(2.5, 4.5, 15, 11, 3), path('M2.5 8.5H17.5'),
+                  rect(5.5, 11, 9, 2, extra=FILL + ' stroke="none"')],
     'finalState': FINAL,
     'initialPseudostate': INITIAL,
     'choice': [path('M10 3.5L16.5 10L10 16.5L3.5 10Z')],

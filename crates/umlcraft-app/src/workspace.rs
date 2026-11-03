@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use rust_i18n::t;
 use umlcraft_model::{
     Aggregation, DiagramKind, Document, EdgeLabels, ElementData, ElementKind, Id, LineShape, Model,
-    ModelError, Multiplicity, Navigability, Point, Presentation, Rect, Shape, StructogramProps,
-    Style, TemplateParameterProps, Tx, TypeRef, Visibility,
+    ModelError, Multiplicity, Navigability, Point, Presentation, Rect, Shape, SharedStyle,
+    StructogramProps, Style, TemplateParameterProps, Tx, TypeRef, Visibility,
 };
 use umlcraft_notation::autoroute;
 use umlcraft_notation::clipboard::{self, Clip};
@@ -303,10 +303,22 @@ impl Workspace {
     pub fn connect(&mut self, tool: EdgeTool, source: Id, target: Id) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.connect").to_string();
+        let base = name_base("tool.associationClass", false);
         let result = self.edit(label, |tx| {
             let edge = palette::connect(tx, diagram, tool, source, target)?;
             if tool != EdgeTool::NoteAnchor {
                 autoroute::route_new_lines(tx, diagram, &[edge])?;
+            }
+            // A new association class is named like other new classes.
+            let model = tx.model();
+            let element = model.view(diagram).and_then(|v| v.get(edge)).and_then(|p| p.element);
+            if let Some(ElementKind::Association(a)) =
+                element.and_then(|e| model.get(e)).map(|e| e.kind())
+                && let Some(class) = a.class.filter(|_| tool == EdgeTool::AssociationClass)
+                && let Some(owner) = model.get(class).and_then(|c| c.owner())
+            {
+                let name = palette::unique_name(model, owner, &base);
+                tx.rename(class, name)?;
             }
             Ok(edge)
         });
@@ -534,10 +546,45 @@ impl Workspace {
         let label = t!("edit.waypoints").to_string();
         let anchors = (route.source_anchor, route.target_anchor);
         let result = self.edit(label, |tx| {
+            let old = match tx.model().view(diagram).and_then(|v| v.get(edge)).map(|p| &p.shape) {
+                Some(Shape::Edge { waypoints, .. }) => waypoints.clone(),
+                _ => Vec::new(),
+            };
             tx.set_route(diagram, edge, route.waypoints, anchors)?;
-            tx.update_presentation(diagram, edge, |p| p.style.auto_route = false)
+            tx.update_presentation(diagram, edge, |p| p.style.auto_route = false)?;
+            // A shared generalization takes its whole group along.
+            umlcraft_notation::shared::move_common_line(tx, diagram, edge, &old)
         });
         self.report(result);
+    }
+
+    /// Gives the generalizations to the general element of `edge` Astah's shared style, or
+    /// separate lines again.
+    pub fn set_shared_style(&mut self, edge: Id, style: SharedStyle) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.shared_style").to_string();
+        let result =
+            self.edit(label, |tx| umlcraft_notation::shared::set_style(tx, diagram, edge, style));
+        self.report(result);
+    }
+
+    /// Turns the association shown by `edge` into an association class and selects the class.
+    pub fn make_association_class(&mut self, edge: Id) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.association_class").to_string();
+        let base = name_base("tool.associationClass", false);
+        let result = self.edit(label, |tx| {
+            let model = tx.model();
+            let element = model.view(diagram).and_then(|v| v.get(edge)).and_then(|p| p.element);
+            let owner = element.and_then(|e| model.get(e)).and_then(|e| e.owner());
+            let name =
+                owner.map_or_else(|| base.clone(), |o| palette::unique_name(model, o, &base));
+            palette::make_association_class(tx, diagram, edge, &name)
+        });
+        if let Some((class, node)) = self.report(result) {
+            self.select(vec![node]);
+            self.selected_element = Some(class);
+        }
     }
 
     /// Lets the given edges aim at the centers of their nodes again, without the router.
@@ -1323,9 +1370,15 @@ fn keeps_words(tool: NodeTool) -> bool {
         NodeTool::UseCase
             | NodeTool::SystemBoundary
             | NodeTool::Action
+            | NodeTool::CallBehavior
+            | NodeTool::SendSignal
+            | NodeTool::AcceptEvent
+            | NodeTool::AcceptTimeEvent
             | NodeTool::ObjectNode
+            | NodeTool::ActivityParameter
             | NodeTool::Partition
             | NodeTool::State
+            | NodeTool::SubmachineState
     )
 }
 

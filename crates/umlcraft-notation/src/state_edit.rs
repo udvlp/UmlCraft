@@ -1,11 +1,137 @@
 //! Edits of state machine diagrams: which state or region a vertex belongs to, following where
-//! it is drawn, and the regions of orthogonal states.
+//! it is drawn, the regions of orthogonal states, and what sits on or in a submachine state.
+//!
+//! Entry and exit points sit on the border of the state they belong to, or of the diagram's
+//! frame for those of the state machine itself, as Astah draws them; like ports
+//! ([`crate::composite`]) they keep their place there when the state moves or changes size.
+//! Stub states go inside a submachine state, which holds nothing else.
 
 use umlcraft_model::{
-    ElementData, ElementKind, Id, InternalTransitionProps, Model, Point, Regions, Result, Shape, Tx,
+    ElementData, ElementKind, Id, InternalTransitionProps, Model, ModelError, Point,
+    PseudostateKind, Rect, Regions, Result, Shape, Tx,
 };
 
+use crate::composite::{border_distance, snap};
+use crate::palette::{NodeTool, owner_for, unique_name};
 use crate::scene::{self, MIN_REGION};
+
+/// Why a stub state could not be placed, as [`ModelError::Invalid`] says it; the app words it
+/// in the language of its user.
+pub const STUB_OUTSIDE: &str = "a stub state goes into a submachine state";
+
+/// How close to a state's border a new entry or exit point must be dropped to go on it, when
+/// not dropped inside the state.
+const NEAR_STATE: f32 = 20.0;
+
+/// Whether `state` is a submachine state.
+pub fn is_submachine(model: &Model, state: Id) -> bool {
+    model
+        .get(state)
+        .is_some_and(|e| matches!(e.kind(), ElementKind::State(p) if p.submachine.is_some()))
+}
+
+/// The state machine a new submachine state on `diagram` stands for: the first other state
+/// machine of the project, else a new one with a diagram of its own, next to the diagram's.
+pub fn submachine_for(tx: &mut Tx<'_>, diagram: Id) -> Result<Id> {
+    let model = tx.model();
+    let own = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
+    let other = model.subtree(model.root()).into_iter().find(|&e| {
+        e != own && model.get(e).is_some_and(|e| matches!(e.kind(), ElementKind::StateMachine))
+    });
+    if let Some(machine) = other {
+        return Ok(machine);
+    }
+    let owner = model.element(own)?.owner().unwrap_or(model.root());
+    let name = unique_name(model, owner, "StateMachine");
+    let created =
+        crate::edit::create_diagram(tx, owner, umlcraft_model::DiagramKind::StateMachine, &name)?;
+    tx.model().element(created)?.owner().ok_or(ModelError::Root)
+}
+
+/// Whether `kind` is an entry or exit point.
+fn is_border_point(kind: &ElementKind) -> bool {
+    matches!(kind, ElementKind::Pseudostate(p) if p.pseudostate.is_border_point())
+}
+
+fn is_stub(kind: &ElementKind) -> bool {
+    matches!(kind, ElementKind::Pseudostate(p) if p.pseudostate == PseudostateKind::StubState)
+}
+
+/// The state whose border an entry or exit point dropped with its center at `at` goes on: the
+/// innermost one drawn around the point whose border is within reach, else the one whose
+/// border is nearest, within reach.
+fn border_state_at(model: &Model, diagram: Id, at: Point) -> Option<(Id, Id, Rect)> {
+    model
+        .view(diagram)?
+        .presentations()
+        .iter()
+        .filter_map(|p| Some((p.id, p.element?, p.bounds()?)))
+        .filter(|(_, e, _)| {
+            model.get(*e).is_some_and(|e| matches!(e.kind(), ElementKind::State(_)))
+        })
+        .map(|(p, e, r)| (p, e, r, border_distance(r, at)))
+        .filter(|(.., d)| *d <= NEAR_STATE)
+        // Nearest border first; of two as near, the smaller state.
+        .min_by(|a, b| {
+            a.3.total_cmp(&b.3).then((a.2.width * a.2.height).total_cmp(&(b.2.width * b.2.height)))
+        })
+        .map(|(p, e, r, _)| (p, e, r))
+}
+
+/// Creates an entry point, an exit point or a stub state with `tool` at `origin` on the state
+/// machine diagram `diagram`. A point goes on the border of the state nearest to where it is
+/// dropped and belongs to it; dropped away from every state, it belongs to the state machine
+/// and goes on the frame, which is added when the diagram has none. A stub state goes into the
+/// submachine state it is dropped on (refused elsewhere, [`STUB_OUTSIDE`]). Returns (element,
+/// presentation).
+pub fn create_node(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    tool: NodeTool,
+    origin: Point,
+    base_name: &str,
+) -> Result<(Id, Id)> {
+    let model = tx.model();
+    let mut bounds = Rect::from_origin_size(origin, tool.default_size());
+    let at = bounds.center();
+    let kind = tool.element_kind();
+    let owner = if is_stub(&kind) {
+        let state = vertex_owner_at(model, diagram, at, &|s| !is_submachine(model, s))
+            .filter(|&s| is_submachine(model, s))
+            .ok_or_else(|| ModelError::Invalid(STUB_OUTSIDE.into()))?;
+        // Within the state, below its texts.
+        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        if let Some(r) = view.presentations_of(state).next().and_then(|p| p.bounds()) {
+            bounds.x = bounds.x.clamp(r.x, (r.right() - bounds.width).max(r.x));
+            bounds.y = bounds.y.clamp(r.y, (r.bottom() - bounds.height).max(r.y));
+        }
+        state
+    } else {
+        match border_state_at(model, diagram, at) {
+            Some((_, state, r)) => {
+                bounds = snap(bounds, r);
+                state
+            }
+            None => {
+                let start = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
+                let machine = owner_for(model, start, &kind)
+                    .ok_or_else(|| ModelError::Invalid("no state machine for the point".into()))?;
+                let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+                let framed = crate::activity::frame(view, diagram).and_then(|f| f.bounds());
+                let r = match framed {
+                    Some(r) => r,
+                    None => crate::activity::add_frame(tx, diagram, at)?,
+                };
+                bounds = snap(bounds, r);
+                machine
+            }
+        }
+    };
+    let name = unique_name(tx.model(), owner, base_name);
+    let element = tx.create(owner, tool.element_data(name))?;
+    let node = tx.add_node(diagram, Some(element), bounds)?;
+    Ok((element, node))
+}
 
 /// What a vertex placed at `p` on `diagram` becomes part of: the innermost state drawn around
 /// `p`, or for an orthogonal state the region `p` lies in (the first one, outside them all).
@@ -56,11 +182,18 @@ pub fn reparent_vertices(tx: &mut Tx<'_>, diagram: Id, presentations: &[Id]) -> 
         let Some(p) = model.view(diagram).and_then(|v| v.get(id)) else { continue };
         let (Some(element), Some(bounds)) = (p.element, p.bounds()) else { continue };
         let Some(e) = model.get(element) else { continue };
-        if !e.kind().is_vertex() {
+        // Entry and exit points stay with the state on whose border they sit.
+        if !e.kind().is_vertex() || is_border_point(e.kind()) {
             continue;
         }
-        // Not into itself or what lies inside it.
-        let inside = |candidate: Id| candidate == element || model.is_ancestor(element, candidate);
+        // Not into itself or what lies inside it; stub states go into submachine states only,
+        // other vertices never.
+        let stub = is_stub(e.kind());
+        let inside = |candidate: Id| {
+            candidate == element
+                || model.is_ancestor(element, candidate)
+                || stub != is_submachine(model, candidate)
+        };
         let owner = vertex_owner_at(model, diagram, bounds.center(), &inside).unwrap_or(machine);
         if e.owner() != Some(owner) && model.get(owner).is_some_and(|o| o.kind().can_own(e.kind()))
         {
@@ -112,7 +245,11 @@ pub fn add_region(tx: &mut Tx<'_>, state: Id, vertical: bool, diagram: Option<Id
             .children(state)
             .iter()
             .copied()
-            .filter(|&c| tx.model().get(c).is_some_and(|c| c.kind().is_vertex()))
+            .filter(|&c| {
+                tx.model().get(c).is_some_and(|c| {
+                    c.kind().is_vertex() && !is_border_point(c.kind()) && !is_stub(c.kind())
+                })
+            })
             .collect();
         for (index, vertex) in vertices.iter().enumerate() {
             tx.move_element(*vertex, created[0], index)?;
@@ -479,5 +616,166 @@ mod tests {
         // One goes into the other, the other stays where it is.
         assert!((owners[0] == cancelled) != (owners[1] == shipped), "{owners:?}");
         model.check().unwrap();
+    }
+
+    fn create(
+        doc: &mut umlcraft_model::Document,
+        diagram: Id,
+        tool: NodeTool,
+        at: Point,
+    ) -> Result<(Id, Id)> {
+        crate::edit::apply(doc, "create", &crate::scene::ApproxMeasure, |tx| {
+            create_node(tx, diagram, tool, at, tool.key())
+        })
+    }
+
+    fn bounds(doc: &umlcraft_model::Document, diagram: Id, node: Id) -> Rect {
+        doc.model().view(diagram).unwrap().get(node).unwrap().bounds().unwrap()
+    }
+
+    #[test]
+    fn entry_and_exit_points_stay_on_their_state_border() {
+        let (mut doc, _) = order_system();
+        let shipped = named(doc.model(), "Shipped");
+        let (diagram, state_node) = node_of(doc.model(), shipped);
+        let s = bounds(&doc, diagram, state_node);
+        // Dropped near the left edge, the point goes onto it, centered on the border.
+        let (entry, entry_node) =
+            create(&mut doc, diagram, NodeTool::EntryPoint, Point::new(s.x - 15.0, s.y)).unwrap();
+        assert_eq!(doc.model().element(entry).unwrap().owner(), Some(shipped));
+        assert_eq!(bounds(&doc, diagram, entry_node).center().x, s.x);
+        let (exit, exit_node) =
+            create(&mut doc, diagram, NodeTool::ExitPoint, Point::new(s.right() - 10.0, s.y))
+                .unwrap();
+        assert_eq!(bounds(&doc, diagram, exit_node).center().x, s.right());
+        // Moving and widening the state takes them along, each on its side.
+        let moved = Rect::new(s.x + 40.0, s.y + 30.0, s.width + 60.0, s.height);
+        crate::edit::apply(&mut doc, "move", &crate::scene::ApproxMeasure, |tx| {
+            tx.set_bounds(diagram, state_node, moved)?;
+            reparent_vertices(tx, diagram, &[state_node])
+        })
+        .unwrap();
+        assert_eq!(bounds(&doc, diagram, entry_node).center().x, moved.x);
+        assert_eq!(bounds(&doc, diagram, exit_node).center().x, moved.right());
+        assert_eq!(doc.model().element(entry).unwrap().owner(), Some(shipped), "not reparented");
+        // A transition ends at the entry point and starts at the exit point.
+        let (cancelled, cancelled_node) = {
+            let c = named(doc.model(), "Cancelled");
+            (c, node_of(doc.model(), c).1)
+        };
+        let _ = cancelled;
+        crate::edit::apply(&mut doc, "transitions", &crate::scene::ApproxMeasure, |tx| {
+            crate::palette::connect(
+                tx,
+                diagram,
+                crate::palette::EdgeTool::Transition,
+                cancelled_node,
+                entry_node,
+            )?;
+            crate::palette::connect(
+                tx,
+                diagram,
+                crate::palette::EdgeTool::Transition,
+                exit_node,
+                cancelled_node,
+            )
+        })
+        .unwrap();
+        // Deleting the state deletes its points.
+        crate::edit::apply(&mut doc, "delete", &crate::scene::ApproxMeasure, |tx| {
+            tx.delete(shipped)
+        })
+        .unwrap();
+        assert!(doc.model().get(entry).is_none() && doc.model().get(exit).is_none());
+        doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn points_away_from_states_go_on_the_frame() {
+        let (mut doc, _) = order_system();
+        let shipped = named(doc.model(), "Shipped");
+        let (diagram, _) = node_of(doc.model(), shipped);
+        let machine = doc.model().element(diagram).unwrap().owner();
+        let (point, node) =
+            create(&mut doc, diagram, NodeTool::ExitPoint, Point::new(1500.0, 900.0)).unwrap();
+        assert_eq!(doc.model().element(point).unwrap().owner(), machine);
+        let view = doc.model().view(diagram).unwrap();
+        let frame = crate::activity::frame(view, diagram).expect("a frame was added");
+        let r = frame.bounds().unwrap();
+        assert!(border_distance(r, bounds(&doc, diagram, node).center()) < 0.5);
+    }
+
+    #[test]
+    fn submachine_states_hold_stub_states_only() {
+        let (mut doc, _) = order_system();
+        let shipped = named(doc.model(), "Shipped");
+        let (diagram, _) = node_of(doc.model(), shipped);
+        let own = doc.model().element(diagram).unwrap().owner().unwrap();
+        // A stub state needs a submachine state.
+        assert!(create(&mut doc, diagram, NodeTool::StubState, Point::new(1500.0, 900.0)).is_err());
+        let s = bounds(&doc, diagram, node_of(doc.model(), shipped).1);
+        let refused = create(&mut doc, diagram, NodeTool::StubState, s.center());
+        assert!(matches!(refused, Err(ModelError::Invalid(m)) if m == STUB_OUTSIDE));
+        // The sample has one state machine, so the submachine state brings a new one along.
+        let machines = |doc: &umlcraft_model::Document| {
+            doc.model().elements().filter(|e| matches!(e.kind(), ElementKind::StateMachine)).count()
+        };
+        assert_eq!(machines(&doc), 1);
+        let (sub, sub_node) =
+            create(&mut doc, diagram, NodeTool::SubmachineState, Point::new(900.0, 600.0)).unwrap();
+        assert_eq!(machines(&doc), 2);
+        let submachine = |doc: &umlcraft_model::Document, state: Id| match doc.model().get(state) {
+            Some(e) => match e.kind() {
+                ElementKind::State(p) => p.submachine,
+                _ => None,
+            },
+            None => None,
+        };
+        let machine = submachine(&doc, sub);
+        assert!(machine.is_some_and(|m| m != own));
+        assert!(is_submachine(doc.model(), sub));
+        let r = bounds(&doc, diagram, sub_node);
+        let (stub, stub_node) = create(
+            &mut doc,
+            diagram,
+            NodeTool::StubState,
+            Point::new(r.x + 5.0, r.bottom() - 30.0),
+        )
+        .unwrap();
+        assert_eq!(doc.model().element(stub).unwrap().owner(), Some(sub));
+        assert!(r.contains_rect(&bounds(&doc, diagram, stub_node)), "clamped inside");
+        // No transition runs between two stub states.
+        let (_, other_stub) = create(
+            &mut doc,
+            diagram,
+            NodeTool::StubState,
+            Point::new(r.right() - 65.0, r.bottom() - 30.0),
+        )
+        .unwrap();
+        let between = crate::edit::apply(&mut doc, "t", &crate::scene::ApproxMeasure, |tx| {
+            crate::palette::connect(
+                tx,
+                diagram,
+                crate::palette::EdgeTool::Transition,
+                stub_node,
+                other_stub,
+            )
+        });
+        assert!(between.is_err());
+        // An ordinary state dropped onto it stays outside, and the stub stays in it.
+        let (_, shipped_node) = node_of(doc.model(), shipped);
+        crate::edit::apply(&mut doc, "drop", &crate::scene::ApproxMeasure, |tx| {
+            tx.set_bounds(diagram, shipped_node, Rect::new(r.x + 10.0, r.y + 5.0, 40.0, 30.0))?;
+            reparent_vertices(tx, diagram, &[shipped_node, stub_node])
+        })
+        .unwrap();
+        assert_eq!(doc.model().element(shipped).unwrap().owner(), Some(own));
+        assert_eq!(doc.model().element(stub).unwrap().owner(), Some(sub));
+        // A second submachine state stands for the machine there is now.
+        let (other, _) =
+            create(&mut doc, diagram, NodeTool::SubmachineState, Point::new(900.0, 800.0)).unwrap();
+        assert_eq!(machines(&doc), 2);
+        assert_eq!(submachine(&doc, other), machine);
+        doc.model().check().unwrap();
     }
 }

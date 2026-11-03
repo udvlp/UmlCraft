@@ -135,6 +135,11 @@ menu:
   line_curve_right_angle: Kurve (rechtwinklig)
   reset_line_ends: Linienenden auf die Mitte setzen
   reset_labels: Beschriftungen zurücksetzen
+  shared_style: Gemeinsamer Stil
+  shared_separate: Getrennt
+  shared_vertical: Vertikal
+  shared_horizontal: Horizontal
+  make_association_class: In Assoziationsklasse umwandeln
   arrange_down: Von oben nach unten
   arrange_right: Von links nach rechts
   type: Typ
@@ -178,6 +183,10 @@ menu:
 tool:
   select: Auswahl
   class: Klasse
+  boundary: Boundary
+  control: Control
+  entity: Entity
+  associationClass: Assoziationsklasse
   interface: Schnittstelle
   enumeration: Aufzählung
   package: Paket
@@ -236,7 +245,36 @@ tool:
   part: Part
   port: Port
   connector: Konnektor
+  callBehavior: Verhaltensaufruf
+  sendSignal: Signal senden
+  acceptEvent: Ereignis annehmen
+  acceptTimeEvent: Zeitereignis
+  activityConnector: Konnektor
+  inputPin: Eingabe-Pin
+  outputPin: Ausgabe-Pin
+  activityParameter: Aktivitätsparameter
+  submachineState: Unterautomatenzustand
+  entryPoint: Eintrittspunkt
+  exitPoint: Austrittspunkt
+  stubState: Stummelzustand
+  stateInvariant: Zustandsinvariante
+  termination: Terminierung
+  durationConstraint: Dauerbedingung
+  timeConstraint: Zeitbedingung
 tool_tip:
+  associationClass: "Eine Assoziation mit eigener Klasse: von einer Klasse zur anderen ziehen. Die Klasse hängt mit einer gestrichelten Linie an der Mitte der Linie"
+  inputPin: "Ein Eingabe-Pin: auf oder nahe eine Aktion klicken. Er gehört zur Aktion und bleibt an ihrem Rand"
+  outputPin: "Ein Ausgabe-Pin: auf oder nahe eine Aktion klicken. Er gehört zur Aktion und bleibt an ihrem Rand"
+  activityParameter: "Eine Ein- oder Ausgabe der ganzen Aktivität: nahe den Rand des Rahmens klicken. Ohne Rahmen bekommt das Diagramm einen"
+  activityConnector: "Setzt einen Fluss anderswo fort: ein Fluss in einen Konnektor geht vom Konnektor gleichen Namens weiter"
+  submachineState: "Ein Zustand, der für einen anderen Zustandsautomaten steht, wählbar in seinen Eigenschaften: zuerst der erste andere des Projekts oder ein neuer"
+  entryPoint: "Ein Eintrittspunkt: auf oder nahe den Rand eines Zustands klicken, oder nahe den Rahmen für einen des ganzen Zustandsautomaten. Er bleibt an diesem Rand"
+  exitPoint: "Ein Austrittspunkt: auf oder nahe den Rand eines Zustands klicken, oder nahe den Rahmen für einen des ganzen Zustandsautomaten. Er bleibt an diesem Rand"
+  stubState: "Ein Stummelzustand: in einen Unterautomatenzustand klicken. Er steht für einen Zustand des Unterautomaten, zu dem Transitionen führen oder von dem sie kommen"
+  stateInvariant: "Eine Bedingung, die auf einer Lebenslinie in diesem Moment gilt: auf die Lebenslinie klicken, wo sie stehen soll"
+  termination: "Beendet eine Lebenslinie mit einem Kreuz: auf die Lebenslinie klicken. Darunter sind keine Nachrichten mehr möglich"
+  durationConstraint: "Wie lange es von einer Nachricht zu einer anderen dauern darf: von der ersten Nachricht zur zweiten ziehen"
+  timeConstraint: "Wann eine Nachricht ankommen darf: auf die Nachricht klicken"
   foundMessage: "Eine Nachricht von außerhalb des Diagramms, etwa der erste Aufruf einer Sequenz: auf die Lebenslinie klicken, die sie empfängt. Den Punkt ziehen ändert Länge und Seite"
   lostMessage: "Eine Nachricht, deren Empfänger das Diagramm nicht zeigt, zunächst eine Antwort: auf die Lebenslinie klicken, die sie sendet. Den Punkt ziehen ändert Länge und Seite"
   part: "Ein Part einer Klasse: in die Klasse klicken. Er wird ein Attribut der Klasse; sein Typ sagt, was er ist"
@@ -274,6 +312,7 @@ prop:
   role: Rolle
   multiplicity: Multiplizität
   constraints: Einschränkungen
+  constraint: Einschränkung
   navigability: Navigierbarkeit
   aggregation: Aggregation
   display: Darstellung im Diagramm
@@ -288,6 +327,12 @@ prop:
   hide_return_types: Rückgabetypen ausblenden
   hide_attribute_stereotypes: Stereotype der Attribute ausblenden
   hide_operation_stereotypes: Stereotype der Operationen ausblenden
+  hide_attribute_constraints: Einschränkungen der Attribute ausblenden
+  hide_operation_constraints: Einschränkungen der Operationen ausblenden
+  hide_constraints: Einschränkungen ausblenden
+  robustness_icon: Als Symbol darstellen
+  element_constraints: Einschränkungen
+  element_constraints_placeholder: Eine pro Zeile, z. B. alter >= 18
   parameter_directions: Parameterrichtungen
   parameter_directions_explicit: out und inout
   parameter_directions_hidden: Keine
@@ -349,6 +394,11 @@ prop:
   value_type: Typ des Werts
   object_type: Typ
   in_state: Zustand
+  ordering: Reihenfolge
+  upper_bound: Obergrenze
+  stream: Stream
+  calls: Ruft auf
+  submachine: Zustandsautomat
   return_type: Rückgabetyp
   initial_value: Anfangswert
   type_bounds: Schranken
@@ -467,6 +517,15 @@ export_dropped:
   compositeStructureDiagram: Kompositionsstrukturdiagramme (als Klassendiagramme ohne Parts und Ports exportiert)
   port: Ports
   connector: Konnektoren
+  pin: Pins, die nicht mit ihrer Aktion gezeigt werden
+  calledActivity: Aktivitäten ohne Diagramm, die Verhaltensaufrufe aufrufen
+  position: Positionen, die Astah nicht übernommen hat
+  entryPoint: Eintrittspunkte (Astahs API kann sie nicht anlegen)
+  exitPoint: Austrittspunkte (Astahs API kann sie nicht anlegen)
+  stubState: Stummelzustände (Astahs API kann sie nicht anlegen)
+  durationConstraint: Dauerbedingungen (Astahs API kann sie nicht anlegen)
+  timeConstraint: Zeitbedingungen (Astahs API kann sie nicht anlegen)
+  submachine: Unterautomatenzustände, deren Zustandsautomat kein Diagramm hat (als Zustände exportiert)
   nestedComponent: Komponenten, Artefakte und Knoten in anderen (ins Paket verschoben)
   instanceKind: Komponenten- und Knoteninstanzen (als Objekte exportiert)
   instance: Instanzen, die auf keinem Komponenten-, Verteilungs- oder Klassendiagramm stehen
@@ -530,6 +589,8 @@ edit:
   properties: Eigenschaften ändern
   waypoints: Linienverlauf ändern
   line_style: Linienstil ändern
+  shared_style: Gemeinsamen Stil ändern
+  association_class: In Assoziationsklasse umwandeln
   line_ends: Linienenden auf die Mitte setzen
   labels: Beschriftungen zurücksetzen
   show: Im Diagramm zeigen
@@ -564,6 +625,7 @@ new_name:
   systemBoundary: System
 kind:
   model: Projekt
+  associationClass: Assoziationsklasse
   package: Paket
   subsystem: Subsystem
   class: Klasse
@@ -634,7 +696,28 @@ kind:
   part: Part
   port: Port
   connector: Konnektor
+  callBehavior: Verhaltensaufruf
+  sendSignal: Signalsendeaktion
+  acceptEvent: Ereignisannahmeaktion
+  acceptTimeEvent: Zeitereignisaktion
+  activityConnector: Konnektor
+  inputPin: Eingabe-Pin
+  outputPin: Ausgabe-Pin
+  activityParameter: Aktivitätsparameterknoten
+  submachineState: Unterautomatenzustand
+  entryPoint: Eintrittspunkt
+  exitPoint: Austrittspunkt
+  stubState: Stummelzustand
+  stateInvariant: Zustandsinvariante
+  termination: Terminierung
+  durationConstraint: Dauerbedingung
+  timeConstraint: Zeitbedingung
 error:
+  pin_outside: Ein Pin gehört an eine Aktion. Auf oder nahe den Rand einer Aktion klicken.
+  stub_outside: Ein Stummelzustand gehört in einen Unterautomatenzustand. In einen Unterautomatenzustand klicken.
+  not_on_lifeline: Eine Zustandsinvariante oder Terminierung gehört auf eine Lebenslinie. Auf eine Lebenslinie klicken.
+  lifeline_ended: Die Lebenslinie endet schon mit einer Terminierung oder einer Zerstören-Nachricht.
+  not_on_message: Eine Dauerbedingung geht von einer Nachricht zu einer anderen, eine Zeitbedingung steht an einer Nachricht. Auf eine Nachricht klicken.
   nsd_xml: "Zeile %{line}, Spalte %{column}: kein gültiges XML (%{message})."
   nsd_not_structorizer: Die Datei ist kein Struktogramm von Structorizer.
   nsd_unexpected_element: "Zeile %{line}, Spalte %{column}: unbekanntes Element <%{name}> in <%{parent}>."

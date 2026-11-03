@@ -135,6 +135,11 @@ menu:
   line_curve_right_angle: Curve (right angle)
   reset_line_ends: Attach line ends to the centers
   reset_labels: Reset label positions
+  shared_style: Shared style
+  shared_separate: Separate
+  shared_vertical: Vertical
+  shared_horizontal: Horizontal
+  make_association_class: Convert to association class
   arrange_down: Top to bottom
   arrange_right: Left to right
   type: Type
@@ -178,6 +183,10 @@ menu:
 tool:
   select: Select
   class: Class
+  boundary: Boundary
+  control: Control
+  entity: Entity
+  associationClass: Association class
   interface: Interface
   enumeration: Enumeration
   package: Package
@@ -236,7 +245,36 @@ tool:
   part: Part
   port: Port
   connector: Connector
+  callBehavior: Call behavior
+  sendSignal: Send signal
+  acceptEvent: Accept event
+  acceptTimeEvent: Time event
+  activityConnector: Connector
+  inputPin: Input pin
+  outputPin: Output pin
+  activityParameter: Activity parameter
+  submachineState: Submachine state
+  entryPoint: Entry point
+  exitPoint: Exit point
+  stubState: Stub state
+  stateInvariant: State invariant
+  termination: Termination
+  durationConstraint: Duration constraint
+  timeConstraint: Time constraint
 tool_tip:
+  associationClass: "An association with a class of its own: drag from one class to the other. The class joins the middle of the line with a dashed line"
+  inputPin: "An input pin: click on or near an action. It belongs to the action and stays on its border"
+  outputPin: "An output pin: click on or near an action. It belongs to the action and stays on its border"
+  activityParameter: "An input or output of the whole activity: click near the frame's border. Without a frame the diagram gets one"
+  activityConnector: "Continues a flow elsewhere: a flow into a connector goes on from the connector of the same name"
+  submachineState: "A state standing for another state machine, chosen in its properties: at first the first other one of the project, or a new one"
+  entryPoint: "An entry point: click on or near the border of a state, or near the frame for one of the whole state machine. It stays on that border"
+  exitPoint: "An exit point: click on or near the border of a state, or near the frame for one of the whole state machine. It stays on that border"
+  stubState: "A stub state: click inside a submachine state. It stands for a state of the submachine that transitions lead to or come from"
+  stateInvariant: "A condition that holds on a lifeline at that moment: click the lifeline where it should be"
+  termination: "Ends a lifeline with a cross: click the lifeline. Messages below it are not possible"
+  durationConstraint: "How long it may take from one message to another: drag from the first message to the second"
+  timeConstraint: "When a message may arrive: click the message"
   foundMessage: "A message from outside the diagram, such as the first call of a sequence: click the lifeline that receives it. Drag the dot to change its length and side"
   lostMessage: "A message whose receiver the diagram does not show, a reply at first: click the lifeline that sends it. Drag the dot to change its length and side"
   part: "A part of a class: click inside the class. It becomes an attribute of the class; its type says what it is"
@@ -274,6 +312,7 @@ prop:
   role: Role
   multiplicity: Multiplicity
   constraints: Constraints
+  constraint: Constraint
   navigability: Navigability
   aggregation: Aggregation
   display: Display on diagram
@@ -288,6 +327,12 @@ prop:
   hide_return_types: Hide return types
   hide_attribute_stereotypes: Hide attribute stereotypes
   hide_operation_stereotypes: Hide operation stereotypes
+  hide_attribute_constraints: Hide attribute constraints
+  hide_operation_constraints: Hide operation constraints
+  hide_constraints: Hide constraints
+  robustness_icon: Show as icon
+  element_constraints: Constraints
+  element_constraints_placeholder: One per line, e.g. age >= 18
   parameter_directions: Parameter directions
   parameter_directions_explicit: out and inout
   parameter_directions_hidden: None
@@ -349,6 +394,11 @@ prop:
   value_type: Type of the value
   object_type: Type
   in_state: State
+  ordering: Ordering
+  upper_bound: Upper bound
+  stream: Stream
+  calls: Calls
+  submachine: State machine
   return_type: Return type
   initial_value: Initial value
   type_bounds: Bounds
@@ -467,6 +517,15 @@ export_dropped:
   compositeStructureDiagram: Composite structure diagrams (exported as class diagrams without parts and ports)
   port: Ports
   connector: Connectors
+  pin: Pins not shown with their action
+  calledActivity: Activities called by call behavior actions that have no diagram
+  position: Positions Astah did not take
+  entryPoint: Entry points (Astah's API cannot create them)
+  exitPoint: Exit points (Astah's API cannot create them)
+  stubState: Stub states (Astah's API cannot create them)
+  durationConstraint: Duration constraints (Astah's API cannot create them)
+  timeConstraint: Time constraints (Astah's API cannot create them)
+  submachine: Submachine states whose state machine has no diagram (exported as states)
   nestedComponent: Components, artifacts and nodes inside others (moved to the package)
   instanceKind: Component and node instances (exported as objects)
   instance: Instances not shown on a component, deployment or class diagram
@@ -530,6 +589,8 @@ edit:
   properties: Change properties
   waypoints: Change line route
   line_style: Change line style
+  shared_style: Change shared style
+  association_class: Convert to association class
   line_ends: Attach line ends to the centers
   labels: Reset label positions
   show: Show on diagram
@@ -564,6 +625,7 @@ new_name:
   systemBoundary: System
 kind:
   model: Project
+  associationClass: Association class
   package: Package
   subsystem: Subsystem
   class: Class
@@ -634,7 +696,28 @@ kind:
   part: Part
   port: Port
   connector: Connector
+  callBehavior: Call behavior action
+  sendSignal: Send signal action
+  acceptEvent: Accept event action
+  acceptTimeEvent: Accept time event action
+  activityConnector: Connector
+  inputPin: Input pin
+  outputPin: Output pin
+  activityParameter: Activity parameter node
+  submachineState: Submachine state
+  entryPoint: Entry point
+  exitPoint: Exit point
+  stubState: Stub state
+  stateInvariant: State invariant
+  termination: Termination
+  durationConstraint: Duration constraint
+  timeConstraint: Time constraint
 error:
+  pin_outside: A pin goes on an action. Click on or near the border of an action.
+  stub_outside: A stub state goes into a submachine state. Click inside a submachine state.
+  not_on_lifeline: A state invariant or termination goes on a lifeline. Click a lifeline.
+  lifeline_ended: The lifeline already ends with a termination or a destroy message.
+  not_on_message: A duration constraint goes from one message to another, a time constraint on one message. Click a message.
   nsd_xml: "Line %{line}, column %{column}: not valid XML (%{message})."
   nsd_not_structorizer: The file is not a Structorizer structogram.
   nsd_unexpected_element: "Line %{line}, column %{column}: unknown element <%{name}> in <%{parent}>."

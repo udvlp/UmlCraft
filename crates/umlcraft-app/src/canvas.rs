@@ -15,7 +15,7 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
     Aggregation, AssociationEnd, Color, ElementKind, Id, LineShape, Model, Multiplicity,
-    Navigability, Point as MPoint, Rect, Shape, TypeRef,
+    Navigability, Point as MPoint, Rect, Shape, SharedStyle, TypeRef,
 };
 use umlcraft_notation::draw::{self, Paint, Primitive};
 use umlcraft_notation::member::{self, member_text};
@@ -31,11 +31,18 @@ use umlcraft_notation::sequence::SequenceLayout;
 use crate::workspace::{EndChange, NewItem, Workspace};
 use crate::{
     AddAttribute, AddExtensionPoint, AddLiteral, AddOperation, Cancel, ChangeRelationship,
-    ConnectAs, DeleteMember, DeleteSelection, LINE_SHAPES, RemoveFromDiagram, ResetLabels,
-    ResetLineEnds, ResetZoom, SelectAll, SetAssociationEnd, SetLineShape, SetMemberType, ZoomToFit,
+    ConnectAs, DeleteMember, DeleteSelection, LINE_SHAPES, MakeAssociationClass, RemoveFromDiagram,
+    ResetLabels, ResetLineEnds, ResetZoom, SelectAll, SetAssociationEnd, SetLineShape,
+    SetMemberType, SetSharedStyle, ZoomToFit,
 };
 
 const MIN_ZOOM: f32 = 0.25;
+/// Astah's shared styles of generalizations in menu order, with their labels.
+const SHARED_STYLES: [(SharedStyle, &str); 3] = [
+    (SharedStyle::Separate, "menu.shared_separate"),
+    (SharedStyle::Vertical, "menu.shared_vertical"),
+    (SharedStyle::Horizontal, "menu.shared_horizontal"),
+];
 /// The fonts for diagram texts, by preference. Astah uses Java's "Dialog", which is Arial on
 /// Windows; Liberation Sans and Arimo have Arial's metrics, for Linux without Arial.
 const DIAGRAM_FONTS: [&str; 3] = ["Arial", "Liberation Sans", "Arimo"];
@@ -838,16 +845,26 @@ impl DiagramCanvas {
     }
 
     /// What a line drawn with `tool` connects to at `p`: a node, or for note anchors also a
-    /// relationship's line (not another anchor), as in Astah. An activation bar stands for its
-    /// lifeline.
+    /// relationship's line (not another anchor), as in Astah. An activation bar, state
+    /// invariant or termination stands for its lifeline. Duration and time constraints go on
+    /// messages only.
     fn connect_target(&self, tool: EdgeTool, p: MPoint, cx: &App) -> Option<Id> {
         let ws = self.workspace.read(cx);
-        let view = ws.active_diagram.and_then(|d| ws.doc.model().view(d))?;
+        let model = ws.doc.model();
+        let view = ws.active_diagram.and_then(|d| model.view(d))?;
+        let is_message = |edge: Id| {
+            view.get(edge)
+                .and_then(|p| model.get(p.element?))
+                .is_some_and(|e| matches!(e.kind(), ElementKind::Message(_)))
+        };
+        if matches!(tool, EdgeTool::DurationConstraint | EdgeTool::TimeConstraint) {
+            return scene::edge_at(&self.scene, p, self.hit_tolerance()).filter(|&e| is_message(e));
+        }
         let line = (tool == EdgeTool::NoteAnchor)
             .then(|| scene::edge_at(&self.scene, p, self.hit_tolerance()))
             .flatten()
             .filter(|&edge| view.get(edge).is_some_and(|p| p.element.is_some()));
-        line.or_else(|| self.node_at(p)).map(|id| palette::lifeline_of(view, id))
+        line.or_else(|| self.node_at(p)).map(|id| palette::lifeline_of(model, view, id))
     }
 
     /// The message behind a message edge, if `presentation` is one: messages move up and down
@@ -895,6 +912,8 @@ impl DiagramCanvas {
                 // A port goes where it is clicked, on the border there.
                 let origin = match node_tool {
                     NodeTool::Port => MPoint::new(p.x - PORT_SIZE / 2.0, p.y - PORT_SIZE / 2.0),
+                    // These go on the lifeline clicked, at the height clicked.
+                    NodeTool::StateInvariant | NodeTool::Termination => p,
                     _ => snap_point(p),
                 };
                 // A fragment goes where it is placed in the sequence, around the lifelines there.
@@ -931,8 +950,13 @@ impl DiagramCanvas {
                 let start = snap_point(p);
                 self.drag = Some(Drag::FreeLine { start, current: start });
             }
-            // Found and lost messages have one lifeline: a click on it draws them.
-            Tool::Edge(edge_tool @ (EdgeTool::FoundMessage | EdgeTool::LostMessage)) => {
+            // Found and lost messages have one lifeline: a click on it draws them. A time
+            // constraint has one message.
+            Tool::Edge(
+                edge_tool @ (EdgeTool::FoundMessage
+                | EdgeTool::LostMessage
+                | EdgeTool::TimeConstraint),
+            ) => {
                 self.drag = None;
                 if let Some(lifeline) = self.connect_target(edge_tool, p, cx) {
                     self.finish_connect(edge_tool, lifeline, lifeline, p, cx);
@@ -1193,7 +1217,7 @@ impl DiagramCanvas {
                 })
             };
             let node = bar.or_else(line)?;
-            let lifeline = palette::lifeline_of(view, node.id);
+            let lifeline = palette::lifeline_of(model, view, node.id);
             let handles = vec![HoverHandle::Message { lifeline, y: p.y }];
             return Some(Hover { node: node.id, handles });
         }
@@ -1519,9 +1543,29 @@ impl DiagramCanvas {
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
-        let (current, labeled, association, use_case, compartments, member, kinds, nothing, focus) = {
+        let (
+            (current, labeled, association, use_case, compartments),
+            (member, kinds, nothing, focus, class_line),
+        ) = {
             let this = canvas.read(cx);
             let ws = this.workspace.read(cx);
+            // A generalization (with its shared style) or an association without a class.
+            let class_line = match (&ws.selection[..], ws.active_diagram) {
+                (&[single], Some(diagram)) => {
+                    let model = ws.doc.model();
+                    let p = model.view(diagram).and_then(|v| v.get(single));
+                    match p.and_then(|p| Some((p, model.get(p.element?)?.kind()))) {
+                        Some((p, ElementKind::Generalization(_))) => {
+                            Some((single, Some(p.style.shared)))
+                        }
+                        Some((_, ElementKind::Association(a))) if a.class.is_none() => {
+                            Some((single, None))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
             let kinds = match (&ws.selection[..], ws.active_diagram) {
                 (&[single], Some(diagram)) => {
                     palette::relationship_kinds(ws.doc.model(), diagram, single)
@@ -1549,7 +1593,10 @@ impl DiagramCanvas {
             };
             let nothing = ws.selection.is_empty();
             let focus = this.focus_handle.clone();
-            (current, labeled, association, use_case, compartments, member, kinds, nothing, focus)
+            (
+                (current, labeled, association, use_case, compartments),
+                (member, kinds, nothing, focus, class_line),
+            )
         };
         let mut menu = menu.action_context(focus);
         if let Some((member, types, delete)) = member {
@@ -1601,6 +1648,23 @@ impl DiagramCanvas {
                     })
                 })
                 .separator();
+        }
+        match class_line {
+            Some((edge, Some(shared))) => {
+                menu = menu
+                    .submenu(t!("menu.shared_style"), window, cx, move |menu, _, _| {
+                        SHARED_STYLES.iter().fold(menu, |menu, &(style, key)| {
+                            let action = Box::new(SetSharedStyle { edge, style });
+                            menu.menu_with_check(t!(key), shared == style, action)
+                        })
+                    })
+                    .separator();
+            }
+            Some((edge, None)) => {
+                let action = Box::new(MakeAssociationClass { edge });
+                menu = menu.menu(t!("menu.make_association_class"), action).separator();
+            }
+            None => {}
         }
         if let Some((association, ends)) = association {
             menu = association_menu(menu, association, ends, window, cx).separator();
@@ -2717,6 +2781,12 @@ impl Render for DiagramCanvas {
             }))
             .on_action(cx.listener(|this, a: &ChangeRelationship, _, cx| {
                 this.update_workspace(cx, |ws| ws.change_relationship(a.edge, a.tool));
+            }))
+            .on_action(cx.listener(|this, a: &SetSharedStyle, _, cx| {
+                this.update_workspace(cx, |ws| ws.set_shared_style(a.edge, a.style));
+            }))
+            .on_action(cx.listener(|this, a: &MakeAssociationClass, _, cx| {
+                this.update_workspace(cx, |ws| ws.make_association_class(a.edge));
             }))
             .on_action(cx.listener(|this, a: &DeleteMember, _, cx| {
                 this.update_workspace(cx, |ws| ws.delete_element(a.member));

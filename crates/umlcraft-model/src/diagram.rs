@@ -390,6 +390,21 @@ pub struct Style {
     /// Classifier boxes: leave out the operations' return types.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_return_types: bool,
+    /// Classifier boxes: leave out the attributes' constraints (`{age > 0}`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_attribute_constraints: bool,
+    /// Classifier boxes: leave out the operations' constraints.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_operation_constraints: bool,
+    /// Edges: leave out the constraints below the name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_constraints: bool,
+    /// Generalizations: drawn in Astah's shared style, one triangle at the general element
+    /// for all generalizations of the same style that end at its node, their lines joining
+    /// on a common line across (vertical style) or up and down (horizontal style). The
+    /// waypoints keep where that common line is.
+    #[serde(default, skip_serializing_if = "SharedStyle::is_separate")]
+    pub shared: SharedStyle,
     /// Classifier boxes: which parameter directions the operations show.
     #[serde(default, skip_serializing_if = "ParameterDirections::is_default")]
     pub parameter_directions: ParameterDirections,
@@ -479,6 +494,25 @@ pub enum ParameterDirections {
 impl ParameterDirections {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// Whether generalizations to one element share their triangle, Astah's "shared style".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SharedStyle {
+    /// Each line has its own triangle.
+    #[default]
+    Separate,
+    /// The lines leave the general element vertically and meet on a horizontal line.
+    Vertical,
+    /// The lines leave the general element horizontally and meet on a vertical line.
+    Horizontal,
+}
+
+impl SharedStyle {
+    pub fn is_separate(&self) -> bool {
+        *self == Self::Separate
     }
 }
 

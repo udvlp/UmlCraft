@@ -119,6 +119,11 @@ impl Importer<'_> {
         };
         // Nodes, and free texts and lines (without node data) among them in Astah's z-order.
         let mut placed: Vec<(ObjId, Option<NodeData>)> = Vec::new();
+        let nodes_and_groups: Vec<ObjId> = nodes
+            .iter()
+            .copied()
+            .filter(|&p| self.r.class(p) == "GeneralizationGroupPresentation")
+            .collect();
         for p in nodes {
             if matches!(self.r.class(p), "TextPresentation" | "LinePresentation") {
                 if !names.contains(&p) {
@@ -135,6 +140,9 @@ impl Importer<'_> {
         let shift = Point::new((MARGIN - min.0).max(0.0), (MARGIN - min.1).max(0.0));
 
         let mut presentation_of = HashMap::new();
+        // Containers go behind the rest in Astah's order, so a state stays in front of the
+        // composite state around it.
+        let mut containers = 0;
         for (source, node) in placed {
             let Some(mut node) = node else {
                 if let Some(presentation) = self.free_shape(source, shift) {
@@ -158,13 +166,31 @@ impl Importer<'_> {
                 style: node.style,
             };
             let index = if container {
-                0
+                containers
             } else {
                 self.model.view(diagram).map_or(0, |v| v.presentations().len())
             };
             let id = presentation.id;
             if self.model.apply(Op::InsertPresentation { diagram, index, presentation }).is_ok() {
                 presentation_of.insert(source, id);
+                if container {
+                    containers += 1;
+                }
+            }
+        }
+        // Generalizations in a shared group run over its common line.
+        self.shared.clear();
+        for &group in &nodes_and_groups {
+            let style = match self.r.g.field(group, "bundledDirection").and_then(Value::as_i64) {
+                Some(1) => SharedStyle::Horizontal,
+                _ => SharedStyle::Vertical,
+            };
+            let Some(at) = self.r.obj(group, "location").and_then(|l| self.r.point(l)) else {
+                continue;
+            };
+            let at = if style == SharedStyle::Horizontal { at.x + shift.x } else { at.y + shift.y };
+            for member in self.r.list(group, "clients") {
+                self.shared.insert(member, (style, at));
             }
         }
         // Note anchors come last: they may end on another line.
@@ -218,14 +244,20 @@ impl Importer<'_> {
         let width = r.num(p, "width").filter(|w| *w > 0.0).map_or(default.width, |w| w as f32);
         let height = r.num(p, "height").filter(|h| *h > 0.0).map_or(default.height, |h| h as f32);
         let mut style = self.fill(p);
-        if class == "ClassifierPresentation" {
+        if matches!(class, "ClassifierPresentation" | "AssociationClassPresentation") {
             style.hide_attributes = r.g.bool_field(p, "allAttributeVisibility") == Some(false);
             style.hide_operations = r.g.bool_field(p, "allOperationVisibility") == Some(false);
-            // Astah's notation 1 is the circle, 3 the socket of a required interface.
+            // Astah's notation 1 is the circle, 3 the socket of a required interface; for a
+            // class «boundary», «control» or «entity», 1 is its robustness icon.
             let notation = r.g.field(p, "notationType").and_then(Value::as_i64);
-            style.iconic = matches!(element_kind, ElementKind::Interface(_))
-                && matches!(notation, Some(1 | 3));
+            let robustness = self.model.get(element).and_then(scene::robustness_icon).is_some();
+            style.iconic = (matches!(element_kind, ElementKind::Interface(_))
+                && matches!(notation, Some(1 | 3)))
+                || (robustness && notation == Some(1));
             style.socket = style.iconic && notation == Some(3);
+            let off = |field: &str| r.g.bool_field(p, field) == Some(false);
+            style.hide_attribute_constraints = off("attributeConstraintVisibility");
+            style.hide_operation_constraints = off("operationConstraintVisibility");
             // Structured classes hold their parts; they are never sized by their name.
             style.auto_size = scene::is_boxed_classifier(&element_kind)
                 && r.g.bool_field(p, "doAutoResize") == Some(true)
@@ -390,6 +422,11 @@ impl Importer<'_> {
         shift: Point,
     ) -> Option<Id> {
         let r = self.r;
+        // The dashed line from an association class to its association's line follows from
+        // the association (see `scene::association_class_anchors`).
+        if r.class(p) == "AssociationClassAnchorPresentation" {
+            return None;
+        }
         let ends: Vec<Id> =
             r.list(p, "servers").iter().filter_map(|s| presentation_of.get(s).copied()).collect();
         let [mut source, mut target] = ends[..] else { return None };
@@ -426,6 +463,11 @@ impl Importer<'_> {
                 (owner(b) == Some(a)).then_some(b)?;
                 Some(b)
             }
+        } else if r.class(p) == "AssociationPathPresentation" {
+            // The line of an association class shows its association; the dashed line to the
+            // class (`AssociationClassAnchorPresentation`) follows from it.
+            let model = r.obj(p, "model")?;
+            Some(*self.association_classes.get(&model).or_else(|| self.ids.get(&model))?)
         } else {
             let &element = r.obj(p, "model").and_then(|m| self.ids.get(&m))?;
             // Message edges are added from the model, see `message_edges`.
@@ -449,7 +491,32 @@ impl Importer<'_> {
         if swapped {
             waypoints.reverse();
         }
+        // A shared generalization keeps the common line in its waypoints (see
+        // `umlcraft_notation::shared`).
+        let shared = self.shared.get(&p).copied();
+        if let Some((style, at)) = shared {
+            let center = |id: Id| self.model.view(diagram)?.get(id)?.bounds().map(|b| b.center());
+            if let (Some(from), Some(to)) = (center(source), center(target)) {
+                let general_is_target = element
+                    .and_then(|e| self.model.get(e))
+                    .and_then(|e| e.kind().as_generalization())
+                    .is_some_and(|g| {
+                        let view = self.model.view(diagram);
+                        view.and_then(|v| v.get(target)).and_then(|p| p.element) == Some(g.general)
+                    });
+                waypoints = if general_is_target {
+                    shared::waypoints(from, to, at, style)
+                } else {
+                    let mut w = shared::waypoints(to, from, at, style);
+                    w.reverse();
+                    w
+                };
+            }
+        }
         let mut presentation = Presentation::edge(element, source, target, waypoints.clone());
+        if let Some((style, _)) = shared {
+            presentation.style.shared = style;
+        }
         presentation.style.line_shape = match self.r.style(p, "line.shape").as_deref() {
             Some("line_right_angle") => LineShape::RightAngle,
             Some("curve") => LineShape::Curve,
@@ -459,6 +526,8 @@ impl Importer<'_> {
         // Astah draws the line in its color and the name in the font's.
         presentation.style.stroke = self.ink(p, "line.color");
         presentation.style.font_color = self.ink(p, "font.color");
+        presentation.style.hide_constraints =
+            self.r.g.bool_field(p, "constraintVisibility") == Some(false);
         let curve = presentation.style.line_shape.is_curve();
         let bounds = |id: Id| self.model.view(diagram)?.get(id)?.bounds();
         // Lines end at the node's ellipse or diamond, as the scene draws them.
@@ -565,6 +634,14 @@ impl Importer<'_> {
         let unnamed = r.obj(p, "model").is_none_or(|m| r.name(m).is_empty());
         if !own_keyword && unnamed && keyword.is_some() {
             name = keyword;
+        }
+        // Without a name or stereotype, the constraints stand where Astah keeps the first one;
+        // generalizations and dependencies keep none and show them where they go by default.
+        let constrained = r.obj(p, "model").is_some_and(|m| {
+            r.list(m, "constraint").iter().any(|&c| r.class(c) == "UConstraintImp")
+        });
+        if !own_keyword && unnamed && keyword.is_none() && constrained {
+            name = r.list(p, "constraintPresentations").first().and_then(|&c| place(c, middle));
         }
         let mut labels =
             EdgeLabels { name, keyword: keyword.filter(|_| own_keyword), ..Default::default() };

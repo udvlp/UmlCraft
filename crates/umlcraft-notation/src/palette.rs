@@ -3,10 +3,11 @@
 
 use umlcraft_model::{
     ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd,
-    DiagramKind, DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, Id,
-    IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
-    InteractionUseProps, LifelineProps, MessageGate, MessageSort, Model, ModelError, Point,
-    PseudostateKind, Rect, Result, Shape, Size, StateProps, Tx, TypeRef, View, Visibility,
+    DiagramKind, DiagramProps, DirectedProps, DurationConstraintProps, ElementData, ElementKind,
+    ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps,
+    InteractionOperator, InteractionUseProps, LifelineProps, MessageGate, MessageSort, Model,
+    ModelError, Point, PseudostateKind, Rect, Result, Shape, Size, StateInvariantProps, StateProps,
+    TerminationProps, TimeConstraintProps, Tx, TypeRef, View, Visibility,
 };
 
 use crate::sequence::{self, Slot};
@@ -23,6 +24,12 @@ pub fn is_subsystem(e: &umlcraft_model::Element) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NodeTool {
     Class,
+    /// Class diagrams: a class «boundary» drawn as Astah's robustness icon.
+    Boundary,
+    /// Class diagrams: a class «control» drawn as Astah's robustness icon.
+    Control,
+    /// Class diagrams: a class «entity» drawn as Astah's robustness icon.
+    Entity,
     Interface,
     Enumeration,
     Package,
@@ -35,6 +42,10 @@ pub enum NodeTool {
     SystemBoundary,
     CombinedFragment,
     InteractionUse,
+    /// Sequence diagrams: a condition on the lifeline clicked, at that height.
+    StateInvariant,
+    /// Sequence diagrams: a cross ending the lifeline clicked, at that height.
+    Termination,
     Action,
     InitialNode,
     ActivityFinal,
@@ -45,7 +56,21 @@ pub enum NodeTool {
     Join,
     ObjectNode,
     Partition,
+    /// Activity diagrams: an action calling another activity.
+    CallBehavior,
+    SendSignal,
+    AcceptEvent,
+    AcceptTimeEvent,
+    /// Activity diagrams: a circle continuing a flow elsewhere.
+    ActivityConnector,
+    /// Activity diagrams: pins on the border of the action they are dropped on.
+    InputPin,
+    OutputPin,
+    /// Activity diagrams: an activity parameter node on the frame.
+    ActivityParameter,
     State,
+    /// State machine diagrams: a state standing for another state machine.
+    SubmachineState,
     FinalState,
     InitialPseudostate,
     Choice,
@@ -54,6 +79,12 @@ pub enum NodeTool {
     JoinPseudostate,
     ShallowHistory,
     DeepHistory,
+    /// State machine diagrams: entry and exit points on the border of the state they are
+    /// dropped on, or of the frame.
+    EntryPoint,
+    ExitPoint,
+    /// State machine diagrams: a stub state in the submachine state it is dropped on.
+    StubState,
     Component,
     Artifact,
     /// A deployment node; `Node` would be ambiguous among diagram tools.
@@ -70,6 +101,8 @@ pub enum NodeTool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EdgeTool {
     Association,
+    /// An association with an association class, drawn with a dashed line to its middle.
+    AssociationClass,
     Link,
     Generalization,
     Realization,
@@ -88,6 +121,10 @@ pub enum EdgeTool {
     Transition,
     /// Composite structure diagrams: between parts and ports.
     Connector,
+    /// Sequence diagrams: the time between two messages.
+    DurationConstraint,
+    /// Sequence diagrams: when the message clicked arrives.
+    TimeConstraint,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -121,9 +158,21 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
     use NodeTool as N;
     let (nodes, edges): (&[NodeTool], &[EdgeTool]) = match kind {
         DiagramKind::Class => (
-            &[N::Class, N::Interface, N::Enumeration, N::Package, N::Subsystem, N::Object, N::Note],
+            &[
+                N::Class,
+                N::Interface,
+                N::Enumeration,
+                N::Package,
+                N::Subsystem,
+                N::Boundary,
+                N::Control,
+                N::Entity,
+                N::Object,
+                N::Note,
+            ],
             &[
                 E::Association,
+                E::AssociationClass,
                 E::Generalization,
                 E::Realization,
                 E::Dependency,
@@ -143,7 +192,14 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
             ],
         ),
         DiagramKind::Sequence => (
-            &[N::Lifeline, N::CombinedFragment, N::InteractionUse, N::Note],
+            &[
+                N::Lifeline,
+                N::CombinedFragment,
+                N::InteractionUse,
+                N::StateInvariant,
+                N::Termination,
+                N::Note,
+            ],
             &[
                 E::Message,
                 E::AsyncMessage,
@@ -152,12 +208,18 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
                 E::DestroyMessage,
                 E::FoundMessage,
                 E::LostMessage,
+                E::DurationConstraint,
+                E::TimeConstraint,
                 E::NoteAnchor,
             ],
         ),
         DiagramKind::Activity => (
             &[
                 N::Action,
+                N::CallBehavior,
+                N::SendSignal,
+                N::AcceptEvent,
+                N::AcceptTimeEvent,
                 N::InitialNode,
                 N::ActivityFinal,
                 N::FlowFinal,
@@ -166,6 +228,10 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
                 N::Fork,
                 N::Join,
                 N::ObjectNode,
+                N::InputPin,
+                N::OutputPin,
+                N::ActivityParameter,
+                N::ActivityConnector,
                 N::Partition,
                 N::Note,
             ],
@@ -174,6 +240,7 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
         DiagramKind::StateMachine => (
             &[
                 N::State,
+                N::SubmachineState,
                 N::InitialPseudostate,
                 N::FinalState,
                 N::Choice,
@@ -182,6 +249,9 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
                 N::JoinPseudostate,
                 N::ShallowHistory,
                 N::DeepHistory,
+                N::EntryPoint,
+                N::ExitPoint,
+                N::StubState,
                 N::Note,
             ],
             &[E::Transition, E::NoteAnchor],
@@ -257,6 +327,9 @@ impl NodeTool {
     pub fn key(self) -> &'static str {
         match self {
             Self::Class => "class",
+            Self::Boundary => "boundary",
+            Self::Control => "control",
+            Self::Entity => "entity",
             Self::Interface => "interface",
             Self::Enumeration => "enumeration",
             Self::Package => "package",
@@ -268,6 +341,8 @@ impl NodeTool {
             Self::SystemBoundary => "systemBoundary",
             Self::CombinedFragment => "combinedFragment",
             Self::InteractionUse => "interactionUse",
+            Self::StateInvariant => "stateInvariant",
+            Self::Termination => "termination",
             Self::Action => "action",
             Self::InitialNode => "initialNode",
             Self::ActivityFinal => "activityFinal",
@@ -278,7 +353,16 @@ impl NodeTool {
             Self::Join => "join",
             Self::ObjectNode => "objectNode",
             Self::Partition => "partition",
+            Self::CallBehavior => "callBehavior",
+            Self::SendSignal => "sendSignal",
+            Self::AcceptEvent => "acceptEvent",
+            Self::AcceptTimeEvent => "acceptTimeEvent",
+            Self::ActivityConnector => "activityConnector",
+            Self::InputPin => "inputPin",
+            Self::OutputPin => "outputPin",
+            Self::ActivityParameter => "activityParameter",
             Self::State => "state",
+            Self::SubmachineState => "submachineState",
             Self::FinalState => "finalState",
             Self::InitialPseudostate => "initialPseudostate",
             Self::Choice => "choice",
@@ -287,6 +371,9 @@ impl NodeTool {
             Self::JoinPseudostate => "joinPseudostate",
             Self::ShallowHistory => "shallowHistory",
             Self::DeepHistory => "deepHistory",
+            Self::EntryPoint => "entryPoint",
+            Self::ExitPoint => "exitPoint",
+            Self::StubState => "stubState",
             Self::Component => "component",
             Self::Artifact => "artifact",
             Self::DeploymentNode => "node",
@@ -327,6 +414,14 @@ impl NodeTool {
             ActivityNodeKind::Fork => Self::Fork,
             ActivityNodeKind::Join => Self::Join,
             ActivityNodeKind::Object => Self::ObjectNode,
+            ActivityNodeKind::SendSignal => Self::SendSignal,
+            ActivityNodeKind::AcceptEvent => Self::AcceptEvent,
+            ActivityNodeKind::AcceptTimeEvent => Self::AcceptTimeEvent,
+            ActivityNodeKind::CallBehavior => Self::CallBehavior,
+            ActivityNodeKind::Connector => Self::ActivityConnector,
+            ActivityNodeKind::InputPin => Self::InputPin,
+            ActivityNodeKind::OutputPin => Self::OutputPin,
+            ActivityNodeKind::ActivityParameter => Self::ActivityParameter,
         }
     }
 
@@ -340,17 +435,19 @@ impl NodeTool {
             PseudostateKind::Join => Self::JoinPseudostate,
             PseudostateKind::ShallowHistory => Self::ShallowHistory,
             PseudostateKind::DeepHistory => Self::DeepHistory,
+            PseudostateKind::EntryPoint => Self::EntryPoint,
+            PseudostateKind::ExitPoint => Self::ExitPoint,
+            PseudostateKind::StubState => Self::StubState,
         }
     }
 
     /// Whether new elements of this tool get a generated name. Notes, control nodes, final
-    /// states and pseudostates stay unnamed; their names are not shown.
+    /// states and most pseudostates stay unnamed; their names are not shown.
     pub fn is_named(self) -> bool {
         match self.element_kind() {
-            ElementKind::ActivityNode(p) => {
-                matches!(p.node, ActivityNodeKind::Action | ActivityNodeKind::Object)
-            }
-            ElementKind::Comment(_) | ElementKind::FinalState | ElementKind::Pseudostate(_) => {
+            ElementKind::ActivityNode(p) => p.node.is_named(),
+            ElementKind::Pseudostate(p) => p.pseudostate.is_named(),
+            ElementKind::Comment(_) | ElementKind::FinalState | ElementKind::Termination(_) => {
                 false
             }
             _ => true,
@@ -364,7 +461,9 @@ impl NodeTool {
         let instance =
             |instance| ElementKind::Instance(InstanceProps { instance, classifier: None });
         match self {
-            Self::Class => ElementKind::Class(classifier),
+            Self::Class | Self::Boundary | Self::Control | Self::Entity => {
+                ElementKind::Class(classifier)
+            }
             Self::Interface => ElementKind::Interface(classifier),
             Self::Enumeration => ElementKind::Enumeration(classifier),
             Self::Package | Self::Subsystem => ElementKind::Package,
@@ -378,6 +477,13 @@ impl NodeTool {
                 covered: Vec::new(),
             }),
             Self::InteractionUse => ElementKind::InteractionUse(InteractionUseProps::default()),
+            // `sequence_edit::create_on_lifeline` puts them on the lifeline clicked.
+            Self::StateInvariant => {
+                ElementKind::StateInvariant(StateInvariantProps { lifeline: Id::from_u128(0) })
+            }
+            Self::Termination => {
+                ElementKind::Termination(TerminationProps { lifeline: Id::from_u128(0) })
+            }
             Self::Action => node(ActivityNodeKind::Action),
             Self::InitialNode => node(ActivityNodeKind::Initial),
             Self::ActivityFinal => node(ActivityNodeKind::ActivityFinal),
@@ -388,7 +494,16 @@ impl NodeTool {
             Self::Join => node(ActivityNodeKind::Join),
             Self::ObjectNode => node(ActivityNodeKind::Object),
             Self::Partition => ElementKind::Partition,
-            Self::State => ElementKind::State(StateProps::default()),
+            Self::CallBehavior => node(ActivityNodeKind::CallBehavior),
+            Self::SendSignal => node(ActivityNodeKind::SendSignal),
+            Self::AcceptEvent => node(ActivityNodeKind::AcceptEvent),
+            Self::AcceptTimeEvent => node(ActivityNodeKind::AcceptTimeEvent),
+            Self::ActivityConnector => node(ActivityNodeKind::Connector),
+            Self::InputPin => node(ActivityNodeKind::InputPin),
+            Self::OutputPin => node(ActivityNodeKind::OutputPin),
+            Self::ActivityParameter => node(ActivityNodeKind::ActivityParameter),
+            // `create_node` gives a new submachine state its state machine.
+            Self::State | Self::SubmachineState => ElementKind::State(StateProps::default()),
             Self::FinalState => ElementKind::FinalState,
             Self::InitialPseudostate => pseudostate(PseudostateKind::Initial),
             Self::Choice => pseudostate(PseudostateKind::Choice),
@@ -397,6 +512,9 @@ impl NodeTool {
             Self::JoinPseudostate => pseudostate(PseudostateKind::Join),
             Self::ShallowHistory => pseudostate(PseudostateKind::ShallowHistory),
             Self::DeepHistory => pseudostate(PseudostateKind::DeepHistory),
+            Self::EntryPoint => pseudostate(PseudostateKind::EntryPoint),
+            Self::ExitPoint => pseudostate(PseudostateKind::ExitPoint),
+            Self::StubState => pseudostate(PseudostateKind::StubState),
             Self::Component => ElementKind::Component(classifier),
             Self::Artifact => ElementKind::Artifact(classifier),
             Self::DeploymentNode => ElementKind::Node(classifier),
@@ -415,12 +533,28 @@ impl NodeTool {
         if self == Self::Subsystem {
             data.stereotypes = vec![SUBSYSTEM.into()];
         }
+        if let Some(stereotype) = self.robustness_stereotype() {
+            data.stereotypes = vec![stereotype.into()];
+        }
         data
+    }
+
+    /// The stereotype of a robustness tool, drawn as its icon.
+    pub fn robustness_stereotype(self) -> Option<&'static str> {
+        match self {
+            Self::Boundary => Some("boundary"),
+            Self::Control => Some("control"),
+            Self::Entity => Some("entity"),
+            _ => None,
+        }
     }
 
     pub fn default_size(self) -> Size {
         match self {
             Self::Class => Size::new(160.0, 70.0),
+            // Astah's robustness icons.
+            Self::Boundary => Size::new(60.0, 40.0),
+            Self::Control | Self::Entity => Size::new(40.0, 40.0),
             Self::Interface | Self::Enumeration => Size::new(160.0, 60.0),
             Self::Package | Self::Subsystem => Size::new(200.0, 140.0),
             Self::Note => Size::new(160.0, 60.0),
@@ -430,6 +564,10 @@ impl NodeTool {
             Self::SystemBoundary => Size::new(300.0, 360.0),
             // The layout sizes fragments; this is only what the file keeps.
             Self::CombinedFragment | Self::InteractionUse => Size::new(200.0, 80.0),
+            Self::StateInvariant => {
+                Size::new(sequence_edit::INVARIANT_WIDTH, sequence_edit::INVARIANT_HEIGHT)
+            }
+            Self::Termination => Size::new(sequence_edit::CROSS, sequence_edit::CROSS),
             Self::Action => Size::new(120.0, 36.0),
             // Astah's control nodes: 20 px circles, 5 px bars.
             Self::InitialNode | Self::ActivityFinal | Self::FlowFinal => Size::new(20.0, 20.0),
@@ -437,12 +575,30 @@ impl NodeTool {
             Self::Fork | Self::Join => Size::new(60.0, 5.0),
             Self::ObjectNode => Size::new(80.0, 36.0),
             Self::Partition => Size::new(200.0, 400.0),
+            // Astah's sizes: signal actions as wide as their stereotype and 20 on each side,
+            // with room for the name below it; a call behavior action keeps 15 for its rake.
+            Self::SendSignal => Size::new(150.0, 38.19),
+            Self::AcceptEvent => Size::new(142.0, 38.19),
+            Self::AcceptTimeEvent => Size::new(20.0, 25.0),
+            Self::CallBehavior => Size::new(120.0, 38.09),
+            Self::ActivityConnector => Size::new(21.5625, 21.5625),
+            Self::InputPin | Self::OutputPin => {
+                Size::new(crate::scene::PIN_SIZE, crate::scene::PIN_SIZE)
+            }
+            Self::ActivityParameter => Size::new(80.0, 25.09),
             Self::State => Size::new(100.0, 50.0),
             Self::FinalState | Self::InitialPseudostate => Size::new(20.0, 20.0),
             Self::Choice => Size::new(24.0, 24.0),
             Self::Junction => Size::new(14.0, 14.0),
             Self::ForkPseudostate | Self::JoinPseudostate => Size::new(60.0, 5.0),
             Self::ShallowHistory | Self::DeepHistory => Size::new(24.0, 24.0),
+            // Astah's default size of submachine states; points are circles of 20, a stub state
+            // is as high as its bar and name.
+            Self::SubmachineState => Size::new(150.0, 60.0),
+            Self::EntryPoint | Self::ExitPoint => {
+                Size::new(crate::scene::POINT_SIZE, crate::scene::POINT_SIZE)
+            }
+            Self::StubState => Size::new(60.0, 24.09),
             Self::Component | Self::ComponentInstance => Size::new(140.0, 60.0),
             Self::Artifact => Size::new(120.0, 60.0),
             Self::DeploymentNode | Self::NodeInstance => Size::new(200.0, 140.0),
@@ -474,6 +630,7 @@ impl EdgeTool {
     pub fn key(self) -> &'static str {
         match self {
             Self::Association => "association",
+            Self::AssociationClass => "associationClass",
             Self::Link => "link",
             Self::Generalization => "generalization",
             Self::Realization => "realization",
@@ -491,6 +648,8 @@ impl EdgeTool {
             Self::Flow => "flow",
             Self::Transition => "transition",
             Self::Connector => "connector",
+            Self::DurationConstraint => "durationConstraint",
+            Self::TimeConstraint => "timeConstraint",
         }
     }
 
@@ -524,6 +683,8 @@ impl EdgeTool {
                 !same && matches!((source, target), (K::Lifeline(_), K::Lifeline(_)))
             }
             Self::Association => source.is_classifier() && target.is_classifier(),
+            // Astah draws association classes between classes and interfaces.
+            Self::AssociationClass => is_class_like(source) && is_class_like(target),
             Self::Link => matches!((source, target), (K::Instance(_), K::Instance(_))),
             Self::Generalization => {
                 !same
@@ -554,6 +715,10 @@ impl EdgeTool {
                 let end = |k: &ElementKind| matches!(k, K::Attribute(_) | K::Port(_));
                 !same && end(source) && end(target)
             }
+            Self::DurationConstraint => {
+                !same && matches!((source, target), (K::Message(_), K::Message(_)))
+            }
+            Self::TimeConstraint => same && matches!(source, K::Message(_)),
             Self::Dependency => !same && is_dependable(source) && is_dependable(target),
             Self::Include | Self::Extend => {
                 !same && matches!(source, K::UseCase(_)) && matches!(target, K::UseCase(_))
@@ -566,16 +731,18 @@ impl EdgeTool {
                 _ => false,
             },
             // Nothing leaves a final state or enters an initial pseudostate; only states loop
-            // back to themselves.
+            // back to themselves; no transition runs between two stub states (Astah refuses it).
             Self::Transition => {
                 let initial = matches!(
                     target,
                     K::Pseudostate(p) if p.pseudostate == PseudostateKind::Initial
                 );
+                let stub = |k: &K| matches!(k, K::Pseudostate(p) if p.pseudostate == PseudostateKind::StubState);
                 source.is_vertex()
                     && target.is_vertex()
                     && !matches!(source, K::FinalState)
                     && !initial
+                    && !(stub(source) && stub(target))
                     && (!same || matches!(source, K::State(_)))
             }
             Self::NoteAnchor => {
@@ -590,7 +757,7 @@ impl EdgeTool {
     pub fn element_kind(self, source: Id, target: Id) -> Option<ElementKind> {
         let directed = DirectedProps { client: source, supplier: target };
         match self {
-            Self::Association => {
+            Self::Association | Self::AssociationClass => {
                 // Astah makes association ends private.
                 let mut kind = ElementKind::association(source, target);
                 if let ElementKind::Association(p) = &mut kind {
@@ -620,6 +787,15 @@ impl EdgeTool {
                 ConnectorEnd::new(target, None),
             )),
             Self::NoteAnchor => None,
+            Self::DurationConstraint => {
+                Some(ElementKind::DurationConstraint(DurationConstraintProps {
+                    from: source,
+                    to: target,
+                }))
+            }
+            Self::TimeConstraint => {
+                Some(ElementKind::TimeConstraint(TimeConstraintProps { message: source }))
+            }
             Self::Message
             | Self::AsyncMessage
             | Self::Reply
@@ -671,6 +847,10 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
             ElementKind::Lifeline(_)
                 | ElementKind::CombinedFragment(_)
                 | ElementKind::InteractionUse(_)
+                | ElementKind::StateInvariant(_)
+                | ElementKind::Termination(_)
+                | ElementKind::DurationConstraint(_)
+                | ElementKind::TimeConstraint(_)
                 | ElementKind::Comment(_)
         ),
         DiagramKind::Activity => matches!(
@@ -723,7 +903,10 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::SystemBoundary => NodeTool::SystemBoundary,
         ElementKind::CombinedFragment(_) => NodeTool::CombinedFragment,
         ElementKind::InteractionUse(_) => NodeTool::InteractionUse,
+        ElementKind::StateInvariant(_) => NodeTool::StateInvariant,
+        ElementKind::Termination(_) => NodeTool::Termination,
         ElementKind::ActivityNode(p) => NodeTool::for_activity_node(p.node),
+        ElementKind::State(p) if p.submachine.is_some() => NodeTool::SubmachineState,
         ElementKind::State(_) => NodeTool::State,
         ElementKind::FinalState => NodeTool::FinalState,
         ElementKind::Pseudostate(p) => NodeTool::for_pseudostate(p.pseudostate),
@@ -837,6 +1020,12 @@ fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Resu
     if matches!(kind, ElementKind::Lifeline(_)) {
         return sequence_edit::add_lifeline(tx, diagram, element, bounds.x, bounds.y);
     }
+    if matches!(kind, ElementKind::StateInvariant(_) | ElementKind::Termination(_)) {
+        return sequence_edit::add_mark(tx, diagram, element, bounds.y);
+    }
+    if matches!(kind, ElementKind::DurationConstraint(_) | ElementKind::TimeConstraint(_)) {
+        return sequence_edit::add_constraint(tx, diagram, element);
+    }
     let fragment = matches!(kind, ElementKind::CombinedFragment(_));
     // On composite structure diagrams classes are drawn around their parts: behind them, and
     // keeping the size they are given.
@@ -895,6 +1084,20 @@ pub fn create_node(
     if matches!(tool, NodeTool::Part | NodeTool::Port) {
         return crate::composite::create_node(tx, diagram, tool, origin, base_name);
     }
+    if matches!(tool, NodeTool::InputPin | NodeTool::OutputPin | NodeTool::ActivityParameter) {
+        return crate::activity::create_node(tx, diagram, tool, origin, base_name);
+    }
+    if matches!(tool, NodeTool::EntryPoint | NodeTool::ExitPoint | NodeTool::StubState) {
+        return crate::state_edit::create_node(tx, diagram, tool, origin, base_name);
+    }
+    if matches!(tool, NodeTool::StateInvariant | NodeTool::Termination) {
+        let termination = tool == NodeTool::Termination;
+        let model = tx.model();
+        let interaction = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
+        let name =
+            if termination { String::new() } else { unique_name(model, interaction, base_name) };
+        return sequence_edit::create_on_lifeline(tx, diagram, termination, origin, &name);
+    }
     let kind = tool.element_kind();
     let diagram_owner = tx.model().element(diagram)?.owner().ok_or(ModelError::Root)?;
     let mut bounds = Rect::from_origin_size(origin, tool.default_size());
@@ -904,9 +1107,11 @@ pub fn create_node(
         bounds.width = bounds.width.max(STRUCTURED_SIZE.width);
         bounds.height = bounds.height.max(STRUCTURED_SIZE.height);
     }
-    // By its center, as moved vertices are.
+    // By its center, as moved vertices are; never into a submachine state.
     let enclosing = if kind.is_vertex() {
-        crate::state_edit::vertex_owner_at(tx.model(), diagram, bounds.center(), &|_| false)
+        let model = tx.model();
+        let submachine = |s: Id| crate::state_edit::is_submachine(model, s);
+        crate::state_edit::vertex_owner_at(model, diagram, bounds.center(), &submachine)
     } else {
         None
     };
@@ -918,8 +1123,18 @@ pub fn create_node(
     };
     let name =
         if tool.is_named() { unique_name(tx.model(), owner, base_name) } else { String::new() };
-    let element = tx.create(owner, tool.element_data(name))?;
+    let mut data = tool.element_data(name);
+    if tool == NodeTool::SubmachineState
+        && let ElementKind::State(p) = &mut data.kind
+    {
+        p.submachine = Some(crate::state_edit::submachine_for(tx, diagram)?);
+    }
+    let element = tx.create(owner, data)?;
     let node = add_node_for(tx, diagram, element, bounds)?;
+    // Robustness classes are drawn as their icon, as Astah makes them.
+    if tool.robustness_stereotype().is_some() {
+        tx.update_presentation(diagram, node, |p| p.style.iconic = true)?;
+    }
     Ok((element, node))
 }
 
@@ -932,6 +1147,12 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
     if tool == EdgeTool::Connector {
         return crate::composite::connect(tx, diagram, source, target);
     }
+    if matches!(tool, EdgeTool::DurationConstraint | EdgeTool::TimeConstraint) {
+        if (source == target) != (tool == EdgeTool::TimeConstraint) {
+            return Err(ModelError::Invalid(sequence_edit::NOT_ON_MESSAGE.into()));
+        }
+        return sequence_edit::constrain(tx, diagram, source, target);
+    }
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let element_of = |p: Id| -> Result<Id> {
@@ -942,7 +1163,10 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
     // Only associations and transitions may loop back to the same node; they get a loop of
     // waypoints.
     let self_loop = source == target;
-    let may_loop = matches!(tool, EdgeTool::Association | EdgeTool::Link | EdgeTool::Transition);
+    let may_loop = matches!(
+        tool,
+        EdgeTool::Association | EdgeTool::AssociationClass | EdgeTool::Link | EdgeTool::Transition
+    );
     if (self_loop && !may_loop) || !tool.accepts(sk, tk, s == t) {
         return Err(ModelError::Invalid(format!(
             "{} cannot connect {} to {}",
@@ -962,7 +1186,13 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
                 _ => Vec::new(),
             };
             let element = tx.create(owner, ElementData::new("", kind))?;
-            tx.add_edge(diagram, Some(element), source, target, waypoints)
+            let edge = tx.add_edge(diagram, Some(element), source, target, waypoints)?;
+            if tool == EdgeTool::AssociationClass {
+                let owner = tx.model().element(element)?.owner().unwrap_or(owner);
+                let name = unique_name(tx.model(), owner, ASSOCIATION_CLASS_NAME);
+                make_association_class(tx, diagram, edge, &name)?;
+            }
+            Ok(edge)
         }
         None => {
             // Note anchor: the comment annotates the other element.
@@ -977,6 +1207,57 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
             tx.add_edge(diagram, None, source, target, Vec::new())
         }
     }
+}
+
+/// The name a new association class gets before a number, as in Astah ("AssociationClass0").
+pub const ASSOCIATION_CLASS_NAME: &str = "AssociationClass";
+
+/// Turns the association that the edge `edge` of `diagram` shows into an association class
+/// (Astah's "Convert to association class"): a new class named `name` beside the association,
+/// shown below the middle of the line, which the drawing joins to it with a dashed line.
+/// Returns the class and its node.
+pub fn make_association_class(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    edge: Id,
+    name: &str,
+) -> Result<(Id, Id)> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let presentation = view.get(edge).ok_or(ModelError::NotFound(edge))?;
+    let association = presentation.element.ok_or(ModelError::NotFound(edge))?;
+    let ElementKind::Association(a) = model.element(association)?.kind() else {
+        return Err(ModelError::Invalid(format!("{association} is no association")));
+    };
+    if a.class.is_some() {
+        return Err(ModelError::Invalid("the association has an association class".into()));
+    }
+    let Shape::Edge { source, target, waypoints, .. } = &presentation.shape else {
+        return Err(ModelError::Invalid(format!("{edge} is no edge")));
+    };
+    let center = |id: &Id| view.get(*id).and_then(|p| p.bounds()).map(|b| b.center());
+    let (Some(a), Some(b)) = (center(source), center(target)) else {
+        return Err(ModelError::Invalid("the line's ends are not on the diagram".into()));
+    };
+    // The middle of the line through its waypoints, roughly where the dashed line will end.
+    let mut points = vec![a];
+    points.extend(waypoints.iter().copied());
+    points.push(b);
+    let middle = points[points.len() / 2 - usize::from(points.len() % 2 == 0)];
+    let next = points[points.len() / 2];
+    let middle = Point::new((middle.x + next.x) / 2.0, (middle.y + next.y) / 2.0);
+    let owner = model.element(association)?.owner().ok_or(ModelError::Root)?;
+    let owner = owner_for(model, owner, &ElementKind::class()).ok_or(ModelError::Root)?;
+    let class = tx.create(owner, ElementData::new(name, ElementKind::class()))?;
+    tx.update(association, |data| {
+        if let ElementKind::Association(a) = &mut data.kind {
+            a.class = Some(class);
+        }
+    })?;
+    let size = NodeTool::Class.default_size();
+    let origin = Point::new(middle.x - size.width / 2.0, middle.y + 50.0);
+    let node = add_node_for(tx, diagram, class, Rect::from_origin_size(origin, size))?;
+    Ok((class, node))
 }
 
 /// The relationships "Change kind" turns into each other.
@@ -1092,7 +1373,7 @@ pub fn connect_message(
 ) -> Result<Id> {
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
-    let (source, target) = (lifeline_of(view, source), lifeline_of(view, target));
+    let (source, target) = (lifeline_of(model, view, source), lifeline_of(model, view, target));
     let element_of = |p: Id| -> Result<Id> {
         view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
     };
@@ -1119,9 +1400,17 @@ pub fn connect_message(
 }
 
 /// The lifeline an activation bar `presentation` lies on, else `presentation` itself.
-pub fn lifeline_of(view: &View, presentation: Id) -> Id {
-    match view.get(presentation).map(|p| &p.shape) {
-        Some(Shape::Activation { lifeline, .. }) => *lifeline,
+pub fn lifeline_of(model: &Model, view: &View, presentation: Id) -> Id {
+    let Some(p) = view.get(presentation) else { return presentation };
+    if let Shape::Activation { lifeline, .. } = p.shape {
+        return lifeline;
+    }
+    // So do a state invariant and a termination drawn on it.
+    match p.element.and_then(|e| model.get(e)).map(|e| e.kind()) {
+        Some(
+            ElementKind::StateInvariant(StateInvariantProps { lifeline })
+            | ElementKind::Termination(TerminationProps { lifeline }),
+        ) => sequence_edit::lane_of(view, *lifeline).unwrap_or(presentation),
         _ => presentation,
     }
 }
@@ -1490,13 +1779,16 @@ mod tests {
         use EdgeTool as E;
         assert_eq!(
             connections(&classes, &class, &class, false),
-            [E::Association, E::Generalization, E::Dependency]
+            [E::Association, E::AssociationClass, E::Generalization, E::Dependency]
         );
         assert_eq!(
             connections(&classes, &class, &interface, false),
-            [E::Association, E::Realization, E::Dependency]
+            [E::Association, E::AssociationClass, E::Realization, E::Dependency]
         );
-        assert_eq!(connections(&classes, &class, &class, true), [E::Association]);
+        assert_eq!(
+            connections(&classes, &class, &class, true),
+            [E::Association, E::AssociationClass]
+        );
         let (actor, use_case) = (ElementKind::actor(), ElementKind::use_case());
         let use_cases = props(DiagramKind::UseCase);
         assert_eq!(

@@ -9,8 +9,7 @@ use umlcraft_model::{Point, Rect};
 use crate::draw::{label_area, text_left};
 use crate::route;
 use crate::scene::{
-    EdgeLabel, EdgeShape, FONT_SIZE, LABEL_HEIGHT, NodeShape, TextMeasure, label_width,
-    line_height, name_arrow,
+    EdgeLabel, EdgeShape, FONT_SIZE, LABEL_HEIGHT, NodeShape, TextMeasure, label_width, name_arrow,
 };
 
 /// Which label of a line a free label is.
@@ -120,6 +119,9 @@ struct Block {
     free: usize,
     width: f32,
     height: f32,
+    /// Where the lines' bounding box starts relative to the first line's top left corner:
+    /// constraints below a name are centered on their own.
+    offset: Point,
     /// Top left corners to choose from; the first is where Astah puts the label.
     spots: Vec<Point>,
     chosen: usize,
@@ -134,8 +136,14 @@ impl Block {
         measure: &dyn TextMeasure,
     ) -> Self {
         let lines = &edge.labels[free.index..free.index + free.lines];
-        let width = lines.iter().map(|l| label_width(&l.text, measure)).fold(0.0, f32::max);
-        let height = LABEL_HEIGHT + (free.lines - 1) as f32 * line_height(FONT_SIZE);
+        let first = lines[0].anchor;
+        let bounds = lines
+            .iter()
+            .map(|l| Rect::new(l.anchor.x, l.anchor.y, label_width(&l.text, measure), LABEL_HEIGHT))
+            .reduce(|a, b| a.union(&b))
+            .unwrap_or_default();
+        let (width, height) = (bounds.width, bounds.height);
+        let offset = Point::new(bounds.x - first.x, bounds.y - first.y);
         let size = (width, height);
         let mut spots = vec![lines[0].anchor];
         match free.kind {
@@ -157,12 +165,12 @@ impl Block {
                 spots.extend(end_spots(&edge.points, source, role, size));
             }
         }
-        Self { edge: index, free: free_index, width, height, spots, chosen: 0 }
+        Self { edge: index, free: free_index, width, height, offset, spots, chosen: 0 }
     }
 
     fn rect(&self, spot: usize) -> Rect {
         let p = self.spots[spot];
-        Rect::new(p.x, p.y, self.width, self.height)
+        Rect::new(p.x + self.offset.x, p.y + self.offset.y, self.width, self.height)
     }
 
     /// What the label covers wherever it goes.

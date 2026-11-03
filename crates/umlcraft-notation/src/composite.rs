@@ -6,10 +6,15 @@
 //! class or part whose border is nearest. Ports stay on that border: when the class or part moves
 //! or changes its size, its ports keep their place along the border ([`follow`]); a port moved by
 //! itself goes onto the border nearest to where it was dropped.
+//!
+//! Activity diagrams have nodes on borders too, which [`follow`] keeps there the same way: pins
+//! just outside the border of their action, and activity parameter nodes on the diagram's
+//! frame (see [`crate::activity`]). So do state machine diagrams: entry and exit points on the
+//! border of their state or of the frame (see [`crate::state_edit`]).
 
 use umlcraft_model::{
-    ConnectorEnd, DiagramKind, ElementData, ElementKind, Id, Model, ModelError, Point,
-    Presentation, Rect, Result, Tx, TypeRef, View, Visibility,
+    ActivityNodeKind, ConnectorEnd, DiagramKind, ElementData, ElementKind, Id, Model, ModelError,
+    Point, Presentation, Rect, Result, Tx, TypeRef, View, Visibility,
 };
 
 use crate::palette::{NodeTool, unique_name};
@@ -40,10 +45,6 @@ fn is_host(kind: &ElementKind) -> bool {
 
 fn element_kind<'m>(model: &'m Model, p: &Presentation) -> Option<&'m ElementKind> {
     p.element.and_then(|e| model.get(e)).map(|e| e.kind())
-}
-
-fn is_port(model: &Model, p: &Presentation) -> bool {
-    matches!(element_kind(model, p), Some(ElementKind::Port(_)))
 }
 
 /// The class or component a part is typed by, whose ports it shows.
@@ -77,7 +78,7 @@ fn innermost_at<'v>(
 }
 
 /// How far `c` is from the border of `r`.
-fn border_distance(r: Rect, c: Point) -> f32 {
+pub(crate) fn border_distance(r: Rect, c: Point) -> f32 {
     let dx = (r.x - c.x).max(c.x - r.right()).max(0.0);
     let dy = (r.y - c.y).max(c.y - r.bottom()).max(0.0);
     if dx > 0.0 || dy > 0.0 {
@@ -120,7 +121,7 @@ pub fn port_host<'v>(
 /// Where along the border of `r` the point nearest to `c` lies: the side (0 top, 1 right,
 /// 2 bottom, 3 left) and how far from the side's top or left end. A port keeps that distance
 /// when its host grows, so it stays level with what it connects to.
-fn border_place(r: Rect, c: Point) -> (u8, f32) {
+pub(crate) fn border_place(r: Rect, c: Point) -> (u8, f32) {
     let to = [c.y - r.y, r.right() - c.x, r.bottom() - c.y, c.x - r.x];
     let side = (0..4).min_by(|&a, &b| to[a].abs().total_cmp(&to[b].abs())).unwrap_or(0) as u8;
     let t = match side {
@@ -144,7 +145,7 @@ pub fn side_on(hosts: &[Rect], c: Point) -> Option<u8> {
 }
 
 /// The point on the border of `r` at `place` (see [`border_place`]).
-fn border_point(r: Rect, (side, t): (u8, f32)) -> Point {
+pub(crate) fn border_point(r: Rect, (side, t): (u8, f32)) -> Point {
     match side {
         0 => Point::new(r.x + t.min(r.width), r.y),
         1 => Point::new(r.right(), r.y + t.min(r.height)),
@@ -159,7 +160,7 @@ pub fn snap(port: Rect, host: Rect) -> Rect {
     centered(at, port)
 }
 
-fn centered(at: Point, r: Rect) -> Rect {
+pub(crate) fn centered(at: Point, r: Rect) -> Rect {
     Rect::new(at.x - r.width / 2.0, at.y - r.height / 2.0, r.width, r.height)
 }
 
@@ -171,8 +172,9 @@ const MARGIN: f32 = 20.0;
 const NEAR_BORDER: f32 = 10.0;
 
 /// Where a new node of `tool` goes on `host` (a node of `diagram`) when no place is given: a
-/// part below the class's name, right of the parts there or in a new row; a port on the first
-/// free place along the left border, then the right, top and bottom ones.
+/// part below the class's name, right of the parts there or in a new row; a stub state along
+/// the bottom of its submachine state; a port on the first free place along the left border,
+/// then the right, top and bottom ones (exit points and output pins start on the right).
 pub fn free_spot(model: &Model, diagram: Id, host: Id, tool: NodeTool) -> Option<Point> {
     let view = model.view(diagram)?;
     let r = view.get(host)?.bounds()?;
@@ -180,6 +182,15 @@ pub fn free_spot(model: &Model, diagram: Id, host: Id, tool: NodeTool) -> Option
         view.presentations().iter().filter(|p| p.id != host).filter_map(|p| p.bounds()).collect();
     let size = tool.default_size();
     match tool {
+        NodeTool::StubState => {
+            let y = r.bottom() - size.height - 5.0;
+            let right = others
+                .iter()
+                .filter(|o| r.contains_rect(o) && o.bottom() > y)
+                .map(|o| o.right())
+                .fold(r.x, f32::max);
+            Some(Point::new(right + 10.0, y))
+        }
         NodeTool::Part => {
             let inside: Vec<&Rect> = others.iter().filter(|o| r.contains_rect(o)).collect();
             let top = r.y + 30.0 + MARGIN;
@@ -196,19 +207,40 @@ pub fn free_spot(model: &Model, diagram: Id, host: Id, tool: NodeTool) -> Option
         _ => {
             // One port every `step` along the border, away from the ports there.
             let step = PORT_SIZE + 16.0;
-            let ports: Vec<Point> =
-                others.iter().filter(|o| o.width <= PORT_SIZE + 0.5).map(|o| o.center()).collect();
+            let ports: Vec<Point> = others
+                .iter()
+                .filter(|o| o.width <= crate::scene::POINT_SIZE + 0.5)
+                .map(|o| o.center())
+                .collect();
             let free = |c: Point| ports.iter().all(|p| p.distance(c) >= step - 0.5);
             let along = |from: f32, to: f32| {
                 let n = ((to - from - step) / step).floor().max(0.0) as usize;
                 (1..=n).map(move |i| from + i as f32 * step)
             };
-            let spots = along(r.y, r.bottom())
-                .map(|y| Point::new(r.x, y))
-                .chain(along(r.y, r.bottom()).map(|y| Point::new(r.right(), y)))
+            // Output pins and exit points look for room on the right first, everything else on
+            // the left. Pins and entry and exit points try the middle of a side first, as
+            // actions and states are often too low for two, and names side by side along the
+            // top would run into each other.
+            let (first, second) = match tool {
+                NodeTool::OutputPin | NodeTool::ExitPoint => (r.right(), r.x),
+                _ => (r.x, r.right()),
+            };
+            let pin = matches!(
+                tool,
+                NodeTool::InputPin
+                    | NodeTool::OutputPin
+                    | NodeTool::EntryPoint
+                    | NodeTool::ExitPoint
+            );
+            let middles = [Point::new(first, r.center().y), Point::new(second, r.center().y)];
+            let spots = middles
+                .into_iter()
+                .filter(|_| pin)
+                .chain(along(r.y, r.bottom()).map(|y| Point::new(first, y)))
+                .chain(along(r.y, r.bottom()).map(|y| Point::new(second, y)))
                 .chain(along(r.x, r.right()).map(|x| Point::new(x, r.y)))
                 .chain(along(r.x, r.right()).map(|x| Point::new(x, r.bottom())));
-            let c = spots.into_iter().find(|&c| free(c)).unwrap_or(Point::new(r.x, r.center().y));
+            let c = spots.into_iter().find(|&c| free(c)).unwrap_or(Point::new(first, r.center().y));
             Some(Point::new(c.x - size.width / 2.0, c.y - size.height / 2.0))
         }
     }
@@ -314,38 +346,165 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<I
     tx.add_edge(diagram, Some(element), source, target, Vec::new())
 }
 
-/// Where a port sat before an edit: on which host, where along its border, and where the port
-/// and the host were.
+/// What keeps to a border: a port to the border of its class or part, a pin just outside the
+/// border of its action, an activity parameter node to the diagram's frame, an entry or exit
+/// point to the border of its state or of the frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Borne {
+    Port,
+    Pin,
+    Parameter,
+    Point,
+}
+
+impl Borne {
+    /// How far outside its host's border the node's center lies.
+    fn reach(self) -> f32 {
+        match self {
+            Self::Pin => crate::scene::PIN_SIZE / 2.0,
+            Self::Port | Self::Parameter | Self::Point => 0.0,
+        }
+    }
+}
+
+/// What kind of border node `p` of a diagram of `kind` is, if any.
+fn borne_kind(model: &Model, kind: Option<DiagramKind>, p: &Presentation) -> Option<Borne> {
+    match (kind?, element_kind(model, p)?) {
+        (DiagramKind::CompositeStructure, ElementKind::Port(_)) => Some(Borne::Port),
+        (DiagramKind::Activity, ElementKind::ActivityNode(n)) if n.node.is_pin() => {
+            Some(Borne::Pin)
+        }
+        (DiagramKind::Activity, ElementKind::ActivityNode(n))
+            if n.node == ActivityNodeKind::ActivityParameter =>
+        {
+            Some(Borne::Parameter)
+        }
+        (DiagramKind::StateMachine, ElementKind::Pseudostate(s))
+            if s.pseudostate.is_border_point() =>
+        {
+            Some(Borne::Point)
+        }
+        _ => None,
+    }
+}
+
+/// The node of `view` that the pin, activity parameter node, entry or exit point `p` keeps
+/// to: the node of the pin's action or the point's state nearest to it, or the diagram's
+/// frame for a parameter and a point of the state machine itself.
+fn owner_host(model: &Model, view: &View, diagram: Id, p: &Presentation) -> Option<Id> {
+    let element = model.get(p.element?)?;
+    let c = p.bounds()?.center();
+    let host = match element.kind() {
+        ElementKind::ActivityNode(n) if n.node.is_pin() => element.owner()?,
+        ElementKind::ActivityNode(_) => diagram,
+        ElementKind::Pseudostate(_) => {
+            let owner = element.owner()?;
+            match model.get(owner)?.kind() {
+                ElementKind::State(_) => owner,
+                _ => diagram,
+            }
+        }
+        _ => return None,
+    };
+    view.presentations()
+        .iter()
+        .filter(|h| h.element == Some(host))
+        .filter_map(|h| Some((h.id, h.bounds()?)))
+        .min_by(|a, b| border_distance(a.1, c).total_cmp(&border_distance(b.1, c)))
+        .map(|(id, _)| id)
+}
+
+/// The pins and activity parameter nodes of the activity diagram `diagram`, or the entry and
+/// exit points of the state machine diagram `diagram`, each with the node it keeps to (its
+/// action's or state's, or the frame), if that is shown.
+pub fn borne_nodes(model: &Model, diagram: Id) -> std::collections::HashMap<Id, Option<Id>> {
+    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let bordered = matches!(kind, Some(DiagramKind::Activity | DiagramKind::StateMachine));
+    let Some(view) = model.view(diagram).filter(|_| bordered) else {
+        return Default::default();
+    };
+    view.presentations()
+        .iter()
+        .filter(|p| borne_kind(model, kind, p).is_some())
+        .map(|p| (p.id, owner_host(model, view, diagram, p)))
+        .collect()
+}
+
+/// The host of the border node `p` of `view` and the line its center keeps to.
+fn track(
+    model: &Model,
+    view: &View,
+    diagram: Id,
+    p: &Presentation,
+    borne: Borne,
+) -> Option<(Id, Rect)> {
+    let host = match borne {
+        Borne::Port => port_host(model, view, p)?.id,
+        Borne::Pin | Borne::Parameter | Borne::Point => owner_host(model, view, diagram, p)?,
+    };
+    Some((host, view.get(host)?.bounds()?.inflate(borne.reach())))
+}
+
+/// Where a border node sat before an edit: on which host, where along its border, and where
+/// the node and the host's track were.
 #[derive(Clone, Debug)]
 pub struct PortPlace {
     diagram: Id,
     port: Id,
+    borne: Borne,
     center: Point,
     host: Option<(Id, Rect)>,
 }
 
-/// Where the ports and parts of composite structure diagrams were before an edit, to
-/// [`follow`] after it.
+/// Where the ports and parts of composite structure diagrams and the pins and activity
+/// parameter nodes of activity diagrams were before an edit, to [`follow`] after it.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     ports: Vec<PortPlace>,
     parts: Vec<(Id, Id, Rect)>,
 }
 
+/// Whether `p` shows an entry or exit point of a state machine itself, which sits on the frame.
+fn on_frame(model: &Model, p: &Presentation) -> bool {
+    let owner = p.element.and_then(|e| model.get(e)).and_then(|e| e.owner());
+    owner.and_then(|o| model.get(o)).is_some_and(|o| matches!(o.kind(), ElementKind::StateMachine))
+}
+
 fn is_part(model: &Model, p: &Presentation) -> bool {
     matches!(element_kind(model, p), Some(ElementKind::Attribute(_)))
 }
 
-/// The places of all ports and parts on composite structure diagrams.
+/// Composite structure, activity and state machine diagrams, with their kind.
+fn bordered_views(model: &Model) -> impl Iterator<Item = (Id, &View, Option<DiagramKind>)> {
+    model.views().filter_map(|(d, view)| {
+        let kind = model.get(d).and_then(|d| d.kind().as_diagram());
+        matches!(
+            kind,
+            Some(
+                DiagramKind::CompositeStructure | DiagramKind::Activity | DiagramKind::StateMachine
+            )
+        )
+        .then_some((d, view, kind))
+    })
+}
+
+/// The places of all ports and parts on composite structure diagrams, and of all pins and
+/// activity parameter nodes on activity diagrams.
 pub fn snapshots(model: &Model) -> Snapshot {
     let mut snapshot = Snapshot::default();
-    for (diagram, view) in model.views().filter(|(d, _)| is_composite(model, *d)) {
+    for (diagram, view, kind) in bordered_views(model) {
         for p in view.presentations() {
             let Some(r) = p.bounds() else { continue };
-            if is_port(model, p) {
-                let host = port_host(model, view, p).and_then(|h| Some((h.id, h.bounds()?)));
-                snapshot.ports.push(PortPlace { diagram, port: p.id, center: r.center(), host });
-            } else if is_part(model, p) {
+            if let Some(borne) = borne_kind(model, kind, p) {
+                let host = track(model, view, diagram, p, borne);
+                snapshot.ports.push(PortPlace {
+                    diagram,
+                    port: p.id,
+                    borne,
+                    center: r.center(),
+                    host,
+                });
+            } else if kind == Some(DiagramKind::CompositeStructure) && is_part(model, p) {
                 snapshot.parts.push((diagram, p.id, r));
             }
         }
@@ -353,11 +512,14 @@ pub fn snapshots(model: &Model) -> Snapshot {
     snapshot
 }
 
-/// Keeps parts inside their class and ports on the border of their hosts after an edit.
+/// Keeps parts inside their class, ports on the border of their hosts, pins on the border of
+/// their actions and activity parameter nodes on the frame after an edit.
 ///
-/// A class grows around a part moved or resized out of it. A port that did not move keeps its
-/// place along the border of a host that moved or changed size, and goes along when its host is
-/// removed from the diagram; a port that moved, or a new one, goes onto the nearest border.
+/// A class grows around a part moved or resized out of it. A port or pin that did not move
+/// keeps its place along the border of a host that moved or changed size, and goes along when
+/// its host is removed from the diagram; one that moved, or a new one, goes onto the nearest
+/// border: a port onto that of any class or part, a pin onto its own action's, an activity
+/// parameter node onto the frame.
 pub fn follow(tx: &mut Tx<'_>, before: &Snapshot) -> Result<()> {
     hold_parts(tx, &before.parts)?;
     follow_ports(tx, &before.ports)
@@ -408,37 +570,52 @@ fn follow_ports(tx: &mut Tx<'_>, before: &[PortPlace]) -> Result<()> {
     let mut moves = Vec::new();
     let mut removed = Vec::new();
     let mut unplaced = Vec::new();
-    for (diagram, view) in model.views().filter(|(d, _)| is_composite(model, *d)) {
-        for p in view.presentations().iter().filter(|p| is_port(model, p)) {
+    for (diagram, view, kind) in bordered_views(model) {
+        for p in view.presentations() {
+            let Some(borne) = borne_kind(model, kind, p) else { continue };
             let Some(r) = p.bounds() else { continue };
             let c = r.center();
             let old = before.iter().find(|b| b.diagram == diagram && b.port == p.id);
-            let still = old.is_some_and(|o| o.center.distance(c) < 0.01);
+            let still = old.is_some_and(|o| o.center.distance(c) < 0.01 && o.borne == borne);
             let target = match old.and_then(|o| o.host).filter(|_| still) {
-                Some((host, was)) => match view.get(host).and_then(|h| h.bounds()) {
-                    Some(now) if now == was => continue,
-                    Some(now) => centered(border_point(now, border_place(was, c)), r),
-                    None => {
-                        removed.push((diagram, p.id));
-                        continue;
-                    }
-                },
-                None => match nearest_host(model, view, c, f32::INFINITY, Some(p.id)) {
-                    Some(host) => {
-                        let now = host.bounds().unwrap_or(r);
-                        let target = snap(r, now);
-                        // A name placed beside the old side would now stand in the way.
-                        let side = |host: Rect, c: Point| border_place(host, c).0;
-                        let turned = old
-                            .and_then(|o| Some((o.host?.1, o.center)))
-                            .is_some_and(|(was, at)| side(was, at) != side(now, target.center()));
-                        if turned && p.style.name_offset.is_some() {
-                            unplaced.push((diagram, p.id));
+                Some((host, was)) => {
+                    match view.get(host).and_then(|h| h.bounds()).map(|h| h.inflate(borne.reach()))
+                    {
+                        Some(now) if now == was => continue,
+                        Some(now) => centered(border_point(now, border_place(was, c)), r),
+                        // An activity parameter node or an entry or exit point of the state
+                        // machine stays where it is without its frame.
+                        None if borne == Borne::Parameter || on_frame(model, p) => continue,
+                        None => {
+                            removed.push((diagram, p.id));
+                            continue;
                         }
-                        target
                     }
-                    None => continue,
-                },
+                }
+                None => {
+                    let host = match borne {
+                        Borne::Port => nearest_host(model, view, c, f32::INFINITY, Some(p.id))
+                            .and_then(|h| Some((h.id, h.bounds()?))),
+                        Borne::Pin | Borne::Parameter | Borne::Point => {
+                            track(model, view, diagram, p, borne)
+                        }
+                    };
+                    match host {
+                        Some((_, now)) => {
+                            let target = snap(r, now);
+                            // A name placed beside the old side would now stand in the way.
+                            let side = |host: Rect, c: Point| border_place(host, c).0;
+                            let turned = old.and_then(|o| Some((o.host?.1, o.center))).is_some_and(
+                                |(was, at)| side(was, at) != side(now, target.center()),
+                            );
+                            if turned && p.style.name_offset.is_some() {
+                                unplaced.push((diagram, p.id));
+                            }
+                            target
+                        }
+                        None => continue,
+                    }
+                }
             };
             if target.origin().distance(r.origin()) > 0.01 {
                 moves.push((diagram, p.id, target));

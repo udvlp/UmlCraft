@@ -124,7 +124,10 @@ impl Importer<'_> {
                     id
                 }
                 None => {
-                    let kind = ElementKind::Association(AssociationProps { ends: [near, far] });
+                    let kind = ElementKind::Association(AssociationProps {
+                        ends: [near, far],
+                        class: None,
+                    });
                     self.report.associations += 1;
                     let mut data = ElementData::new("", kind);
                     data.tagged_values.push(imported_tag());

@@ -52,6 +52,39 @@ impl Importer<'_> {
             }
         }
         self.interaction_items(interaction, messages, fragments);
+
+        // Duration and time constraints belong to the collaboration and name the messages
+        // they constrain.
+        for ownership in self.r.list(collaboration, "ownedElementOwnership") {
+            let Some(constraint) = self.r.obj(ownership, "ownedElement") else { continue };
+            let class = self.r.class(constraint);
+            if !matches!(class, "UDurationConstraintImp" | "UTimeConstraintImp") {
+                continue;
+            }
+            let messages: Vec<Id> = self
+                .r
+                .list(constraint, "constrainedElement")
+                .iter()
+                .filter_map(|m| self.ids.get(m).copied())
+                .filter(|id| {
+                    matches!(self.model.get(*id).map(|e| e.kind()), Some(ElementKind::Message(_)))
+                })
+                .collect();
+            let kind = match (class, &messages[..]) {
+                ("UDurationConstraintImp", &[from, to]) => {
+                    ElementKind::DurationConstraint(DurationConstraintProps { from, to })
+                }
+                ("UTimeConstraintImp", &[message]) => {
+                    ElementKind::TimeConstraint(TimeConstraintProps { message })
+                }
+                _ => {
+                    self.skip(constraint);
+                    continue;
+                }
+            };
+            let data = self.data(constraint, kind, &[]);
+            self.create(interaction, data, Some(constraint));
+        }
         Some(interaction)
     }
 
@@ -109,6 +142,21 @@ impl Importer<'_> {
                 return;
             }
         };
+        // A termination is a destroy message from a lifeline to itself that only a cross shows.
+        let shown_as_line =
+            r.list(object, "presentation").iter().any(|&p| r.class(p) == "MessagePresentation");
+        if action_type(r, object) == Some(DESTROY)
+            && gate == MessageGate::None
+            && from == to
+            && !shown_as_line
+        {
+            let kind = ElementKind::Termination(TerminationProps { lifeline: from });
+            let mut data = self.data(object, kind, &[]);
+            // Astah names them Stop0, Stop1, …; nothing shows the name.
+            data.name.clear();
+            self.create(container, data, Some(object));
+            return;
+        }
         let action = r.obj(object, "action");
         let asynchronous = action.is_some_and(|a| r.flag(a, "asynchronous"));
         let sort = match action_type(r, object) {
@@ -157,7 +205,7 @@ impl Importer<'_> {
 
     pub(super) fn fragment(&mut self, container: Id, object: ObjId) {
         let r = self.r;
-        let covered =
+        let covered: Vec<Id> =
             r.list(object, "covereds").iter().filter_map(|c| self.ids.get(c).copied()).collect();
         if r.class(object) == "UInteractionUseImp" {
             // The interaction it refers to may not exist yet; see `resolve_references`.
@@ -173,6 +221,17 @@ impl Importer<'_> {
             {
                 self.references.push((id, target));
             }
+            return;
+        }
+        // A state invariant's condition is its name.
+        if r.class(object) == "UStateInvariantImp" {
+            let Some(&lifeline) = covered.first() else {
+                self.skip(object);
+                return;
+            };
+            let kind = ElementKind::StateInvariant(StateInvariantProps { lifeline });
+            let data = self.data(object, kind, &[]);
+            self.create(container, data, Some(object));
             return;
         }
         if r.class(object) != "UCombinedFragmentImp" {
@@ -230,9 +289,16 @@ impl Importer<'_> {
             |this: &Self, p: ObjId| r.obj(p, "model").and_then(|m| this.ids.get(&m)).copied();
         let mut presentation_of: HashMap<ObjId, Id> = HashMap::new();
 
+        // The crosses of destroy messages; those of terminations are nodes of their own.
+        let terminates = |this: &Self, p: ObjId| {
+            matches!(
+                element(this, p).and_then(|e| this.model.get(e)).map(|e| e.kind()),
+                Some(ElementKind::Termination(_))
+            )
+        };
         let destroyed: HashSet<ObjId> = sources
             .iter()
-            .filter(|&&p| class(p) == "TerminationPresentation")
+            .filter(|&&p| class(p) == "TerminationPresentation" && !terminates(self, p))
             .filter_map(|&p| r.list(p, "servers").first().copied())
             .collect();
         // Nodes in Astah's z-order; bars and messages lie in front of them.
@@ -324,6 +390,45 @@ impl Importer<'_> {
                 self.message_presentation(diagram, p, shift, |this, s| {
                     lane_of(this, s, &presentation_of)
                 });
+            }
+        }
+        // State invariants, terminations and constraints lie in front of the messages.
+        for &p in &sources {
+            let Some(e) = element(self, p) else { continue };
+            let kind = self.model.get(e).map(|e| e.kind());
+            let bounds = match (class(p), kind) {
+                ("StateInvariantPresentation", Some(ElementKind::StateInvariant(_)))
+                | ("TerminationPresentation", Some(ElementKind::Termination(_))) => rect(self, p),
+                // A duration's line keeps its x; its ends follow the messages.
+                ("DurationConstraintPresentation", Some(ElementKind::DurationConstraint(_))) => {
+                    let points = r.points(p, "allPoints");
+                    match (points.first(), points.last()) {
+                        (Some(a), Some(b)) => Some(Rect::new(
+                            a.x + shift.x - 10.0,
+                            a.y.min(b.y) + shift.y,
+                            20.0,
+                            (a.y - b.y).abs(),
+                        )),
+                        _ => None,
+                    }
+                }
+                // A time constraint goes where its message's arrowhead is.
+                ("TimeConstraintPresentation", Some(ElementKind::TimeConstraint(_))) => {
+                    let points = r.points(p, "points");
+                    match (points.first(), points.last()) {
+                        (Some(&a), Some(&b)) => {
+                            Some(Rect::from_corners(a, b).translate(shift.x, shift.y).inflate(5.0))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => continue,
+            };
+            let Some(bounds) = bounds else { continue };
+            let mut presentation = Presentation::node(Some(e), bounds);
+            presentation.style = self.fill(p);
+            if let Some(id) = self.insert(diagram, presentation, false) {
+                presentation_of.insert(p, id);
             }
         }
         for &p in &sources {

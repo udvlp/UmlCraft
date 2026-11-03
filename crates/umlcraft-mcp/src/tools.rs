@@ -8,8 +8,9 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 use umlcraft_model::{
-    DiagramKind, ElementData, ElementKind, Id, InteractionOperator, MessageSort, Model, ModelError,
-    Point, Rect, Shape, Tx, Visibility,
+    ActivityNodeKind, DiagramKind, ElementData, ElementKind, Id, InteractionOperator, MessageSort,
+    Model, ModelError, Point, Rect, Shape, SharedStyle, StateInvariantProps, TerminationProps, Tx,
+    Visibility,
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview};
@@ -278,7 +279,20 @@ pub fn list() -> Vec<Value> {
              the class drawn around it, which grows to hold it, and a `port` sits on the \
              border of a class or a part; `on` names that class or part instead of `x`, `y`. \
              A port on a part belongs to the class that is the part's type, so type the part \
-             first (`update_element` with the member `text`, e.g. `engine : Engine`).",
+             first (`update_element` with the member `text`, e.g. `engine : Engine`). On \
+             activity diagrams an `inputPin` or `outputPin` belongs to the action at or near \
+             `x`, `y` (or `on`) and sits just outside its border; an `activityParameter` sits \
+             on the diagram's frame, which is added when missing. A `callBehavior` action calls \
+             the activity `update_element` gives it as `calls`; `activityConnector`s of the \
+             same name continue a flow. On state machine diagrams a `submachineState` stands \
+             for another state machine (the first there is, else a new one; `update_element` \
+             changes it as `submachine`); an `entryPoint` or `exitPoint` sits on the border of \
+             the state at or near `x`, `y` (or `on`), else on the diagram's frame; a \
+             `stubState` goes into the submachine state there (or `on`). On sequence diagrams \
+             a `stateInvariant` (its `name` is the condition, e.g. `x > 0`) or a `termination` \
+             (the × that ends a lifeline) goes on the lifeline `on`, with its top at `y` or \
+             below everything; a termination stays below what happens on its lifeline. \
+             Duration and time constraints are drawn with `connect`.",
             json!({
                 "diagram": id("The diagram."),
                 "tool": text("The diagram tool."),
@@ -286,7 +300,11 @@ pub fn list() -> Vec<Value> {
                 "x": number("Left edge."),
                 "y": number("Top edge."),
                 "on": id("Composite structure diagrams: the class (or part) a part goes into or \
-                          a port goes on, when `x` and `y` are not given."),
+                          a port goes on; activity diagrams: the action a pin goes on; state \
+                          machine diagrams: the state an entry or exit point goes on, the \
+                          submachine state a stub state goes into; when `x` and `y` are not \
+                          given. Sequence diagrams: the lifeline a state invariant or \
+                          termination goes on, with or without `y`."),
             }),
             &["diagram", "tool"],
         ),
@@ -325,12 +343,15 @@ pub fn list() -> Vec<Value> {
              answered yet continue that call's bar. `foundMessage` (from outside the \
              interaction) and `lostMessage` (to outside) take one lifeline, as `source`; a \
              lost message is drawn as a reply (it mostly answers a found one) until \
-             `update_element` gives it another `sort`.",
+             `update_element` gives it another `sort`. A `durationConstraint` runs from the \
+             message `source` to the message `target` (`name` is the constraint without \
+             braces, e.g. `d..3*d`); a `timeConstraint` goes on the one message `source` \
+             (e.g. `t..t+3`).",
             json!({
                 "diagram": id("The diagram."),
                 "tool": text("The relationship tool."),
                 "source": id("Element or presentation it starts at."),
-                "target": id("Element or presentation it ends at; not for found and lost messages."),
+                "target": id("Element or presentation it ends at; not for found and lost messages and time constraints."),
                 "y": number("Sequence diagrams: the height of the message."),
                 "name": text("Its name, e.g. a message's or an association's."),
             }),
@@ -419,7 +440,13 @@ pub fn list() -> Vec<Value> {
              documentation or its stereotypes; a message's sort, guard, arguments, return \
              value and operation; a combined fragment's operator (an `alt` gets an `else` \
              operand) and the lifelines a fragment or interaction use covers (its frame then \
-             spans them); the guard of an operand, flow or transition.",
+             spans them); the guard of an operand, flow or transition; the type, state, \
+             ordering, upper bound and stream of an object node, pin or activity parameter; \
+             the activity a call behavior action calls; the state machine a submachine state \
+             stands for; the constraints of an element (members show them after their text, \
+             lines below their name); on every diagram showing it, the shared style of a \
+             generalization (one triangle for all generalizations to its general element) \
+             and whether a class «boundary», «control» or «entity» is drawn as its icon.",
             json!({
                 "id": id("The element."),
                 "name": text("New name."),
@@ -438,6 +465,34 @@ pub fn list() -> Vec<Value> {
                 "covered": { "type": "array", "items": { "type": "string" },
                              "description": "Fragments and interaction uses: the lifelines \
                                              covered; all if empty." },
+                "object_type": text("Object nodes, pins, activity parameters: the type of the \
+                                     objects, a class name (\"\" for none)."),
+                "in_state": text("Object nodes, pins, activity parameters: the state of the \
+                                  objects, without brackets."),
+                "ordering": { "type": "string", "enum": ["", "unordered", "ordered", "LIFO", "FIFO"],
+                              "description": "Object nodes, pins, activity parameters: the \
+                                              order objects leave in, \"\" for none." },
+                "upper_bound": text("Object nodes, pins, activity parameters: how many objects \
+                                     they hold at most, e.g. `3` or `*` (\"\" for none)."),
+                "stream": { "type": "boolean",
+                            "description": "Object nodes, pins, activity parameters: objects \
+                                            stream while the action runs." },
+                "calls": text("Call behavior actions: the id of the activity called or of its \
+                               diagram, or \"\" for none."),
+                "submachine": text("Submachine states: the id of the state machine they stand \
+                                    for, or of its diagram."),
+                "constraints": { "type": "array", "items": { "type": "string" },
+                                 "description": "The element's constraints without braces, \
+                                                 e.g. [\"age >= 18\"]; [] for none." },
+                "shared_style": { "type": "string",
+                                  "enum": ["separate", "vertical", "horizontal"],
+                                  "description": "Generalizations: share one triangle with \
+                                                  the other generalizations to the same \
+                                                  general element, joining on a horizontal \
+                                                  (vertical style) or vertical line." },
+                "icon": { "type": "boolean",
+                          "description": "Classes whose first stereotype is boundary, control \
+                                          or entity: drawn as the robustness icon." },
             }),
             &["id"],
         ),
@@ -925,6 +980,18 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
                     .collect();
                 node["operands"] = json!(operands);
             }
+            // What a state invariant, termination or constraint of a sequence diagram is on.
+            match p.element.and_then(|e| model.get(e)).map(|e| e.kind()) {
+                Some(
+                    ElementKind::StateInvariant(StateInvariantProps { lifeline })
+                    | ElementKind::Termination(TerminationProps { lifeline }),
+                ) => node["lifeline"] = json!(lifeline),
+                Some(ElementKind::DurationConstraint(c)) => {
+                    node["messages"] = json!([c.from, c.to])
+                }
+                Some(ElementKind::TimeConstraint(c)) => node["messages"] = json!([c.message]),
+                _ => {}
+            }
             nodes.push(node);
         }
     }
@@ -1027,7 +1094,18 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
     let tool = node_tool(kind, str_arg(args, "tool")?)?;
     let model = host.document().model();
+    let on_lifeline = matches!(tool, NodeTool::StateInvariant | NodeTool::Termination);
     let origin = match (opt_num(args, "x"), opt_num(args, "y"), opt_id(args, "on")?) {
+        // A state invariant or termination goes on the lifeline `on`, at `y` or below the rest.
+        (_, y, Some(on)) if on_lifeline => {
+            let view = model.view(diagram).ok_or("not a diagram")?;
+            let lane = palette::lifeline_of(model, view, on_diagram(model, diagram, on)?);
+            sequence_edit::spot_on_lifeline(model, diagram, lane, y)
+                .map_err(|_| "`on` is not a lifeline")?
+        }
+        (_, _, None) if on_lifeline && opt_num(args, "x").is_none() => {
+            return Err("`on` (the lifeline) is missing".into());
+        }
         (Some(x), Some(y), _) => Point::new(x, y),
         (_, _, Some(on)) => {
             let on = on_diagram(model, diagram, on)?;
@@ -1127,7 +1205,7 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     let source = on_diagram(model, diagram, id_arg(args, "source")?)?;
     // Found and lost messages are drawn from their lifeline to itself.
     let target = match (tool, opt_id(args, "target")?) {
-        (EdgeTool::FoundMessage | EdgeTool::LostMessage, _) => source,
+        (EdgeTool::FoundMessage | EdgeTool::LostMessage | EdgeTool::TimeConstraint, _) => source,
         (_, Some(target)) => on_diagram(model, diagram, target)?,
         (_, None) => return Err("`target` is missing".into()),
     };
@@ -1149,7 +1227,12 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
             autoroute::route_new_lines(tx, diagram, &[edge])?;
         }
         let element = tx.model().view(diagram).and_then(|v| v.get(edge)).and_then(|p| p.element);
-        if let (Some(name), Some(element)) = (&name, element) {
+        // An association class's name is its class's.
+        let class = match element.and_then(|e| tx.model().get(e)).map(|e| e.kind()) {
+            Some(ElementKind::Association(a)) if tool == EdgeTool::AssociationClass => a.class,
+            _ => None,
+        };
+        if let (Some(name), Some(element)) = (&name, class.or(element)) {
             tx.rename(element, name.clone())?;
         }
         Ok(edge)
@@ -1213,8 +1296,30 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
             kind.type_name()
         ));
     }
+    let constraints: Option<Vec<String>> =
+        args.get("constraints").and_then(Value::as_array).map(|c| {
+            c.iter()
+                .filter_map(Value::as_str)
+                .map(|c| c.trim().trim_start_matches('{').trim_end_matches('}').trim().to_owned())
+                .filter(|c| !c.is_empty())
+                .collect()
+        });
+    let shared = pick(args, "shared_style", &SHARED_STYLES)?;
+    if shared.is_some() && !matches!(kind, ElementKind::Generalization(_)) {
+        return Err(format!("a {} has no `shared_style`", kind.type_name()));
+    }
+    let icon = args.get("icon").and_then(Value::as_bool);
+    let robustness = model.get(id).and_then(scene::robustness_icon).is_some();
+    if icon.is_some() && !robustness {
+        return Err("only classes whose first stereotype is boundary, control or entity take \
+                    `icon`"
+            .into());
+    }
+    let shown = model.shown_on(id);
     let mut settings = kind.clone();
     set_properties(model, &mut settings, args)?;
+    set_activity_node(model, id, &mut settings, args)?;
+    set_submachine(model, id, &mut settings, args)?;
     let is_alt = |kind: &ElementKind| matches!(kind, ElementKind::CombinedFragment(p) if p.operator == InteractionOperator::Alt);
     let becomes_alt = is_alt(&settings) && !is_alt(&kind);
     let recovered = args.get("covered").is_some();
@@ -1225,7 +1330,11 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         if let Some(name) = name {
             tx.rename(id, name)?;
         }
-        if documentation.is_some() || stereotypes.is_some() || settings != kind {
+        if documentation.is_some()
+            || stereotypes.is_some()
+            || constraints.is_some()
+            || settings != kind
+        {
             tx.update(id, |data| {
                 if let Some(documentation) = documentation {
                     data.documentation = documentation;
@@ -1233,8 +1342,19 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
                 if let Some(stereotypes) = stereotypes {
                     data.stereotypes = stereotypes;
                 }
+                if let Some(constraints) = constraints {
+                    data.constraints = constraints;
+                }
                 data.kind = settings;
             })?;
+        }
+        for &(diagram, presentation) in &shown {
+            if let Some(style) = shared {
+                umlcraft_notation::shared::set_style(tx, diagram, presentation, style)?;
+            }
+            if let Some(icon) = icon {
+                tx.update_presentation(diagram, presentation, |p| p.style.iconic = icon)?;
+            }
         }
         // A fragment turned into an alt gets its else, as in the app.
         if becomes_alt {
@@ -1248,6 +1368,12 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     })?;
     Ok(Reply::json(summary(host.document().model(), id)))
 }
+
+const SHARED_STYLES: [(&str, SharedStyle); 3] = [
+    ("separate", SharedStyle::Separate),
+    ("vertical", SharedStyle::Vertical),
+    ("horizontal", SharedStyle::Horizontal),
+];
 
 const SORTS: [(&str, MessageSort); 5] = [
     ("synchronous", MessageSort::Synchronous),
@@ -1282,6 +1408,112 @@ fn pick<T: Copy>(args: &Value, key: &str, names: &[(&str, T)]) -> Result<Option<
             Err(format!("`{key}` is one of {}, not `{name}`", names.join(", ")))
         }
     }
+}
+
+/// Writes the object node settings and the activity called of `args` into the activity node
+/// `kind`.
+fn set_activity_node(
+    model: &Model,
+    id: Id,
+    kind: &mut ElementKind,
+    args: &Value,
+) -> Result<(), String> {
+    let keys = ["object_type", "in_state", "ordering", "upper_bound", "stream", "calls"];
+    let Some(key) = keys.into_iter().find(|k| args.get(k).is_some()) else { return Ok(()) };
+    let type_name = kind.type_name();
+    let ElementKind::ActivityNode(p) = kind else {
+        return Err(format!("a {type_name} has no `{key}`"));
+    };
+    let object = p.node.is_object();
+    let only_objects =
+        |key: &str| format!("only object nodes, pins and activity parameters have `{key}`");
+    if let Some(text) = opt_str(args, "object_type") {
+        if !object {
+            return Err(only_objects("object_type"));
+        }
+        let text = text.trim();
+        // Names resolve as in a declaration, from the node outward.
+        p.type_ref = (!text.is_empty()).then(|| member::parse_type(model, id, text));
+    }
+    if let Some(state) = opt_str(args, "in_state") {
+        if !object {
+            return Err(only_objects("in_state"));
+        }
+        let state = state.trim();
+        let state = state.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(state);
+        p.in_state = state.trim().to_owned();
+    }
+    if let Some(ordering) = opt_str(args, "ordering") {
+        if !object {
+            return Err(only_objects("ordering"));
+        }
+        p.ordering = match ordering.trim() {
+            "" => None,
+            o => Some(umlcraft_model::ObjectOrdering::parse(o).ok_or_else(|| {
+                format!("`ordering` is one of unordered, ordered, LIFO, FIFO, not `{o}`")
+            })?),
+        };
+    }
+    if let Some(bound) = opt_str(args, "upper_bound") {
+        if !object {
+            return Err(only_objects("upper_bound"));
+        }
+        p.upper_bound = bound.trim().to_owned();
+    }
+    if let Some(stream) = args.get("stream") {
+        if !object {
+            return Err(only_objects("stream"));
+        }
+        p.is_stream = stream.as_bool().ok_or("`stream` is true or false")?;
+    }
+    if args.get("calls").is_some() {
+        if p.node != ActivityNodeKind::CallBehavior {
+            return Err("only call behavior actions have `calls`".into());
+        }
+        // The activity is given as itself or as one of its diagrams.
+        let calls = opt_str(args, "calls").map(str::trim).filter(|c| !c.is_empty());
+        p.behavior = match calls.map(parse_id).transpose()? {
+            Some(id) => match model.get(id).map(|e| e.kind()) {
+                Some(ElementKind::Activity) => Some(id),
+                Some(k) if k.as_diagram() == Some(DiagramKind::Activity) => Some(
+                    model.get(id).and_then(|d| d.owner()).ok_or("the diagram has no activity")?,
+                ),
+                _ => return Err(format!("{id} is no activity")),
+            },
+            None => None,
+        };
+    }
+    Ok(())
+}
+
+/// Writes the state machine of `args`' `submachine` into the submachine state `kind`. The
+/// machine is given as itself or as one of its diagrams.
+fn set_submachine(
+    model: &Model,
+    id: Id,
+    kind: &mut ElementKind,
+    args: &Value,
+) -> Result<(), String> {
+    let Some(text) = opt_str(args, "submachine") else { return Ok(()) };
+    let ElementKind::State(p) = kind else {
+        return Err(format!("a {} has no `submachine`", kind.type_name()));
+    };
+    if p.submachine.is_none() {
+        return Err("only submachine states have `submachine`".into());
+    }
+    let given = parse_id(text.trim())?;
+    let machine = match model.get(given).map(|e| e.kind()) {
+        Some(ElementKind::StateMachine) => given,
+        Some(k) if k.as_diagram() == Some(DiagramKind::StateMachine) => {
+            model.get(given).and_then(|d| d.owner()).ok_or("the diagram has no state machine")?
+        }
+        _ => return Err(format!("{given} is no state machine")),
+    };
+    if model.ancestors(id).contains(&machine) {
+        return Err("a submachine state cannot stand for the state machine it is part of".into());
+    }
+    p.submachine = Some(machine);
+    Ok(())
 }
 
 /// Writes the settings of `args` that belong to the element's kind into `kind`: a guard, a
@@ -1828,6 +2060,7 @@ fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
 mod tests {
     use super::*;
     use crate::host::Headless;
+    use umlcraft_model::PseudostateKind;
 
     fn ok(reply: Reply) -> Value {
         assert!(!reply.is_error, "{reply:?}");
@@ -2359,6 +2592,336 @@ mod tests {
             call(&mut host, &access, "open_file", &json!({ "path": dir.join("shop.ucraft") }));
         assert!(!opened.is_error, "{opened:?}");
         assert_eq!(host.path(), Some(dir.join("shop.ucraft").as_path()));
+    }
+
+    #[test]
+    fn activity_pins_parameters_and_calls() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "activity", "name": "Order" }));
+        let d = id(&d["diagram"]);
+        let make = |host: &mut Headless, tool: &str, extra: Value| {
+            let mut args = json!({ "diagram": d, "tool": tool });
+            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            run(host, "create_element", args)
+        };
+        let pack = make(&mut host, "callBehavior", json!({ "name": "Pack", "x": 200, "y": 100 }));
+        let pin_in = make(&mut host, "inputPin", json!({ "on": pack["presentation"] }));
+        let pin_out = make(&mut host, "outputPin", json!({ "on": pack["presentation"] }));
+        let send = make(&mut host, "sendSignal", json!({ "name": "Notify", "x": 200, "y": 250 }));
+        let param =
+            make(&mut host, "activityParameter", json!({ "name": "order", "x": 0, "y": 0 }));
+        make(&mut host, "acceptTimeEvent", json!({ "name": "Daily" }));
+        make(&mut host, "activityConnector", json!({ "name": "A" }));
+        // A pin away from every action is refused.
+        let lone = call(
+            &mut host,
+            &Access::default(),
+            "create_element",
+            &json!({ "diagram": d, "tool": "inputPin", "x": 900, "y": 900 }),
+        );
+        assert!(lone.is_error);
+        run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "flow", "source": pin_out["element"], "target": send["element"] }),
+        );
+        let activity = host.document().model().element(parse_id(&d).unwrap()).unwrap().owner();
+        let activity = activity.unwrap().to_string();
+        // The activity called may be given by its diagram.
+        run(&mut host, "update_element", json!({ "id": pack["element"], "calls": d }));
+        run(
+            &mut host,
+            "update_element",
+            json!({ "id": pin_in["element"], "ordering": "LIFO", "upper_bound": "2",
+                    "stream": true, "object_type": "Order" }),
+        );
+        for wrong in [
+            json!({ "id": send["element"], "ordering": "FIFO" }),
+            json!({ "id": pin_in["element"], "calls": activity }),
+            json!({ "id": param["element"], "ordering": "sideways" }),
+            json!({ "id": pack["element"], "calls": pin_in["element"] }),
+        ] {
+            assert!(
+                call(&mut host, &Access::default(), "update_element", &wrong).is_error,
+                "{wrong}"
+            );
+        }
+        let model = host.document().model();
+        model.check().unwrap();
+        let node = |value: &Value| match model.element(parse_id(&id(&value["element"])).unwrap()) {
+            Ok(e) => match e.kind() {
+                ElementKind::ActivityNode(p) => p.clone(),
+                other => panic!("{other:?}"),
+            },
+            Err(e) => panic!("{e}"),
+        };
+        assert_eq!(node(&pack).behavior.map(|b| b.to_string()), Some(activity.clone()));
+        let pin = node(&pin_in);
+        assert_eq!(pin.ordering, Some(umlcraft_model::ObjectOrdering::Lifo));
+        assert_eq!(pin.upper_bound, "2");
+        assert!(pin.is_stream);
+        assert!(pin.type_ref.is_some());
+        let pin_owner = model.element(parse_id(&id(&pin_in["element"])).unwrap()).unwrap().owner();
+        assert_eq!(pin_owner.map(|o| o.to_string()), Some(id(&pack["element"])));
+        assert_eq!(node(&param).node, ActivityNodeKind::ActivityParameter);
+        // The output pin found room on the right of the action.
+        let view = model.view(parse_id(&d).unwrap()).unwrap();
+        let bounds = |value: &Value| {
+            view.get(parse_id(&id(&value["presentation"])).unwrap()).unwrap().bounds().unwrap()
+        };
+        assert!(bounds(&pin_out).center().x > bounds(&pack).center().x);
+        assert!(bounds(&pin_in).center().x < bounds(&pack).center().x);
+    }
+
+    #[test]
+    fn submachine_states_points_and_stubs() {
+        let mut host = Headless::new();
+        let car =
+            run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "Car" }));
+        let car = id(&car["diagram"]);
+        let engine =
+            run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "Engine" }));
+        let engine = id(&engine["diagram"]);
+        let make = |host: &mut Headless, tool: &str, extra: Value| {
+            let mut args = json!({ "diagram": car, "tool": tool });
+            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            run(host, "create_element", args)
+        };
+        let drive =
+            make(&mut host, "submachineState", json!({ "name": "Drive", "x": 200, "y": 100 }));
+        let parked = make(&mut host, "state", json!({ "name": "Parked", "x": 40, "y": 100 }));
+        let entry =
+            make(&mut host, "entryPoint", json!({ "name": "start", "on": drive["presentation"] }));
+        let exit =
+            make(&mut host, "exitPoint", json!({ "name": "stop", "on": drive["presentation"] }));
+        let stub =
+            make(&mut host, "stubState", json!({ "name": "Halt", "on": drive["presentation"] }));
+        // On a state too low for two points a side, they go to the middle of its sides, not
+        // side by side along the top, where their names would run into each other.
+        let busy = make(&mut host, "state", json!({ "name": "Busy", "x": 500, "y": 100 }));
+        let resume =
+            make(&mut host, "entryPoint", json!({ "name": "resume", "on": busy["presentation"] }));
+        let abort =
+            make(&mut host, "exitPoint", json!({ "name": "abort", "on": busy["presentation"] }));
+        // Away from every state an entry point goes on the diagram's frame.
+        let outer = make(&mut host, "entryPoint", json!({ "name": "in" }));
+        // A stub state outside a submachine state is refused.
+        let lone = call(
+            &mut host,
+            &Access::default(),
+            "create_element",
+            &json!({ "diagram": car, "tool": "stubState", "on": parked["presentation"] }),
+        );
+        assert!(lone.is_error);
+        for (source, target) in [(&parked, &entry), (&exit, &parked), (&outer, &parked)] {
+            run(
+                &mut host,
+                "connect",
+                json!({ "diagram": car, "tool": "transition", "source": source["element"],
+                        "target": target["element"] }),
+            );
+        }
+        run(&mut host, "update_element", json!({ "id": drive["element"], "submachine": engine }));
+        for wrong in [
+            json!({ "id": parked["element"], "submachine": engine }),
+            json!({ "id": drive["element"], "submachine": car }),
+            json!({ "id": drive["element"], "submachine": parked["element"] }),
+        ] {
+            assert!(
+                call(&mut host, &Access::default(), "update_element", &wrong).is_error,
+                "{wrong}"
+            );
+        }
+        let model = host.document().model();
+        model.check().unwrap();
+        let element =
+            |value: &Value| model.element(parse_id(&id(&value["element"])).unwrap()).unwrap();
+        let machine_of = |diagram: &str| model.element(parse_id(diagram).unwrap()).unwrap().owner();
+        let ElementKind::State(p) = element(&drive).kind() else { panic!() };
+        assert_eq!(p.submachine, machine_of(&engine));
+        for (point, kind) in [
+            (&entry, PseudostateKind::EntryPoint),
+            (&exit, PseudostateKind::ExitPoint),
+            (&stub, PseudostateKind::StubState),
+        ] {
+            let ElementKind::Pseudostate(p) = element(point).kind() else { panic!() };
+            assert_eq!(p.pseudostate, kind);
+            assert_eq!(element(point).owner(), Some(element(&drive).id()));
+        }
+        assert_eq!(element(&outer).owner(), machine_of(&car));
+        // Points sit on the state's border, the exit point on the right; the stub inside.
+        let view = model.view(parse_id(&car).unwrap()).unwrap();
+        let bounds = |value: &Value| {
+            view.get(parse_id(&id(&value["presentation"])).unwrap()).unwrap().bounds().unwrap()
+        };
+        let r = bounds(&drive);
+        assert!((bounds(&entry).center().x - r.x).abs() < 0.5);
+        assert!((bounds(&exit).center().x - r.right()).abs() < 0.5);
+        assert!(r.contains_rect(&bounds(&stub)));
+        let r = bounds(&busy);
+        assert_eq!(bounds(&resume).center(), Point::new(r.x, r.center().y));
+        assert_eq!(bounds(&abort).center(), Point::new(r.right(), r.center().y));
+    }
+
+    #[test]
+    fn state_invariants_terminations_and_constraints() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "sequence", "name": "Timing" }));
+        let d = d["diagram"].clone();
+        let lifeline = |host: &mut Headless, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": "lifeline", "name": name }))
+        };
+        let (shop, store) = (lifeline(&mut host, "shop"), lifeline(&mut host, "store"));
+        let send = |host: &mut Headless, name: &str| {
+            let m = json!({ "diagram": d, "tool": "asyncMessage", "source": shop["element"],
+                            "target": store["element"], "name": name });
+            run(host, "connect", m)
+        };
+        let (check, save) = (send(&mut host, "check"), send(&mut host, "save"));
+        let invariant = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "stateInvariant", "name": "x > 0",
+                    "on": store["element"] }),
+        );
+        assert_eq!(invariant["kind"], "stateInvariant");
+        assert_eq!(invariant["name"], "x > 0");
+        run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "termination", "on": store["presentation"], "y": 60 }),
+        );
+        // A lifeline ends once, and off a lifeline nothing goes.
+        let again = json!({ "diagram": d, "tool": "termination", "on": store["element"] });
+        assert!(call(&mut host, &Access::default(), "create_element", &again).is_error);
+        let nowhere = json!({ "diagram": d, "tool": "stateInvariant" });
+        assert!(call(&mut host, &Access::default(), "create_element", &nowhere).is_error);
+        let duration = run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "durationConstraint", "source": check["element"],
+                    "target": save["element"], "name": "d..3*d" }),
+        );
+        assert_eq!(duration["kind"], "durationConstraint");
+        let time = run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "timeConstraint", "source": save["element"] }),
+        );
+        run(&mut host, "update_element", json!({ "id": time["element"], "name": "t..t+3" }));
+        // Constraints go on messages only.
+        let wrong = json!({ "diagram": d, "tool": "timeConstraint", "source": shop["element"] });
+        assert!(call(&mut host, &Access::default(), "connect", &wrong).is_error);
+        host.document().model().check().unwrap();
+
+        let shown = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let tools = shown["element_tools"].as_array().unwrap();
+        assert!(tools.contains(&json!("stateInvariant")) && tools.contains(&json!("termination")));
+        let tools = shown["relationship_tools"].as_array().unwrap();
+        assert!(tools.contains(&json!("durationConstraint")));
+        let node = |kind: &str| -> Value {
+            let nodes = shown["nodes"].as_array().unwrap();
+            nodes.iter().find(|n| n["kind"] == kind).cloned().unwrap()
+        };
+        assert_eq!(node("stateInvariant")["lifeline"], store["element"]);
+        assert_eq!(node("termination")["lifeline"], store["element"]);
+        assert_eq!(
+            node("durationConstraint")["messages"],
+            json!([check["element"], save["element"]])
+        );
+        assert_eq!(node("timeConstraint")["messages"], json!([save["element"]]));
+        assert_eq!(node("timeConstraint")["name"], "t..t+3");
+        // The cross ends the lifeline below everything on it, the invariant included; the
+        // duration's line reaches from one message to the other.
+        let bottom = |v: &Value| {
+            v["bounds"]["y"].as_f64().unwrap() + v["bounds"]["height"].as_f64().unwrap()
+        };
+        let cross = &node("termination")["bounds"];
+        let cross_y = cross["y"].as_f64().unwrap() + 10.0;
+        assert!(cross_y > bottom(&node("stateInvariant")), "{cross}");
+        let line_y = |m: &Value| {
+            let lines = shown["lines"].as_array().unwrap();
+            lines.iter().find(|l| l["element"] == m["element"]).unwrap()["y"].as_f64().unwrap()
+        };
+        let span = &node("durationConstraint")["bounds"];
+        assert!((span["y"].as_f64().unwrap() - line_y(&check)).abs() < 1.0, "{span}");
+        assert!(bottom(&node("durationConstraint")) >= line_y(&save) - 1.0, "{span}");
+        // Deleting a message takes its constraints along.
+        run(&mut host, "delete_element", json!({ "id": save["element"] }));
+        let model = host.document().model();
+        model.check().unwrap();
+        let left = model.elements().filter(|e| {
+            matches!(e.kind(), ElementKind::DurationConstraint(_) | ElementKind::TimeConstraint(_))
+        });
+        assert_eq!(left.count(), 0);
+    }
+
+    #[test]
+    fn association_classes_constraints_shared_generalizations_and_robustness_icons() {
+        use umlcraft_model::SharedStyle;
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "School" }));
+        let d = d["diagram"].clone();
+        let class = |host: &mut Headless, tool: &str, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": tool, "name": name }))
+        };
+        let student = class(&mut host, "class", "Student");
+        let course = class(&mut host, "class", "Course");
+        let person = class(&mut host, "class", "Person");
+        let teacher = class(&mut host, "class", "Teacher");
+        let pupil = class(&mut host, "class", "Pupil");
+        let screen = class(&mut host, "boundary", "Screen");
+        let enrolment = run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "associationClass", "source": student["element"],
+                    "target": course["element"], "name": "Enrolment" }),
+        );
+        let generalize = |host: &mut Headless, specific: &Value| {
+            let g = json!({ "diagram": d, "tool": "generalization", "source": specific["element"],
+                            "target": person["element"] });
+            run(host, "connect", g)
+        };
+        let (g1, g2) = (generalize(&mut host, &teacher), generalize(&mut host, &pupil));
+        run(
+            &mut host,
+            "update_element",
+            json!({ "id": enrolment["element"], "constraints": ["{ordered}", "unique"] }),
+        );
+        run(
+            &mut host,
+            "update_element",
+            json!({ "id": g1["element"], "shared_style": "vertical", "constraints": ["complete"] }),
+        );
+        run(&mut host, "update_element", json!({ "id": screen["element"], "icon": false }));
+        // Only generalizations share, only robustness classes have an icon.
+        let wrong = json!({ "id": enrolment["element"], "shared_style": "vertical" });
+        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+        let wrong = json!({ "id": student["element"], "icon": true });
+        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+
+        let model = host.document().model();
+        model.check().unwrap();
+        let id = |v: &Value| v.as_str().unwrap().parse::<Id>().unwrap();
+        let association = model.get(id(&enrolment["element"])).unwrap();
+        let ElementKind::Association(a) = association.kind() else { panic!() };
+        let class = model.get(a.class.expect("the association class")).unwrap();
+        assert_eq!(class.name(), "Enrolment");
+        assert_eq!(association.data().constraints, ["ordered", "unique"]);
+        assert_eq!(model.get(id(&g1["element"])).unwrap().data().constraints, ["complete"]);
+        let view = model.view(id(&d)).unwrap();
+        for g in [&g1, &g2] {
+            let p = view.get(id(&g["presentation"])).unwrap();
+            assert_eq!(p.style.shared, SharedStyle::Vertical);
+        }
+        assert!(!view.get(id(&screen["presentation"])).unwrap().style.iconic);
+        assert_eq!(model.get(id(&screen["element"])).unwrap().data().stereotypes, ["boundary"]);
+        // The class box and the dashed line to the association's line.
+        assert_eq!(model.shown_on(class.id()).len(), 1);
+        let class = class.id();
+        let element = run(&mut host, "get_element", json!({ "id": enrolment["element"] }));
+        assert_eq!(element["properties"]["class"], json!(class));
+        assert_eq!(element["properties"]["constraints"], json!(["ordered", "unique"]));
     }
 
     #[test]

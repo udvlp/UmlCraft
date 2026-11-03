@@ -656,6 +656,10 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
     for &edge in edges {
         let Some(p) = view.get(edge) else { continue };
         let Shape::Edge { source, target, .. } = &p.shape else { continue };
+        // Shared generalizations run over their common line (`crate::shared`).
+        if !p.style.shared.is_separate() {
+            continue;
+        }
         if let (Some(&s), Some(&t)) = (index.get(source), index.get(target))
             && s != t
         {

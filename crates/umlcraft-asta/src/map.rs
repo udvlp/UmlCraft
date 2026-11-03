@@ -14,19 +14,21 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, AssociationProps,
     AttributeProps, ClassifierProps, Color, CombinedFragmentProps, CommentProps, ConnectorEnd,
-    DiagramKind, DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps,
-    GeneralizationProps, Id, IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps,
-    InteractionOperator, InteractionUseProps, InternalTransitionProps, LifelineProps, LineShape,
-    LinkEnd, LinkProps, MessageGate, MessageProps, MessageSort, Model, Multiplicity, Navigability,
-    Op, OperationProps, ParameterDirection, ParameterDirections, ParameterProps, Point, PortProps,
-    Presentation, PseudostateKind, Qualifier, Rect, Regions, Shape, SlotProps, StateProps, Style,
-    TaggedValue, TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef,
-    Visibility,
+    DiagramKind, DirectedProps, DurationConstraintProps, EdgeLabels, ElementData, ElementKind,
+    ExtendProps, GeneralizationProps, Id, IncludeProps, InstanceKind, InstanceProps,
+    InteractionOperandProps, InteractionOperator, InteractionUseProps, InternalTransitionProps,
+    LifelineProps, LineShape, LinkEnd, LinkProps, MessageGate, MessageProps, MessageSort, Model,
+    Multiplicity, Navigability, ObjectOrdering, Op, OperationProps, ParameterDirection,
+    ParameterDirections, ParameterProps, Point, PortProps, Presentation, PseudostateKind,
+    Qualifier, Rect, Regions, Shape, SharedStyle, SlotProps, StateInvariantProps, StateProps,
+    Style, TaggedValue, TemplateParameterKind, TemplateParameterProps, TerminationProps,
+    TimeConstraintProps, TransitionProps, TypeExpr, TypeRef, Visibility,
 };
 use umlcraft_notation::composite;
 use umlcraft_notation::palette;
 use umlcraft_notation::route;
 use umlcraft_notation::scene::{self, Outline};
+use umlcraft_notation::shared;
 
 use crate::jser::{Graph, ObjId, Value};
 
@@ -214,6 +216,15 @@ fn neutral_tag(key: &str) -> String {
 
 /// Tagged values Astah uses for itself. Those of its language profiles stay: they hold
 /// modifiers such as Java's `transient` (`jude.java.transient`), which UML has no place for.
+/// The stereotypes by which Astah tells kinds of actions apart; they are no stereotypes of the
+/// user's.
+const SEND_SIGNAL: &str = "signal sending";
+const ACCEPT_EVENT: &str = "signal receipt";
+const ACCEPT_TIME_EVENT: &str = "accept_time_event";
+const CONNECTOR: &str = "internal_connector";
+const ACTIVITY_NODE_STEREOTYPES: &[&str] =
+    &[SEND_SIGNAL, ACCEPT_EVENT, ACCEPT_TIME_EVENT, CONNECTOR];
+
 fn is_internal_tag(key: &str) -> bool {
     let profile = LANGUAGE_TAGS.iter().any(|(astah, _)| key.starts_with(astah));
     (key.starts_with("jude.") && !profile)
@@ -343,6 +354,12 @@ struct Importer<'g> {
     dimensions: HashSet<ObjId>,
     /// Bound types `type_of` may still expand for the type it was asked for.
     type_budget: Cell<usize>,
+    /// Astah's association classes, each one element there: `ids` maps it to its class, this
+    /// to its association.
+    association_classes: HashMap<ObjId, Id>,
+    /// Generalization presentations in a shared group: the style and where the common line
+    /// runs (y for the vertical style, x for the horizontal one), before shifting.
+    shared: HashMap<ObjId, (SharedStyle, f32)>,
 }
 
 /// Most bound types expanded for one type; real ones such as `Map<String, List<Order>>` need
@@ -373,6 +390,8 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         bound: Vec::new(),
         dimensions: HashSet::new(),
         type_budget: Cell::new(MAX_TYPE_NODES),
+        association_classes: HashMap::new(),
+        shared: HashMap::new(),
     };
     let root_id = im.model.root();
     im.walk(root, root_id);
@@ -452,7 +471,20 @@ impl Importer<'_> {
             .map(|(key, value)| TaggedValue { key: neutral_tag(&key), value })
             .collect();
         data.documentation = self.r.text(object, "definition");
+        data.constraints = self.constraints(object);
         data
+    }
+
+    /// The constraints of an Astah element, as Astah shows them: the specification (`body`),
+    /// else the name. Duration and time constraints are elements of their own.
+    fn constraints(&self, object: ObjId) -> Vec<String> {
+        let r = self.r;
+        r.list(object, "constraint")
+            .into_iter()
+            .filter(|&c| r.class(c) == "UConstraintImp")
+            .map(|c| Some(r.text(c, "body")).filter(|b| !b.is_empty()).unwrap_or_else(|| r.name(c)))
+            .filter(|c| !c.is_empty())
+            .collect()
     }
 
     /// Inserts an element under `owner`, or under the nearest ancestor that may own it.
@@ -534,8 +566,14 @@ impl Importer<'_> {
                         self.walk(child, package);
                     }
                 }
-                "UClassifierImp" | "UInterfaceImp" | "UActorImp" | "UUseCaseImp"
-                | "UComponentImp" | "UArtifactImp" | "UNodeImp" => {
+                "UClassifierImp"
+                | "UInterfaceImp"
+                | "UActorImp"
+                | "UUseCaseImp"
+                | "UComponentImp"
+                | "UArtifactImp"
+                | "UNodeImp"
+                | "UAssociationClassImp" => {
                     // Anonymous classifiers bind a template to arguments; they live on as type
                     // expressions such as `List<Projekt>` (see `type_of`), and as bound classes
                     // where a diagram shows them, a lifeline represents them (`baseInv`) or a
@@ -564,6 +602,11 @@ impl Importer<'_> {
                     let (kind, hide) = self.classifier_kind(child);
                     let data = self.data(child, kind, hide);
                     if let Some(classifier) = self.create(id, data, Some(child)) {
+                        // An association class is a class and an association in one: its
+                        // association comes with the other relationships.
+                        if self.r.class(child) == "UAssociationClassImp" {
+                            self.relationships.push((id, child));
+                        }
                         if self.r.obj(child, "ownedTemplateSignatrue").is_some() {
                             self.templates.push((classifier, child));
                         }
@@ -611,13 +654,8 @@ impl Importer<'_> {
                 "UComponentInstanceImp" | "UNodeInstanceImp" | "UObjectImp" => {
                     self.instances.push((id, child));
                 }
-                // Constraints on association ends come with their association.
-                "UConstraintImp"
-                    if self
-                        .r
-                        .list(child, "constrainedElement")
-                        .iter()
-                        .all(|&e| self.r.class(e) == "UAssociationEndImp") => {}
+                // Constraints come with the element they constrain (see `constraints`).
+                "UConstraintImp" => {}
                 _ => self.skip(child),
             }
         }
@@ -682,22 +720,29 @@ impl Importer<'_> {
         }
     }
 
-    /// Points interaction uses to the interactions they refer to, now that all exist.
+    /// Points interaction uses to the interactions they refer to, call behavior actions to the
+    /// activities they call and submachine states to their state machines, now that all exist.
     fn resolve_references(&mut self) {
         for (id, target) in std::mem::take(&mut self.references) {
-            let Some(&interaction) = self.ids.get(&target) else { continue };
-            if !matches!(
-                self.model.get(interaction).map(|e| e.kind()),
-                Some(ElementKind::Interaction)
-            ) {
+            let Some(&behavior) = self.ids.get(&target) else { continue };
+            let Some(target_kind) = self.model.get(behavior).map(|e| e.kind().clone()) else {
                 continue;
-            }
+            };
             let Some(e) = self.model.get(id) else { continue };
             let mut data = e.data().clone();
-            if let ElementKind::InteractionUse(p) = &mut data.kind {
-                p.refers_to = Some(interaction);
-                let _ = self.model.apply(Op::UpdateElement { id, data });
+            match (&mut data.kind, target_kind) {
+                (ElementKind::InteractionUse(p), ElementKind::Interaction) => {
+                    p.refers_to = Some(behavior);
+                }
+                (ElementKind::ActivityNode(p), ElementKind::Activity) => {
+                    p.behavior = Some(behavior);
+                }
+                (ElementKind::State(p), ElementKind::StateMachine) => {
+                    p.submachine = Some(behavior);
+                }
+                _ => continue,
             }
+            let _ = self.model.apply(Op::UpdateElement { id, data });
         }
     }
 
@@ -1011,13 +1056,33 @@ impl Importer<'_> {
         let class = r.class(object);
         let stereotypes = r.stereotypes(object);
         let kind = match class {
+            // Its name, members, stereotypes and constraints are its class's.
+            "UAssociationClassImp" => {
+                let ends: Vec<AssociationEnd> = r
+                    .list(object, "connection")
+                    .into_iter()
+                    .filter_map(|end| self.association_end(end))
+                    .collect();
+                let class = self.ids.get(&object).copied();
+                let Ok(ends) = <[AssociationEnd; 2]>::try_from(ends) else {
+                    self.skip(object);
+                    return;
+                };
+                let kind = ElementKind::Association(AssociationProps { ends, class });
+                if let Some(id) = self.create(owner, ElementData::new("", kind), None) {
+                    self.association_classes.insert(object, id);
+                }
+                return;
+            }
             "UAssociationImp" => {
                 let ends: Vec<AssociationEnd> = r
                     .list(object, "connection")
                     .into_iter()
                     .filter_map(|end| self.association_end(end))
                     .collect();
-                ends.try_into().ok().map(|ends| ElementKind::Association(AssociationProps { ends }))
+                ends.try_into()
+                    .ok()
+                    .map(|ends| ElementKind::Association(AssociationProps { ends, class: None }))
             }
             // A template parameter's generalizations are its bounds (see `template_parameters`).
             "UGeneralizationImp"
@@ -1217,31 +1282,65 @@ impl Importer<'_> {
             self.partition(activity, partition);
         }
         let vertices = r.obj(graph, "top").map(|top| r.list(top, "subvertex")).unwrap_or_default();
-        for vertex in vertices {
-            let Some(node) = self.activity_node_kind(vertex) else {
+        // Pins after the actions they belong to.
+        let kinds: Vec<(ObjId, Option<ActivityNodeKind>)> =
+            vertices.iter().map(|&v| (v, self.activity_node_kind(v))).collect();
+        let (pins, others): (Vec<_>, Vec<_>) =
+            kinds.into_iter().partition(|(_, k)| k.is_some_and(|k| k.is_pin()));
+        for (vertex, node) in others.into_iter().chain(pins) {
+            let Some(node) = node else {
                 self.skip(vertex);
                 continue;
             };
+            // A pin belongs to its action, which Astah links to it by a dependency marked as
+            // ownership (`jude.uml.owned_element`), from the action to the pin.
+            let owner = if node.is_pin() {
+                let action = r
+                    .list(vertex, "supplierDependency")
+                    .into_iter()
+                    .flat_map(|d| r.list(d, "client"))
+                    .find_map(|a| self.ids.get(&a).copied());
+                let Some(action) = action else {
+                    self.skip(vertex);
+                    continue;
+                };
+                action
+            } else {
+                activity
+            };
             // Object nodes have a classifier in a state as their type: the classifier and the
             // states it is in. Astah keeps `filled, paid` typed in as one state of that name.
-            let in_state = r.obj(vertex, "type").filter(|_| node == ActivityNodeKind::Object);
+            let in_state = r.obj(vertex, "type").filter(|_| node.is_object());
             let type_ref = in_state.and_then(|t| self.type_ref(t));
             let in_state = in_state
                 .map(|t| r.list(t, "inStates").into_iter().map(|s| r.name(s)).collect::<Vec<_>>())
                 .unwrap_or_default()
                 .join(", ");
-            let mut data = self.data(
-                vertex,
-                ElementKind::ActivityNode(ActivityNodeProps { node, type_ref, in_state }),
-                &[],
-            );
+            // Object node properties are tagged values of Astah's own.
+            let tag = |key: &str| {
+                r.tagged_values(vertex).into_iter().find(|(k, _)| k == key).map(|(_, v)| v)
+            };
+            let props = ActivityNodeProps {
+                node,
+                type_ref,
+                in_state,
+                ordering: tag("jude.uml.objectnode.ordering")
+                    .and_then(|o| ObjectOrdering::parse(&o)),
+                upper_bound: tag("jude.uml.objectnode.upperbound").unwrap_or_default(),
+                is_stream: tag("jude.uml.objectnode.stream").as_deref() == Some("stream"),
+                behavior: None,
+            };
+            let mut data =
+                self.data(vertex, ElementKind::ActivityNode(props), ACTIVITY_NODE_STEREOTYPES);
             // Astah names control nodes by itself; UmlCraft neither shows nor needs those names.
-            if !matches!(node, ActivityNodeKind::Action | ActivityNodeKind::Object)
-                && is_default_node_name(&data.name)
-            {
+            if !node.is_named() && is_default_node_name(&data.name) {
                 data.name.clear();
             }
-            self.create(activity, data, Some(vertex));
+            let Some(id) = self.create(owner, data, Some(vertex)) else { continue };
+            // The activity a call behavior action calls may come later.
+            if let Some(called) = r.obj(vertex, "submachine") {
+                self.references.push((id, called));
+            }
         }
         for transition in r.list(graph, "transition") {
             let end = |field| r.obj(transition, field).and_then(|v| self.ids.get(&v).copied());
@@ -1305,8 +1404,9 @@ impl Importer<'_> {
         let r = self.r;
         for vertex in r.list(composite, "subvertex") {
             // The substates of an orthogonal state are its regions, composite states of their
-            // own; Astah's API names them Region0, Region1 …
-            if r.flag(composite, "isOrthogonal") {
+            // own; Astah's API names them Region0, Region1 … Its entry and exit points are
+            // pseudostates beside them.
+            if r.flag(composite, "isOrthogonal") && r.class(vertex) == "UCompositeStateImp" {
                 let mut data = self.data(vertex, ElementKind::Region, &[]);
                 if is_default_region_name(&data.name) {
                     data.name.clear();
@@ -1318,14 +1418,20 @@ impl Importer<'_> {
             }
             let action = |field| r.obj(vertex, field).map(|a| r.name(a)).unwrap_or_default();
             let kind = match r.class(vertex) {
-                "UCompositeStateImp" | "UStateImp" | "USimpleStateImp" => {
+                // A submachine state names its state machine (`submachine`), set once all
+                // machines exist.
+                "UCompositeStateImp" | "UStateImp" | "USimpleStateImp" | "USubmachineStateImp" => {
                     ElementKind::State(StateProps {
                         entry: action("entry"),
                         do_activity: action("doActivity"),
                         exit: action("exit"),
+                        submachine: None,
                     })
                 }
                 "UFinalStateImp" => ElementKind::FinalState,
+                // Astah's stub states keep the name of what they stand for (`referenceState`)
+                // empty; their own name is what they show.
+                "UStubStateImp" => ElementKind::pseudostate(PseudostateKind::StubState),
                 "UPseudostateImp" => {
                     let pseudostate = match r.text(vertex, "kind").as_str() {
                         "initial" => PseudostateKind::Initial,
@@ -1335,6 +1441,8 @@ impl Importer<'_> {
                         "join" => PseudostateKind::Join,
                         "shallowHistory" => PseudostateKind::ShallowHistory,
                         "deepHistory" => PseudostateKind::DeepHistory,
+                        "entryPoint" => PseudostateKind::EntryPoint,
+                        "exitPoint" => PseudostateKind::ExitPoint,
                         _ => {
                             self.skip(vertex);
                             continue;
@@ -1352,6 +1460,10 @@ impl Importer<'_> {
                 data.name.clear();
             }
             let Some(id) = self.create(owner, data, Some(vertex)) else { continue };
+            // The state machine a submachine state stands for may come later.
+            if let Some(machine) = r.obj(vertex, "submachine") {
+                self.references.push((id, machine));
+            }
             for transition in r.list(vertex, "internalTransitions") {
                 let named = |field| r.obj(transition, field).map(|o| r.name(o)).unwrap_or_default();
                 let props = InternalTransitionProps {
@@ -1393,10 +1505,32 @@ impl Importer<'_> {
     }
 
     fn activity_node_kind(&self, vertex: ObjId) -> Option<ActivityNodeKind> {
-        Some(match self.r.class(vertex) {
-            // A subactivity calls another activity; UmlCraft shows it as an action.
-            "UActionStateImp" | "USubactivityStateImp" => ActivityNodeKind::Action,
+        let r = self.r;
+        let tagged =
+            |key: &str| r.tagged_values(vertex).iter().any(|(k, v)| k == key && v == "true");
+        Some(match r.class(vertex) {
+            // Astah marks the kinds of actions by stereotypes of its own.
+            "UActionStateImp" => {
+                let stereotypes = r.stereotypes(vertex);
+                let has = |s: &str| stereotypes.iter().any(|t| t == s);
+                if has(SEND_SIGNAL) {
+                    ActivityNodeKind::SendSignal
+                } else if has(ACCEPT_EVENT) {
+                    ActivityNodeKind::AcceptEvent
+                } else if has(ACCEPT_TIME_EVENT) {
+                    ActivityNodeKind::AcceptTimeEvent
+                } else if has(CONNECTOR) {
+                    ActivityNodeKind::Connector
+                } else {
+                    ActivityNodeKind::Action
+                }
+            }
+            // A subactivity calls another activity.
+            "USubactivityStateImp" => ActivityNodeKind::CallBehavior,
+            "UObjectFlowStateImp" if tagged("jude.uml.inputpin") => ActivityNodeKind::InputPin,
+            "UObjectFlowStateImp" if tagged("jude.uml.outputpin") => ActivityNodeKind::OutputPin,
             "UObjectFlowStateImp" => ActivityNodeKind::Object,
+            "UActivityParameterNodeImp" => ActivityNodeKind::ActivityParameter,
             "UFinalStateImp" => ActivityNodeKind::ActivityFinal,
             "UFlowFinalNodeImp" => ActivityNodeKind::FlowFinal,
             "UPseudostateImp" => match self.r.text(vertex, "kind").as_str() {
@@ -2039,6 +2173,93 @@ mod tests {
             .collect();
         // Astah keeps the return value on the call; UmlCraft shows it on the reply.
         assert_eq!(messages, [(MessageSort::Synchronous, ""), (MessageSort::Reply, "ok")]);
+    }
+
+    #[test]
+    fn sequence_diagrams_bring_state_invariants_terminations_and_constraints() {
+        let mut b = Builder::default();
+        let model = named(&mut b, "UModelImp", "Model");
+        let diagram = named(&mut b, "USequenceDiagramImp", "Timing");
+        b.own(model, &[diagram]);
+        let collaboration = b.instance("UCollaborationImp");
+        b.set(diagram, "collaboration", Value::Object(collaboration));
+        let (shop, store) = (
+            named(&mut b, "UClassifierRoleImp", "shop"),
+            named(&mut b, "UClassifierRoleImp", "store"),
+        );
+        let message = |b: &mut Builder, name: &str, from, to, action_type: Option<i64>| {
+            let m = named(b, "UMessageImp", name);
+            b.set(m, "sender", Value::Object(from));
+            b.set(m, "receiver", Value::Object(to));
+            if let Some(t) = action_type {
+                let action = b.instance("UActionImp");
+                b.set(action, "actionType", Value::Long(t));
+                b.set(m, "action", Value::Object(action));
+            }
+            m
+        };
+        let check = message(&mut b, "check", shop, store, None);
+        let save = message(&mut b, "save", shop, store, None);
+        // A termination is a destroy message from the lifeline to itself, drawn only as a cross.
+        let stop = message(&mut b, "Stop0", store, store, Some(DESTROY));
+        let invariant = named(&mut b, "UStateInvariantImp", "x > 0");
+        let covered = b.list(&[store]);
+        b.set(invariant, "covereds", covered);
+        let constraint = |b: &mut Builder, class: &str, name: &str, on: &[ObjId]| {
+            let c = named(b, class, name);
+            let on = b.list(on);
+            b.set(c, "constrainedElement", on);
+            c
+        };
+        let duration = constraint(&mut b, "UDurationConstraintImp", "d..3*d", &[check, save]);
+        let time = constraint(&mut b, "UTimeConstraintImp", "t..t+3", &[save]);
+        b.own(collaboration, &[shop, store, duration, time]);
+        let interaction = b.instance("UInteractionImp");
+        let messages = b.list(&[check, save, stop]);
+        b.set(interaction, "message", messages);
+        let fragments = b.list(&[invariant]);
+        b.set(interaction, "fragments", fragments);
+        let interactions = b.list(&[interaction]);
+        b.set(collaboration, "interactions", interactions);
+
+        let imported = import(&b.0).unwrap();
+        assert!(imported.skipped.is_empty(), "{:?}", imported.skipped);
+        let m = &imported.model;
+        m.check().unwrap();
+        let by_name = |name: &str| m.elements().find(|e| e.name() == name).unwrap().id();
+        let (store, check, save) = (by_name("store"), by_name("check"), by_name("save"));
+        let messages = m.elements().filter(|e| matches!(e.kind(), ElementKind::Message(_))).count();
+        assert_eq!(messages, 2, "the termination is no message");
+        let kinds: Vec<ElementKind> = m
+            .elements()
+            .filter(|e| {
+                matches!(
+                    e.kind(),
+                    ElementKind::StateInvariant(_)
+                        | ElementKind::Termination(_)
+                        | ElementKind::DurationConstraint(_)
+                        | ElementKind::TimeConstraint(_)
+                )
+            })
+            .map(|e| e.kind().clone())
+            .collect();
+        assert_eq!(kinds.len(), 4);
+        assert!(
+            kinds.contains(&ElementKind::StateInvariant(StateInvariantProps { lifeline: store }))
+        );
+        assert!(kinds.contains(&ElementKind::Termination(TerminationProps { lifeline: store })));
+        assert!(kinds.contains(&ElementKind::DurationConstraint(DurationConstraintProps {
+            from: check,
+            to: save
+        })));
+        assert!(
+            kinds.contains(&ElementKind::TimeConstraint(TimeConstraintProps { message: save }))
+        );
+        assert_eq!(m.get(by_name("x > 0")).map(|e| e.kind().type_name()), Some("stateInvariant"));
+        assert_eq!(
+            m.get(by_name("d..3*d")).map(|e| e.kind().type_name()),
+            Some("durationConstraint")
+        );
     }
 
     #[test]

@@ -27,6 +27,11 @@ Like UML, `umlcraft-model` separates **elements** from **presentations**:
   [Nassi-Shneiderman diagrams](#nassi-shneiderman-diagrams)), with no view. It may name the
   operation it describes (a weak `RefRole::Operation`: deleting the operation leaves the
   structogram). Its name stays empty; tree and tab show the text of its root.
+- An association class is a Class plus an Association whose `class` names it (a weak
+  `RefRole::AssociationClass`: deleting the class leaves a plain association). The class keeps
+  name, members and constraints; the scene draws the name and constraints on the line and
+  derives the dashed line from the class box to the line's middle. Any element may carry
+  constraints (`ElementData::constraints`, texts without braces); members and lines show them.
 
 ## Changes
 
@@ -180,14 +185,21 @@ that a diff shows which element changed.
   `autoroute::snapshots` before every edit and routes such edges again afterwards where their
   nodes moved or a node moved onto them (`autoroute::follow`). Editing the route by hand
   (waypoints, line style, line ends) clears the flag. New lines but note anchors are routed
-  when drawn.
+  when drawn. Shared generalizations (below) are left alone.
+- `shared` draws Astah's shared style of generalizations: all generalizations to one general
+  node with the same `Style::shared` (vertical or horizontal) meet on a common line and end in
+  one triangle. Each edge keeps the common line in its waypoints; the scene takes the first
+  edge's (`common_lines`) and runs every edge of the group up from its specific, along the
+  common line and up to the general's middle. `set_style` switches a whole group,
+  `move_common_line` moves it when one of its lines is dragged.
 - `layout` arranges class, component and deployment diagrams in layers, after Sugiyama:
   generals above their specifics, suppliers above clients and wholes above their parts (other
   edges give way where they would close a cycle); then barycenter sweeps for few crossings, and
   places along each layer by isotonic regression toward the middle of the neighbors, ending
   bottom up so that generals are centered over theirs. Parts nothing connects are packed into
   rows, larger ones first. Containers are laid out inside out and sized around what they
-  hold. Arranging a selection keeps its top left corner; nodes it grows into move right or
+  hold. Generals with two or more specifics beyond them in the layout direction get the
+  shared style. Arranging a selection keeps its top left corner; nodes it grows into move right or
   down. All its lines are routed afterwards. The other kinds but sequence diagrams use the
   same layers: flows and transitions point from layer to layer (cycles give way at the edges
   met last going out from the initial node), include and extend from the base use case to
@@ -242,6 +254,16 @@ export to `.asta` and back without change:
   gate without a dot. The ends meet the bars at those heights.
 - A combined fragment is `Shape::Fragment` with its bounds, the offsets of the operand
   separators and hand-placed guard offsets; an interaction use is a node presentation.
+- State invariants and terminations (`ElementKind::StateInvariant`, `Termination`) name their
+  lifeline (strong `RefRole::OnLifeline`) and are items of the interaction or an operand like
+  messages; duration and time constraints (`DurationConstraint`, `TimeConstraint`) name their
+  messages (strong `RefRole::Constrained`) and belong to the interaction. All four are node
+  presentations: an invariant centered on its lifeline (its name is the condition), a
+  termination's 20 × 20 cross where its lifeline ends, a duration constraint's line at its x
+  from one message's height to the other's, a time constraint on from its message's arrowhead
+  (placed by `sequence`, which reads its message's line). A termination is not the `destroyed`
+  flag, which stays for destroy messages. `sequence_edit::create_on_lifeline` and `constrain`
+  create them, `add_mark` and `add_constraint` show existing ones.
 - Message numbers ("2.1") are not stored: a message sent from a bar is numbered below the call
   that started the bar; messages leaving the same point branch ("-A", "-B"). A reply's return
   value is shown after the call it answers. Both can be switched off per diagram
@@ -249,8 +271,12 @@ export to `.asta` and back without change:
 
 The interaction's order follows the drawing: `sequence_edit::tidy`, run after every edit of a
 sequence diagram, grows bars to end 20 below what lies in them and lifelines to reach 30 below
-what is on them, grows the frame around everything, and puts every message and fragment into the
-operand of the innermost fragment drawn around it, ordered by height (`sync_order`). Edits follow
+what is on them, centers state invariants on their lifelines, puts each termination's cross where
+its lifeline ends (at its own height, or 30 below what is on the lifeline when that is lower),
+lets duration and time constraints follow their messages, grows the frame around everything, and
+puts every message, fragment, state invariant and termination into the operand of the innermost
+fragment drawn around it, ordered by height (`sync_order`). Messages stay 20 above a
+termination's cross, as above a destroy message's. Edits follow
 the rules measured through the `.asta` export API: a call gets a bar of 25 on the receiver (a create message none) and, where the
 sender has none, a bar of 45 on the sender (60 for create, 30 for lost messages); a reply leaves
 at the end of the bar it returns from; a message to self comes back 20 lower into a bar of its
@@ -286,6 +312,20 @@ substates into the one they are drawn in; further regions halve the last one. Mo
 between regions moves the substates on the other side into their new region; deleting a region
 deletes what it holds and gives its room to the neighbor before it.
 
+A submachine state is a `State` whose `StateProps::submachine` names another state machine (a
+weak `RefRole::Submachine`); `scene` draws it with `include / Machine` between two lines and
+the submachine icon (`Figure::State { submachine }`). A new one stands for the first other
+machine of the project, else for a new machine with its own diagram
+(`state_edit::submachine_for`). Entry and exit points and stub states are `Pseudostate`s
+(`PseudostateKind::EntryPoint`, `ExitPoint`, `StubState`). `state_edit::create_node` puts a
+point on the border of the state at or within 20 of the click, owned by that state, else on the
+diagram's frame, owned by the machine (adding the frame when missing); a stub state goes into
+the submachine state around the click and is refused elsewhere (`STUB_OUTSIDE`). Points are
+borne nodes like pins (`composite::Borne::Point`, host from `composite::owner_host`), so
+`composite::follow` keeps them on their border; `reparent_vertices` leaves them and stubs where
+they belong and puts no ordinary vertex into a submachine state. `scene::state_borders` maps
+points onto the drawn border and puts the names of top-side points above them.
+
 ## Composite structures
 
 A composite structure diagram shows the inside of a class or component. Its parts are the
@@ -310,6 +350,22 @@ and Arrange is not offered. An iconic interface with `Style::socket` is drawn as
 for an interface shown as a circle, the `.asta` import for interfaces a port requires. The `.asta` import reads parts, ports, connectors, ball and socket;
 the export recreates them through `CompositeStructureDiagramEditor` and writes a component's
 parts as association ends, as Astah takes no attributes on components.
+
+## Pins and activity parameters
+
+Pins and activity parameter nodes are `ActivityNode` elements that live on a border, like ports.
+An `InputPin` or `OutputPin` is owned by its action (`can_own`), an `ActivityParameter` by the
+activity; a call behavior action names the activity it calls (`ActivityNodeProps::behavior`, a
+weak `RefRole::Calls`). Object nodes, pins and parameters carry ordering, upper bound and stream.
+`activity::create_node` puts a new pin on the border of the action at or within 20 of the point
+(refused elsewhere, `PIN_OUTSIDE`) and a parameter on the diagram's frame, adding the frame when
+missing. `composite::follow` keeps them there: its snapshot covers ports, pins (host: the
+owning action's presentation) and parameters (host: the frame), so a pin keeps its side and
+place when its action moves or changes size, goes away with its action, and a moved pin or
+parameter snaps back onto its border. `layout::arrange` leaves borne nodes alone and treats a
+line at a pin as a line at its action. Since an action or the frame can be drawn larger than
+stored, `scene::activity_borders` maps pins and parameters onto the drawn border at layout time,
+puts the labels of top-side pins above them and gives pins without flows their arrow.
 
 ## .asta import
 
@@ -501,18 +557,24 @@ through its official API (`astah-api.jar`):
   by as much; x stays. Messages are created from top to bottom at their stored height, from the
   Astah bar made for the UmlCraft bar at that height (or the lifeline). Astah makes the bars
   itself by the same rules UmlCraft follows, and refuses to resize them (`setHeight`, reported as
-  `barHeight`); a reply (`createReturnMessage`) goes to the end of the bar of the call it
+  `barHeight` where Astah's height differs); a reply (`createReturnMessage`) goes to the end of the bar of the call it
   answers, where UmlCraft has it too. Lifeline lengths are set through `lifeline_length`; Astah
   refuses lengths shorter than what lies on a lifeline, interaction uses included. A reply's
   return value is stored on the call it answers, as Astah does. The round-trip test checks that
-  heads and message heights come back unchanged.
+  heads and message heights come back unchanged. State invariants (`createStateInvariant`, top
+  at the stored height) and then terminations (`createTermination`, at the lifeline's end) come
+  after the lengths, which are set again after each, as Astah refits the lifelines; duration and
+  time constraints are reported as dropped, the API cannot create them.
 - Activity diagrams: `createActivityDiagram` brings its own activity, so an activity exports its
   first diagram only. Astah creates activity nodes only on a diagram; nodes, flows and
   partitions not shown are dropped. Partitions are created left to right with
   `createPartition(superPartition, previous, …)`; Astah wraps top-level lanes in a "dimension"
   header of its own and lines them up below it, so the header is moved above UmlCraft's lanes
   before the lanes are placed. The API creates decision and merge nodes as one kind; the import
-  tells them apart by their flows. Unnamed control nodes get Astah-like default names
+  tells them apart by their flows. Pins are created after all other nodes, on their action's
+  presentation; the activities called by call behavior actions are set once all diagrams
+  exist, so an activity without a diagram (none in Astah) is reported as dropped. Unnamed
+  control nodes get Astah-like default names
   (`InitialNode0`), which the import drops again, together with Astah's own (`ForkNode1`) and the
   default dimension (`Dimension0`).
 - Component and deployment diagrams: the API creates components, artifacts and nodes

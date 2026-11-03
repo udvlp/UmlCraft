@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::*;
-use umlcraft_model::{Id, LineShape, TypeRef};
+use umlcraft_model::{Id, LineShape, SharedStyle, TypeRef};
 use umlcraft_notation::layout::Direction;
 use umlcraft_notation::palette::EdgeTool;
 use umlcraft_reverse::SourceLanguage;
@@ -144,6 +144,22 @@ pub struct ConnectAs {
 pub struct ChangeRelationship {
     pub edge: Id,
     pub tool: EdgeTool,
+}
+
+/// Gives the generalizations to the general element of a generalization Astah's shared style,
+/// from the canvas's context menu.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct SetSharedStyle {
+    pub edge: Id,
+    pub style: SharedStyle,
+}
+
+/// Turns the selected association into an association class, from the canvas's context menu.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct MakeAssociationClass {
+    pub edge: Id,
 }
 
 /// Gives the selected edges a line style.

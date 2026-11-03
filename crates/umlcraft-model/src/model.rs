@@ -271,6 +271,14 @@ impl Model {
         found
     }
 
+    /// The association whose association class `class` is, if any.
+    pub fn association_of_class(&self, class: Id) -> Option<Id> {
+        self.referrers(class)
+            .into_iter()
+            .find(|&(_, role)| role == RefRole::AssociationClass)
+            .map(|(id, _)| id)
+    }
+
     /// `(diagram, presentation)` pairs showing `element`.
     pub fn shown_on(&self, element: Id) -> Vec<(Id, Id)> {
         self.views

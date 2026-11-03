@@ -411,10 +411,27 @@ fn diagram(
                 .selected(tool == current);
                 // Tools whose name alone does not say how they are used.
                 match tool {
-                    Tool::Edge(EdgeTool::FoundMessage | EdgeTool::LostMessage)
-                    | Tool::Node(NodeTool::Part | NodeTool::Port) => {
-                        item.tooltip(t!(format!("tool_tip.{}", tool.key())))
-                    }
+                    Tool::Edge(
+                        EdgeTool::AssociationClass
+                        | EdgeTool::FoundMessage
+                        | EdgeTool::LostMessage
+                        | EdgeTool::DurationConstraint
+                        | EdgeTool::TimeConstraint,
+                    )
+                    | Tool::Node(
+                        NodeTool::StateInvariant
+                        | NodeTool::Termination
+                        | NodeTool::Part
+                        | NodeTool::Port
+                        | NodeTool::InputPin
+                        | NodeTool::OutputPin
+                        | NodeTool::ActivityParameter
+                        | NodeTool::ActivityConnector
+                        | NodeTool::SubmachineState
+                        | NodeTool::EntryPoint
+                        | NodeTool::ExitPoint
+                        | NodeTool::StubState,
+                    ) => item.tooltip(t!(format!("tool_tip.{}", tool.key()))),
                     _ => item,
                 }
             })

@@ -17,8 +17,8 @@ use rust_i18n::t;
 use umlcraft_model::{
     ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Color, DiagramKind,
     ElementData, ElementKind, Id, InstanceKind, InstanceProps, InteractionOperator, LifelineProps,
-    LinkEnd, LinkProps, MessageSort, Model, Multiplicity, Navigability, ParameterDirections,
-    Presentation, Shape, Style, TemplateParameterKind, TypeRef, Visibility,
+    LinkEnd, LinkProps, MessageSort, Model, Multiplicity, Navigability, ObjectOrdering,
+    ParameterDirections, Presentation, Shape, Style, TemplateParameterKind, TypeRef, Visibility,
 };
 use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
@@ -97,7 +97,10 @@ enum Field {
     Default,
     MemberMultiplicity,
     Slots,
+    /// The element's own constraints, one per line.
+    ElementConstraints,
     InState,
+    UpperBound,
     Binding,
 }
 
@@ -119,6 +122,8 @@ pub struct PropertiesPanel {
     text: Entity<TextareaState>,
     /// An object's slots, one `name = value` per line.
     slots: Entity<TextareaState>,
+    /// The element's constraints, one per line, without braces.
+    constraints: Entity<TextareaState>,
     visibility: Entity<Choice>,
     ends: [EndFields; 2],
     arguments: Entity<InputState>,
@@ -137,6 +142,10 @@ pub struct PropertiesPanel {
     member_multiplicity: Entity<InputState>,
     /// Object nodes: the states their objects are in, without brackets.
     in_state: Entity<InputState>,
+    /// Object nodes: how many objects they hold at most.
+    upper_bound: Entity<InputState>,
+    /// Object nodes: the order objects leave in, or none.
+    ordering: Entity<Choice>,
     bounds: Entity<InputState>,
     default: Entity<InputState>,
     /// Classes: the template they bind, with its arguments (`Pair<int,Holder>`).
@@ -236,6 +245,14 @@ fn split_types(text: &str) -> Vec<&str> {
     parts.into_iter().map(str::trim).filter(|p| !p.is_empty()).collect()
 }
 
+/// "—" for no ordering, then UML's orderings as UML writes them.
+fn ordering_items() -> Vec<SharedString> {
+    std::iter::once("—")
+        .chain(ObjectOrdering::ALL.iter().map(|o| o.as_str()))
+        .map(SharedString::from)
+        .collect()
+}
+
 fn operator_items() -> Vec<SharedString> {
     OPERATORS.iter().map(|&o| operator_keyword(o).into()).collect()
 }
@@ -316,15 +333,26 @@ fn covered_of_mut(kind: &mut ElementKind) -> Option<&mut Vec<Id>> {
     }
 }
 
-/// The interactions an interaction use can refer to, by name.
-fn interactions(model: &Model) -> Vec<Option<Id>> {
-    let mut all: Vec<(&str, Id)> = model
-        .elements()
-        .filter(|e| matches!(e.kind(), ElementKind::Interaction))
-        .map(|e| (e.name(), e.id()))
-        .collect();
+/// The interactions an interaction use can refer to, or the activities a call behavior action
+/// can call: the elements whose kind `pick` accepts, by name.
+fn behaviors(model: &Model, pick: impl Fn(&ElementKind) -> bool) -> Vec<Option<Id>> {
+    let mut all: Vec<(&str, Id)> =
+        model.elements().filter(|e| pick(e.kind())).map(|e| (e.name(), e.id())).collect();
     all.sort_by(|a, b| a.0.cmp(b.0));
     std::iter::once(None).chain(all.into_iter().map(|(_, id)| Some(id))).collect()
+}
+
+/// The state machines the submachine state `state` can stand for, by name: all but the one it
+/// belongs to.
+fn submachines(model: &Model, state: Id) -> Vec<Option<Id>> {
+    let own = model
+        .ancestors(state)
+        .into_iter()
+        .find(|&a| model.get(a).is_some_and(|a| matches!(a.kind(), ElementKind::StateMachine)));
+    behaviors(model, |k| matches!(k, ElementKind::StateMachine))
+        .into_iter()
+        .filter(|m| m.is_some() && *m != own)
+        .collect()
 }
 
 /// The classifiers a lifeline can represent, by name.
@@ -346,6 +374,11 @@ impl PropertiesPanel {
             .new(|cx| InputState::new(window, cx).placeholder(t!("prop.stereotypes_placeholder")));
         let text = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 12));
         let slots = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 12));
+        let constraints = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(1, 8)
+                .placeholder(t!("prop.element_constraints_placeholder"))
+        });
         let visibility = cx.new(|cx| SelectState::new(visibility_items(), None, window, cx));
         let end = |window: &mut Window, cx: &mut Context<Self>| EndFields {
             role: cx.new(|cx| InputState::new(window, cx)),
@@ -368,6 +401,8 @@ impl PropertiesPanel {
         let value_type = input(window, cx);
         let in_state =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("prop.in_state_placeholder")));
+        let upper_bound = cx.new(|cx| InputState::new(window, cx).placeholder("*"));
+        let ordering = cx.new(|cx| SelectState::new(ordering_items(), None, window, cx));
         let bounds = cx.new(|cx| InputState::new(window, cx).placeholder("Number, Comparable<T>"));
         let default = input(window, cx);
         let member_multiplicity = cx.new(|cx| InputState::new(window, cx).placeholder("0..*"));
@@ -408,6 +443,7 @@ impl PropertiesPanel {
         watch(&exit, Field::Exit, cx);
         watch(&value_type, Field::ValueType, cx);
         watch(&in_state, Field::InState, cx);
+        watch(&upper_bound, Field::UpperBound, cx);
         watch(&bounds, Field::Bounds, cx);
         watch(&default, Field::Default, cx);
         watch(&member_multiplicity, Field::MemberMultiplicity, cx);
@@ -428,6 +464,15 @@ impl PropertiesPanel {
                 this.on_input(Field::Slots, ev, cx);
             }
         }));
+        subscriptions.push(cx.subscribe_in(
+            &constraints,
+            window,
+            |this, _, ev: &InputEvent, _, cx| {
+                if !matches!(ev, InputEvent::PressEnter { .. }) {
+                    this.on_input(Field::ElementConstraints, ev, cx);
+                }
+            },
+        ));
         subscriptions.push(cx.subscribe_in(
             &association,
             window,
@@ -498,6 +543,19 @@ impl PropertiesPanel {
             },
         ));
         subscriptions.push(cx.subscribe_in(
+            &ordering,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(ix) = selected(state, cx) else { return };
+                let ordering = ix.checked_sub(1).and_then(|i| ObjectOrdering::ALL.get(i).copied());
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::ActivityNode(p) = &mut data.kind {
+                        p.ordering = ordering;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
             &operation,
             window,
             |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
@@ -524,6 +582,9 @@ impl PropertiesPanel {
                     ElementKind::Lifeline(p) => p.represents = target,
                     ElementKind::Instance(p) => p.classifier = target,
                     ElementKind::InteractionUse(p) => p.refers_to = target,
+                    ElementKind::ActivityNode(p) => p.behavior = target,
+                    // A submachine state always stands for a state machine.
+                    ElementKind::State(p) if target.is_some() => p.submachine = target,
                     _ => {}
                 });
             },
@@ -595,6 +656,7 @@ impl PropertiesPanel {
             stereotypes,
             text,
             slots,
+            constraints,
             visibility,
             ends,
             arguments,
@@ -608,6 +670,8 @@ impl PropertiesPanel {
             value_type,
             member_multiplicity,
             in_state,
+            upper_bound,
+            ordering,
             bounds,
             default,
             binding,
@@ -875,6 +939,14 @@ impl PropertiesPanel {
                     }
                 });
             }
+            Field::UpperBound => {
+                let value = Self::value(&self.upper_bound, cx).trim().to_owned();
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::ActivityNode(p) = &mut data.kind {
+                        p.upper_bound = value;
+                    }
+                });
+            }
             Field::Role(i) => {
                 let value = Self::value(&self.ends[i].role, cx);
                 self.apply(id, cx, move |data| match &mut data.kind {
@@ -882,6 +954,17 @@ impl PropertiesPanel {
                     ElementKind::Link(p) => p.ends[i].role = value,
                     _ => {}
                 });
+            }
+            Field::ElementConstraints => {
+                // One per line; braces typed around one are dropped.
+                let text = self.constraints.read(cx).value().to_string();
+                let list: Vec<String> = text
+                    .lines()
+                    .map(|line| line.trim().trim_start_matches('{').trim_end_matches('}').trim())
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                self.apply(id, cx, move |data| data.constraints = list);
             }
             Field::Slots => {
                 // One `name = value` per line; names that are no slot of the object are ignored.
@@ -1022,7 +1105,13 @@ impl PropertiesPanel {
         let references = match &data.kind {
             ElementKind::Message(_) => operations_for(model, id),
             ElementKind::Lifeline(_) | ElementKind::Instance(_) => classifiers(model),
-            ElementKind::InteractionUse(_) => interactions(model),
+            ElementKind::InteractionUse(_) => {
+                behaviors(model, |k| matches!(k, ElementKind::Interaction))
+            }
+            ElementKind::ActivityNode(p) if p.node == ActivityNodeKind::CallBehavior => {
+                behaviors(model, |k| matches!(k, ElementKind::Activity))
+            }
+            ElementKind::State(p) if p.submachine.is_some() => submachines(model, id),
             ElementKind::Link(p) => associations_for(model, p),
             _ => Vec::new(),
         };
@@ -1073,6 +1162,8 @@ impl PropertiesPanel {
         };
         self.text.update(cx, |s, cx| s.set_value(text, window, cx));
         self.slots.update(cx, |s, cx| s.set_value(slots, window, cx));
+        let constraints = data.constraints.join("\n");
+        self.constraints.update(cx, |s, cx| s.set_value(constraints, window, cx));
         let choose = |state: &Entity<Choice>,
                       ix: Option<usize>,
                       items: Option<Vec<SharedString>>,
@@ -1159,11 +1250,25 @@ impl PropertiesPanel {
                 set(&self.entry, p.entry.clone(), window, cx);
                 set(&self.do_activity, p.do_activity.clone(), window, cx);
                 set(&self.exit, p.exit.clone(), window, cx);
+                if p.submachine.is_some() {
+                    let ix = references.iter().position(|r| *r == p.submachine);
+                    choose(&self.represents, ix, Some(reference_labels), window, cx);
+                    self.represents_ids = references;
+                }
             }
             ElementKind::ActivityNode(p) => {
                 let [object_type, _, _] = parameter_texts;
                 set(&self.value_type, object_type, window, cx);
                 set(&self.in_state, p.in_state.clone(), window, cx);
+                set(&self.upper_bound, p.upper_bound.clone(), window, cx);
+                let ordering =
+                    p.ordering.and_then(|o| ObjectOrdering::ALL.iter().position(|&x| x == o));
+                choose(&self.ordering, Some(ordering.map_or(0, |i| i + 1)), None, window, cx);
+                if p.node == ActivityNodeKind::CallBehavior {
+                    let ix = references.iter().position(|r| *r == p.behavior);
+                    choose(&self.represents, ix, Some(reference_labels), window, cx);
+                    self.represents_ids = references;
+                }
             }
             ElementKind::Class(_) => set(&self.binding, binding_text, window, cx),
             ElementKind::Attribute(_) => {
@@ -1222,6 +1327,24 @@ impl PropertiesPanel {
 
 fn selected(state: &Entity<Choice>, cx: &App) -> Option<usize> {
     state.read(cx).selected_index(cx).map(|ix| ix.row)
+}
+
+/// Elements whose own constraints the panel offers: what class diagrams show constraints of
+/// (members and lines) and the classifiers and packages Astah keeps them for.
+fn has_constraints(kind: &ElementKind) -> bool {
+    kind.is_classifier()
+        || matches!(
+            kind,
+            ElementKind::Package
+                | ElementKind::Attribute(_)
+                | ElementKind::Operation(_)
+                | ElementKind::Association(_)
+                | ElementKind::Generalization(_)
+                | ElementKind::Realization(_)
+                | ElementKind::Dependency(_)
+                | ElementKind::Include(_)
+                | ElementKind::Extend(_)
+        )
 }
 
 fn is_member(kind: &ElementKind) -> bool {
@@ -1367,6 +1490,7 @@ impl Render for PropertiesPanel {
                 | ElementKind::CombinedFragment(_)
                 | ElementKind::InteractionOperand(_)
                 | ElementKind::InternalTransition(_)
+                | ElementKind::Termination(_)
                 // Its title is the text of its root, edited in the structogram itself.
                 | ElementKind::Structogram(_)
         );
@@ -1396,6 +1520,19 @@ impl Render for PropertiesPanel {
                         Select::new(&self.visibility).small().into_any_element(),
                     ));
             }
+            // Their name is the text they show.
+            ElementKind::StateInvariant(_) => {
+                body = body.child(field(
+                    t!("prop.condition").into(),
+                    Input::new(&self.name).small().into_any_element(),
+                ));
+            }
+            ElementKind::DurationConstraint(_) | ElementKind::TimeConstraint(_) => {
+                body = body.child(field(
+                    t!("prop.constraint").into(),
+                    Input::new(&self.name).small().into_any_element(),
+                ));
+            }
             _ => {
                 body = body.child(field(
                     t!("prop.name").into(),
@@ -1410,7 +1547,135 @@ impl Render for PropertiesPanel {
             ));
         }
 
-        match &kind {
+        body = self.kind_options(body, &kind, id, model, cx);
+
+        // The lifelines a frame covers; none ticked means "as its messages need".
+        if let Some(covered) = covered_of(&kind) {
+            let interaction = model.ancestors(id).into_iter().find(|&a| {
+                model.get(a).is_some_and(|e| matches!(e.kind(), ElementKind::Interaction))
+            });
+            let lifelines: Vec<(Id, String)> = interaction
+                .into_iter()
+                .flat_map(|i| model.children(i).iter().copied())
+                .filter_map(|c| model.get(c))
+                .filter(|c| matches!(c.kind(), ElementKind::Lifeline(_)))
+                .map(|c| (c.id(), labels::display_name(c)))
+                .collect();
+            body = body.child(heading(t!("prop.covered").to_string()));
+            if covered.is_empty() {
+                body = body
+                    .child(div().text_xs().text_color(muted).child(t!("prop.covered_automatic")));
+            }
+            for (ix, (lifeline, name)) in lifelines.into_iter().enumerate() {
+                let workspace = workspace.clone();
+                body = body.child(
+                    Checkbox::new(("covered", ix))
+                        .label(name)
+                        .checked(covered.contains(&lifeline))
+                        .on_click(move |checked: &bool, _, cx| {
+                            let checked = *checked;
+                            workspace.update(cx, |ws, cx| {
+                                ws.update_element(id, |d| {
+                                    if let Some(covered) = covered_of_mut(&mut d.kind) {
+                                        covered.retain(|&l| l != lifeline);
+                                        if checked {
+                                            covered.push(lifeline);
+                                        }
+                                    }
+                                });
+                                cx.notify();
+                            });
+                        }),
+                );
+            }
+        }
+
+        if has_constraints(&kind) {
+            body = body.child(field(
+                t!("prop.element_constraints").into(),
+                Textarea::new(&self.constraints).small().into_any_element(),
+            ));
+        }
+        let text_label = if matches!(kind, ElementKind::Comment(_)) {
+            t!("prop.text")
+        } else {
+            t!("prop.documentation")
+        };
+        body = body
+            .child(field(text_label.into(), Textarea::new(&self.text).small().into_any_element()))
+            .child(field(
+                t!("prop.owner").into(),
+                div().text_sm().child(labels::owner_path(model, id)).into_any_element(),
+            ));
+
+        // Display options of the one selected node.
+        // Fragments size themselves, so they have no display options.
+        let is_fragment = |p: &umlcraft_model::Presentation| {
+            p.element
+                .and_then(|e| model.get(e))
+                .is_some_and(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)))
+        };
+        let presentation = selected_presentation(ws).filter(|p| !is_fragment(p)).cloned();
+        if let Some(p) = presentation.as_ref().filter(|p| matches!(p.shape, Shape::Edge { .. })) {
+            body = body
+                .child(heading(t!("prop.display").to_string()))
+                .child(field(
+                    t!("prop.font_color").into(),
+                    self.color_select(&self.font_color, p.style.font_color.is_some(), false, cx),
+                ))
+                .child(field(
+                    t!("prop.line_color").into(),
+                    self.color_select(&self.line_color, p.style.stroke.is_some(), true, cx),
+                ));
+        }
+        if let Some(p) = presentation.filter(|p| !p.is_edge()) {
+            body = self.node_options(body, p, model, cx);
+        }
+        body
+    }
+}
+
+// The render function is split up: built in one piece, its frame in a debug build outgrew the
+// main thread's 1 MB stack on Windows.
+impl PropertiesPanel {
+    /// The fields of the element's kind.
+    fn kind_options(
+        &self,
+        body: Div,
+        kind: &ElementKind,
+        id: Id,
+        model: &Model,
+        cx: &Context<Self>,
+    ) -> Div {
+        match kind {
+            ElementKind::Diagram(_)
+            | ElementKind::Class(_)
+            | ElementKind::TemplateParameter(_)
+            | ElementKind::Attribute(_)
+            | ElementKind::Operation(_)
+            | ElementKind::Extend(_)
+            | ElementKind::Association(_) => self.structure_options(body, kind, id, model, cx),
+            _ => self.behavior_options(body, kind, id, model, cx),
+        }
+    }
+
+    /// Fields of classifiers, members and their lines.
+    fn structure_options(
+        &self,
+        mut body: Div,
+        kind: &ElementKind,
+        id: Id,
+        model: &Model,
+        cx: &Context<Self>,
+    ) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let field = |label: SharedString, content: AnyElement| {
+            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
+        };
+        let heading =
+            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
+        let workspace = self.workspace.clone();
+        match kind {
             ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => {
                 body = body
                     .child(flag(
@@ -1689,6 +1954,28 @@ impl Render for PropertiesPanel {
                         ));
                 }
             }
+            _ => {}
+        }
+        body
+    }
+
+    /// Fields of interactions, activities and state machines.
+    fn behavior_options(
+        &self,
+        mut body: Div,
+        kind: &ElementKind,
+        id: Id,
+        model: &Model,
+        cx: &Context<Self>,
+    ) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let field = |label: SharedString, content: AnyElement| {
+            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
+        };
+        let heading =
+            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
+        let workspace = self.workspace.clone();
+        match kind {
             ElementKind::Message(_) => {
                 body = body
                     .child(field(
@@ -1827,7 +2114,7 @@ impl Render for PropertiesPanel {
                             }),
                     );
             }
-            ElementKind::ActivityNode(p) if p.node == ActivityNodeKind::Object => {
+            ElementKind::ActivityNode(p) if p.node.is_object() => {
                 body = body
                     .child(field(
                         t!("prop.object_type").into(),
@@ -1836,7 +2123,33 @@ impl Render for PropertiesPanel {
                     .child(field(
                         t!("prop.in_state").into(),
                         Input::new(&self.in_state).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.ordering").into(),
+                        Select::new(&self.ordering).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.upper_bound").into(),
+                        Input::new(&self.upper_bound).small().into_any_element(),
+                    ))
+                    .child(flag(
+                        "object-stream",
+                        t!("prop.stream").into(),
+                        p.is_stream,
+                        workspace.clone(),
+                        id,
+                        |d, on| {
+                            if let ElementKind::ActivityNode(p) = &mut d.kind {
+                                p.is_stream = on;
+                            }
+                        },
                     ));
+            }
+            ElementKind::ActivityNode(p) if p.node == ActivityNodeKind::CallBehavior => {
+                body = body.child(field(
+                    t!("prop.calls").into(),
+                    Select::new(&self.represents).small().into_any_element(),
+                ));
             }
             ElementKind::ActivityEdge(_) => {
                 body = body.child(field(
@@ -1872,7 +2185,13 @@ impl Render for PropertiesPanel {
                     id,
                 ));
             }
-            ElementKind::State(_) => {
+            ElementKind::State(p) => {
+                if p.submachine.is_some() {
+                    body = body.child(field(
+                        t!("prop.submachine").into(),
+                        Select::new(&self.represents).small().into_any_element(),
+                    ));
+                }
                 for (label, state) in [
                     ("prop.entry", &self.entry),
                     ("prop.do_activity", &self.do_activity),
@@ -1950,349 +2269,339 @@ impl Render for PropertiesPanel {
             }
             _ => {}
         }
+        body
+    }
 
-        // The lifelines a frame covers; none ticked means "as its messages need".
-        if let Some(covered) = covered_of(&kind) {
-            let interaction = model.ancestors(id).into_iter().find(|&a| {
-                model.get(a).is_some_and(|e| matches!(e.kind(), ElementKind::Interaction))
-            });
-            let lifelines: Vec<(Id, String)> = interaction
-                .into_iter()
-                .flat_map(|i| model.children(i).iter().copied())
-                .filter_map(|c| model.get(c))
-                .filter(|c| matches!(c.kind(), ElementKind::Lifeline(_)))
-                .map(|c| (c.id(), labels::display_name(c)))
-                .collect();
-            body = body.child(heading(t!("prop.covered").to_string()));
-            if covered.is_empty() {
-                body = body
-                    .child(div().text_xs().text_color(muted).child(t!("prop.covered_automatic")));
+    /// The display options of the one selected node.
+    fn node_options(
+        &self,
+        mut body: Div,
+        p: Presentation,
+        model: &Model,
+        cx: &Context<Self>,
+    ) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let field = |label: SharedString, content: AnyElement| {
+            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
+        };
+        let heading =
+            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
+        let workspace = self.workspace.clone();
+        let shown = p.element.and_then(|e| model.get(e)).map(|e| e.kind().clone());
+        body = body.child(heading(t!("prop.display").to_string()));
+        if matches!(p.shape, Shape::Node { .. }) {
+            body = body.child(field(
+                t!("prop.font_color").into(),
+                self.color_select(&self.font_color, p.style.font_color.is_some(), false, cx),
+            ));
+        }
+        let boxed = matches!(
+            shown,
+            Some(
+                ElementKind::Class(_)
+                    | ElementKind::Interface(_)
+                    | ElementKind::Enumeration(_)
+                    | ElementKind::DataType(_)
+            )
+        );
+        if boxed && !p.style.iconic {
+            body = body
+                .child(style_flag(
+                    "hide-attributes",
+                    t!("prop.hide_attributes").into(),
+                    p.style.hide_attributes,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.hide_attributes = v,
+                ))
+                .child(style_flag(
+                    "hide-operations",
+                    t!("prop.hide_operations").into(),
+                    p.style.hide_operations,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.hide_operations = v,
+                ));
+            // What the box leaves out of its members, as Astah offers it per box.
+            type Flag = (&'static str, &'static str, fn(&Style) -> bool, fn(&mut Style, bool));
+            const MEMBERS: [Flag; 9] = [
+                (
+                    "hide-stereotypes",
+                    "prop.hide_stereotypes",
+                    |s| s.hide_stereotypes,
+                    |s, v| s.hide_stereotypes = v,
+                ),
+                (
+                    "hide-member-visibility",
+                    "prop.hide_member_visibility",
+                    |s| s.hide_member_visibility,
+                    |s, v| s.hide_member_visibility = v,
+                ),
+                (
+                    "hide-attribute-types",
+                    "prop.hide_attribute_types",
+                    |s| s.hide_attribute_types,
+                    |s, v| s.hide_attribute_types = v,
+                ),
+                (
+                    "hide-initial-values",
+                    "prop.hide_initial_values",
+                    |s| s.hide_initial_values,
+                    |s, v| s.hide_initial_values = v,
+                ),
+                (
+                    "hide-parameters",
+                    "prop.hide_parameters",
+                    |s| s.hide_parameters,
+                    |s, v| s.hide_parameters = v,
+                ),
+                (
+                    "hide-parameter-types",
+                    "prop.hide_parameter_types",
+                    |s| s.hide_parameter_types,
+                    |s, v| s.hide_parameter_types = v,
+                ),
+                (
+                    "hide-return-types",
+                    "prop.hide_return_types",
+                    |s| s.hide_return_types,
+                    |s, v| s.hide_return_types = v,
+                ),
+                (
+                    "hide-attribute-stereotypes",
+                    "prop.hide_attribute_stereotypes",
+                    |s| s.hide_attribute_stereotypes,
+                    |s, v| s.hide_attribute_stereotypes = v,
+                ),
+                (
+                    "hide-operation-stereotypes",
+                    "prop.hide_operation_stereotypes",
+                    |s| s.hide_operation_stereotypes,
+                    |s, v| s.hide_operation_stereotypes = v,
+                ),
+            ];
+            for (id, key, get, set) in MEMBERS {
+                body = body.child(style_flag(
+                    id,
+                    t!(key).into(),
+                    get(&p.style),
+                    workspace.clone(),
+                    p.id,
+                    set,
+                ));
             }
-            for (ix, (lifeline, name)) in lifelines.into_iter().enumerate() {
-                let workspace = workspace.clone();
-                body = body.child(
-                    Checkbox::new(("covered", ix))
-                        .label(name)
-                        .checked(covered.contains(&lifeline))
+            body = body.child(field(
+                t!("prop.parameter_directions").into(),
+                Select::new(&self.directions).small().into_any_element(),
+            ));
+            // The members shown by visibility; the box leaves out those not ticked.
+            type Hidden = fn(&mut Style) -> &mut Vec<Visibility>;
+            let filters: [(&str, &str, &[Visibility], Hidden); 2] = [
+                ("shown-attributes", "prop.shown_attributes", &p.style.hidden_attributes, |s| {
+                    &mut s.hidden_attributes
+                }),
+                ("shown-operations", "prop.shown_operations", &p.style.hidden_operations, |s| {
+                    &mut s.hidden_operations
+                }),
+            ];
+            for (id, key, hidden, list) in filters {
+                let boxes = VISIBILITIES.iter().map(|&v| {
+                    let workspace = workspace.clone();
+                    let presentation = p.id;
+                    Checkbox::new(SharedString::from(format!("{id}-{}", v.symbol())))
+                        .label(labels::visibility_label(v))
+                        .checked(!hidden.contains(&v))
                         .on_click(move |checked: &bool, _, cx| {
-                            let checked = *checked;
+                            let shown = *checked;
                             workspace.update(cx, |ws, cx| {
-                                ws.update_element(id, |d| {
-                                    if let Some(covered) = covered_of_mut(&mut d.kind) {
-                                        covered.retain(|&l| l != lifeline);
-                                        if checked {
-                                            covered.push(lifeline);
-                                        }
+                                ws.update_style(presentation, |s| {
+                                    let hidden = list(s);
+                                    hidden.retain(|&h| h != v);
+                                    if !shown {
+                                        hidden.push(v);
+                                        hidden.sort_by_key(|h| {
+                                            VISIBILITIES.iter().position(|x| x == h)
+                                        });
                                     }
                                 });
                                 cx.notify();
                             });
-                        }),
-                );
-            }
-        }
-
-        let text_label = if matches!(kind, ElementKind::Comment(_)) {
-            t!("prop.text")
-        } else {
-            t!("prop.documentation")
-        };
-        body = body
-            .child(field(text_label.into(), Textarea::new(&self.text).small().into_any_element()))
-            .child(field(
-                t!("prop.owner").into(),
-                div().text_sm().child(labels::owner_path(model, id)).into_any_element(),
-            ));
-
-        // Display options of the one selected node.
-        // Fragments size themselves, so they have no display options.
-        let is_fragment = |p: &umlcraft_model::Presentation| {
-            p.element
-                .and_then(|e| model.get(e))
-                .is_some_and(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)))
-        };
-        let presentation = selected_presentation(ws).filter(|p| !is_fragment(p)).cloned();
-        // The color of the name and of the line, unset the theme's; one picker per color.
-        let panel = cx.entity();
-        let featured = FEATURED_COLORS.map(crate::canvas::hsla).to_vec();
-        let color = |state: &Entity<ColorPickerState>, set: bool, line: bool| {
-            let panel = panel.clone();
-            h_flex()
-                .gap_1()
-                .child(
-                    ColorSelect::new(state)
-                        .small()
-                        .featured_colors(featured.clone())
-                        .placeholder(t!("prop.default_color"))
-                        .flex_1(),
-                )
-                .when(set, |row| {
-                    row.child(
-                        Button::new(("reset-color", usize::from(line)))
-                            .ghost()
-                            .small()
-                            .label(t!("prop.reset_color"))
-                            .on_click(move |_, _, cx| {
-                                panel.update(cx, |this, cx| this.set_color(line, None, cx));
-                            }),
-                    )
-                })
-                .into_any_element()
-        };
-        if let Some(p) = presentation.as_ref().filter(|p| matches!(p.shape, Shape::Edge { .. })) {
-            body = body
-                .child(heading(t!("prop.display").to_string()))
-                .child(field(
-                    t!("prop.font_color").into(),
-                    color(&self.font_color, p.style.font_color.is_some(), false),
-                ))
-                .child(field(
-                    t!("prop.line_color").into(),
-                    color(&self.line_color, p.style.stroke.is_some(), true),
-                ));
-        }
-        if let Some(p) = presentation.filter(|p| !p.is_edge()) {
-            let shown = p.element.and_then(|e| model.get(e)).map(|e| e.kind().clone());
-            body = body.child(heading(t!("prop.display").to_string()));
-            if matches!(p.shape, Shape::Node { .. }) {
+                        })
+                });
                 body = body.child(field(
-                    t!("prop.font_color").into(),
-                    color(&self.font_color, p.style.font_color.is_some(), false),
+                    t!(key).into(),
+                    h_flex().flex_wrap().gap_x_3().gap_y_1().children(boxes).into_any_element(),
                 ));
             }
-            let boxed = matches!(
-                shown,
-                Some(
-                    ElementKind::Class(_)
-                        | ElementKind::Interface(_)
-                        | ElementKind::Enumeration(_)
-                        | ElementKind::DataType(_)
-                )
-            );
-            if boxed && !p.style.iconic {
+        }
+        if matches!(&shown, Some(ElementKind::Lifeline(_))) {
+            body = body
+                .child(style_flag(
+                    "hide-instance-name",
+                    t!("prop.hide_instance_name").into(),
+                    p.style.hide_instance_name,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.hide_instance_name = v,
+                ))
+                .child(style_flag(
+                    "hide-instance-type",
+                    t!("prop.hide_instance_type").into(),
+                    p.style.hide_instance_type,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.hide_instance_type = v,
+                ));
+        }
+        if let Some(ElementKind::Instance(instance)) = &shown {
+            body = body
+                .child(style_flag(
+                    "hide-instance-name",
+                    t!("prop.hide_instance_name").into(),
+                    p.style.hide_instance_name,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.hide_instance_name = v,
+                ))
+                .child(style_flag(
+                    "hide-instance-type",
+                    t!("prop.hide_instance_type").into(),
+                    p.style.hide_instance_type,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.hide_instance_type = v,
+                ));
+            if instance.instance == umlcraft_model::InstanceKind::Object {
                 body = body
                     .child(style_flag(
-                        "hide-attributes",
-                        t!("prop.hide_attributes").into(),
+                        "hide-slots",
+                        t!("prop.hide_slots").into(),
                         p.style.hide_attributes,
                         workspace.clone(),
                         p.id,
                         |s, v| s.hide_attributes = v,
                     ))
                     .child(style_flag(
-                        "hide-operations",
-                        t!("prop.hide_operations").into(),
-                        p.style.hide_operations,
+                        "hide-empty-slots",
+                        t!("prop.hide_empty_slots").into(),
+                        p.style.hide_empty_slots,
                         workspace.clone(),
                         p.id,
-                        |s, v| s.hide_operations = v,
-                    ));
-                // What the box leaves out of its members, as Astah offers it per box.
-                type Flag = (&'static str, &'static str, fn(&Style) -> bool, fn(&mut Style, bool));
-                const MEMBERS: [Flag; 9] = [
-                    (
-                        "hide-stereotypes",
-                        "prop.hide_stereotypes",
-                        |s| s.hide_stereotypes,
-                        |s, v| s.hide_stereotypes = v,
-                    ),
-                    (
-                        "hide-member-visibility",
-                        "prop.hide_member_visibility",
-                        |s| s.hide_member_visibility,
-                        |s, v| s.hide_member_visibility = v,
-                    ),
-                    (
-                        "hide-attribute-types",
-                        "prop.hide_attribute_types",
-                        |s| s.hide_attribute_types,
-                        |s, v| s.hide_attribute_types = v,
-                    ),
-                    (
-                        "hide-initial-values",
-                        "prop.hide_initial_values",
-                        |s| s.hide_initial_values,
-                        |s, v| s.hide_initial_values = v,
-                    ),
-                    (
-                        "hide-parameters",
-                        "prop.hide_parameters",
-                        |s| s.hide_parameters,
-                        |s, v| s.hide_parameters = v,
-                    ),
-                    (
-                        "hide-parameter-types",
-                        "prop.hide_parameter_types",
-                        |s| s.hide_parameter_types,
-                        |s, v| s.hide_parameter_types = v,
-                    ),
-                    (
-                        "hide-return-types",
-                        "prop.hide_return_types",
-                        |s| s.hide_return_types,
-                        |s, v| s.hide_return_types = v,
-                    ),
-                    (
-                        "hide-attribute-stereotypes",
-                        "prop.hide_attribute_stereotypes",
-                        |s| s.hide_attribute_stereotypes,
-                        |s, v| s.hide_attribute_stereotypes = v,
-                    ),
-                    (
-                        "hide-operation-stereotypes",
-                        "prop.hide_operation_stereotypes",
-                        |s| s.hide_operation_stereotypes,
-                        |s, v| s.hide_operation_stereotypes = v,
-                    ),
-                ];
-                for (id, key, get, set) in MEMBERS {
-                    body = body.child(style_flag(
-                        id,
-                        t!(key).into(),
-                        get(&p.style),
-                        workspace.clone(),
-                        p.id,
-                        set,
-                    ));
-                }
-                body = body.child(field(
-                    t!("prop.parameter_directions").into(),
-                    Select::new(&self.directions).small().into_any_element(),
-                ));
-                // The members shown by visibility; the box leaves out those not ticked.
-                type Hidden = fn(&mut Style) -> &mut Vec<Visibility>;
-                let filters: [(&str, &str, &[Visibility], Hidden); 2] = [
-                    (
-                        "shown-attributes",
-                        "prop.shown_attributes",
-                        &p.style.hidden_attributes,
-                        |s| &mut s.hidden_attributes,
-                    ),
-                    (
-                        "shown-operations",
-                        "prop.shown_operations",
-                        &p.style.hidden_operations,
-                        |s| &mut s.hidden_operations,
-                    ),
-                ];
-                for (id, key, hidden, list) in filters {
-                    let boxes = VISIBILITIES.iter().map(|&v| {
-                        let workspace = workspace.clone();
-                        let presentation = p.id;
-                        Checkbox::new(SharedString::from(format!("{id}-{}", v.symbol())))
-                            .label(labels::visibility_label(v))
-                            .checked(!hidden.contains(&v))
-                            .on_click(move |checked: &bool, _, cx| {
-                                let shown = *checked;
-                                workspace.update(cx, |ws, cx| {
-                                    ws.update_style(presentation, |s| {
-                                        let hidden = list(s);
-                                        hidden.retain(|&h| h != v);
-                                        if !shown {
-                                            hidden.push(v);
-                                            hidden.sort_by_key(|h| {
-                                                VISIBILITIES.iter().position(|x| x == h)
-                                            });
-                                        }
-                                    });
-                                    cx.notify();
-                                });
-                            })
-                    });
-                    body = body.child(field(
-                        t!(key).into(),
-                        h_flex().flex_wrap().gap_x_3().gap_y_1().children(boxes).into_any_element(),
-                    ));
-                }
-            }
-            if matches!(&shown, Some(ElementKind::Lifeline(_))) {
-                body = body
-                    .child(style_flag(
-                        "hide-instance-name",
-                        t!("prop.hide_instance_name").into(),
-                        p.style.hide_instance_name,
-                        workspace.clone(),
-                        p.id,
-                        |s, v| s.hide_instance_name = v,
-                    ))
-                    .child(style_flag(
-                        "hide-instance-type",
-                        t!("prop.hide_instance_type").into(),
-                        p.style.hide_instance_type,
-                        workspace.clone(),
-                        p.id,
-                        |s, v| s.hide_instance_type = v,
+                        |s, v| s.hide_empty_slots = v,
                     ));
             }
-            if let Some(ElementKind::Instance(instance)) = &shown {
-                body = body
-                    .child(style_flag(
-                        "hide-instance-name",
-                        t!("prop.hide_instance_name").into(),
-                        p.style.hide_instance_name,
-                        workspace.clone(),
-                        p.id,
-                        |s, v| s.hide_instance_name = v,
-                    ))
-                    .child(style_flag(
-                        "hide-instance-type",
-                        t!("prop.hide_instance_type").into(),
-                        p.style.hide_instance_type,
-                        workspace.clone(),
-                        p.id,
-                        |s, v| s.hide_instance_type = v,
-                    ));
-                if instance.instance == umlcraft_model::InstanceKind::Object {
-                    body = body
-                        .child(style_flag(
-                            "hide-slots",
-                            t!("prop.hide_slots").into(),
-                            p.style.hide_attributes,
-                            workspace.clone(),
-                            p.id,
-                            |s, v| s.hide_attributes = v,
-                        ))
-                        .child(style_flag(
-                            "hide-empty-slots",
-                            t!("prop.hide_empty_slots").into(),
-                            p.style.hide_empty_slots,
-                            workspace.clone(),
-                            p.id,
-                            |s, v| s.hide_empty_slots = v,
-                        ));
-                }
-            }
-            if matches!(shown, Some(ElementKind::Interface(_))) {
-                body = body.child(style_flag(
-                    "iconic",
-                    t!("prop.iconic").into(),
-                    p.style.iconic,
+        }
+        // A class whose first stereotype is «boundary», «control» or «entity».
+        let robustness = p
+            .element
+            .and_then(|e| model.get(e))
+            .is_some_and(|e| umlcraft_notation::scene::robustness_icon(e).is_some());
+        if robustness {
+            body = body.child(style_flag(
+                "robustness-icon",
+                t!("prop.robustness_icon").into(),
+                p.style.iconic,
+                workspace.clone(),
+                p.id,
+                |s, v| s.iconic = v,
+            ));
+        }
+        if matches!(shown, Some(ElementKind::Class(_) | ElementKind::Interface(_)))
+            && !p.style.iconic
+        {
+            body = body
+                .child(style_flag(
+                    "hide-attribute-constraints",
+                    t!("prop.hide_attribute_constraints").into(),
+                    p.style.hide_attribute_constraints,
                     workspace.clone(),
                     p.id,
-                    |s, v| s.iconic = v,
+                    |s, v| s.hide_attribute_constraints = v,
+                ))
+                .child(style_flag(
+                    "hide-operation-constraints",
+                    t!("prop.hide_operation_constraints").into(),
+                    p.style.hide_operation_constraints,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.hide_operation_constraints = v,
                 ));
-                // A required interface: a half circle instead of the circle.
-                if p.style.iconic {
-                    body = body.child(style_flag(
-                        "socket",
-                        t!("prop.socket").into(),
-                        p.style.socket,
-                        workspace.clone(),
-                        p.id,
-                        |s, v| s.socket = v,
-                    ));
-                }
-            }
-            if let Some(b) = p.bounds() {
-                body = body.child(field(
-                    t!("prop.bounds").into(),
-                    div()
-                        .text_sm()
-                        .child(format!("x {}, y {}, {} × {}", b.x, b.y, b.width, b.height))
-                        .into_any_element(),
+        }
+        if matches!(p.shape, umlcraft_model::Shape::Edge { .. })
+            && shown.as_ref().is_some_and(has_constraints)
+        {
+            body = body.child(style_flag(
+                "hide-constraints",
+                t!("prop.hide_constraints").into(),
+                p.style.hide_constraints,
+                workspace.clone(),
+                p.id,
+                |s, v| s.hide_constraints = v,
+            ));
+        }
+        if matches!(shown, Some(ElementKind::Interface(_))) {
+            body = body.child(style_flag(
+                "iconic",
+                t!("prop.iconic").into(),
+                p.style.iconic,
+                workspace.clone(),
+                p.id,
+                |s, v| s.iconic = v,
+            ));
+            // A required interface: a half circle instead of the circle.
+            if p.style.iconic {
+                body = body.child(style_flag(
+                    "socket",
+                    t!("prop.socket").into(),
+                    p.style.socket,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.socket = v,
                 ));
             }
         }
+        if let Some(b) = p.bounds() {
+            body = body.child(field(
+                t!("prop.bounds").into(),
+                div()
+                    .text_sm()
+                    .child(format!("x {}, y {}, {} × {}", b.x, b.y, b.width, b.height))
+                    .into_any_element(),
+            ));
+        }
         body
+    }
+
+    /// A color picker with a button back to the theme's color.
+    fn color_select(
+        &self,
+        state: &Entity<ColorPickerState>,
+        set: bool,
+        line: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let panel = cx.entity();
+        let featured = FEATURED_COLORS.map(crate::canvas::hsla).to_vec();
+        h_flex()
+            .gap_1()
+            .child(
+                ColorSelect::new(state)
+                    .small()
+                    .featured_colors(featured.clone())
+                    .placeholder(t!("prop.default_color"))
+                    .flex_1(),
+            )
+            .when(set, |row| {
+                row.child(
+                    Button::new(("reset-color", usize::from(line)))
+                        .ghost()
+                        .small()
+                        .label(t!("prop.reset_color"))
+                        .on_click(move |_, _, cx| {
+                            panel.update(cx, |this, cx| this.set_color(line, None, cx));
+                        }),
+                )
+            })
+            .into_any_element()
     }
 }

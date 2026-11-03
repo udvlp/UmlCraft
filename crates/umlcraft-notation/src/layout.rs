@@ -13,7 +13,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, DiagramKind, Element, ElementKind, Id, Model,
-    ModelError, Navigability, Point, PseudostateKind, Rect, Regions, Result, Shape, Size, Tx,
+    ModelError, Navigability, Point, PseudostateKind, Rect, Regions, Result, Shape, SharedStyle,
+    Size, Tx,
 };
 
 use crate::scene::{self, TextMeasure};
@@ -547,8 +548,15 @@ pub fn arrange(
         bar: bool,
     }
     let mut nodes: Vec<Node> = Vec::new();
+    // Pins go along with their action and activity parameters stay on the frame, so lines to
+    // them count as lines to the action or not at all.
+    let borne = crate::composite::borne_nodes(model, diagram);
     for p in view.presentations() {
         let Shape::Node { bounds, .. } = p.shape else { continue };
+        // The diagram's frame is not laid out but drawn around the rest afterwards.
+        if borne.contains_key(&p.id) || p.element == Some(diagram) {
+            continue;
+        }
         let element = p.element.and_then(|e| model.get(e));
         let kind = element.map(|e| e.kind());
         let lollipop = p.style.iconic && matches!(kind, Some(ElementKind::Interface(_)));
@@ -630,12 +638,16 @@ pub fn arrange(
     let mut edges: Vec<(usize, usize, bool, bool)> = Vec::new();
     for p in view.presentations() {
         let Shape::Edge { source, target, .. } = &p.shape else { continue };
-        let (Some(&s), Some(&t)) = (index.get(source), index.get(target)) else { continue };
+        let source_element = view.get(*source).and_then(|p| p.element);
+        let carrier = |id: &Id| borne.get(id).copied().flatten().unwrap_or(*id);
+        let (Some(&s), Some(&t)) = (index.get(&carrier(source)), index.get(&carrier(target)))
+        else {
+            continue;
+        };
         if s == t || !in_scope.contains(&s) || !in_scope.contains(&t) {
             continue;
         }
         let element = p.element.and_then(|e| model.get(e));
-        let source_element = view.get(*source).and_then(|p| p.element);
         let (source_above, hierarchy) =
             match element.and_then(|e| actor_first(model, e, source_element)) {
                 Some(first) => (first, false),
@@ -1049,6 +1061,23 @@ pub fn arrange(
             }
         })?;
     }
+    // The frame goes around what was arranged; arranging a selection only widens it.
+    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let frame = view.presentations().iter().find(|p| p.element == Some(diagram));
+    if let Some((frame, old_frame)) = frame.and_then(|f| Some((f.id, f.bounds()?))) {
+        let content = ids
+            .iter()
+            .filter_map(|&id| view.get(id).and_then(|p| p.bounds()))
+            .reduce(|a, b| a.union(&b));
+        if let Some(content) = content {
+            let around = crate::activity::frame_around(content);
+            let wanted = if scope.is_some() { old_frame.union(&around) } else { around };
+            if wanted != old_frame {
+                tx.set_bounds(diagram, frame, wanted)?;
+                changed.push(frame);
+            }
+        }
+    }
 
     // Loops follow their node; the lines of what moved are routed.
     let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
@@ -1073,7 +1102,61 @@ pub fn arrange(
     }
     crate::autoroute::route_lines(tx, diagram, &lines)?;
     straighten_at_bars(tx, diagram, &bars, &lines)?;
+    share_generalization_trees(tx, diagram, &lines, direction)?;
     Ok(changed)
+}
+
+/// Generalization trees share their triangle, as Astah's shared style draws them: where two or
+/// more of the lines just routed end at one general element and all its specific elements lie
+/// beyond it in the direction of the layout, the generalizations to it get the shared style.
+fn share_generalization_trees(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    lines: &[Id],
+    direction: Direction,
+) -> Result<()> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let bounds = |id: Id| view.get(id).and_then(|p| p.bounds());
+    let mut groups: HashMap<Id, Vec<Id>> = HashMap::new();
+    for p in view.presentations() {
+        if let Some((general, specific)) = crate::shared::ends(model, view, p)
+            && general != specific
+        {
+            groups.entry(general).or_default().push(specific);
+        }
+    }
+    let mut shared = Vec::new();
+    for (general, specifics) in groups {
+        let touched = view.presentations().iter().any(|p| {
+            lines.contains(&p.id)
+                && crate::shared::ends(model, view, p).is_some_and(|(g, _)| g == general)
+        });
+        let Some(g) = bounds(general) else { continue };
+        let beyond = specifics.iter().filter_map(|&s| bounds(s)).all(|s| match direction {
+            Direction::Down => s.y >= g.bottom(),
+            Direction::Right => s.x >= g.right(),
+        });
+        if touched && specifics.len() >= 2 && beyond {
+            shared.push(general);
+        }
+    }
+    let style = match direction {
+        Direction::Down => SharedStyle::Vertical,
+        Direction::Right => SharedStyle::Horizontal,
+    };
+    for general in shared {
+        let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let edge = view
+            .presentations()
+            .iter()
+            .find(|p| crate::shared::ends(tx.model(), view, p).is_some_and(|(g, _)| g == general))
+            .map(|p| p.id);
+        if let Some(edge) = edge {
+            crate::shared::set_style(tx, diagram, edge, style)?;
+        }
+    }
+    Ok(())
 }
 
 /// Lines between a fork or join bar and a node above or below it run straight up or down.
@@ -1209,7 +1292,7 @@ mod tests {
                 if let Shape::Edge { source, target, .. } = p.shape
                     && source != target
                 {
-                    assert!(p.style.auto_route, "{p:?}");
+                    assert!(p.style.auto_route || !p.style.shared.is_separate(), "{p:?}");
                 }
             }
             model.check().unwrap();
@@ -1288,6 +1371,49 @@ mod tests {
             })
             .unwrap();
         assert!(rects.iter().all(|r| r.y >= rects[start].y));
+        model.check().unwrap();
+    }
+
+    #[test]
+    fn the_frame_goes_around_an_arranged_activity() {
+        use crate::palette::NodeTool;
+        use umlcraft_model::sample::order_system;
+        let (mut doc, ids) = order_system();
+        let d = ids.activity_diagram;
+        fn is_parameter(k: &ElementKind) -> bool {
+            matches!(k, ElementKind::ActivityNode(p) if p.node == ActivityNodeKind::ActivityParameter)
+        }
+        // A parameter dropped far below adds a frame around it and the rest. The edits run as
+        // the app runs them, so the parameter follows the frame.
+        let measure = scene::ApproxMeasure;
+        crate::edit::apply(&mut doc, "parameter", &measure, |tx| {
+            crate::activity::create_node(
+                tx,
+                d,
+                NodeTool::ActivityParameter,
+                Point::new(0.0, 2000.0),
+                "order",
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+        crate::edit::apply(&mut doc, "arrange", &measure, |tx| {
+            arrange(tx, d, None, default_direction(DiagramKind::Activity), &measure)
+        })
+        .unwrap();
+        let model = doc.model();
+        let frame = shown(model, d, d);
+        let nodes = elements_of(model, d, |k| {
+            matches!(k, ElementKind::ActivityNode(_) | ElementKind::Partition) && !is_parameter(k)
+        });
+        for node in nodes {
+            assert!(frame.contains_rect(&shown(model, d, node)), "{frame:?}");
+        }
+        let parameter = elements_of(model, d, is_parameter)[0];
+        let at = shown(model, d, parameter).center();
+        let on_border = [frame.x, frame.right()].iter().any(|x| (at.x - x).abs() < 0.5)
+            || [frame.y, frame.bottom()].iter().any(|y| (at.y - y).abs() < 0.5);
+        assert!(on_border, "{at:?} {frame:?}");
         model.check().unwrap();
     }
 
