@@ -18,8 +18,8 @@ pub struct Palette {
     pub background: Color,
     /// Unframed heads.
     pub head: Color,
-    /// The markers of elements with a comment.
-    pub comment: Color,
+    /// The markers of elements with a comment; without a colour they are left out.
+    pub comment: Option<Color>,
     /// The hatching of disabled elements.
     pub hatch: Color,
     /// The frame of the include list.
@@ -34,11 +34,15 @@ impl Palette {
         line: Color([0, 0, 0]),
         background: Color::WHITE,
         head: GREY,
-        comment: GREY,
+        comment: Some(GREY),
         hatch: HATCH,
         includes: INCLUDES_FRAME,
         tint: 1.0,
     };
+
+    /// Structorizer's colours without the markers of elements with a comment, as UmlCraft
+    /// shows and exports structograms.
+    pub const PLAIN: Palette = Palette { comment: None, ..Palette::STRUCTORIZER };
 
     /// What an element's own colour `c` is drawn as.
     fn fill(&self, c: Color) -> Color {
@@ -98,6 +102,7 @@ pub fn render_with(diagram: &Diagram, layout: &Layout, m: &Metrics, palette: &Pa
     out.push_str("</pattern></defs>\n");
     for p in draw(diagram, layout, m) {
         match p {
+            Primitive::Area { ink: Ink::Comment, .. } if palette.comment.is_none() => {}
             Primitive::Area { points, ink } => {
                 let points: Vec<String> =
                     points.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
@@ -169,7 +174,7 @@ fn color(ink: Ink, palette: &Palette) -> String {
         Ink::Line => palette.line,
         Ink::Background => palette.background,
         Ink::Head => palette.head,
-        Ink::Comment => palette.comment,
+        Ink::Comment => palette.comment.unwrap_or(palette.background),
         Ink::Hatch => return "url(#hatch)".into(),
         Ink::Includes => palette.includes,
         Ink::Fill(c) => palette.fill(c),

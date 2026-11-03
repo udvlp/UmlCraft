@@ -1260,10 +1260,11 @@ fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// What exports have and the light theme shows.
-const LIGHT: Palette = Palette::STRUCTORIZER;
+const LIGHT: Palette = Palette::PLAIN;
 
 /// The colours a structogram is shown in: [`LIGHT`] in the light theme, those of the diagrams
-/// in the dark one, with the elements' own colours dimmed.
+/// in the dark one, with the elements' own colours dimmed. Neither marks elements with a
+/// comment.
 fn palette(theme: &Theme) -> Palette {
     if !theme.is_dark() {
         return LIGHT;
@@ -1277,7 +1278,7 @@ fn palette(theme: &Theme) -> Palette {
         line: color(theme.foreground),
         background: color(theme.secondary),
         head: color(theme.muted),
-        comment: color(theme.muted_foreground),
+        comment: None,
         hatch: color(theme.muted_foreground),
         includes: color(theme.muted_foreground),
         tint: 0.35,

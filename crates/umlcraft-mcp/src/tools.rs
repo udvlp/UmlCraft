@@ -984,12 +984,19 @@ fn diagram_svg(host: &mut dyn Host, diagram: Id) -> String {
     svg::render(&scene, measure)
 }
 
+/// A structogram as SVG, as the app shows and exports it.
+fn structogram_svg(d: &umlcraft_nsd::Diagram) -> String {
+    let m = umlcraft_nsd::Metrics::for_platform();
+    let layout = umlcraft_nsd::layout::Layout::of(d, m);
+    umlcraft_nsd::svg::render_with(d, &layout, m, &umlcraft_nsd::svg::Palette::PLAIN)
+}
+
 fn render_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let scale = opt_num(args, "scale").unwrap_or(1.0).clamp(0.5, 2.0);
     let shown = opt_id(args, "diagram")?.or(host.active_diagram());
     let model = host.document().model();
     if let Some(p) = shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram()) {
-        let svg = umlcraft_nsd::svg::render(&p.structogram, umlcraft_nsd::Metrics::for_platform());
+        let svg = structogram_svg(&p.structogram);
         // Structogram images are in pixels already.
         let image = png(&svg, scale * svg::SCALE)?;
         return Ok(Reply { content: vec![Content::Image(image)], is_error: false });
@@ -1792,8 +1799,7 @@ fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
             umlcraft_nsd::write(&umlcraft_nsd::content::to_file(&p.structogram, &made)).into_bytes()
         }
         (Some(p), extension) => {
-            let svg =
-                umlcraft_nsd::svg::render(&p.structogram, umlcraft_nsd::Metrics::for_platform());
+            let svg = structogram_svg(&p.structogram);
             match extension {
                 "svg" => svg.into_bytes(),
                 // Two pixels per pixel of the structogram, as diagrams get two per unit.

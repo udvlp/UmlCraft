@@ -15,6 +15,9 @@ today.
 - **Structograms in the dark theme**: the editor draws structograms in the dark colours of the
   diagrams, light lines and texts on dark grey, with the elements' own colours dimmed, instead
   of a bright white sheet. Exports and the clipboard keep Structorizer's black on white.
+- **No comment markers in structograms**: elements with a comment no longer carry
+  Structorizer's grey bar, in the editor, in SVG and PNG exports and in images for AI clients.
+  The comments themselves stay, also in `.nsd` files.
 - **AI clients take screenshots without disturbing**: the MCP server's new `set_window` tool
   sizes the UmlCraft window in the pixels of `screenshot` and moves it beyond the screens,
   where it keeps drawing but nobody sees it, to the taskbar or back onto a screen, without
