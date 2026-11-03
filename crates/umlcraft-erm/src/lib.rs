@@ -9,15 +9,22 @@
 //! - [`model`]: the diagram as a graph of typed nodes, links and free texts.
 //! - [`create`]: adding elements with the sizes and texts a new diagram uses.
 //! - [`check`]: the rules a valid diagram keeps (which nodes may be joined, owners, …).
+//! - [`edit`]: the editor's changes, each keeping the error rules; [`history`]: undo, redo
+//!   and the selection; [`hit`]: what is under the mouse, grips, connection points;
+//!   [`clip`]: copy and paste.
 //! - [`write`] and [`read`]: the `.ucerm` file, pretty-printed JSON like `.ucraft`.
 //! - [`metrics`], [`size`], [`geometry`]: text widths and breaks, text boxes and sizes that
 //!   fit a name, outlines, line ends and label positions as draw.io computes them.
 //! - [`draw`] and [`svg`]: what is drawn, and the SVG image of it.
 
 pub mod check;
+pub mod clip;
 pub mod create;
 pub mod draw;
+pub mod edit;
 pub mod geometry;
+pub mod history;
+pub mod hit;
 pub mod metrics;
 pub mod model;
 pub mod read;
@@ -27,6 +34,7 @@ pub mod svg;
 pub mod write;
 
 pub use check::{Issue, IssueKind, Severity, check};
+pub use edit::{EditError, End, Item};
 pub use model::{
     Caption, Cardinality, Diagram, Id, Key, Label, LabelPos, LabelText, Line, Link, Max, Meta,
     Node, NodeKind, Point, Props, Rect, Style, Text, TextAlign,

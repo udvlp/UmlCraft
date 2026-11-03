@@ -1,7 +1,8 @@
 //! The rules a valid diagram keeps (`docs/erm-spec.md` § 5, P1–P12).
 //!
-//! Errors make a file unreadable, warnings are reported and the file still opens. The editor
-//! keeps every error rule with each operation.
+//! Errors make a file unreadable, warnings are reported and the file still opens. Diagrams on
+//! their way (a new relationship without participants, an attribute without owner) only warn;
+//! the editor keeps every error rule with each operation.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -43,21 +44,22 @@ pub enum IssueKind {
     MissingEnd { end: Id },
     /// P3
     NotAllowed { source: &'static str, target: &'static str },
-    /// P4
+    /// P4 (warning: unfinished)
     NoOwner,
     /// P4
     SeveralOwners,
     /// P5
     OwnPart,
-    /// P6
+    /// P6 (warning: unfinished)
     TooFewParticipants,
-    /// P7
+    /// P7 (warning: unfinished)
     IdentifyingWithoutWeak,
     /// P7
     IdentifyingWithSeveralWeak,
     /// P8 (warning)
     WeakWithoutIdentifying,
-    /// P9: an IS-A without exactly one supertype link and at least one subtype link.
+    /// P9 (warning: unfinished): an IS-A without exactly one supertype link and at least one
+    /// subtype link.
     IsAEnds,
     /// P9: `superType` on a link that does not start at an IS-A.
     SuperTypeOutsideIsA,
@@ -71,11 +73,17 @@ pub enum IssueKind {
 }
 
 impl IssueKind {
+    /// Errors are what breaks a file and what the editor never makes; warnings are what an
+    /// unfinished diagram has on its way (a new relationship without participants, a new
+    /// attribute without owner) and what is odd but drawable.
     pub fn severity(&self) -> Severity {
         match self {
-            Self::WeakWithoutIdentifying | Self::CardinalityOutsideParticipation => {
-                Severity::Warning
-            }
+            Self::NoOwner
+            | Self::TooFewParticipants
+            | Self::IdentifyingWithoutWeak
+            | Self::WeakWithoutIdentifying
+            | Self::IsAEnds
+            | Self::CardinalityOutsideParticipation => Severity::Warning,
             _ => Severity::Error,
         }
     }
@@ -360,6 +368,19 @@ mod tests {
     }
 
     #[test]
+    fn new_shapes_without_lines_are_only_unfinished() {
+        let mut d = Diagram::new("t");
+        let r = d.add_relationship("r", Point::new(0.0, 0.0), SizeSet::Compact);
+        d.node_mut(&r).unwrap().kind = NodeKind::Relationship { identifying: true };
+        d.add_node(NodeKind::attribute(), "a", Point::new(0.0, 100.0), SizeSet::Compact);
+        d.add_is_a(Point::new(0.0, 200.0), SizeSet::Compact);
+        let issues = check(&d);
+        let codes: Vec<&str> = issues.iter().map(|i| i.kind.code()).collect();
+        assert_eq!(codes, ["P6", "P7", "P4", "P9"]);
+        assert!(issues.iter().all(|i| i.severity() == Severity::Warning));
+    }
+
+    #[test]
     fn a_binary_relationship_is_valid() {
         assert_eq!(check(&binary().0), vec![]);
     }
@@ -435,7 +456,9 @@ mod tests {
         let i = d.add_is_a(Point::new(0.0, 100.0), SizeSet::Compact);
         let up = d.connect(&i, &sup).unwrap();
         d.links.push(Link::new(i.clone(), sub));
-        assert_eq!(check(&d), vec![Issue { element: i, kind: IssueKind::IsAEnds }]);
+        let issues = check(&d);
+        assert_eq!(issues, vec![Issue { element: i, kind: IssueKind::IsAEnds }]);
+        assert_eq!(issues[0].severity(), Severity::Warning);
         d.links.iter_mut().find(|l| l.id == up).unwrap().super_type = true;
         assert_eq!(check(&d), vec![]);
     }

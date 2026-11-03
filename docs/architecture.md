@@ -851,8 +851,28 @@ import follows in a later step.
 - **Rules** (`check`). Twelve rules: unique ids, existing ends, the allowed pairs of kinds
   (`check::allowed`), one owner per attribute and no composite cycles, at least two
   participants per relationship, one weak entity per identifying relationship, one supertype
-  per IS-A, valid geometry and cardinalities are errors; a weak entity without identifying
-  relationship and a cardinality outside a participation are warnings.
+  per IS-A, valid geometry and cardinalities. What breaks a file is an error (duplicate ids,
+  missing ends, pairs that may not be joined, several owners, composite cycles, several weak
+  entities at an identifying relationship, `superType` outside an IS-A, geometry,
+  cardinalities); what a diagram has on its way or what is only odd is a warning (an
+  attribute without owner, a relationship with fewer than two participants, an identifying
+  relationship without its weak entity, a weak entity without one, an IS-A without its ends,
+  a cardinality outside a participation), so that files of unfinished diagrams open.
+- **Editing** (`edit`, `history`, `hit`, `clip`). Each operation of the editor (add, connect
+  in the files' direction with `[0,n]` on a new participation, delete with own attributes and
+  attached lines, move, resize, rename, labels typed as `[0,n]` or `1..*` become
+  cardinalities, kinds, line styles, supertype, ports, styles, database properties) works on
+  a copy and is refused, leaving the diagram as it was, if it would make a new error.
+  `history::Editor` keeps the selection (`Item`: node, link, text, label), undo and redo as
+  snapshots (200 steps), whether the diagram differs from the file, and stamps `modified`
+  (and `created`, `author` for new diagrams) when it is saved. `hit` finds what is under the
+  mouse on the exact outlines, what a rubber band holds, the grips of a box and the
+  connection points (around the box clockwise: a rectangle every quarter of a side, an ellipse
+  and a rhombus the corners and side middles; the IS-A triangle its tip, the middles of its
+  slanted sides and three points on its base). `clip` copies the
+  selected nodes and texts with the lines between them as the text of a `.ucerm` file and
+  pastes it with new ids. `tests/editing.rs` runs 50 × 200 random operations: no error rule
+  breaks, a refused operation changes nothing, and the result survives writing and reading.
 - **New elements** (`create`) get the sizes of the flight example the feature started from
   (entity 100 × 40, attribute 70 × 28, relationship 60 × 40) or those of draw.io's library
   (`SizeSet::Palette`); `connect` only joins allowed kinds.
@@ -898,22 +918,38 @@ import follows in a later step.
   resvg differ from draw.io's PNGs in at most the share of pixels `tests/drawio_deviations.txt`
   allows each file, with the reason (text smoothing, right-angle routing, stroke widths).
 - **App** (`umlcraft-app/src/erm`). An ER diagram opens in a window of its own, outside the
-  project: File → "Open ER diagram (.ucerm)", the command line or "Open with" (`MainView::open`
-  hands `.ucerm` over and keeps the project; a file already open brings its window to the
-  front). The window (`window.rs`) is a frame with a title bar like the main window's, a
-  toolbar (zoom, grid, SVG and PNG export) and the canvas; the canvas (`canvas.rs`) is an entity
-  of its own, so that it can later become a tab of the main window. It shows the SVG export
+  project: File → "New ER diagram" or "Open ER diagram (.ucerm)", the command line or "Open
+  with" (`MainView::open` hands `.ucerm` over and keeps the project; a file already open
+  brings its window to the front). The window (`window.rs`) is a frame with a title bar like
+  the main window's, a toolbar (save, undo, zoom, grid, SVG and PNG export, properties), the
+  palette (`palette.rs`, our own drawings of the shapes; click places in the middle of the
+  view, drag drops at the mouse), the canvas and the properties (`props.rs`: name, the kind's
+  switches, line style, label and role, colours and font, database properties; the diagram's
+  name and origin when nothing is selected). The canvas (`canvas.rs`) is an entity of its own,
+  so that it can later become a tab of the main window. It shows the SVG export (transparent)
   rasterized with resvg like the structogram view (it uses `nsd::rasterize`, its fonts and
-  `write_file`): a new image when zoom, screen scale or grid change, in the background, at most
-  8192 px. Zoom 25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−, Ctrl+Shift+0 fits), panning
-  with the wheel (Shift: sideways), the middle button or Space and the left button. Until the
-  user zooms or pans, the sheet is fitted into the window, at most at 100 %. The sheet stays
-  white in the dark theme; the grid (draw.io's: 10 px, every fourth line stronger) is drawn
-  into the image shown, never into an export. PNG images are the SVG at twice the size, white
-  or transparent. Read errors and the warnings of `check` are told in the UI's language
-  (`erm.issue.*`, an element by its name, a line by its ends); errors in a dialog, warnings
-  in a line under the canvas that opens into their list. ER diagrams do not go into the
-  recent files (the list opens projects).
+  `write_file`) on white paper with a 10 px grid in the colour of the main canvas's, never
+  in an export; a new image right after each edit, in the background while dragging, at most
+  8192 px. Selection, grips, connection points, rubber band and the outlines of what is
+  dragged are painted over it in the theme's blue, as on the main canvas; the colours offered
+  for fills, lines and texts are the main window's (`properties::FEATURED_COLORS`), fills
+  lightened. Mouse and keys (`input.rs`) follow draw.io: click,
+  Shift/Ctrl+click and rubber band select; dragging moves with the top left corner on the grid
+  (Alt: free), grips resize (Shift keeps the proportions), labels are dragged, a line is drawn
+  from a connection point to another node (on a point: fixed port, on the shape: floating; not
+  allowed targets are marked red), a selected line's ends are hung elsewhere; arrows move by
+  1 px, Shift+arrows by 10, Ctrl+arrows resize; Delete, Ctrl+A/C/X/V/D, F2 or Enter and a
+  double click edit the text in place (`text.rs`, with the usual cardinalities for a label),
+  Escape cancels. The context menu adds an attribute, a relationship to a second entity, fits
+  sizes to their texts and releases line ends. Each mouse action is one undo step. Zoom
+  25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−, Ctrl+Shift+0 fits), panning with the wheel
+  (Shift: sideways), the middle button or Space and the left button; until the user zooms or
+  pans, the drawing is fitted into the window, at most at 100 %. Saving writes through a
+  temporary file; closing with unsaved changes asks (save, discard, cancel), and quitting from
+  the main window lists the ER diagrams with unsaved changes first. Read errors, refused edits
+  and the warnings of `check` (live) are told in the UI's language (`erm.*`, an element by its
+  name, a line by its ends); a click on a warning selects the element. ER diagrams do not go
+  into the recent files (the list opens projects).
 
 ## MCP server
 

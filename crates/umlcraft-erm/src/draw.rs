@@ -8,7 +8,9 @@ use crate::geometry::{
 use crate::metrics::{
     BASELINE, LABEL_FONT_SIZE, Metrics, NODE_FONT_SIZE, UNDERLINE_OFFSET, line_height,
 };
-use crate::model::{Diagram, Key, Line, Link, Node, NodeKind, Point, Rect, Style, TextAlign};
+use crate::model::{
+    Diagram, Key, LabelPos, Line, Link, Node, NodeKind, Point, Rect, Style, TextAlign,
+};
 use crate::size::text_box;
 
 pub const BLACK: &str = "#000000";
@@ -353,6 +355,18 @@ fn draw_link(d: &Diagram, link: &Link, out: &mut Vec<Primitive>) {
     }
 }
 
+/// Where a label is drawn: its anchor on whole pixels (as in draw.io's exports) and the box of
+/// its lines, centred on the anchor.
+pub fn label_box(points: &[Point], text: &str, pos: &LabelPos) -> (Point, Rect) {
+    let exact = label_anchor(points, pos);
+    let anchor = Point::new((exact.x + 0.5).floor(), (exact.y + 0.5).floor());
+    let m = Metrics::get();
+    let lines = text.split('\n');
+    let height = line_height(LABEL_FONT_SIZE) * text.split('\n').count() as f64;
+    let widest = lines.map(|l| m.width(l, LABEL_FONT_SIZE, false)).fold(0.0, f64::max);
+    (anchor, Rect::new(anchor.x - widest / 2.0, anchor.y - height / 2.0, widest, height))
+}
+
 fn draw_labels(d: &Diagram, link: &Link, out: &mut Vec<Primitive>) {
     let Some(points) = points_of(d, link) else { return };
     let texts = link
@@ -364,21 +378,13 @@ fn draw_labels(d: &Diagram, link: &Link, out: &mut Vec<Primitive>) {
     let size = LABEL_FONT_SIZE;
     let lh = line_height(size);
     for (text, pos) in texts {
-        // draw.io places HTML labels on whole pixels (Math.round).
-        let exact = label_anchor(&points, &pos);
-        let anchor = Point::new((exact.x + 0.5).floor(), (exact.y + 0.5).floor());
-        let lines: Vec<&str> = text.split('\n').collect();
-        let height = lh * lines.len() as f64;
-        let widest = lines.iter().map(|l| m.width(l, size, false)).fold(0.0, f64::max);
-        out.push(Primitive::Background {
-            rect: Rect::new(anchor.x - widest / 2.0, anchor.y - height / 2.0, widest, height),
-            fill: WHITE.to_owned(),
-        });
-        for (i, line) in lines.iter().enumerate() {
+        let (anchor, rect) = label_box(&points, &text, &pos);
+        out.push(Primitive::Background { rect, fill: WHITE.to_owned() });
+        for (i, line) in text.split('\n').enumerate() {
             out.push(Primitive::Text {
                 x: anchor.x,
-                y: anchor.y - height / 2.0 + lh * (i as f64 + 0.5) + BASELINE * size,
-                text: (*line).to_owned(),
+                y: rect.y + lh * (i as f64 + 0.5) + BASELINE * size,
+                text: line.to_owned(),
                 size,
                 bold: false,
                 italic: false,

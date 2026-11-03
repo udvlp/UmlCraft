@@ -102,6 +102,7 @@ menu:
   import_astah: Import .asta project …
   import_structogram: Import structogram (.nsd) …
   open_erm: Open ER diagram (.ucerm) …
+  new_erm: New ER diagram
   export: Export
   export_svg: Diagram as SVG …
   export_png: Diagram as PNG …
@@ -448,6 +449,8 @@ canvas:
 dialog:
   unsaved: The project has unsaved changes.
   unsaved_detail: Do you want to save them?
+  erm_unsaved: These ER diagrams have unsaved changes. Quit anyway?
+  quit_anyway: Quit without saving
   save: Save
   discard: Discard
   cancel: Cancel
@@ -860,8 +863,96 @@ erm:
   line_between: "line between %{a} and %{b}"
   free_text: free text
   untitled_stem: ER diagram
+  new_title: New ER diagram
+  save_tip: "Save (Ctrl+S)"
+  save_failed: The ER diagram could not be saved.
+  unsaved: "“%{name}” has unsaved changes."
+  properties: Properties
+  palette: Shapes
+  new_entity: Entity
+  new_attribute: Attribute
+  new_relationship: Relationship
+  new_text: Text
+  edit_text: Edit text
+  duplicate: Duplicate
+  add_attribute: Add attribute
+  relationship_to: Relationship to …
+  relationship_hint: "Relationship to …: now click the second entity (Esc cancels)."
+  fit_to_text: Fit size to text
+  release_ends: Release line ends
+  no_label: none
+  cannot_join: These elements cannot be joined.
+  edit_missing: The element no longer exists.
+  edit_not_applicable: This is not possible for this element.
+  shape:
+    entity: Entity
+    weak_entity: Weak entity
+    associative_entity: Associative entity
+    attribute: Attribute
+    key_attribute: Key
+    partial_key: Partial key
+    derived_attribute: Derived
+    multivalued_attribute: Multivalued
+    relationship: Relationship
+    identifying_relationship: Identifying
+    is_a: IS-A
+    text: Text
+  prop:
+    diagram: Diagram
+    diagram_name: Name
+    author: Author
+    created: Created
+    modified: Modified
+    origin: Origin
+    element: Element
+    name: Name
+    weak: weak
+    key: Key
+    key_none: none
+    key_primary: primary
+    key_partial: partial
+    derived: derived
+    multivalued: multivalued
+    identifying: identifying
+    total: total (double line to the supertype)
+    disjoint: Disjoint
+    disjoint_open: open
+    disjoint_d: d
+    disjoint_o: o
+    style: Appearance
+    fill: Fill
+    stroke: Line
+    font_color: Font colour
+    font_size: Font size (empty = 12)
+    bold: bold
+    italic: italic
+    rounded: rounded
+    standard: Standard
+    sql: Database (not drawn)
+    physical_name: Physical name
+    datatype: Data type
+    length: Length/precision
+    default: Default value
+    comment: Comment
+    not_null: NOT NULL
+    line: Line
+    label: Label
+    label_hint: "[0,1], [1,n], 0..* … become a cardinality, anything else free text, empty = none"
+    role: Role
+    line_style: Line style
+    line_solid: solid
+    line_dotted: dotted (optional participation)
+    line_double: double (total participation)
+    super_type: leads to the supertype
+    text: Free text
+    text_hint: Edit the text with a double click or F2.
+    align: Alignment
+    align_left: left
+    align_center: centre
+    align_right: right
+    several: "%{count} elements selected"
   grid: Grid
-  grid_tip: Show or hide the grid (10 px) on the sheet; on screen only, never in exports
+  grid_tip: Show or hide the grid (10 px); on screen only, never in exports
   zoom_fit_tip: "Fit (Ctrl+Shift+0)"
   export_svg: SVG …
   export_svg_tip: Save the diagram as an SVG image

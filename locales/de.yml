@@ -102,6 +102,7 @@ menu:
   import_astah: .asta-Projekt importieren …
   import_structogram: Struktogramm (.nsd) importieren …
   open_erm: ER-Diagramm (.ucerm) öffnen …
+  new_erm: Neues ER-Diagramm
   export: Exportieren
   export_svg: Diagramm als SVG …
   export_png: Diagramm als PNG …
@@ -448,6 +449,8 @@ canvas:
 dialog:
   unsaved: Das Projekt enthält ungespeicherte Änderungen.
   unsaved_detail: Sollen die Änderungen gespeichert werden?
+  erm_unsaved: Diese ER-Diagramme haben ungespeicherte Änderungen. Trotzdem beenden?
+  quit_anyway: Ohne Speichern beenden
   save: Speichern
   discard: Verwerfen
   cancel: Abbrechen
@@ -860,8 +863,96 @@ erm:
   line_between: "Linie zwischen %{a} und %{b}"
   free_text: freier Text
   untitled_stem: ER-Diagramm
+  new_title: Neues ER-Diagramm
+  save_tip: "Speichern (Strg+S)"
+  save_failed: Das ER-Diagramm konnte nicht gespeichert werden.
+  unsaved: "„%{name}“ hat ungespeicherte Änderungen."
+  properties: Eigenschaften
+  palette: Formen
+  new_entity: Entity
+  new_attribute: Attribut
+  new_relationship: Beziehung
+  new_text: Text
+  edit_text: Text bearbeiten
+  duplicate: Duplizieren
+  add_attribute: Attribut hinzufügen
+  relationship_to: Beziehung zu …
+  relationship_hint: "Beziehung zu …: jetzt auf die zweite Entity klicken (Esc bricht ab)."
+  fit_to_text: Größe an Text anpassen
+  release_ends: Linienenden lösen
+  no_label: keine
+  cannot_join: Diese Elemente lassen sich nicht verbinden.
+  edit_missing: Das Element gibt es nicht mehr.
+  edit_not_applicable: Das geht bei diesem Element nicht.
+  shape:
+    entity: Entity
+    weak_entity: Schwache Entity
+    associative_entity: Assoziative Entity
+    attribute: Attribut
+    key_attribute: Schlüssel
+    partial_key: Teilschlüssel
+    derived_attribute: Abgeleitet
+    multivalued_attribute: Mehrwertig
+    relationship: Beziehung
+    identifying_relationship: Identifizierend
+    is_a: IS-A
+    text: Text
+  prop:
+    diagram: Diagramm
+    diagram_name: Name
+    author: Autor
+    created: Erstellt
+    modified: Geändert
+    origin: Herkunft
+    element: Element
+    name: Name
+    weak: schwach
+    key: Schlüssel
+    key_none: keiner
+    key_primary: Primär
+    key_partial: Teil
+    derived: abgeleitet
+    multivalued: mehrwertig
+    identifying: identifizierend
+    total: total (Doppellinie zum Obertyp)
+    disjoint: Disjunkt
+    disjoint_open: offen
+    disjoint_d: d
+    disjoint_o: o
+    style: Darstellung
+    fill: Füllung
+    stroke: Linie
+    font_color: Schriftfarbe
+    font_size: Schriftgröße (leer = 12)
+    bold: fett
+    italic: kursiv
+    rounded: abgerundet
+    standard: Standard
+    sql: Datenbank (wird nicht gezeichnet)
+    physical_name: Physischer Name
+    datatype: Datentyp
+    length: Länge/Genauigkeit
+    default: Standardwert
+    comment: Kommentar
+    not_null: NOT NULL
+    line: Linie
+    label: Beschriftung
+    label_hint: "[0,1], [1,n], 0..* … wird Kardinalität, anderes freier Text, leer = keine"
+    role: Rolle
+    line_style: Linienart
+    line_solid: durchgezogen
+    line_dotted: gepunktet (optionale Teilnahme)
+    line_double: doppelt (totale Teilnahme)
+    super_type: führt zum Obertyp
+    text: Freier Text
+    text_hint: Text bearbeiten mit Doppelklick oder F2.
+    align: Ausrichtung
+    align_left: links
+    align_center: Mitte
+    align_right: rechts
+    several: "%{count} Elemente ausgewählt"
   grid: Raster
-  grid_tip: Raster (10 px) auf dem Blatt zeigen oder ausblenden; nur in der Ansicht, nie im Export
+  grid_tip: Raster (10 px) zeigen oder ausblenden; nur in der Ansicht, nie im Export
   zoom_fit_tip: "Einpassen (Strg+Umschalt+0)"
   export_svg: SVG …
   export_svg_tip: Diagramm als SVG-Bild speichern
