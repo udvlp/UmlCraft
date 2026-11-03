@@ -14,7 +14,7 @@ use umlcraft_erm::{Diagram, Id, NodeKind, Point as DPoint, Rect as DRect, clip};
 use super::canvas::{ErmCanvas, GRID, HANDLE_GRAB, Redraw, band};
 use super::palette::{DraggedShape, Shape};
 use super::{
-    AddAttribute, Duplicate, EditText, FitToText, Grow, Nudge, RelationshipTo, ReleaseEnds,
+    AddAttribute, Arrange, Duplicate, EditText, FitToText, Grow, Nudge, RelationshipTo, ReleaseEnds,
 };
 use crate::{Copy, Cut, DeleteSelection, Paste, SelectAll};
 
@@ -663,6 +663,21 @@ impl ErmCanvas {
         }
     }
 
+    /// Lays the whole diagram out anew (as the SQL import does): one undo step, then the
+    /// view shows all of it. Waypoints and fixed connection points are dropped.
+    pub(super) fn arrange(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.diagram().nodes.is_empty() {
+            return;
+        }
+        let done = self.apply(cx, |d| {
+            umlcraft_erm::layout::arrange(d);
+            Ok(None)
+        });
+        if done {
+            self.zoom_to_fit(&crate::ZoomToFit, window, cx);
+        }
+    }
+
     pub(super) fn add_attribute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let [Item::Node(owner)] = self.selection() else { return };
         let owner = owner.clone();
@@ -777,6 +792,7 @@ pub fn context_menu(
         .menu_with_disabled(t!("erm.release_ends"), Box::new(ReleaseEnds), !has_links)
         .separator()
         .menu(t!("menu.select_all"), Box::new(SelectAll))
+        .menu_with_disabled(t!("erm.arrange"), Box::new(Arrange), d.nodes.is_empty())
 }
 
 #[cfg(test)]

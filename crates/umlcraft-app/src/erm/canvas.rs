@@ -26,8 +26,8 @@ use umlcraft_erm::{Diagram, Issue, Rect as DRect, check};
 use super::input::Drag;
 use super::text::TextEdit;
 use super::{
-    AddAttribute, Duplicate, EditText, FitToText, Grow, Nudge, RelationshipTo, ReleaseEnds,
-    ToggleGrid,
+    AddAttribute, Arrange, Duplicate, EditText, FitToText, Grow, Nudge, RelationshipTo,
+    ReleaseEnds, ToggleGrid,
 };
 use crate::nsd::{OPTIONS, rasterize};
 use crate::{
@@ -580,6 +580,7 @@ impl Render for ErmCanvas {
             .on_action(cx.listener(|this, _: &Cancel, w, cx| this.cancel(w, cx)))
             .on_action(cx.listener(|this, _: &EditText, w, cx| this.edit_selected(w, cx)))
             .on_action(cx.listener(|this, _: &FitToText, w, cx| this.fit_to_text(w, cx)))
+            .on_action(cx.listener(|this, _: &Arrange, w, cx| this.arrange(w, cx)))
             .on_action(cx.listener(|this, _: &AddAttribute, w, cx| this.add_attribute(w, cx)))
             .on_action(cx.listener(|this, _: &RelationshipTo, w, cx| this.relationship_to(w, cx)))
             .on_action(cx.listener(|this, _: &ReleaseEnds, w, cx| this.release_ends(w, cx)))

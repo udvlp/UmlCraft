@@ -2372,6 +2372,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
         menu_item("menu.import_structogram", ImportStructogram),
         menu_item("menu.new_erm", crate::erm::NewErm),
         menu_item("menu.open_erm", crate::erm::OpenErm),
+        menu_item("menu.import_sql", crate::erm::ImportSql),
     ];
     file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items([
         menu_item("menu.export_svg", ExportSvg),
@@ -2524,6 +2525,7 @@ fn file_menu(
     menu = item(menu, "menu.import_structogram", Box::new(ImportStructogram));
     menu = item(menu, "menu.new_erm", Box::new(crate::erm::NewErm));
     menu = item(menu, "menu.open_erm", Box::new(crate::erm::OpenErm));
+    menu = item(menu, "menu.import_sql", Box::new(crate::erm::ImportSql));
     menu = menu.submenu(t!("menu.export"), window, cx, move |menu, _, _| {
         menu.menu(t!("menu.export_svg"), Box::new(ExportSvg))
             .menu(t!("menu.export_png"), Box::new(ExportPng))
@@ -2716,6 +2718,9 @@ impl Render for MainView {
             .on_action(cx.listener(Self::import_structogram))
             .on_action(|_: &crate::erm::OpenErm, window, cx| crate::erm::prompt_open(window, cx))
             .on_action(|_: &crate::erm::NewErm, _, cx| crate::erm::new_diagram(cx))
+            .on_action(|_: &crate::erm::ImportSql, window, cx| {
+                crate::erm::prompt_import_sql(window, cx)
+            })
             .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::export_astah))
             .on_action(cx.listener(Self::import_source))

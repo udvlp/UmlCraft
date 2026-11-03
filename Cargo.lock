@@ -6832,6 +6832,7 @@ dependencies = [
  "umlcraft-asta",
  "umlcraft-asta-export",
  "umlcraft-erm",
+ "umlcraft-erm-sql",
  "umlcraft-format",
  "umlcraft-mcp",
  "umlcraft-model",

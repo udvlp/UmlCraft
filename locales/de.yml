@@ -103,6 +103,7 @@ menu:
   import_structogram: Struktogramm (.nsd) importieren …
   open_erm: ER-Diagramm (.ucerm) öffnen …
   new_erm: Neues ER-Diagramm
+  import_sql: SQL-Dump als ER-Diagramm importieren …
   export: Exportieren
   export_svg: Diagramm als SVG …
   export_png: Diagramm als PNG …
@@ -884,6 +885,32 @@ erm:
   cannot_join: Diese Elemente lassen sich nicht verbinden.
   edit_missing: Das Element gibt es nicht mehr.
   edit_not_applicable: Das geht bei diesem Element nicht.
+  arrange: Anordnen
+  arrange_tip: Ganzes Diagramm automatisch anordnen (wie beim SQL-Import); Knickpunkte und feste Anschlusspunkte gehen dabei verloren
+  import_title: SQL-Dump importieren
+  import_found: "%{file}: %{count} Tabellen gefunden."
+  import_dialect: SQL-Dialekt
+  import_detected: "%{dialect} (erkannt)"
+  import_attributes: Attribute
+  import_attributes_all: alle
+  import_attributes_keys: nur Schlüssel
+  import_attributes_none: keine
+  import_attributes_hint: Große Schemas werden mit allen Attributen sehr breit.
+  import_schemas: Schemas
+  import_button: Importieren
+  import_failed: Der SQL-Dump konnte nicht importiert werden.
+  import_no_tables: Die Datei enthält keine Tabellen (CREATE TABLE), oder keine in den gewählten Schemas.
+  import_pg_custom: Die Datei ist im Archivformat von pg_dump. Bitte als Klartext exportieren (pg_dump -Fp) und diese Datei importieren.
+  import_compressed: Die Datei ist komprimiert. Bitte zuerst entpacken.
+  import_summary: "Importiert aus %{file} (%{dialect}): %{tables} Tabellen → %{entities} Entities, %{relationships} Beziehungen, %{attributes} Attribute; %{skipped} Anweisungen übersprungen"
+  import_no_key: "%{table}: kein Primärschlüssel, die Entity hat kein Schlüsselattribut"
+  import_placeholder: "%{table}: wird referenziert, steht aber nicht im Dump (Platzhalter-Entity)"
+  import_recoded: "Zeile %{line}: kein UTF-8, als Windows-1252 gelesen"
+  import_problem: "Zeile %{line}: %{what} nicht verstanden: %{text}"
+  import_problem_statement: Anweisung
+  import_problem_column: Spalte
+  import_problem_constraint: Schlüssel
+  import_unknown_table: "Zeile %{line}: betrifft eine Tabelle, die nicht im Dump steht: %{text}"
   shape:
     entity: Entity
     weak_entity: Schwache Entity
