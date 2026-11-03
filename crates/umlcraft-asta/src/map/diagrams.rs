@@ -528,6 +528,7 @@ impl Importer<'_> {
         presentation.style.font_color = self.ink(p, "font.color");
         presentation.style.hide_constraints =
             self.r.g.bool_field(p, "constraintVisibility") == Some(false);
+        presentation.style.constraint_offsets = self.constraint_offsets(p);
         let curve = presentation.style.line_shape.is_curve();
         let bounds = |id: Id| self.model.view(diagram)?.get(id)?.bounds();
         // Lines end at the node's ellipse or diamond, as the scene draws them.
@@ -635,14 +636,6 @@ impl Importer<'_> {
         if !own_keyword && unnamed && keyword.is_some() {
             name = keyword;
         }
-        // Without a name or stereotype, the constraints stand where Astah keeps the first one;
-        // generalizations and dependencies keep none and show them where they go by default.
-        let constrained = r.obj(p, "model").is_some_and(|m| {
-            r.list(m, "constraint").iter().any(|&c| r.class(c) == "UConstraintImp")
-        });
-        if !own_keyword && unnamed && keyword.is_none() && constrained {
-            name = r.list(p, "constraintPresentations").first().and_then(|&c| place(c, middle));
-        }
         let mut labels =
             EdgeLabels { name, keyword: keyword.filter(|_| own_keyword), ..Default::default() };
         (
@@ -656,6 +649,40 @@ impl Importer<'_> {
             (role_a, mult_a, role_b, mult_b)
         };
         (source_anchor, target_anchor, labels)
+    }
+
+    /// How far each constraint label of the line presentation `p` was moved by hand, by the
+    /// index of the constraint among those the import keeps (see `Importer::constraints`).
+    /// Astah keeps one `LabelPresentation` per constraint in `constraintPresentations`, its
+    /// `location` where Astah puts it and its `localMovement` the offset from there. It makes
+    /// the labels only as it draws them, a new one with the first one's offset, so a list that
+    /// is short or missing (files written through the API) leaves the rest at the first offset.
+    pub(super) fn constraint_offsets(&self, p: ObjId) -> Vec<Option<Point>> {
+        let r = self.r;
+        let Some(model) = r.obj(p, "model") else { return Vec::new() };
+        let moved: Vec<Point> = r
+            .list(p, "constraintPresentations")
+            .iter()
+            .map(|&label| {
+                r.obj(label, "localMovement").and_then(|l| r.point(l)).unwrap_or_default()
+            })
+            .collect();
+        let first = moved.first().copied().unwrap_or_default();
+        let mut offsets: Vec<Option<Point>> = r
+            .list(model, "constraint")
+            .iter()
+            .filter(|&&c| r.class(c) == "UConstraintImp")
+            .enumerate()
+            .filter(|&(_, &c)| !r.text(c, "body").is_empty() || !r.name(c).is_empty())
+            .map(|(i, _)| {
+                let m = moved.get(i).copied().unwrap_or(first);
+                (m.x.abs() > 1e-3 || m.y.abs() > 1e-3).then_some(m)
+            })
+            .collect();
+        while offsets.last().is_some_and(Option::is_none) {
+            offsets.pop();
+        }
+        offsets
     }
 
     pub(super) fn annotate(&mut self, comment: Id, annotated: Id) {

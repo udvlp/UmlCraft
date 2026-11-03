@@ -1569,7 +1569,8 @@ public final class AstaExport {
         return base;
     }
 
-    /// State, ordering, upper bound and stream of an object node, pin or activity parameter.
+    /// State, ordering, upper bound, control, effect, stream and exception of an object node,
+    /// pin or activity parameter.
     private void objectProperties(Map<String, Object> e, IObjectNode node) throws InvalidEditingException {
         if (!text(e, "inState").isEmpty()) {
             node.setInState(text(e, "inState"));
@@ -1588,8 +1589,18 @@ public final class AstaExport {
         if (!text(e, "upperBound").isEmpty()) {
             node.setUpperBound(text(e, "upperBound"));
         }
+        if (flag(e, "isControl")) {
+            node.setControl(true);
+        }
+        // UmlCraft's effects are Astah's, which takes them in lower case only.
+        if (!text(e, "effect").isEmpty()) {
+            node.setEffect(text(e, "effect"));
+        }
         if (flag(e, "isStream")) {
             node.setStream("stream");
+        }
+        if (flag(e, "isException")) {
+            node.setException(true);
         }
     }
 
@@ -2166,6 +2177,7 @@ public final class AstaExport {
             drop("edgeRoute");
         }
         labels(link, source, diagram, p);
+        constraintLabels(link, diagram, p);
         if (p.get("style") instanceof Map<?, ?> s) {
             Map<String, Object> style = (Map<String, Object>) s;
             ink(link, style);
@@ -2270,6 +2282,34 @@ public final class AstaExport {
         label(link, source + ".multiplicity", placed.get("sourceMultiplicity"));
         label(link, target + ".name", placed.get("targetRole"));
         label(link, target + ".multiplicity", placed.get("targetMultiplicity"));
+    }
+
+    /// Constraint labels moved away from where Astah puts them. Astah moves a line's constraint
+    /// labels together: `constraint.point` places the first one, and the others move by as
+    /// much. Only associations take it, so the places go only where all labels moved by the
+    /// same offset on an association; elsewhere they are dropped. The offset is added to where
+    /// Astah has put the first label, so Astah's own text widths center it.
+    private void constraintLabels(ILinkPresentation link, String diagram, Map<String, Object> p) {
+        Map<String, Object> l = (Map<String, Object>) layouts.get(diagram);
+        if (l == null || !(l.get("constraints") instanceof Map<?, ?> all)
+                || !(all.get(p.get("id")) instanceof Map<?, ?> found)) {
+            return;
+        }
+        try {
+            if (found.get("together") instanceof Map<?, ?> by && link.getModel() instanceof IAssociation) {
+                Map<String, Object> offset = (Map<String, Object>) by;
+                String x = link.getProperty("constraint.point.x");
+                String y = link.getProperty("constraint.point.y");
+                if (x != null && y != null) {
+                    link.setProperty("constraint.point.x", Double.toString(Double.parseDouble(x) + num(offset, "x")));
+                    link.setProperty("constraint.point.y", Double.toString(Double.parseDouble(y) + num(offset, "y")));
+                    return;
+                }
+            }
+        } catch (InvalidEditingException | NumberFormatException x) {
+            // Dropped below.
+        }
+        drop("constraintPosition");
     }
 
     private static void label(ILinkPresentation link, String key, Object point) throws InvalidEditingException {

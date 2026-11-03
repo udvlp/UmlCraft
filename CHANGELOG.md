@@ -12,20 +12,25 @@ today.
   diagrams: an association class hangs on a dashed line from the middle of its association and
   shows its name on the line; draw one with its tool or turn an association into one from the
   line's context menu. Attributes, operations and lines show their constraints (`{age > 0}`),
-  edited one per line in the properties panel. Generalizations to one class can share a single
-  triangle, joined on a common line (context menu › Shared style); arranging a diagram does
-  this for class trees. «boundary», «control» and «entity» classes are drawn as their icons,
-  with their own tools, or as boxes. AI clients set all of this with `connect` and
-  `update_element`. `.asta` files bring them along; the export to `.asta` keeps everything
-  but the shared triangle.
+  edited one per line in the properties panel; a line's constraint labels are dragged
+  together, as in Astah, and keep their distance when the line moves. Generalizations to one
+  class can share a single triangle, joined on a common line (context menu › Shared style);
+  arranging a diagram does this for class trees. «boundary», «control» and «entity» classes
+  are drawn as their icons, with their own tools, or as boxes. AI clients set all of this with `connect` and
+  `update_element`. `.asta` files bring them along, constraint labels moved by hand included;
+  the export to `.asta` keeps everything but the shared triangle and constraint labels on a
+  line that moved apart from each other or sit on a line other than an association.
 - **State invariants, terminations, duration and time constraints** in sequence diagrams: a
   state invariant shows a condition on a lifeline in a rounded box, a termination ends a
   lifeline with a cross, which stays below what happens on it. A duration constraint
   (`{d..3*d}`) is dragged from one message to another and keeps reaching from one to the other
-  when they move; a time constraint (`{t..t+3}`) goes on a message with one click. The
-  properties panel edits their text. AI clients create them with `create_element` and
-  `connect`. `.asta` files bring all four along; the export to `.asta` keeps state invariants
-  and terminations but leaves out duration and time constraints.
+  when they move, its label beside the line; a time constraint (`{t..t+3}`) goes on a message
+  with one click, and the diagram's frame grows to hold its label. Both labels can be dragged
+  to another place. A longer condition of a state invariant wraps, and its box grows and
+  shrinks with it. The properties panel edits their text. AI clients create them with
+  `create_element` and `connect`. `.asta` files bring all four along, labels moved by hand
+  included; the export to `.asta` keeps state invariants and terminations but leaves out
+  duration and time constraints.
 - **Submachine states, entry and exit points, stub states**: a submachine state stands for
   another state machine, chosen in its properties, and shows `include / Machine` and the
   submachine icon. Entry and exit points sit on the border of a state or of the diagram's
@@ -36,10 +41,15 @@ today.
 - **More of the activity diagram**: send signal, accept event and accept time event actions,
   call behavior actions that call another activity, input and output pins on the border of an
   action, activity parameter nodes on the diagram's frame, and connectors that continue a flow
-  elsewhere. Object nodes, pins and parameters have an ordering, an upper bound and a stream
-  flag, shown below them. Pins and parameters stay on their border when the action or the frame
-  moves or changes size. AI clients create them with `create_element` and set them with
-  `update_element`; Astah's `.asta` files bring them along both ways.
+  elsewhere. Object nodes, pins and parameters have an ordering, an upper bound, a stream
+  flag, an effect (create, read, update, delete) and a control flag, shown below them, which
+  makes control pins; exception pins and object nodes are marked by a small triangle. Pins and
+  parameters stay on their border when the action or the frame moves or changes size. AI
+  clients create them with `create_element` and set them with `create_element` or
+  `update_element`; Astah's `.asta` files bring them along both ways. Arranging an activity
+  diagram leaves room for pin names and the properties below object nodes, keeps the lines off
+  them where it can, puts a pin alone on a side of its action level with the action's bottom so
+  its texts stand below it, and draws the frame around the texts.
 - **Composite structure diagrams**: the inside of a class or component, with parts drawn in
   it, ports on the border of the class and of typed parts, and connectors between parts and
   ports. A part dragged over the class's border takes the border along; ports stay on their

@@ -1275,7 +1275,7 @@ fn composite_structure_through_astah() {
 /// the editor's tools.
 #[test]
 fn activity_elements_through_astah() {
-    use umlcraft_model::ObjectOrdering;
+    use umlcraft_model::{ObjectEffect, ObjectOrdering};
     use umlcraft_notation::edit;
     use umlcraft_notation::palette::{self, EdgeTool, NodeTool};
     let (mut doc, ids) = order_system();
@@ -1327,12 +1327,24 @@ fn activity_elements_through_astah() {
             p.ordering = Some(ObjectOrdering::Fifo);
             p.upper_bound = "3".into();
             p.is_stream = true;
+            p.is_control = true;
+            p.effect = Some(ObjectEffect::Read);
         })?;
+        // A control pin, an exception pin.
         set(nodes["order"].0, &|p| {
             p.type_ref = Some(TypeRef::Element(ids.order));
             p.ordering = Some(ObjectOrdering::Lifo);
+            p.is_control = true;
         })?;
-        set(nodes["input"].0, &|p| p.type_ref = Some(TypeRef::Element(ids.order)))?;
+        set(nodes["items"].0, &|p| {
+            p.is_exception = true;
+            p.effect = Some(ObjectEffect::Create);
+        })?;
+        set(nodes["input"].0, &|p| {
+            p.type_ref = Some(TypeRef::Element(ids.order));
+            p.effect = Some(ObjectEffect::Update);
+            p.is_exception = true;
+        })?;
         set(call, &|p| p.behavior = Some(pay))?;
         let node = |name: &str| nodes[name].1;
         for (a, b) in [
@@ -1374,6 +1386,9 @@ fn activity_elements_through_astah() {
                 for property in p.property_lines() {
                     line += &format!(" {property}");
                 }
+                if p.is_exception {
+                    line += " exception";
+                }
                 if let Some(b) = p.behavior {
                     line += &format!(" calls {}", n(b));
                 }
@@ -1393,10 +1408,10 @@ fn activity_elements_through_astah() {
             "Pay order CallBehavior in Checkout calls Pay",
             "Pick Action in Checkout",
             "Wait AcceptTimeEvent in Checkout",
-            "cart Object in Checkout {ordering=FIFO} {upperBound=3} {stream}",
-            "input ActivityParameter in Checkout : Order",
-            "items OutputPin in Pick",
-            "order InputPin in Pick : Order {ordering=LIFO}",
+            "cart Object in Checkout {read} {ordering=FIFO} {upperBound=3} {control} {stream}",
+            "input ActivityParameter in Checkout : Order {update} exception",
+            "items OutputPin in Pick {create} exception",
+            "order InputPin in Pick : Order {ordering=LIFO} {control}",
         ]
     );
     let flows = relationships(&back);
@@ -1535,6 +1550,9 @@ fn submachine_states_through_astah() {
     assert!(matches!(node.figure, scene::Figure::State { submachine: Some(_), .. }));
 }
 
+/// A state invariant of two lines, however wide they are measured.
+const TWO_LINES: &str = "first\nsecond";
+
 #[test]
 fn state_invariants_and_terminations_through_astah() {
     use umlcraft_model::{DurationConstraintProps, StateInvariantProps, TerminationProps};
@@ -1581,6 +1599,9 @@ fn state_invariants_and_terminations_through_astah() {
     let shop_at = Point::new(center(&doc, shop), 100.0);
     let (invariant, invariant_node) = edit::apply(&mut doc, "marks", &measure, |tx| {
         let made = sequence_edit::create_on_lifeline(tx, d, false, at, "stock > 0")?;
+        // Two lines, whatever the widths: Astah makes the box as high.
+        let below = Point::new(at.x, at.y + 50.0);
+        sequence_edit::create_on_lifeline(tx, d, false, below, TWO_LINES)?;
         sequence_edit::create_on_lifeline(tx, d, true, shop_at, "")?;
         let duration = sequence_edit::constrain(tx, d, check, save)?;
         let time = sequence_edit::constrain(tx, d, save, save)?;
@@ -1652,6 +1673,12 @@ fn state_invariants_and_terminations_through_astah() {
             .fold(f32::MAX, f32::min)
     };
     let after = view.presentations_of(invariant.id()).next().unwrap().bounds().unwrap();
+    let two = back.elements().find(|e| e.name() == TWO_LINES).expect("the second invariant");
+    let two = view.presentations_of(two.id()).next().unwrap().bounds().unwrap();
+    assert!((two.height - 35.1875).abs() < 0.01, "{two:?}");
+    let mine = doc.model().elements().find(|e| e.name() == TWO_LINES).unwrap().id();
+    let mine = doc.model().view(d).unwrap().presentations_of(mine).next().unwrap();
+    assert!((mine.bounds().unwrap().height - two.height).abs() < 0.01, "{mine:?}");
     let (dy_before, dy_after) = (before.y - top(doc.model(), d), after.y - top(&back, diagram));
     assert!((dy_before - dy_after).abs() < 1.0, "{dy_before} {dy_after} {before:?} {after:?}");
     assert!((before.width - after.width).abs() < 1.0, "{before:?} {after:?}");
@@ -1828,4 +1855,70 @@ fn class_diagram_notations_through_astah() {
     let dashed =
         scene.edges.iter().filter(|e| e.line == scene::LineStyle::ShortDashed && e.fixed).count();
     assert_eq!(dashed, 1, "the dashed line to the association class");
+}
+
+#[test]
+fn constraint_labels_through_astah() {
+    use umlcraft_notation::edit;
+    use umlcraft_notation::palette::{self, EdgeTool, NodeTool};
+    let mut doc = Document::new(Model::new("Places"));
+    let root = doc.model().root();
+    let measure = ApproxMeasure;
+    let d = edit::apply(&mut doc, "diagram", &measure, |tx| {
+        edit::create_diagram(tx, root, DiagramKind::Class, "Main")
+    })
+    .unwrap();
+    let node = |doc: &mut Document, x: f32, y: f32, name: &str| {
+        edit::apply(doc, "node", &measure, |tx| {
+            let (element, node) =
+                palette::create_node(tx, d, NodeTool::Class, Point::new(x, y), name)?;
+            tx.rename(element, name)?;
+            Ok::<_, umlcraft_model::ModelError>(node)
+        })
+        .unwrap()
+    };
+    let (a, b) = (node(&mut doc, 40.0, 40.0, "A"), node(&mut doc, 440.0, 40.0, "B"));
+    let (c, e) = (node(&mut doc, 40.0, 340.0, "C"), node(&mut doc, 440.0, 340.0, "E"));
+    let (together, apart) = (Point::new(25.0, -35.0), Point::new(-40.0, 10.0));
+    edit::apply(&mut doc, "constraints", &measure, |tx| {
+        let ab = palette::connect(tx, d, EdgeTool::Association, a, b)?;
+        let ac = palette::connect(tx, d, EdgeTool::Association, a, c)?;
+        let eb = palette::connect(tx, d, EdgeTool::Generalization, e, b)?;
+        for (edge, constraints, offsets) in [
+            (ab, vec!["xor", "other"], vec![Some(together), Some(together)]),
+            (ac, vec!["c1", "c2"], vec![Some(apart)]),
+            (eb, vec!["complete"], vec![Some(together)]),
+        ] {
+            let element = tx.model().view(d).unwrap().get(edge).unwrap().element.unwrap();
+            tx.update(element, |data| {
+                data.constraints = constraints.iter().map(|&c| c.into()).collect()
+            })?;
+            tx.update_presentation(d, edge, |p| p.style.constraint_offsets = offsets)?;
+        }
+        Ok::<_, umlcraft_model::ModelError>(())
+    })
+    .unwrap();
+    let Some((back, report)) = through_astah_reporting(doc.model(), "constraint-places") else {
+        return;
+    };
+    // Astah moves the constraint labels of a line together, and takes their place only on
+    // associations: the two that moved apart and the generalization's are dropped.
+    assert_eq!(report.dropped.get("constraintPosition"), Some(&2), "{:?}", report.dropped);
+    let diagram =
+        back.elements().find(|e| e.kind().as_diagram() == Some(DiagramKind::Class)).unwrap();
+    let view = back.view(diagram.id()).unwrap();
+    let offsets = |first: &str| {
+        let element =
+            back.elements().find(|e| e.data().constraints.first().is_some_and(|c| c == first));
+        let (_, p) = back.shown_on(element.unwrap().id())[0];
+        view.get(p).unwrap().style.constraint_offsets.clone()
+    };
+    let moved = offsets("xor");
+    assert_eq!(moved.len(), 2, "{moved:?}");
+    for offset in &moved {
+        let o = offset.expect("moved");
+        assert!(o.distance(together) < 0.01, "{moved:?}");
+    }
+    assert_eq!(offsets("c1"), []);
+    assert_eq!(offsets("complete"), []);
 }

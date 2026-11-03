@@ -17,8 +17,9 @@ use rust_i18n::t;
 use umlcraft_model::{
     ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Color, DiagramKind,
     ElementData, ElementKind, Id, InstanceKind, InstanceProps, InteractionOperator, LifelineProps,
-    LinkEnd, LinkProps, MessageSort, Model, Multiplicity, Navigability, ObjectOrdering,
-    ParameterDirections, Presentation, Shape, Style, TemplateParameterKind, TypeRef, Visibility,
+    LinkEnd, LinkProps, MessageSort, Model, Multiplicity, Navigability, ObjectEffect,
+    ObjectOrdering, ParameterDirections, Presentation, Shape, Style, TemplateParameterKind,
+    TypeRef, Visibility,
 };
 use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
@@ -146,6 +147,8 @@ pub struct PropertiesPanel {
     upper_bound: Entity<InputState>,
     /// Object nodes: the order objects leave in, or none.
     ordering: Entity<Choice>,
+    /// Object nodes: what the action does to the objects, or nothing said.
+    object_effect: Entity<Choice>,
     bounds: Entity<InputState>,
     default: Entity<InputState>,
     /// Classes: the template they bind, with its arguments (`Pair<int,Holder>`).
@@ -249,6 +252,14 @@ fn split_types(text: &str) -> Vec<&str> {
 fn ordering_items() -> Vec<SharedString> {
     std::iter::once("—")
         .chain(ObjectOrdering::ALL.iter().map(|o| o.as_str()))
+        .map(SharedString::from)
+        .collect()
+}
+
+/// "—" for no effect, then UML's effects as UML writes them.
+fn effect_items() -> Vec<SharedString> {
+    std::iter::once("—")
+        .chain(ObjectEffect::ALL.iter().map(|o| o.as_str()))
         .map(SharedString::from)
         .collect()
 }
@@ -403,6 +414,7 @@ impl PropertiesPanel {
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("prop.in_state_placeholder")));
         let upper_bound = cx.new(|cx| InputState::new(window, cx).placeholder("*"));
         let ordering = cx.new(|cx| SelectState::new(ordering_items(), None, window, cx));
+        let object_effect = cx.new(|cx| SelectState::new(effect_items(), None, window, cx));
         let bounds = cx.new(|cx| InputState::new(window, cx).placeholder("Number, Comparable<T>"));
         let default = input(window, cx);
         let member_multiplicity = cx.new(|cx| InputState::new(window, cx).placeholder("0..*"));
@@ -556,6 +568,19 @@ impl PropertiesPanel {
             },
         ));
         subscriptions.push(cx.subscribe_in(
+            &object_effect,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(ix) = selected(state, cx) else { return };
+                let effect = ix.checked_sub(1).and_then(|i| ObjectEffect::ALL.get(i).copied());
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::ActivityNode(p) = &mut data.kind {
+                        p.effect = effect;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
             &operation,
             window,
             |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
@@ -672,6 +697,7 @@ impl PropertiesPanel {
             in_state,
             upper_bound,
             ordering,
+            object_effect,
             bounds,
             default,
             binding,
@@ -1264,6 +1290,8 @@ impl PropertiesPanel {
                 let ordering =
                     p.ordering.and_then(|o| ObjectOrdering::ALL.iter().position(|&x| x == o));
                 choose(&self.ordering, Some(ordering.map_or(0, |i| i + 1)), None, window, cx);
+                let effect = p.effect.and_then(|o| ObjectEffect::ALL.iter().position(|&x| x == o));
+                choose(&self.object_effect, Some(effect.map_or(0, |i| i + 1)), None, window, cx);
                 if p.node == ActivityNodeKind::CallBehavior {
                     let ix = references.iter().position(|r| *r == p.behavior);
                     choose(&self.represents, ix, Some(reference_labels), window, cx);
@@ -2141,6 +2169,34 @@ impl PropertiesPanel {
                         |d, on| {
                             if let ElementKind::ActivityNode(p) = &mut d.kind {
                                 p.is_stream = on;
+                            }
+                        },
+                    ))
+                    .child(field(
+                        t!("prop.object_effect").into(),
+                        Select::new(&self.object_effect).small().into_any_element(),
+                    ))
+                    .child(flag(
+                        "object-control",
+                        t!("prop.object_control").into(),
+                        p.is_control,
+                        workspace.clone(),
+                        id,
+                        |d, on| {
+                            if let ElementKind::ActivityNode(p) = &mut d.kind {
+                                p.is_control = on;
+                            }
+                        },
+                    ))
+                    .child(flag(
+                        "object-exception",
+                        t!("prop.object_exception").into(),
+                        p.is_exception,
+                        workspace.clone(),
+                        id,
+                        |d, on| {
+                            if let ElementKind::ActivityNode(p) = &mut d.kind {
+                                p.is_exception = on;
                             }
                         },
                     ));

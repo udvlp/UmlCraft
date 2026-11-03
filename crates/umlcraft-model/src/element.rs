@@ -714,6 +714,35 @@ impl ObjectOrdering {
     }
 }
 
+/// What the action an object node feeds or comes from does to its objects (UML's
+/// `ObjectFlowEffectKind`), as Astah offers it on object nodes and pins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjectEffect {
+    Create,
+    Read,
+    Update,
+    Delete,
+}
+
+impl ObjectEffect {
+    pub const ALL: [Self; 4] = [Self::Create, Self::Read, Self::Update, Self::Delete];
+
+    /// The name as UML and Astah write it (`{create}`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Read => "read",
+            Self::Update => "update",
+            Self::Delete => "delete",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|o| o.as_str().eq_ignore_ascii_case(text.trim()))
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityNodeProps {
@@ -736,6 +765,17 @@ pub struct ActivityNodeProps {
     /// Object nodes: objects flow in and out while the action runs (`{stream}`).
     #[serde(default, skip_serializing_if = "is_default")]
     pub is_stream: bool,
+    /// Object nodes: the objects are control tokens (UML's `isControl`, `{control}`); on a
+    /// pin it makes a control pin.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub is_control: bool,
+    /// Object nodes: what the action does to the objects (`{create}`); unset, none is shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<ObjectEffect>,
+    /// Pins and object nodes: the objects are exceptions, marked by a small triangle beside
+    /// the node (an exception pin).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub is_exception: bool,
     /// Call behavior actions: the activity called.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<Id>,
@@ -782,15 +822,27 @@ impl ActivityNodeKind {
 }
 
 impl ActivityNodeProps {
-    /// The object node properties as UML writes them below the node: `{ordering=FIFO}`,
-    /// `{upperBound=3}`, `{stream}`, in Astah's order.
+    /// The object node properties as UML writes them below the node: `{create}`,
+    /// `{ordering=FIFO}`, `{upperBound=3}`, `{control}`, `{stream}`, in Astah's order, which
+    /// puts the effect last for activity parameters.
     pub fn property_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
+        let effect = self.effect.map(|e| format!("{{{}}}", e.as_str()));
+        let parameter = self.node == ActivityNodeKind::ActivityParameter;
+        if !parameter {
+            lines.extend(effect.clone());
+        }
         if let Some(o) = self.ordering {
             lines.push(format!("{{ordering={}}}", o.as_str()));
         }
         if !self.upper_bound.is_empty() {
             lines.push(format!("{{upperBound={}}}", self.upper_bound));
+        }
+        if self.is_control {
+            lines.push("{control}".to_owned());
+        }
+        if parameter {
+            lines.extend(effect);
         }
         if self.is_stream {
             lines.push("{stream}".to_owned());

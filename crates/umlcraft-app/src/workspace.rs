@@ -654,11 +654,14 @@ impl Workspace {
         let label = t!("edit.labels").to_string();
         let result = self.edit(label, |tx| {
             edges.iter().try_for_each(|&edge| {
-                tx.update_presentation(diagram, edge, |p| match &mut p.shape {
-                    Shape::Edge { labels, .. } | Shape::Message { labels, .. } => {
-                        *labels = EdgeLabels::default();
+                tx.update_presentation(diagram, edge, |p| {
+                    p.style.constraint_offsets.clear();
+                    match &mut p.shape {
+                        Shape::Edge { labels, .. } | Shape::Message { labels, .. } => {
+                            *labels = EdgeLabels::default();
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 })
             })
         });
@@ -899,6 +902,26 @@ impl Workspace {
         let label = t!("edit.move").to_string();
         let result = self.edit(label, |tx| {
             umlcraft_notation::sequence_edit::place_label(tx, diagram, presentation, top_left)
+        });
+        self.report(result);
+    }
+
+    /// Moves the label of a duration or time constraint by `by`, where the user dragged it.
+    pub fn move_constraint_label(&mut self, presentation: Id, by: Point) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.move").to_string();
+        let result = self.edit(label, |tx| {
+            umlcraft_notation::sequence_edit::move_constraint_label(tx, diagram, presentation, by)
+        });
+        self.report(result);
+    }
+
+    /// Moves the constraint labels of a line by `by`, all together, as the user dragged one.
+    pub fn shift_line_constraints(&mut self, presentation: Id, by: Point) {
+        let Some(diagram) = self.active_diagram else { return };
+        let label = t!("edit.move").to_string();
+        let result = self.edit(label, |tx| {
+            umlcraft_notation::edit::shift_line_constraints(tx, diagram, presentation, by)
         });
         self.report(result);
     }

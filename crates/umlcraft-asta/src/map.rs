@@ -18,11 +18,11 @@ use umlcraft_model::{
     ExtendProps, GeneralizationProps, Id, IncludeProps, InstanceKind, InstanceProps,
     InteractionOperandProps, InteractionOperator, InteractionUseProps, InternalTransitionProps,
     LifelineProps, LineShape, LinkEnd, LinkProps, MessageGate, MessageProps, MessageSort, Model,
-    Multiplicity, Navigability, ObjectOrdering, Op, OperationProps, ParameterDirection,
-    ParameterDirections, ParameterProps, Point, PortProps, Presentation, PseudostateKind,
-    Qualifier, Rect, Regions, Shape, SharedStyle, SlotProps, StateInvariantProps, StateProps,
-    Style, TaggedValue, TemplateParameterKind, TemplateParameterProps, TerminationProps,
-    TimeConstraintProps, TransitionProps, TypeExpr, TypeRef, Visibility,
+    Multiplicity, Navigability, ObjectEffect, ObjectOrdering, Op, OperationProps,
+    ParameterDirection, ParameterDirections, ParameterProps, Point, PortProps, Presentation,
+    PseudostateKind, Qualifier, Rect, Regions, Shape, SharedStyle, SlotProps, StateInvariantProps,
+    StateProps, Style, TaggedValue, TemplateParameterKind, TemplateParameterProps,
+    TerminationProps, TimeConstraintProps, TransitionProps, TypeExpr, TypeRef, Visibility,
 };
 use umlcraft_notation::composite;
 use umlcraft_notation::palette;
@@ -1328,6 +1328,9 @@ impl Importer<'_> {
                     .and_then(|o| ObjectOrdering::parse(&o)),
                 upper_bound: tag("jude.uml.objectnode.upperbound").unwrap_or_default(),
                 is_stream: tag("jude.uml.objectnode.stream").as_deref() == Some("stream"),
+                is_control: tag("jude.uml.objectnode.control").as_deref() == Some("true"),
+                effect: tag("jude.uml.objectnode.effect").and_then(|e| ObjectEffect::parse(&e)),
+                is_exception: tag("jude.uml.objectnode.exception").as_deref() == Some("true"),
                 behavior: None,
             };
             let mut data =
@@ -2098,6 +2101,72 @@ mod tests {
         let Shape::Edge { source, target, waypoints, .. } = &edge.shape else { panic!() };
         assert_eq!((*source, *target), (shown(id("Order")), shown(id("Item"))));
         assert_eq!(*waypoints, [Point::new(150.0, 200.0), Point::new(250.0, 200.0)]);
+    }
+
+    #[test]
+    fn constraint_labels_of_a_line_keep_their_offsets() {
+        let mut b = Builder::default();
+        let model = named(&mut b, "UModelImp", "Model");
+        let (order, item) =
+            (named(&mut b, "UClassifierImp", "Order"), named(&mut b, "UClassifierImp", "Item"));
+        let generalization = b.instance("UGeneralizationImp");
+        b.set(generalization, "subtype", Value::Object(order));
+        b.set(generalization, "supertype", Value::Object(item));
+        let constraints: Vec<ObjId> = ["first", "second", "third"]
+            .iter()
+            .map(|c| named(&mut b, "UConstraintImp", c))
+            .collect();
+        let list = b.list(&constraints);
+        b.set(generalization, "constraint", list);
+        let diagram = named(&mut b, "UDiagramImp", "Overview");
+        let kind = b.string("Class Diagram");
+        b.set(diagram, "type", kind);
+        b.own(model, &[order, item, generalization, diagram]);
+        let node = |b: &mut Builder, element: ObjId, x: f64| {
+            let p = b.instance("ClassifierPresentation");
+            b.set(p, "model", Value::Object(element));
+            let at = point(b, x, 40.0);
+            b.set(p, "location", Value::Object(at));
+            b.set(p, "width", Value::Double(100.0));
+            b.set(p, "height", Value::Double(60.0));
+            p
+        };
+        let (order_p, item_p) = (node(&mut b, order, 20.0), node(&mut b, item, 300.0));
+        let edge = b.instance("GeneralizationPresentation");
+        b.set(edge, "model", Value::Object(generalization));
+        let servers = b.list(&[item_p, order_p]);
+        b.set(edge, "servers", servers);
+        let ends = [point(&mut b, 350.0, 100.0), point(&mut b, 70.0, 100.0)];
+        let all = b.list(&ends);
+        b.set(edge, "allPoints", all.clone());
+        b.set(edge, "points", all);
+        // Astah keeps a label per constraint with its offset by hand, and makes the third one
+        // only as it draws it, with the first one's offset.
+        let label = |b: &mut Builder, x: f64, y: f64| {
+            let label = b.instance("LabelPresentation");
+            let at = point(b, 0.0, 0.0);
+            b.set(label, "location", Value::Object(at));
+            let moved = point(b, x, y);
+            b.set(label, "localMovement", Value::Object(moved));
+            label
+        };
+        let labels = [label(&mut b, 5.0, 6.0), label(&mut b, 20.0, -30.0)];
+        let labels = b.list(&labels);
+        b.set(edge, "constraintPresentations", labels);
+        let presentations = b.list(&[order_p, item_p, edge]);
+        b.set(diagram, "presentation", presentations);
+
+        let imported = import(&b.0).unwrap();
+        let m = &imported.model;
+        m.check().unwrap();
+        let generalization =
+            m.elements().find(|e| matches!(e.kind(), ElementKind::Generalization(_))).unwrap();
+        assert_eq!(generalization.data().constraints, ["first", "second", "third"]);
+        let diagram = m.elements().find(|e| e.name() == "Overview").unwrap().id();
+        let view = m.view(diagram).unwrap();
+        let edge = view.presentations_of(generalization.id()).next().expect("an edge");
+        let (first, second) = (Point::new(5.0, 6.0), Point::new(20.0, -30.0));
+        assert_eq!(edge.style.constraint_offsets, [Some(first), Some(second), Some(first)]);
     }
 
     #[test]

@@ -26,11 +26,11 @@ pub use element::{
     ElementData, ElementKind, ExtendProps, GeneralizationProps, IMPORTED_TAG, IncludeProps,
     InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator, InteractionUseProps,
     InternalTransitionProps, LifelineProps, LinkEnd, LinkProps, MessageGate, MessageProps,
-    MessageSort, Multiplicity, Navigability, ObjectOrdering, OperationProps, ParameterDirection,
-    ParameterProps, ParseMultiplicityError, PortProps, PseudostateKind, PseudostateProps,
-    Qualifier, RefRole, SlotProps, StateInvariantProps, StateProps, StructogramProps, TaggedValue,
-    TemplateParameterKind, TemplateParameterProps, TerminationProps, TimeConstraintProps,
-    TransitionProps, TypeExpr, TypeRef, Visibility,
+    MessageSort, Multiplicity, Navigability, ObjectEffect, ObjectOrdering, OperationProps,
+    ParameterDirection, ParameterProps, ParseMultiplicityError, PortProps, PseudostateKind,
+    PseudostateProps, Qualifier, RefRole, SlotProps, StateInvariantProps, StateProps,
+    StructogramProps, TaggedValue, TemplateParameterKind, TemplateParameterProps, TerminationProps,
+    TimeConstraintProps, TransitionProps, TypeExpr, TypeRef, Visibility,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

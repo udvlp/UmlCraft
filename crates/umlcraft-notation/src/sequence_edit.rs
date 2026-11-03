@@ -145,15 +145,24 @@ struct Constraint {
     id: Id,
     element: Id,
     rect: Rect,
+    /// Its label's offset from its usual place, if moved by hand.
+    label: Option<umlcraft_model::Point>,
 }
 
 /// Size of a termination's cross.
 pub const CROSS: f32 = 20.0;
-/// State invariants: Astah's box, as wide whatever it reads (longer text wraps), and its height
-/// for one line of text and for each further line.
+/// State invariants: Astah's box, as wide whatever it reads (longer text wraps), at least as
+/// high as for one line of text, and the height of each line.
 pub const INVARIANT_WIDTH: f32 = 74.044_92;
 pub const INVARIANT_HEIGHT: f32 = 21.0;
-pub const INVARIANT_LINE: f32 = 14.1875;
+pub const INVARIANT_LINE: f32 = 15.093_75;
+/// What a state invariant adds to the height of its text.
+const INVARIANT_TEXT_PAD: f32 = 5.0;
+
+/// The height Astah gives a state invariant of `lines` lines: theirs and 5, at least 21.
+pub fn invariant_height(lines: usize) -> f32 {
+    (lines as f32 * INVARIANT_LINE + INVARIANT_TEXT_PAD).max(INVARIANT_HEIGHT)
+}
 /// Time constraints: how far the line goes on beyond the message's arrowhead.
 pub const TIME_TICK: f32 = 30.0;
 /// Edge labels' height, by which constraint labels are centered on their point.
@@ -270,6 +279,7 @@ impl Geometry {
                                 id: p.id,
                                 element: p.element.expect("matched"),
                                 rect: *bounds,
+                                label: p.style.name_offset,
                             });
                         }
                         _ => g.notes.push(*bounds),
@@ -865,12 +875,61 @@ fn duration_bounds(x: f32, a: f32, b: f32) -> Rect {
 /// Where a time constraint's line goes, roughly: on from the arrowhead of `m`, away from the
 /// sender. The layout places it exactly.
 fn time_bounds(g: &Geometry, m: &Msg) -> Rect {
+    let (tip, end) = time_tick(g, m);
+    Rect::new(tip.min(end), m.end() - CONSTRAINT_LABEL / 2.0, TIME_TICK, CONSTRAINT_LABEL)
+}
+
+/// Roughly where a time constraint's line on `m` starts and ends: at the arrowhead and 30 on,
+/// away from the sender.
+fn time_tick(g: &Geometry, m: &Msg) -> (f32, f32) {
     let center = |lane: Id| g.lane(lane).map_or(0.0, |l| l.center());
     let (from, to) = (center(m.source), center(m.target));
     let dir = if m.source != m.target && to >= from { 1.0 } else { -1.0 };
     let tip = to - dir * crate::sequence::BAR / 2.0;
-    let end = tip + dir * TIME_TICK;
-    Rect::new(tip.min(end), m.end() - CONSTRAINT_LABEL / 2.0, TIME_TICK, CONSTRAINT_LABEL)
+    (tip, tip + dir * TIME_TICK)
+}
+
+/// Roughly where the label of the constraint `c` goes, measured by Java's widths, for the
+/// diagram's frame to hold it.
+fn constraint_label(model: &Model, g: &Geometry, c: &Constraint) -> Option<Rect> {
+    use crate::sequence::ConstraintAnchor;
+    let e = model.get(c.element)?;
+    let text = crate::sequence::constraint_text(e)?;
+    let size = crate::scene::FONT_SIZE;
+    let width = crate::metrics::java_width(&text, size, false).unwrap_or_else(|| {
+        crate::scene::TextMeasure::width(&crate::scene::ApproxMeasure, &text, size, false)
+    });
+    let anchor = match e.kind() {
+        ElementKind::DurationConstraint(_) => {
+            ConstraintAnchor::Duration { x: c.rect.center().x, middle: c.rect.center().y }
+        }
+        ElementKind::TimeConstraint(p) => {
+            let m = g.message_of(p.message)?;
+            let (tip, end) = time_tick(g, m);
+            ConstraintAnchor::Time {
+                end: umlcraft_model::Point::new(end, m.end()),
+                left: end < tip,
+            }
+        }
+        _ => return None,
+    };
+    Some(crate::sequence::constraint_label_box(anchor, width, c.label))
+}
+
+/// Moves the label of the duration or time constraint presentation `constraint` by `by` from
+/// where it is, and lets the diagram's frame hold it.
+pub fn move_constraint_label(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    constraint: Id,
+    by: umlcraft_model::Point,
+) -> Result<()> {
+    tx.update_presentation(diagram, constraint, |p| {
+        let was = p.style.name_offset.unwrap_or_default();
+        let to = umlcraft_model::Point::new(was.x + by.x, was.y + by.y);
+        p.style.name_offset = (to.x.abs() > 0.01 || to.y.abs() > 0.01).then_some(to);
+    })?;
+    tidy(tx, diagram)
 }
 
 /// The lifelines a combined fragment or interaction use covers, by its `covered` list.
@@ -1776,8 +1835,17 @@ fn fit_frame(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
         g.lanes.iter().map(|l| Rect::new(l.head.x, l.head.y, l.head.width, l.bottom() - l.head.y));
     let frames = g.frames.iter().map(|f| f.rect);
     let marks = g.marks.iter().map(|m| m.rect);
-    let Some(content) =
-        lanes.chain(frames).chain(marks).chain(g.notes.iter().copied()).reduce(|a, b| a.union(&b))
+    // Constraints with their labels, which a time constraint's carries beyond the lifelines.
+    let constraints = g.constraints.iter().flat_map(|c| {
+        let label = constraint_label(tx.model(), &g, c);
+        std::iter::once(c.rect).chain(label)
+    });
+    let Some(content) = lanes
+        .chain(frames)
+        .chain(marks)
+        .chain(constraints)
+        .chain(g.notes.iter().copied())
+        .reduce(|a, b| a.union(&b))
     else {
         return Ok(());
     };
@@ -2884,6 +2952,138 @@ mod tests {
         .unwrap();
         let view = doc.model().view(d).unwrap();
         assert!(view.get(duration).is_none() && view.get(time).is_none());
+    }
+
+    #[test]
+    fn state_invariants_wrap_and_grow_as_astah_draws_them() {
+        let (mut doc, d, _, b) = two_lifelines();
+        let (center, _) = lane_of(&doc, d, b);
+        let (invariant, node) = on_lifeline(&mut doc, d, false, Point::new(center, 200.0));
+        let rename = |doc: &mut Document, text: &str| {
+            crate::edit::apply(doc, "name", &ApproxMeasure, |tx| {
+                tx.rename(invariant, text.to_owned())
+            })
+            .unwrap();
+            let r = bounds_of(doc, d, node);
+            let scene = scene_of(doc, d);
+            let rows: Vec<(String, Rect)> = scene
+                .node(node)
+                .unwrap()
+                .rows
+                .iter()
+                .map(|row| (row.text.clone(), row.rect))
+                .collect();
+            (r, rows)
+        };
+        let texts = |rows: &[(String, Rect)]| -> Vec<String> {
+            rows.iter().map(|(t, _)| t.clone()).collect()
+        };
+        // Wider than the box: broken before the word that does not fit, left-aligned, the box
+        // 15.09 higher for each line beyond the first and 5 below the text.
+        let (r, rows) = rename(&mut doc, "Waiting for a reply from the server");
+        assert_eq!(texts(&rows), ["Waiting", "for a", "reply", "from the", "server"]);
+        assert!((r.height - (5.0 * 15.093_75 + 5.0)).abs() < 0.01, "{r:?}");
+        assert!(rows.iter().all(|(_, row)| (row.x - (r.x + 10.0)).abs() < 0.01));
+        assert!((rows[1].1.y - rows[0].1.y - super::INVARIANT_LINE).abs() < 0.01);
+        assert_eq!(r.width, super::INVARIANT_WIDTH, "the width stays");
+        // Drawn with Astah's corners, 10 wide and 20 high, and a border of 2.
+        let drawn = crate::draw::figure(scene_of(&doc, d).node(node).unwrap());
+        let crate::draw::Primitive::Polygon { points, .. } = &drawn[0] else {
+            panic!("no outline")
+        };
+        let at = |x: f32, y: f32| {
+            points.iter().any(|p| (p.x - x).abs() < 0.01 && (p.y - y).abs() < 0.01)
+        };
+        assert!(at(r.x + 10.0, r.y) && at(r.x, r.y + 20.0) && at(r.right(), r.bottom() - 20.0));
+        assert!(matches!(drawn[1], crate::draw::Primitive::Polyline { width: 2.0, .. }));
+        // The lifeline reaches below it, and tidying moves nothing.
+        assert!(lane_of(&doc, d, b).1 >= r.bottom() + 15.0);
+        let before = doc.model().clone();
+        doc.edit("tidy", |tx| super::tidy(tx, d)).unwrap();
+        assert_eq!(*doc.model(), before);
+        // A word wider than the box breaks between characters.
+        let (r, rows) = rename(&mut doc, "abcdefghijklmnopqrstuvwxyz0123");
+        assert_eq!(texts(&rows), ["abcdefgh", "ijklmnop", "qrstuvwx", "yz0123"]);
+        assert!((r.height - 65.375).abs() < 0.01, "{r:?}");
+        // Line breaks count, empty lines too; a text as narrow as the box keeps each line
+        // centered, as one line is.
+        let (r, rows) = rename(&mut doc, "a\n\nb");
+        assert_eq!(texts(&rows), ["a", "", "b"]);
+        assert!((r.height - 50.281_25).abs() < 0.01, "{r:?}");
+        let middle = |row: &Rect| row.center().x;
+        assert!((middle(&rows[0].1) - r.center().x).abs() < 0.01);
+        assert!((middle(&rows[2].1) - r.center().x).abs() < 0.01);
+        let (r, rows) = rename(&mut doc, "first\nsecond");
+        assert_eq!(texts(&rows), ["first", "second"]);
+        assert!((r.height - 35.1875).abs() < 0.01, "{r:?}");
+        assert!((rows[0].1.x - (r.x + 10.0)).abs() < 0.01);
+        // Shortened, it shrinks back to one line.
+        let (r, _) = rename(&mut doc, "x");
+        assert_eq!(r.height, super::INVARIANT_HEIGHT);
+    }
+
+    #[test]
+    fn constraint_labels_stand_beside_their_line_and_can_be_moved() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let first = draw(&mut doc, d, EdgeTool::AsyncMessage, a, b, 150.0);
+        let second = draw(&mut doc, d, EdgeTool::AsyncMessage, a, b, 250.0);
+        let (p1, p2) = (presentation_of(&doc, d, first), presentation_of(&doc, d, second));
+        let duration = doc.edit("duration", |tx| super::constrain(tx, d, p1, p2)).unwrap();
+        let time = doc.edit("time", |tx| super::constrain(tx, d, p2, p2)).unwrap();
+        let element =
+            |doc: &Document, p: Id| doc.model().view(d).unwrap().get(p).unwrap().element.unwrap();
+        let (de, te) = (element(&doc, duration), element(&doc, time));
+        let label = |doc: &Document, p: Id| scene_of(doc, d).node(p).unwrap().rows[0].rect;
+        let line_x = |doc: &Document| match scene_of(doc, d).node(duration).unwrap().figure {
+            Figure::Duration { x, .. } => x,
+            _ => panic!("no duration"),
+        };
+        // Astah's `{d}` (16.7 wide in Arial) is centered 9 right of the line, beside it.
+        use crate::sequence::{ConstraintAnchor, DURATION_GAP, constraint_label_box};
+        let anchor = ConstraintAnchor::Duration { x: 100.0, middle: 200.0 };
+        let short = constraint_label_box(anchor, 16.7, None);
+        assert!((short.center().x - 109.0).abs() < 0.01 && short.x > 100.0 + DURATION_GAP);
+        // A wider label does not cross the line: it starts right of it.
+        doc.edit("name", |tx| tx.rename(de, "0..2 seconds".to_owned())).unwrap();
+        let wide = label(&doc, duration);
+        let x = line_x(&doc);
+        assert!((wide.x - (x + DURATION_GAP)).abs() < 0.01, "{wide:?} {x}");
+        assert!((wide.center().y - 200.0).abs() < 1.0, "{wide:?}");
+        // Moved by hand, the label keeps its offset, which adds up over moves and follows the
+        // line when its messages move.
+        let by = |x, y| umlcraft_model::Point::new(x, y);
+        doc.edit("label", |tx| super::move_constraint_label(tx, d, duration, by(30.0, -20.0)))
+            .unwrap();
+        doc.edit("label", |tx| super::move_constraint_label(tx, d, duration, by(5.0, 5.0)))
+            .unwrap();
+        let style =
+            |doc: &Document, p: Id| doc.model().view(d).unwrap().get(p).unwrap().style.name_offset;
+        assert_eq!(style(&doc, duration), Some(by(35.0, -15.0)));
+        let moved = label(&doc, duration);
+        assert!((moved.x - wide.x - 35.0).abs() < 0.01 && (moved.y - wide.y + 15.0).abs() < 0.01);
+        doc.edit("move", |tx| super::move_item(tx, d, second, 350.0)).unwrap();
+        let along = label(&doc, duration);
+        assert!((along.center().y - moved.center().y - 50.0).abs() < 1.0, "{along:?}");
+        // Moved back, it is in its place again.
+        doc.edit("label", |tx| super::move_constraint_label(tx, d, duration, by(-35.0, 15.0)))
+            .unwrap();
+        assert_eq!(style(&doc, duration), None);
+        // The frame holds a time constraint's label beyond the last lifeline.
+        let long = "t..t+3 and a long while after";
+        crate::edit::apply(&mut doc, "name", &ApproxMeasure, |tx| tx.rename(te, long.to_owned()))
+            .unwrap();
+        let text = label(&doc, time);
+        let frame =
+            scene_of(&doc, d).nodes.iter().find(|n| n.element == Some(d)).map(|n| n.rect).unwrap();
+        // (The tidy measures by Java's widths, the app as it draws, close to them.)
+        let java = crate::metrics::java_width(&format!("{{{long}}}"), 12.0, false).unwrap();
+        assert!(frame.right() >= text.x + java + 10.0, "{frame:?} {text:?}");
+        let before = doc.model().clone();
+        doc.edit("tidy", |tx| super::tidy(tx, d)).unwrap();
+        assert_eq!(*doc.model(), before);
+        // Its label moves too.
+        doc.edit("label", |tx| super::move_constraint_label(tx, d, time, by(0.0, 30.0))).unwrap();
+        assert!((label(&doc, time).y - text.y - 30.0).abs() < 0.01);
     }
 
     #[test]

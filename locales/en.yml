@@ -397,6 +397,9 @@ prop:
   ordering: Ordering
   upper_bound: Upper bound
   stream: Stream
+  object_effect: Effect
+  object_control: Control (control tokens)
+  object_exception: Exception
   calls: Calls
   submachine: State machine
   return_type: Return type
@@ -547,6 +550,7 @@ export_dropped:
   fontSize: Font sizes of single elements
   containment: Containment lines of nested classes
   guardPosition: Guards moved above their operand
+  constraintPosition: Places of constraint labels on lines (Astah takes one offset for all constraints of an association)
   instanceNameVisibility: Hidden names of instances
   instanceTypeVisibility: Hidden classifiers of instances
 settings:

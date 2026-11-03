@@ -13,9 +13,9 @@ use umlcraft_model::{
     Visibility,
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
-use umlcraft_notation::scene::{self, Preview};
+use umlcraft_notation::scene::{self, Preview, TextMeasure};
 use umlcraft_notation::{
-    autoroute, composite, edit, layout, member, sequence_edit, state_edit, svg,
+    activity, autoroute, composite, edit, layout, member, sequence_edit, state_edit, svg,
 };
 
 use crate::base64;
@@ -145,6 +145,42 @@ pub fn list() -> Vec<Value> {
         tool
     };
     let kinds: Vec<&str> = DIAGRAM_KINDS.iter().map(|(key, _)| *key).collect();
+    // The settings of activity nodes, which both `create_element` and `update_element` take.
+    let activity_node = json!({
+        "object_type": text("Object nodes, pins, activity parameters: the type of the \
+                             objects, a class name (\"\" for none)."),
+        "in_state": text("Object nodes, pins, activity parameters: the state of the \
+                          objects, without brackets."),
+        "ordering": { "type": "string", "enum": ["", "unordered", "ordered", "LIFO", "FIFO"],
+                      "description": "Object nodes, pins, activity parameters: the \
+                                      order objects leave in, \"\" for none." },
+        "upper_bound": text("Object nodes, pins, activity parameters: how many objects \
+                             they hold at most, e.g. `3` or `*` (\"\" for none)."),
+        "stream": { "type": "boolean",
+                    "description": "Object nodes, pins, activity parameters: objects \
+                                    stream while the action runs." },
+        "control": { "type": "boolean",
+                     "description": "Object nodes, pins, activity parameters: the \
+                                     objects are control tokens (`{control}`; a \
+                                     control pin)." },
+        "exception": { "type": "boolean",
+                       "description": "Object nodes, pins, activity parameters: the \
+                                       objects are exceptions (an exception pin, \
+                                       marked by a small triangle)." },
+        "object_effect": { "type": "string",
+                           "enum": ["", "create", "read", "update", "delete"],
+                           "description": "Object nodes, pins, activity parameters: \
+                                           what the action does to the objects \
+                                           (`{create}`), \"\" for nothing said." },
+        "calls": text("Call behavior actions: the id of the activity called or of its \
+                       diagram, or \"\" for none."),
+    });
+    let with = |mut properties: Value, more: &Value| {
+        if let (Some(p), Some(m)) = (properties.as_object_mut(), more.as_object()) {
+            p.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        properties
+    };
     let structogram_schema = json!({
         "type": "object",
         "description": format!(
@@ -281,7 +317,10 @@ pub fn list() -> Vec<Value> {
              A port on a part belongs to the class that is the part's type, so type the part \
              first (`update_element` with the member `text`, e.g. `engine : Engine`). On \
              activity diagrams an `inputPin` or `outputPin` belongs to the action at or near \
-             `x`, `y` (or `on`) and sits just outside its border; an `activityParameter` sits \
+             `x`, `y` (or `on`) and sits just outside its border; with `on` it goes where its \
+             name and properties stay clear of the other pins' texts (the left side for input \
+             pins, the right for output pins), the action growing if needed; an \
+             `activityParameter` sits \
              on the diagram's frame, which is added when missing. A `callBehavior` action calls \
              the activity `update_element` gives it as `calls`; `activityConnector`s of the \
              same name continue a flow. On state machine diagrams a `submachineState` stands \
@@ -293,19 +332,22 @@ pub fn list() -> Vec<Value> {
              (the × that ends a lifeline) goes on the lifeline `on`, with its top at `y` or \
              below everything; a termination stays below what happens on its lifeline. \
              Duration and time constraints are drawn with `connect`.",
-            json!({
-                "diagram": id("The diagram."),
-                "tool": text("The diagram tool."),
-                "name": text("Its name; a free default name if omitted."),
-                "x": number("Left edge."),
-                "y": number("Top edge."),
-                "on": id("Composite structure diagrams: the class (or part) a part goes into or \
-                          a port goes on; activity diagrams: the action a pin goes on; state \
-                          machine diagrams: the state an entry or exit point goes on, the \
-                          submachine state a stub state goes into; when `x` and `y` are not \
-                          given. Sequence diagrams: the lifeline a state invariant or \
-                          termination goes on, with or without `y`."),
-            }),
+            with(
+                json!({
+                    "diagram": id("The diagram."),
+                    "tool": text("The diagram tool."),
+                    "name": text("Its name; a free default name if omitted."),
+                    "x": number("Left edge."),
+                    "y": number("Top edge."),
+                    "on": id("Composite structure diagrams: the class (or part) a part goes into or \
+                              a port goes on; activity diagrams: the action a pin goes on; state \
+                              machine diagrams: the state an entry or exit point goes on, the \
+                              submachine state a stub state goes into; when `x` and `y` are not \
+                              given. Sequence diagrams: the lifeline a state invariant or \
+                              termination goes on, with or without `y`."),
+                }),
+                &activity_node,
+            ),
             &["diagram", "tool"],
         ),
         tool(
@@ -441,59 +483,49 @@ pub fn list() -> Vec<Value> {
              value and operation; a combined fragment's operator (an `alt` gets an `else` \
              operand) and the lifelines a fragment or interaction use covers (its frame then \
              spans them); the guard of an operand, flow or transition; the type, state, \
-             ordering, upper bound and stream of an object node, pin or activity parameter; \
+             ordering, upper bound, stream, control, effect and exception of an object node, \
+             pin or activity parameter (a control pin, an exception pin); \
              the activity a call behavior action calls; the state machine a submachine state \
              stands for; the constraints of an element (members show them after their text, \
              lines below their name); on every diagram showing it, the shared style of a \
              generalization (one triangle for all generalizations to its general element) \
              and whether a class «boundary», «control» or «entity» is drawn as its icon.",
-            json!({
-                "id": id("The element."),
-                "name": text("New name."),
-                "text": text("Attributes and operations: the whole member as text."),
-                "documentation": text("New documentation."),
-                "stereotypes": { "type": "array", "items": { "type": "string" } },
-                "guard": text("Messages, operands, flows, transitions: the guard, without brackets."),
-                "sort": { "type": "string",
-                          "enum": ["synchronous", "asynchronous", "reply", "create", "destroy"] },
-                "arguments": text("Messages: the arguments, written between the parentheses."),
-                "return_value": text("Replies: the value they return."),
-                "operation": text("Messages: the id of the operation it calls, or \"\" for none."),
-                "operator": { "type": "string",
-                              "enum": ["alt", "opt", "loop", "par", "break", "critical", "neg",
-                                       "assert", "strict", "seq", "ignore", "consider"] },
-                "covered": { "type": "array", "items": { "type": "string" },
-                             "description": "Fragments and interaction uses: the lifelines \
-                                             covered; all if empty." },
-                "object_type": text("Object nodes, pins, activity parameters: the type of the \
-                                     objects, a class name (\"\" for none)."),
-                "in_state": text("Object nodes, pins, activity parameters: the state of the \
-                                  objects, without brackets."),
-                "ordering": { "type": "string", "enum": ["", "unordered", "ordered", "LIFO", "FIFO"],
-                              "description": "Object nodes, pins, activity parameters: the \
-                                              order objects leave in, \"\" for none." },
-                "upper_bound": text("Object nodes, pins, activity parameters: how many objects \
-                                     they hold at most, e.g. `3` or `*` (\"\" for none)."),
-                "stream": { "type": "boolean",
-                            "description": "Object nodes, pins, activity parameters: objects \
-                                            stream while the action runs." },
-                "calls": text("Call behavior actions: the id of the activity called or of its \
-                               diagram, or \"\" for none."),
-                "submachine": text("Submachine states: the id of the state machine they stand \
-                                    for, or of its diagram."),
-                "constraints": { "type": "array", "items": { "type": "string" },
-                                 "description": "The element's constraints without braces, \
-                                                 e.g. [\"age >= 18\"]; [] for none." },
-                "shared_style": { "type": "string",
-                                  "enum": ["separate", "vertical", "horizontal"],
-                                  "description": "Generalizations: share one triangle with \
-                                                  the other generalizations to the same \
-                                                  general element, joining on a horizontal \
-                                                  (vertical style) or vertical line." },
-                "icon": { "type": "boolean",
-                          "description": "Classes whose first stereotype is boundary, control \
-                                          or entity: drawn as the robustness icon." },
-            }),
+            with(
+                json!({
+                    "id": id("The element."),
+                    "name": text("New name."),
+                    "text": text("Attributes and operations: the whole member as text."),
+                    "documentation": text("New documentation."),
+                    "stereotypes": { "type": "array", "items": { "type": "string" } },
+                    "guard": text("Messages, operands, flows, transitions: the guard, without brackets."),
+                    "sort": { "type": "string",
+                              "enum": ["synchronous", "asynchronous", "reply", "create", "destroy"] },
+                    "arguments": text("Messages: the arguments, written between the parentheses."),
+                    "return_value": text("Replies: the value they return."),
+                    "operation": text("Messages: the id of the operation it calls, or \"\" for none."),
+                    "operator": { "type": "string",
+                                  "enum": ["alt", "opt", "loop", "par", "break", "critical", "neg",
+                                           "assert", "strict", "seq", "ignore", "consider"] },
+                    "covered": { "type": "array", "items": { "type": "string" },
+                                 "description": "Fragments and interaction uses: the lifelines \
+                                                 covered; all if empty." },
+                    "submachine": text("Submachine states: the id of the state machine they stand \
+                                        for, or of its diagram."),
+                    "constraints": { "type": "array", "items": { "type": "string" },
+                                     "description": "The element's constraints without braces, \
+                                                     e.g. [\"age >= 18\"]; [] for none." },
+                    "shared_style": { "type": "string",
+                                      "enum": ["separate", "vertical", "horizontal"],
+                                      "description": "Generalizations: share one triangle with \
+                                                      the other generalizations to the same \
+                                                      general element, joining on a horizontal \
+                                                      (vertical style) or vertical line." },
+                    "icon": { "type": "boolean",
+                              "description": "Classes whose first stereotype is boundary, control \
+                                              or entity: drawn as the robustness icon." },
+                }),
+                &activity_node,
+            ),
             &["id"],
         ),
         tool(
@@ -822,6 +854,17 @@ fn change<R>(
     edit::apply(doc, label, measure, f).map_err(model_error)
 }
 
+/// [`change`] for a change that measures text.
+fn change_measured<R>(
+    host: &mut dyn Host,
+    tool: &str,
+    f: impl FnOnce(&mut Tx<'_>, &dyn TextMeasure) -> umlcraft_model::Result<R>,
+) -> Result<R, String> {
+    let label = host.label(tool);
+    let (doc, measure) = host.parts();
+    edit::apply(doc, label, measure, |tx| f(tx, measure)).map_err(model_error)
+}
+
 // ----- Reading -------------------------------------------------------------------------------
 
 fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
@@ -1115,12 +1158,31 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     };
     let name = opt_str(args, "name").map(str::to_owned);
     let base = name.clone().unwrap_or_else(|| default_base(tool));
-    let (element, node) = change(host, "create_element", |tx| {
+    // Object node settings (`control`, `exception`, …) apply to the new node; wrong ones are
+    // refused before anything is drawn.
+    let settings = ACTIVITY_NODE_KEYS.iter().any(|k| args.get(k).is_some());
+    if settings {
+        set_activity_node(model, diagram, &mut tool.element_kind(), args)?;
+    }
+    // A pin put on an action looks for room once its texts are known.
+    let place_pin = matches!(tool, NodeTool::InputPin | NodeTool::OutputPin)
+        && opt_id(args, "on")?.is_some()
+        && (opt_num(args, "x").is_none() || opt_num(args, "y").is_none());
+    let (element, node) = change_measured(host, "create_element", |tx, measure| {
         let (element, node) = palette::create_node(tx, diagram, tool, origin, &base)?;
         if let Some(name) = &name
             && tool.is_named()
         {
             tx.rename(element, name.clone())?;
+        }
+        if settings {
+            let mut kind = tx.model().element(element)?.kind().clone();
+            set_activity_node(tx.model(), element, &mut kind, args)
+                .map_err(umlcraft_model::ModelError::Invalid)?;
+            tx.update(element, |data| data.kind = kind)?;
+        }
+        if place_pin {
+            activity::place_pin(tx, diagram, node, measure)?;
         }
         if is_sequence(tx.model(), diagram) {
             sequence_edit::tidy(tx, diagram)?;
@@ -1410,6 +1472,19 @@ fn pick<T: Copy>(args: &Value, key: &str, names: &[(&str, T)]) -> Result<Option<
     }
 }
 
+/// The settings of activity nodes `update_element` and `create_element` take.
+const ACTIVITY_NODE_KEYS: [&str; 9] = [
+    "object_type",
+    "in_state",
+    "ordering",
+    "upper_bound",
+    "stream",
+    "control",
+    "exception",
+    "object_effect",
+    "calls",
+];
+
 /// Writes the object node settings and the activity called of `args` into the activity node
 /// `kind`.
 fn set_activity_node(
@@ -1418,8 +1493,9 @@ fn set_activity_node(
     kind: &mut ElementKind,
     args: &Value,
 ) -> Result<(), String> {
-    let keys = ["object_type", "in_state", "ordering", "upper_bound", "stream", "calls"];
-    let Some(key) = keys.into_iter().find(|k| args.get(k).is_some()) else { return Ok(()) };
+    let Some(key) = ACTIVITY_NODE_KEYS.into_iter().find(|k| args.get(k).is_some()) else {
+        return Ok(());
+    };
     let type_name = kind.type_name();
     let ElementKind::ActivityNode(p) = kind else {
         return Err(format!("a {type_name} has no `{key}`"));
@@ -1465,6 +1541,29 @@ fn set_activity_node(
             return Err(only_objects("stream"));
         }
         p.is_stream = stream.as_bool().ok_or("`stream` is true or false")?;
+    }
+    if let Some(control) = args.get("control") {
+        if !object {
+            return Err(only_objects("control"));
+        }
+        p.is_control = control.as_bool().ok_or("`control` is true or false")?;
+    }
+    if let Some(exception) = args.get("exception") {
+        if !object {
+            return Err(only_objects("exception"));
+        }
+        p.is_exception = exception.as_bool().ok_or("`exception` is true or false")?;
+    }
+    if let Some(effect) = opt_str(args, "object_effect") {
+        if !object {
+            return Err(only_objects("object_effect"));
+        }
+        p.effect = match effect.trim() {
+            "" => None,
+            e => Some(umlcraft_model::ObjectEffect::parse(e).ok_or_else(|| {
+                format!("`object_effect` is one of create, read, update, delete, not `{e}`")
+            })?),
+        };
     }
     if args.get("calls").is_some() {
         if p.node != ActivityNodeKind::CallBehavior {
@@ -2673,6 +2772,149 @@ mod tests {
         assert!(bounds(&pin_in).center().x < bounds(&pack).center().x);
     }
 
+    /// Pins put `on` an action find room where their texts stay clear of the other pins'
+    /// texts, the action growing to hold them, and keep it when the diagram is arranged.
+    #[test]
+    fn pins_on_an_action_keep_their_texts_apart() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "activity", "name": "Order" }));
+        let d = id(&d["diagram"]);
+        let action = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "action", "name": "Ship", "x": 200, "y": 100 }),
+        );
+        let pins = [
+            json!({ "tool": "inputPin", "name": "order", "object_type": "Order",
+                    "in_state": "paid", "ordering": "FIFO", "upper_bound": "2" }),
+            json!({ "tool": "inputPin", "name": "address", "control": true }),
+            json!({ "tool": "inputPin", "name": "voucher", "exception": true,
+                    "object_effect": "read" }),
+            json!({ "tool": "outputPin", "name": "parcel", "stream": true }),
+            json!({ "tool": "outputPin", "name": "receipt", "in_state": "printed" }),
+        ];
+        let action_node = parse_id(&id(&action["presentation"])).unwrap();
+        let diagram = parse_id(&d).unwrap();
+        // Every text of a pin of the action, and its square, by pin.
+        let shapes = |host: &mut Headless| -> Vec<(Rect, Vec<Rect>)> {
+            let (doc, measure) = host.parts();
+            let model = doc.model();
+            let scene = scene::build(model, diagram, &Preview::default(), measure);
+            let borne = composite::borne_nodes(model, diagram);
+            scene
+                .nodes
+                .iter()
+                .filter(|n| borne.get(&n.id).copied().flatten() == Some(action_node))
+                .map(|n| (n.rect, n.outside()))
+                .collect()
+        };
+        let clear = |shapes: &[(Rect, Vec<Rect>)]| {
+            let overlap = |a: &Rect, b: &Rect| {
+                a.x < b.right() - 0.01
+                    && b.x < a.right() - 0.01
+                    && a.y < b.bottom() - 0.01
+                    && b.y < a.bottom() - 0.01
+            };
+            for (i, (_, texts)) in shapes.iter().enumerate() {
+                for (j, (square, others)) in shapes.iter().enumerate().filter(|(j, _)| *j != i) {
+                    for t in texts {
+                        assert!(!overlap(t, square), "pin {i}: {t:?} on pin {j} {square:?}");
+                        for o in others {
+                            assert!(!overlap(t, o), "pin {i}: {t:?} on {o:?} of pin {j}");
+                        }
+                    }
+                }
+            }
+        };
+        let size = |host: &Headless| {
+            let view = host.document().model().view(diagram).unwrap();
+            view.get(action_node).unwrap().bounds().unwrap()
+        };
+        let before = size(&host);
+        for pin in &pins {
+            let mut args = json!({ "diagram": d, "on": action["presentation"] });
+            args.as_object_mut().unwrap().extend(pin.as_object().unwrap().clone());
+            run(&mut host, "create_element", args);
+            clear(&shapes(&mut host));
+        }
+        assert_eq!(shapes(&mut host).len(), pins.len());
+        let grown = size(&host);
+        assert!(grown.height > before.height, "{grown:?}");
+        // Input pins on the left, output pins on the right.
+        let squares: Vec<Rect> = shapes(&mut host).into_iter().map(|(r, _)| r).collect();
+        assert_eq!(squares.iter().filter(|r| r.right() <= grown.x + 0.01).count(), 3);
+        assert_eq!(squares.iter().filter(|r| r.x >= grown.right() - 0.01).count(), 2);
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        clear(&shapes(&mut host));
+        host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn control_exception_and_effect_of_object_nodes() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "activity", "name": "Order" }));
+        let d = id(&d["diagram"]);
+        let action = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "action", "name": "Ship", "x": 200, "y": 100 }),
+        );
+        // `create_element` takes the settings along: a control pin, an exception pin.
+        let control = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "inputPin", "on": action["presentation"],
+                    "control": true, "object_effect": "read" }),
+        );
+        let exception = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "outputPin", "on": action["presentation"],
+                    "exception": true }),
+        );
+        let object = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "objectNode", "name": "Box", "x": 200, "y": 300 }),
+        );
+        run(
+            &mut host,
+            "update_element",
+            json!({ "id": object["element"], "control": true, "exception": true,
+                    "object_effect": "delete" }),
+        );
+        run(&mut host, "update_element", json!({ "id": control["element"], "object_effect": "" }));
+        for (tool, wrong) in [
+            ("update_element", json!({ "id": action["element"], "exception": true })),
+            ("update_element", json!({ "id": object["element"], "object_effect": "eat" })),
+            ("update_element", json!({ "id": object["element"], "control": "yes" })),
+            (
+                "create_element",
+                json!({ "diagram": d, "tool": "action", "name": "X", "control": true }),
+            ),
+        ] {
+            assert!(call(&mut host, &Access::default(), tool, &wrong).is_error, "{wrong}");
+        }
+        let model = host.document().model();
+        model.check().unwrap();
+        // The refused action was not created.
+        assert!(model.elements().all(|e| e.name() != "X"));
+        let node = |value: &Value| match model.element(parse_id(&id(&value["element"])).unwrap()) {
+            Ok(e) => match e.kind() {
+                ElementKind::ActivityNode(p) => p.clone(),
+                other => panic!("{other:?}"),
+            },
+            Err(e) => panic!("{e}"),
+        };
+        let pin = node(&control);
+        assert!(pin.is_control && !pin.is_exception && pin.effect.is_none());
+        assert!(node(&exception).is_exception);
+        let o = node(&object);
+        assert!(o.is_control && o.is_exception);
+        assert_eq!(o.effect, Some(umlcraft_model::ObjectEffect::Delete));
+        assert_eq!(o.property_lines(), ["{delete}", "{control}"]);
+    }
+
     #[test]
     fn submachine_states_points_and_stubs() {
         let mut host = Headless::new();
@@ -2786,6 +3028,13 @@ mod tests {
         );
         assert_eq!(invariant["kind"], "stateInvariant");
         assert_eq!(invariant["name"], "x > 0");
+        // A longer condition wraps, and its box grows to hold it.
+        let waiting = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "stateInvariant", "name": "waiting for the store",
+                    "on": shop["element"], "y": 200 }),
+        );
         run(
             &mut host,
             "create_element",
@@ -2831,6 +3080,22 @@ mod tests {
         );
         assert_eq!(node("timeConstraint")["messages"], json!([save["element"]]));
         assert_eq!(node("timeConstraint")["name"], "t..t+3");
+        let of = |element: &Value| -> Value {
+            let nodes = shown["nodes"].as_array().unwrap();
+            nodes.iter().find(|n| n["element"] == *element).cloned().unwrap()
+        };
+        let num = |v: &Value, key: &str| v["bounds"][key].as_f64().unwrap();
+        let tall = of(&waiting["element"]);
+        assert!(num(&tall, "height") >= 21.0 + 15.0, "{tall}");
+        // Three lines (by the estimated widths): 15.09 each and 5.
+        assert_eq!(num(&tall, "height"), 3.0 * 15.093_75 + 5.0);
+        assert_eq!(num(&node("stateInvariant"), "height"), 21.0);
+        // The frame holds the time constraint's label: it starts where the line ends, 30 on
+        // from the arrowhead (the node's left is 5 before it).
+        let frame = of(&d);
+        let text = umlcraft_notation::metrics::java_width("{t..t+3}", 12.0, false).unwrap();
+        let label_end = num(&node("timeConstraint"), "x") + 5.0 + 30.0 + f64::from(text);
+        assert!(num(&frame, "x") + num(&frame, "width") >= label_end + 10.0, "{frame}");
         // The cross ends the lifeline below everything on it, the invariant included; the
         // duration's line reaches from one message to the other.
         let bottom = |v: &Value| {

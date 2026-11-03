@@ -35,6 +35,11 @@ const HUG: f32 = 0.05;
 const PORT_INSET: f32 = 4.0;
 /// Coordinates closer than this are the same grid line.
 const SAME: f32 = 0.5;
+/// Distance a route keeps from texts drawn outside nodes, such as a pin's name, where it can.
+const TEXT_MARGIN: f32 = 4.0;
+/// Extra cost per unit of length of a stretch through such a text: routes may cross texts,
+/// but go around them where that is not much longer.
+const THROUGH_TEXT: f32 = 6.0;
 
 /// A line to route from box `source` to box `target` (indices into the boxes). With `facing`,
 /// boxes clear of each other above and below (or side by side) are joined through the sides
@@ -173,10 +178,16 @@ struct Grid {
     east: Vec<Vec<u32>>,
     /// The boxes each stretch from vertex `(i, j)` to `(i, j + 1)` runs through.
     south: Vec<Vec<u32>>,
+    /// Whether the stretch from vertex `(i, j)` to `(i + 1, j)` runs through a text.
+    text_east: Vec<bool>,
+    /// Whether the stretch from vertex `(i, j)` to `(i, j + 1)` runs through a text.
+    text_south: Vec<bool>,
+    /// Whether a vertex lies in a text (with its margin).
+    text_cells: Vec<bool>,
 }
 
 impl Grid {
-    fn new(boxes: &[Rect]) -> Grid {
+    fn new(boxes: &[Rect], texts: &[Rect]) -> Grid {
         let mut xs = Vec::new();
         let mut ys = Vec::new();
         for r in boxes {
@@ -185,6 +196,11 @@ impl Grid {
             xs.extend([(p.x, true), (p.right(), true), (c.x, false)]);
             ys.extend([(p.y, true), (p.bottom(), true), (c.y, false)]);
         }
+        for r in texts {
+            let p = r.inflate(TEXT_MARGIN);
+            xs.extend([(p.x, false), (p.right(), false)]);
+            ys.extend([(p.y, false), (p.bottom(), false)]);
+        }
         let (xs, hug_x) = grid_lines(xs);
         let (ys, hug_y) = grid_lines(ys);
         let (nx, ny) = (xs.len(), ys.len());
@@ -192,6 +208,9 @@ impl Grid {
             cells: vec![Vec::new(); nx * ny],
             east: vec![Vec::new(); nx * ny],
             south: vec![Vec::new(); nx * ny],
+            text_east: vec![false; nx * ny],
+            text_south: vec![false; nx * ny],
+            text_cells: vec![false; nx * ny],
             xs,
             ys,
             hug_x,
@@ -219,6 +238,25 @@ impl Grid {
                 }
             }
         }
+        for r in texts {
+            let p = r.inflate(TEXT_MARGIN);
+            let (x0, x1) = (line_index(&grid.xs, p.x), line_index(&grid.xs, p.right()));
+            let (y0, y1) = (line_index(&grid.ys, p.y), line_index(&grid.ys, p.bottom()));
+            for j in y0..=y1 {
+                for i in x0..=x1 {
+                    let k = j * nx + i;
+                    if i < x1 && y0 < j && j < y1 {
+                        grid.text_east[k] = true;
+                    }
+                    if j < y1 && x0 < i && i < x1 {
+                        grid.text_south[k] = true;
+                    }
+                    if x0 < i && i < x1 && y0 < j && j < y1 {
+                        grid.text_cells[k] = true;
+                    }
+                }
+            }
+        }
         grid
     }
 
@@ -234,15 +272,16 @@ impl Grid {
         Point::new(self.xs[v % self.nx()], self.ys[v / self.nx()])
     }
 
-    /// The vertex one step from `v` in direction `d`, and the boxes that step runs through.
-    fn step(&self, v: usize, d: Dir) -> Option<(usize, &[u32])> {
+    /// The vertex one step from `v` in direction `d`, the boxes that step runs through and
+    /// whether it runs through a text.
+    fn step(&self, v: usize, d: Dir) -> Option<(usize, &[u32], bool)> {
         let (nx, ny) = (self.nx(), self.ys.len());
         let (i, j) = (v % nx, v / nx);
         match d {
-            Dir::East if i + 1 < nx => Some((v + 1, &self.east[v])),
-            Dir::West if i > 0 => Some((v - 1, &self.east[v - 1])),
-            Dir::South if j + 1 < ny => Some((v + nx, &self.south[v])),
-            Dir::North if j > 0 => Some((v - nx, &self.south[v - nx])),
+            Dir::East if i + 1 < nx => Some((v + 1, &self.east[v], self.text_east[v])),
+            Dir::West if i > 0 => Some((v - 1, &self.east[v - 1], self.text_east[v - 1])),
+            Dir::South if j + 1 < ny => Some((v + nx, &self.south[v], self.text_south[v])),
+            Dir::North if j > 0 => Some((v - nx, &self.south[v - nx], self.text_south[v - nx])),
             _ => None,
         }
     }
@@ -275,7 +314,17 @@ impl PartialOrd for Entry {
 /// corners to the border of its target; consecutive points differ in x or in y only. `None`
 /// where there is no route: a box contains the other end, or the ends are shut in.
 pub fn route(boxes: &[Rect], requests: &[Request]) -> Vec<Option<Vec<Point>>> {
-    let grid = Grid::new(boxes);
+    route_around(boxes, &[], requests)
+}
+
+/// Routes `requests` around `boxes` as [`route`] does, keeping off `texts` (drawn outside
+/// nodes) where a way around them is not much longer.
+pub fn route_around(
+    boxes: &[Rect],
+    texts: &[Rect],
+    requests: &[Request],
+) -> Vec<Option<Vec<Point>>> {
+    let grid = Grid::new(boxes, texts);
     let mut used: HashMap<(usize, usize), u32> = HashMap::new();
     let mut order: Vec<usize> = (0..requests.len()).collect();
     let span = |r: &Request| {
@@ -340,6 +389,8 @@ fn shortest(
         })
         .filter(|&(v, _, _)| !blocked(&grid.cells[v]))
         .collect();
+    // Leaving or entering a node through a text costs as running through it.
+    let stub = |v: usize| MARGIN * if grid.text_cells[v] { 1.0 + THROUGH_TEXT } else { 1.0 };
     if exits.is_empty() {
         return if request.facing { anywhere() } else { None };
     }
@@ -365,9 +416,9 @@ fn shortest(
             continue;
         }
         let state = v * 4 + side.outward().index();
-        best.insert(state, MARGIN);
+        best.insert(state, stub(v));
         starts.insert(state, (side, port));
-        queue.push(Entry { estimate: MARGIN + heuristic(v), cost: MARGIN, state });
+        queue.push(Entry { estimate: stub(v) + heuristic(v), cost: stub(v), state });
     }
     let mut finish = None;
     while let Some(Entry { cost, state, .. }) = queue.pop() {
@@ -382,7 +433,7 @@ fn shortest(
         for &(e, side, _) in &exits {
             if e == v {
                 let inward = side.outward().opposite();
-                let total = cost + MARGIN + if arrived == inward { 0.0 } else { BEND };
+                let total = cost + stub(e) + if arrived == inward { 0.0 } else { BEND };
                 let done = goal + exits.iter().position(|x| x.0 == e && x.1 == side).unwrap_or(0);
                 if best.get(&done).is_none_or(|&b| total < b) {
                     best.insert(done, total);
@@ -395,7 +446,7 @@ fn shortest(
             if d == arrived.opposite() {
                 continue;
             }
-            let Some((w, through)) = grid.step(v, d) else { continue };
+            let Some((w, through, text)) = grid.step(v, d) else { continue };
             if blocked(through) || blocked(&grid.cells[w]) {
                 continue;
             }
@@ -404,7 +455,11 @@ fn shortest(
             let hugs =
                 if d.horizontal() { grid.hug_y[v / grid.nx()] } else { grid.hug_x[v % grid.nx()] };
             let shared = used.get(&(v.min(w), v.max(w))).copied().unwrap_or(0) as f32;
-            let step = length * (1.0 + if hugs { HUG } else { 0.0 } + SHARED * shared)
+            let step = length
+                * (1.0
+                    + if hugs { HUG } else { 0.0 }
+                    + SHARED * shared
+                    + if text { THROUGH_TEXT } else { 0.0 })
                 + if d == arrived { 0.0 } else { BEND };
             let next = w * 4 + d.index();
             let total = cost + step;
@@ -670,7 +725,21 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
             routed.push(edge);
         }
     }
-    let routes = route(&boxes, &requests);
+    // On activity diagrams lines keep off the texts outside nodes (pin names, object node
+    // properties); widths as estimated, which is close enough to steer around them.
+    let texts: Vec<Rect> =
+        if model.element(diagram)?.kind().as_diagram() == Some(DiagramKind::Activity) {
+            let scene = crate::scene::build(
+                model,
+                diagram,
+                &crate::scene::Preview::default(),
+                &crate::scene::ApproxMeasure,
+            );
+            scene.nodes.iter().flat_map(|n| n.outside()).collect()
+        } else {
+            Vec::new()
+        };
+    let routes = route_around(&boxes, &texts, &requests);
     let relative = |r: Rect, p: Point| {
         let fraction = |v: f32, start: f32, size: f32| {
             if size > 0.0 { ((v - start) / size).clamp(0.0, 1.0) } else { 0.5 }

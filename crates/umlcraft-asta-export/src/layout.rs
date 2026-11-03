@@ -26,6 +26,9 @@ struct DiagramLayout {
     /// the diagram.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     labels: BTreeMap<Id, EdgeLabels>,
+    /// Lines whose constraint labels are not all where Astah puts them.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    constraints: BTreeMap<Id, ConstraintPlaces>,
     /// Sequence messages whose label is placed by hand: where Astah puts the label by itself
     /// (its left edge), which its `name.point` is relative to. Astah centers it on the last
     /// segment by Java's whole-pixel width of the text, at most 200.
@@ -37,11 +40,22 @@ struct DiagramLayout {
     corners: BTreeMap<Id, Vec<Point>>,
 }
 
+/// Where a line's constraint labels are drawn, as far as Astah can take it.
+#[derive(Serialize)]
+struct ConstraintPlaces {
+    /// All labels moved by the same offset from where Astah puts them (by hand, or out of the
+    /// way along with the name): that offset, as Astah's `localMovement`. Unset where they
+    /// moved apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    together: Option<Point>,
+}
+
 pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
     let mut diagrams = BTreeMap::new();
     for (diagram, view) in model.views() {
         let scene = scene::build(model, diagram, &Preview::default(), measure);
         let mut labels = BTreeMap::new();
+        let mut constraints = BTreeMap::new();
         let mut label_defaults = BTreeMap::new();
         let mut corners = BTreeMap::new();
         for p in view.presentations() {
@@ -51,6 +65,9 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
                     let at = absolute(placed, edge);
                     if !at.is_empty() {
                         labels.insert(p.id, at);
+                    }
+                    if let Some(places) = constraint_places(edge) {
+                        constraints.insert(p.id, places);
                     }
                     if edge.shape.is_right_angle() {
                         corners.insert(p.id, edge.waypoints().to_vec());
@@ -80,12 +97,29 @@ pub(crate) fn layout(model: &Model, measure: &dyn TextMeasure) -> Layout {
                 nodes: scene.nodes.iter().map(|n| (n.id, n.rect)).collect(),
                 edges: scene.edges.iter().map(|e| (e.id, e.points.clone())).collect(),
                 labels,
+                constraints,
                 label_defaults,
                 corners,
             },
         );
     }
     Layout { diagrams }
+}
+
+/// Where the constraint labels of `edge` are drawn, unless all are where Astah puts them.
+fn constraint_places(edge: &EdgeShape) -> Option<ConstraintPlaces> {
+    let offset = |c: &scene::ConstraintLabel| {
+        let at = edge.labels[c.index].anchor;
+        Point::new(at.x - c.default.x, at.y - c.default.y)
+    };
+    let offsets: Vec<Point> = edge.constraint_labels.iter().map(offset).collect();
+    let near = |a: Point, b: Point| (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01;
+    let first = *offsets.first()?;
+    if offsets.iter().all(|&o| near(o, Point::default())) {
+        return None;
+    }
+    let together = offsets.iter().all(|&o| near(o, first)).then_some(first);
+    Some(ConstraintPlaces { together })
 }
 
 /// Label offsets turned into positions: roles and multiplicities are relative to where the line

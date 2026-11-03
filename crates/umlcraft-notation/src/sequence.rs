@@ -458,8 +458,8 @@ pub(crate) fn arrange(
                         };
                         let x = r.center().x;
                         node.figure = Figure::Duration { x, top, bottom };
-                        let at = Point::new(x + DURATION_LABEL, (top + bottom) / 2.0);
-                        node.rows = constraint_row(e, at, LabelAlign::Center, measure);
+                        let anchor = ConstraintAnchor::Duration { x, middle: (top + bottom) / 2.0 };
+                        node.rows = constraint_row(e, anchor, p.style.name_offset, measure);
                         let line = Rect::new(x - BAR, top, 2.0 * BAR, bottom - top);
                         node.rect = node.rows.iter().fold(line, |a, row| a.union(&row.rect));
                     }
@@ -592,39 +592,85 @@ pub(crate) fn arrange(
     (layout, edges)
 }
 
-/// A duration constraint's label is centered this far right of its line.
-const DURATION_LABEL: f32 = 9.0;
+/// A duration constraint's label: Astah centers it this far right of its line.
+pub const DURATION_LABEL: f32 = 9.0;
+/// A duration constraint's label starts no further left than this right of its line, so that a
+/// label wider than Astah's `{d}` stays beside the arrow instead of crossing it.
+pub const DURATION_GAP: f32 = 0.5;
 /// Constraint labels are as high as Astah's edge labels and centered on their point.
-const CONSTRAINT_LABEL: f32 = 15.093_75;
-/// A state invariant's text: one line centered with its baseline 15.52 below the top, several
-/// lines 10 in from the left, the first baseline 14.58 below the top, one per 15.09.
+pub const CONSTRAINT_LABEL: f32 = 15.093_75;
+/// A state invariant's text: if it fits on one line, each of its lines centered, the first
+/// baseline 15.52 below the top; otherwise lines 10 in from the left, the first baseline 14.58
+/// below the top. One line per 15.09.
 const INVARIANT_BASELINE: f32 = 15.52;
 const INVARIANT_FIRST_BASELINE: f32 = 14.58;
-const INVARIANT_PITCH: f32 = 15.093_75;
 const INVARIANT_PAD: f32 = 10.0;
 
+/// `text` broken into lines as Java's `LineBreakMeasurer` breaks a state invariant for Astah:
+/// at its line breaks (an empty line counts), then before a word that would make the line wider
+/// than `room`; a word wider than `room` breaks between characters.
+fn invariant_lines(text: &str, room: f32, measure: &dyn TextMeasure) -> Vec<String> {
+    let fits = |s: &str| measure.width(s.trim_end(), FONT_SIZE, false) <= room;
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut rest = paragraph.strip_suffix('\r').unwrap_or(paragraph);
+        if rest.is_empty() {
+            lines.push(String::new());
+        }
+        while !rest.is_empty() {
+            // Where a line may end: after a run of spaces, or at the end.
+            let ends = rest
+                .char_indices()
+                .zip(rest.chars().skip(1))
+                .filter(|&((_, c), next)| c == ' ' && next != ' ')
+                .map(|((i, _), _)| i + 1)
+                .chain([rest.len()]);
+            let mut end = None;
+            for at in ends {
+                if !fits(&rest[..at]) {
+                    break;
+                }
+                end = Some(at);
+            }
+            // A word wider than the line: as many characters as fit, at least one.
+            let end = end.unwrap_or_else(|| {
+                let mut chars = rest.char_indices().skip(1).map(|(i, _)| i).chain([rest.len()]);
+                let first = chars.next().unwrap_or(rest.len());
+                chars.take_while(|&at| fits(&rest[..at])).last().unwrap_or(first)
+            });
+            lines.push(rest[..end].trim_end().to_owned());
+            rest = &rest[end..];
+        }
+    }
+    lines
+}
+
+/// The height Astah gives a state invariant `width` wide that reads `text`.
+pub fn invariant_height(text: &str, width: f32, measure: &dyn TextMeasure) -> f32 {
+    let lines = invariant_lines(text, width - 2.0 * INVARIANT_PAD, measure);
+    crate::sequence_edit::invariant_height(lines.len())
+}
+
 /// A state invariant in `r`: its condition broken into lines as wide as the box leaves room
-/// for, and the box, grown to hold them.
+/// for, and the box, grown to hold them. A condition as narrow as the room, without its line
+/// breaks, has each of its lines centered; a wider one is left-aligned.
 fn invariant(id: Id, text: &str, r: Rect, measure: &dyn TextMeasure) -> (Rect, Vec<Row>) {
-    let lines = if text.is_empty() {
-        Vec::new()
-    } else {
-        break_lines(text, r.width - 2.0 * INVARIANT_PAD, measure)
-    };
-    let n = lines.len().max(1);
-    let needed = crate::sequence_edit::INVARIANT_HEIGHT
-        + crate::sequence_edit::INVARIANT_LINE * (n - 1) as f32;
+    let room = r.width - 2.0 * INVARIANT_PAD;
+    let lines = if text.is_empty() { Vec::new() } else { invariant_lines(text, room, measure) };
+    let needed = crate::sequence_edit::invariant_height(lines.len());
     let rect = Rect::new(r.x, r.y, r.width, r.height.max(needed));
+    let centered = measure.width(&text.replace(['\r', '\n'], ""), FONT_SIZE, false) <= room;
     let h = line_height(FONT_SIZE);
     let rows = lines
         .into_iter()
         .enumerate()
         .map(|(i, line)| {
             let w = measure.width(&line, FONT_SIZE, false);
-            let (x, baseline) = if n == 1 {
-                (r.center().x - w / 2.0, r.y + INVARIANT_BASELINE)
+            let below = i as f32 * crate::sequence_edit::INVARIANT_LINE;
+            let (x, baseline) = if centered {
+                (r.center().x - w / 2.0, r.y + INVARIANT_BASELINE + below)
             } else {
-                (r.x + INVARIANT_PAD, r.y + INVARIANT_FIRST_BASELINE + i as f32 * INVARIANT_PITCH)
+                (r.x + INVARIANT_PAD, r.y + INVARIANT_FIRST_BASELINE + below)
             };
             Row {
                 rect: Rect::new(x, baseline - crate::draw::baseline(FONT_SIZE), w, h),
@@ -636,27 +682,48 @@ fn invariant(id: Id, text: &str, r: Rect, measure: &dyn TextMeasure) -> (Rect, V
     (rect, rows)
 }
 
-/// The label `{constraint}` of a duration or time constraint `e`, centered on `at` or starting
-/// or ending there; none for an empty constraint.
+/// Where the label of a duration or time constraint goes by default.
+#[derive(Clone, Copy, Debug)]
+pub enum ConstraintAnchor {
+    /// A duration's line at `x`, `middle` halfway down it: the label is centered 9 right of it,
+    /// as Astah's, but never crosses the line.
+    Duration { x: f32, middle: f32 },
+    /// The end of a time constraint's line: the label starts there, or ends there when the line
+    /// points left.
+    Time { end: Point, left: bool },
+}
+
+/// The box of a constraint's label `width` wide: where `anchor` puts it, moved by `offset`
+/// (placed by hand). It is as high as an edge label, centered on the anchor's height.
+pub fn constraint_label_box(anchor: ConstraintAnchor, width: f32, offset: Option<Point>) -> Rect {
+    let (left, y) = match anchor {
+        ConstraintAnchor::Duration { x, middle } => {
+            ((x + DURATION_LABEL - width / 2.0).max(x + DURATION_GAP), middle)
+        }
+        ConstraintAnchor::Time { end, left: false } => (end.x, end.y),
+        ConstraintAnchor::Time { end, left: true } => (end.x - width, end.y),
+    };
+    let by = offset.unwrap_or_default();
+    Rect::new(left + by.x, y - CONSTRAINT_LABEL / 2.0 + by.y, width, CONSTRAINT_LABEL)
+}
+
+/// The text of a constraint's label, `{constraint}`; none for an empty constraint.
+pub fn constraint_text(e: &umlcraft_model::Element) -> Option<String> {
+    (!e.name().trim().is_empty()).then(|| format!("{{{}}}", e.name()))
+}
+
+/// The label of a duration or time constraint `e` where `anchor` and `offset` put it.
 fn constraint_row(
     e: &umlcraft_model::Element,
-    at: Point,
-    align: LabelAlign,
+    anchor: ConstraintAnchor,
+    offset: Option<Point>,
     measure: &dyn TextMeasure,
 ) -> Vec<Row> {
-    if e.name().trim().is_empty() {
-        return Vec::new();
-    }
-    let text = format!("{{{}}}", e.name());
+    let Some(text) = constraint_text(e) else { return Vec::new() };
     let w = measure.width(&text, FONT_SIZE, false);
-    let left = match align {
-        LabelAlign::Left => at.x,
-        LabelAlign::Center => at.x - w / 2.0,
-        LabelAlign::Right => at.x - w,
-    };
-    let top = at.y - CONSTRAINT_LABEL / 2.0 + LABEL_TO_ROW;
+    let label = constraint_label_box(anchor, w, offset);
     vec![Row {
-        rect: Rect::new(left, top, w, line_height(FONT_SIZE)),
+        rect: Rect::new(label.x, label.y + LABEL_TO_ROW, w, line_height(FONT_SIZE)),
         role: RowRole::Name,
         ..plain_row(text, e.id())
     }]
@@ -684,8 +751,9 @@ fn time_constraints(
         let dir = if tip.x < before.x { -1.0 } else { 1.0 };
         let end = tip.offset(dir * crate::sequence_edit::TIME_TICK, 0.0);
         node.figure = Figure::TimeTick { from: tip, to: end };
-        let align = if dir > 0.0 { LabelAlign::Left } else { LabelAlign::Right };
-        node.rows = constraint_row(e, end, align, measure);
+        let anchor = ConstraintAnchor::Time { end, left: dir < 0.0 };
+        let offset = view.get(node.id).and_then(|p| p.style.name_offset);
+        node.rows = constraint_row(e, anchor, offset, measure);
         let line = Rect::from_corners(tip, end).inflate(BAR / 2.0);
         node.rect = node.rows.iter().fold(line, |a, row| a.union(&row.rect));
     }
@@ -1114,6 +1182,7 @@ fn message_edge(
         free_labels: Vec::new(),
         association: false,
         end_labels: Vec::new(),
+        constraint_labels: Vec::new(),
         stroke: None,
     }
 }

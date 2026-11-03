@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use umlcraft_model::{
-    DiagramKind, Document, ElementData, ElementKind, Id, Model, Rect, Result, Size, Tx,
+    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Point, Rect, Result,
+    Size, Tx,
 };
 
 use crate::scene::{self, TextMeasure};
@@ -36,9 +37,29 @@ fn fitted_boxes(model: &Model, measure: &dyn TextMeasure) -> Vec<FittedBox> {
         .collect()
 }
 
+/// The texts of the duration and time constraints of all diagrams, by diagram and presentation.
+fn constraint_texts(model: &Model) -> HashMap<(Id, Id), String> {
+    model
+        .views()
+        .flat_map(|(diagram, view)| {
+            view.presentations().iter().filter_map(move |p| {
+                let e = model.get(p.element?)?;
+                matches!(
+                    e.kind(),
+                    ElementKind::DurationConstraint(_) | ElementKind::TimeConstraint(_)
+                )
+                .then(|| ((diagram, p.id), e.name().to_owned()))
+            })
+        })
+        .collect()
+}
+
 /// Runs `f` as one undo step of `doc`. Afterwards, as in Astah, boxes sized to their content
 /// whose content the edit changed take the size it now needs (a new box always does); others
-/// keep their size, even if Astah stored one that does not fit. Classes grow around their parts,
+/// keep their size, even if Astah stored one that does not fit. State invariants take the
+/// height of their text; a sequence diagram where one did, or where a duration or time
+/// constraint was renamed, is tidied again, so that lifelines and frame hold them and their
+/// labels. Classes grow around their parts,
 /// and ports follow the border of the class or part they sit on ([`composite::follow`]). Then lines that the router
 /// keeps are routed again where their nodes moved or something moved into their way, and found
 /// and lost messages keep their length to lifelines that moved.
@@ -52,6 +73,7 @@ pub fn apply<R>(
         .into_iter()
         .map(|b| (b.presentation, b.content))
         .collect();
+    let constraints = constraint_texts(doc.model());
     let routes = autoroute::snapshots(doc.model());
     let lifelines = sequence_edit::lifeline_centers(doc.model());
     let ports = composite::snapshots(doc.model());
@@ -66,12 +88,27 @@ pub fn apply<R>(
         let close = |a: Size, b: Size| {
             (a.width - b.width).abs() < 0.01 && (a.height - b.height).abs() < 0.01
         };
+        let mut sequences = Vec::new();
         for b in fitted_boxes(tx.model(), measure) {
             let unchanged = before.get(&b.presentation) == Some(&b.content);
             if !unchanged && !close(b.bounds.size(), b.size) {
                 let rect = Rect::from_origin_size(b.bounds.origin(), b.size);
                 tx.set_bounds(b.diagram, b.presentation, rect)?;
+                let kind = tx.model().get(b.diagram).and_then(|d| d.kind().as_diagram());
+                if kind == Some(DiagramKind::Sequence) && !sequences.contains(&b.diagram) {
+                    sequences.push(b.diagram);
+                }
             }
+        }
+        // A constraint renamed: the frame holds its label.
+        for ((diagram, p), text) in constraint_texts(tx.model()) {
+            if constraints.get(&(diagram, p)) != Some(&text) && !sequences.contains(&diagram) {
+                sequences.push(diagram);
+            }
+        }
+        // A state invariant grown or shrunk for its text: the lifeline and frame follow.
+        for diagram in sequences {
+            sequence_edit::tidy(tx, diagram)?;
         }
         autoroute::follow(tx, &routes)?;
         Ok(result)
@@ -112,6 +149,32 @@ pub fn create_diagram(tx: &mut Tx<'_>, owner: Id, kind: DiagramKind, name: &str)
         }
         None => tx.create(owner, diagram),
     }
+}
+
+/// Moves all constraint labels of the line `presentation` by `by`, as Astah's editor moves them
+/// together; each keeps its own offset from where the layout puts it. Offsets that come to
+/// nothing are dropped.
+pub fn shift_line_constraints(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    presentation: Id,
+    by: Point,
+) -> Result<()> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let element = view.get(presentation).and_then(|p| p.element);
+    let count = element.and_then(|e| model.get(e)).map_or(0, |e| e.data().constraints.len());
+    tx.update_presentation(diagram, presentation, |p| {
+        let offsets = &mut p.style.constraint_offsets;
+        offsets.resize(count.max(offsets.len()), None);
+        for offset in offsets.iter_mut().take(count) {
+            let o = offset.unwrap_or_default().offset(by.x, by.y);
+            *offset = (o.x.abs() > 0.01 || o.y.abs() > 0.01).then_some(o);
+        }
+        while offsets.last().is_some_and(Option::is_none) {
+            offsets.pop();
+        }
+    })
 }
 
 /// Creates an object diagram named `name` under `owner`: a class diagram whose palette starts

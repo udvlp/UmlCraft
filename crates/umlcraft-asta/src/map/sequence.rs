@@ -427,6 +427,7 @@ impl Importer<'_> {
             let Some(bounds) = bounds else { continue };
             let mut presentation = Presentation::node(Some(e), bounds);
             presentation.style = self.fill(p);
+            presentation.style.name_offset = self.constraint_label(p, shift);
             if let Some(id) = self.insert(diagram, presentation, false) {
                 presentation_of.insert(p, id);
             }
@@ -442,6 +443,36 @@ impl Importer<'_> {
                 self.insert(diagram, presentation, false);
             }
         }
+    }
+
+    /// How far the label of the duration or time constraint presentation `p` lies from where
+    /// UmlCraft puts it: Astah draws it at its `location` (its own place, which centers a
+    /// duration's label 9 right of the line even where it crosses the line) moved by
+    /// `localMovement` (by hand). None where both agree.
+    fn constraint_label(&self, p: ObjId, shift: Point) -> Option<Point> {
+        use umlcraft_notation::sequence::{ConstraintAnchor, constraint_label_box};
+        let r = self.r;
+        let label = r.obj(p, "namePresentation")?;
+        let at = r.obj(label, "location").and_then(|l| r.point(l))?;
+        let moved = r.obj(label, "localMovement").and_then(|l| r.point(l)).unwrap_or_default();
+        let width = r.num(label, "width")? as f32;
+        let anchor = match r.class(p) {
+            "DurationConstraintPresentation" => {
+                let points = r.points(p, "allPoints");
+                let (a, b) = (points.first()?, points.last()?);
+                ConstraintAnchor::Duration { x: a.x + shift.x, middle: (a.y + b.y) / 2.0 + shift.y }
+            }
+            "TimeConstraintPresentation" => {
+                let points = r.points(p, "points");
+                let (tip, end) = (points.first()?, points.last()?);
+                let end = end.offset(shift.x, shift.y);
+                ConstraintAnchor::Time { end, left: end.x < tip.x + shift.x }
+            }
+            _ => return None,
+        };
+        let usual = constraint_label_box(anchor, width, None);
+        let by = Point::new(at.x + moved.x + shift.x - usual.x, at.y + moved.y + shift.y - usual.y);
+        (by.x.abs() > 0.05 || by.y.abs() > 0.05).then_some(by)
     }
 
     /// A combined fragment with the offsets of its operands and its guards placed by hand, or

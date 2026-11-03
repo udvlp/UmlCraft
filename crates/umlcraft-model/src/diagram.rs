@@ -399,6 +399,11 @@ pub struct Style {
     /// Edges: leave out the constraints below the name.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_constraints: bool,
+    /// Edges: how far each constraint label (`{…}`, by the constraint's index) was moved by
+    /// hand from where the layout puts it, as Astah's `localMovement`; unset or missing, not
+    /// moved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraint_offsets: Vec<Option<Point>>,
     /// Generalizations: drawn in Astah's shared style, one triangle at the general element
     /// for all generalizations of the same style that end at its node, their lines joining
     /// on a common line across (vertical style) or up and down (horizontal style). The
@@ -460,7 +465,8 @@ pub struct Style {
     /// left, as Astah keeps a free text (the text starts 10 right of the box, its baseline 17
     /// below the box's top). Unset: centered at the top. Ports: where the box of the name lies
     /// relative to the port's top left, as Astah keeps it; unset, outside the border the port
-    /// sits on.
+    /// sits on. Duration and time constraints: how far their label was moved by hand from where
+    /// the layout puts it, as Astah's `localMovement`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_offset: Option<Point>,
     /// Edges: how the line runs through its waypoints.

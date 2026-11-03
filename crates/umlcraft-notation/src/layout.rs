@@ -60,6 +60,8 @@ const EMPTY_REGION: f32 = 40.0;
 const BAR_REACH: f32 = 40.0;
 /// Space between actors one below the other.
 const ACTOR_GAP: f32 = 20.0;
+/// Room between an activity parameter on the frame and what the frame holds.
+const PARAMETER_GAP: f32 = 10.0;
 const PLACE_SWEEPS: usize = 12;
 
 /// Places nodes of the given `sizes`: returns the top left corner of each, the whole starting
@@ -525,12 +527,18 @@ pub fn arrange(
     direction: Direction,
     measure: &dyn TextMeasure,
 ) -> Result<Vec<Id>> {
-    let model = tx.model();
     let kind =
-        model.element(diagram)?.kind().as_diagram().ok_or(ModelError::NotADiagram(diagram))?;
+        tx.model().element(diagram)?.kind().as_diagram().ok_or(ModelError::NotADiagram(diagram))?;
     if !can_arrange(kind) {
         return Err(ModelError::Invalid("sequence diagrams are not arranged".into()));
     }
+    // The pins of each action are laid out along its sides first, clear of each other's
+    // texts, the action growing where it must, so that the room they take is known: a pin
+    // alone on the left or right side goes to its bottom, its texts below the action.
+    if kind == DiagramKind::Activity {
+        crate::activity::spread_pins(tx, diagram, scope, measure)?;
+    }
+    let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
 
     // The nodes, their sizes and what holds them.
@@ -546,11 +554,22 @@ pub fn arrange(
         partition: bool,
         /// A fork or join bar.
         bar: bool,
+        /// Room around the node for what is drawn outside it (left, top, right, bottom); its
+        /// `size` includes it.
+        margin: [f32; 4],
     }
     let mut nodes: Vec<Node> = Vec::new();
     // Pins go along with their action and activity parameters stay on the frame, so lines to
     // them count as lines to the action or not at all.
     let borne = crate::composite::borne_nodes(model, diagram);
+    // On activity diagrams the pins of an action and the texts outside nodes (pin names, the
+    // properties below an object node) are laid out with their node, so that nothing else
+    // lands on them.
+    let margins = if kind == DiagramKind::Activity {
+        outside_margins(model, diagram, measure)
+    } else {
+        HashMap::new()
+    };
     for p in view.presentations() {
         let Shape::Node { bounds, .. } = p.shape else { continue };
         // The diagram's frame is not laid out but drawn around the rest afterwards.
@@ -568,24 +587,44 @@ pub fn arrange(
             scene::fitted_size(model, p, measure).unwrap_or(bounds.size())
         };
         let name_width = element.map_or(0.0, |e| measure.width(e.name(), scene::FONT_SIZE, true));
+        let container = kind.is_some_and(crate::palette::is_container);
+        let partition = matches!(kind, Some(ElementKind::Partition));
+        let bar = matches!(
+            kind,
+            Some(ElementKind::ActivityNode(ActivityNodeProps {
+                node: ActivityNodeKind::Fork | ActivityNodeKind::Join,
+                ..
+            }))
+        );
+        let margin = match margins.get(&p.id) {
+            Some(&m) if !container && !partition && !bar => m,
+            _ => [0.0; 4],
+        };
+        let size =
+            Size::new(size.width + margin[0] + margin[2], size.height + margin[1] + margin[3]);
         nodes.push(Node {
             id: p.id,
             bounds,
             size,
-            container: kind.is_some_and(crate::palette::is_container),
+            container,
             name_width,
             element: p.element,
             regions: p.regions().cloned(),
-            partition: matches!(kind, Some(ElementKind::Partition)),
-            bar: matches!(
-                kind,
-                Some(ElementKind::ActivityNode(ActivityNodeProps {
-                    node: ActivityNodeKind::Fork | ActivityNodeKind::Join,
-                    ..
-                }))
-            ),
+            partition,
+            bar,
+            margin,
         });
     }
+    // The node's bounds in the box laid out for it with its margin.
+    let inner = |i: usize, cell: Rect| {
+        let [left, top, right, bottom] = nodes[i].margin;
+        Rect::new(
+            cell.x + left,
+            cell.y + top,
+            cell.width - left - right,
+            cell.height - top - bottom,
+        )
+    };
     let index: HashMap<Id, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     // Each node's container: the smallest one drawn around it.
     let parent: Vec<Option<usize>> = (0..nodes.len())
@@ -777,8 +816,8 @@ pub fn arrange(
                 let mut at = x + (widths[c] - needed(cell)) / 2.0;
                 for &l in cell {
                     let top = row_top[row] + (row_depth[row] - sizes[l].height) / 2.0;
-                    placed
-                        .push((movable[l], Rect::from_origin_size(Point::new(at, top), sizes[l])));
+                    let cell = Rect::from_origin_size(Point::new(at, top), sizes[l]);
+                    placed.push((movable[l], inner(movable[l], cell)));
                     at += sizes[l].width + NODE_GAP;
                 }
             }
@@ -945,17 +984,16 @@ pub fn arrange(
         let origin = before.origin();
         let mut bounds: HashMap<usize, Rect> = HashMap::new();
         for (&root, p) in top.iter().zip(&points) {
-            bounds.insert(root, Rect::from_origin_size(p.offset(origin.x, origin.y), size[root]));
+            let cell = Rect::from_origin_size(p.offset(origin.x, origin.y), size[root]);
+            bounds.insert(root, inner(root, cell));
         }
         // Then what each container holds, outside in.
         let mut pending: Vec<usize> = top.clone();
         while let Some(c) = pending.pop() {
             let at = bounds[&c].origin();
             for i in (0..nodes.len()).filter(|&i| parent[i] == Some(c)) {
-                bounds.insert(
-                    i,
-                    Rect::from_origin_size(at.offset(offset[i].x, offset[i].y), size[i]),
-                );
+                let cell = Rect::from_origin_size(at.offset(offset[i].x, offset[i].y), size[i]);
+                bounds.insert(i, inner(i, cell));
                 pending.push(i);
             }
         }
@@ -1053,6 +1091,12 @@ pub fn arrange(
             changed.push(ids[i]);
         }
     }
+    // Pins go along with their action, those alone on a side at its bottom again.
+    if kind == DiagramKind::Activity {
+        let was: HashMap<Id, Rect> = ids.iter().copied().zip(old.iter().copied()).collect();
+        carry_pins(tx, diagram, &was)?;
+        pins_to_bottom(tx, diagram, Some(&changed))?;
+    }
     // Orthogonal states keep where the lines between their regions go.
     for (i, regions) in new_regions {
         tx.update_presentation(diagram, ids[i], |p| {
@@ -1065,12 +1109,43 @@ pub fn arrange(
     let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let frame = view.presentations().iter().find(|p| p.element == Some(diagram));
     if let Some((frame, old_frame)) = frame.and_then(|f| Some((f.id, f.bounds()?))) {
+        // With the texts outside the nodes, which Astah's frame also holds.
         let content = ids
             .iter()
-            .filter_map(|&id| view.get(id).and_then(|p| p.bounds()))
+            .zip(&nodes)
+            .filter_map(|(&id, n)| {
+                let r = view.get(id).and_then(|p| p.bounds())?;
+                let [left, top, right, bottom] = n.margin;
+                Some(Rect::new(
+                    r.x - left,
+                    r.y - top,
+                    r.width + left + right,
+                    r.height + top + bottom,
+                ))
+            })
             .reduce(|a, b| a.union(&b));
         if let Some(content) = content {
+            // Activity parameters reach into the frame by half their size; the frame keeps
+            // them clear of the content on their side.
+            let mut reach = [0.0f32; 4];
+            for p in view.presentations() {
+                let parameter = p.element.and_then(|e| tx.model().get(e)).is_some_and(|e| {
+                    matches!(e.kind(), ElementKind::ActivityNode(n)
+                        if n.node == ActivityNodeKind::ActivityParameter)
+                });
+                let Some(r) = p.bounds().filter(|_| parameter) else { continue };
+                let side = crate::composite::border_place(old_frame, r.center()).0;
+                let half = if side.is_multiple_of(2) { r.height } else { r.width } / 2.0;
+                reach[side as usize] = reach[side as usize].max(half + PARAMETER_GAP);
+            }
             let around = crate::activity::frame_around(content);
+            let around = Rect::from_corners(
+                Point::new(around.x.min(content.x - reach[3]), around.y.min(content.y - reach[0])),
+                Point::new(
+                    around.right().max(content.right() + reach[1]),
+                    around.bottom().max(content.bottom() + reach[2]),
+                ),
+            );
             let wanted = if scope.is_some() { old_frame.union(&around) } else { around };
             if wanted != old_frame {
                 tx.set_bounds(diagram, frame, wanted)?;
@@ -1104,6 +1179,120 @@ pub fn arrange(
     straighten_at_bars(tx, diagram, &bars, &lines)?;
     share_generalization_trees(tx, diagram, &lines, direction)?;
     Ok(changed)
+}
+
+/// Takes the pins of the actions that moved (`old` bounds by presentation) along to the same
+/// place on their action's border.
+fn carry_pins(tx: &mut Tx<'_>, diagram: Id, old: &HashMap<Id, Rect>) -> Result<()> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let borne = crate::composite::borne_nodes(model, diagram);
+    let reach = scene::PIN_SIZE / 2.0;
+    let mut moves: Vec<(Id, Rect)> = Vec::new();
+    for (&pin, &host) in &borne {
+        let Some(host) = host else { continue };
+        let (Some(p), Some(&was)) = (view.get(pin), old.get(&host)) else { continue };
+        let is_pin = p
+            .element
+            .and_then(|e| model.get(e))
+            .is_some_and(|e| matches!(e.kind(), ElementKind::ActivityNode(n) if n.node.is_pin()));
+        let (Some(r), Some(now)) = (p.bounds(), view.get(host).and_then(|h| h.bounds())) else {
+            continue;
+        };
+        if !is_pin || now == was {
+            continue;
+        }
+        let place = crate::composite::border_place(was.inflate(reach), r.center());
+        let at = crate::composite::border_point(now.inflate(reach), place);
+        moves.push((pin, crate::composite::centered(at, r)));
+    }
+    moves.sort_by_key(|(pin, _)| *pin);
+    for (pin, r) in moves {
+        tx.set_bounds(diagram, pin, r)?;
+    }
+    Ok(())
+}
+
+/// Moves a pin that is alone on the left or right side of its action to the bottom end of
+/// that side, level with the action's bottom, so that its name and properties stand below the
+/// action rather than over its border. Only the actions in `hosts` (presentations), or all.
+fn pins_to_bottom(tx: &mut Tx<'_>, diagram: Id, hosts: Option<&[Id]>) -> Result<()> {
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let borne = crate::composite::borne_nodes(model, diagram);
+    // The pins on each side of each action: the pin, its bounds and the action's.
+    type Placed = (Id, Rect, Rect);
+    let mut sides: HashMap<(Id, u8), Vec<Placed>> = HashMap::new();
+    for (&pin, &host) in &borne {
+        let Some(host) = host.filter(|h| hosts.is_none_or(|hs| hs.contains(h))) else {
+            continue;
+        };
+        let Some(p) = view.get(pin) else { continue };
+        let is_pin = p
+            .element
+            .and_then(|e| model.get(e))
+            .is_some_and(|e| matches!(e.kind(), ElementKind::ActivityNode(n) if n.node.is_pin()));
+        let (Some(r), Some(h)) = (p.bounds(), view.get(host).and_then(|h| h.bounds())) else {
+            continue;
+        };
+        if !is_pin || p.style.name_offset.is_some() {
+            continue;
+        }
+        let side = crate::composite::border_place(h.inflate(scene::PIN_SIZE / 2.0), r.center()).0;
+        if side == 1 || side == 3 {
+            sides.entry((host, side)).or_default().push((pin, r, h));
+        }
+    }
+    let mut moves: Vec<(Id, Rect)> = sides
+        .into_iter()
+        .filter(|(_, pins)| pins.len() == 1)
+        .map(|((_, side), pins)| {
+            let (pin, r, h) = pins[0];
+            let x = if side == 1 { h.right() } else { h.x - r.width };
+            let y = (h.bottom() - r.height).max(h.y);
+            (pin, Rect::new(x, y, r.width, r.height))
+        })
+        .filter(|(pin, r)| view.get(*pin).and_then(|p| p.bounds()) != Some(*r))
+        .collect();
+    moves.sort_by_key(|(pin, _)| *pin);
+    for (pin, r) in moves {
+        tx.set_bounds(diagram, pin, r)?;
+    }
+    Ok(())
+}
+
+/// How far what is drawn for each node of `diagram` reaches beyond its bounds (left, top,
+/// right, bottom): its pins with their names, and texts outside it such as an object node's
+/// properties or the name below an hourglass. Left and right are made equal, so that the node
+/// stays centered in its column and straight lines stay straight. Nodes drawn within their
+/// bounds are left out.
+fn outside_margins(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> HashMap<Id, [f32; 4]> {
+    let scene = scene::build(model, diagram, &scene::Preview::default(), measure);
+    let borne = crate::composite::borne_nodes(model, diagram);
+    let rects: HashMap<Id, Rect> = scene.nodes.iter().map(|n| (n.id, n.rect)).collect();
+    let mut extents: HashMap<Id, Rect> = HashMap::new();
+    for n in &scene.nodes {
+        // A pin counts for its action, with all it shows; a node for the texts outside it.
+        let (owner, own) = match borne.get(&n.id) {
+            Some(Some(host)) => (*host, Some(n.rect)),
+            Some(None) => continue,
+            None => (n.id, None),
+        };
+        let Some(&base) = rects.get(&owner) else { continue };
+        let extent = extents.entry(owner).or_insert(base);
+        for r in own.into_iter().chain(n.outside()) {
+            *extent = extent.union(&r);
+        }
+    }
+    extents
+        .into_iter()
+        .filter_map(|(id, e)| {
+            let r = rects[&id];
+            let side = (r.x - e.x).max(e.right() - r.right()).max(0.0);
+            let margin = [side, (r.y - e.y).max(0.0), side, (e.bottom() - r.bottom()).max(0.0)];
+            margin.iter().any(|&m| m > 0.01).then_some((id, margin))
+        })
+        .collect()
 }
 
 /// Generalization trees share their triangle, as Astah's shared style draws them: where two or
@@ -1415,6 +1604,113 @@ mod tests {
             || [frame.y, frame.bottom()].iter().any(|y| (at.y - y).abs() < 0.5);
         assert!(on_border, "{at:?} {frame:?}");
         model.check().unwrap();
+    }
+
+    /// After arranging, the names of pins and the properties below an object node have room:
+    /// no other node and no line runs over them, and a pin alone on a side of its action
+    /// stands at the bottom of that side, its texts below the action.
+    #[test]
+    fn arranging_leaves_room_for_pin_names_and_properties() {
+        use crate::palette::{self, EdgeTool, NodeTool};
+        use umlcraft_model::{Document, ObjectOrdering};
+        let mut doc = Document::new(Model::new("m"));
+        let root = doc.model().root();
+        let measure = scene::ApproxMeasure;
+        let d = crate::edit::apply(&mut doc, "diagram", &measure, |tx| {
+            crate::edit::create_diagram(tx, root, DiagramKind::Activity, "Order")
+        })
+        .unwrap();
+        let node = |doc: &mut Document, tool: NodeTool, name: &str, at: Point| {
+            crate::edit::apply(doc, "node", &measure, |tx| {
+                let (element, node) = palette::create_node(tx, d, tool, at, name)?;
+                if tool.is_named() {
+                    tx.rename(element, name)?;
+                }
+                Ok((element, node))
+            })
+            .unwrap()
+        };
+        let (_, start) = node(&mut doc, NodeTool::InitialNode, "", Point::new(100.0, 0.0));
+        let (_, check) = node(&mut doc, NodeTool::Action, "Check", Point::new(100.0, 100.0));
+        let a = doc.model().view(d).unwrap().get(check).unwrap().bounds().unwrap();
+        let (pin, pin_node) = node(
+            &mut doc,
+            NodeTool::InputPin,
+            "order with a long name",
+            Point::new(a.x - 10.0, a.y + 2.0),
+        );
+        let (_, out) =
+            node(&mut doc, NodeTool::OutputPin, "result", Point::new(a.right() - 5.0, a.y + 2.0));
+        let (object, invoice) =
+            node(&mut doc, NodeTool::ObjectNode, "Invoice", Point::new(100.0, 200.0));
+        let (_, pay) = node(&mut doc, NodeTool::Action, "Pay", Point::new(100.0, 300.0));
+        let (_, end) = node(&mut doc, NodeTool::ActivityFinal, "", Point::new(100.0, 400.0));
+        // A parameter, which brings the frame.
+        node(&mut doc, NodeTool::ActivityParameter, "order", Point::new(0.0, 100.0));
+        crate::edit::apply(&mut doc, "details", &measure, |tx| {
+            for id in [pin, object] {
+                tx.update(id, |data| {
+                    if let ElementKind::ActivityNode(p) = &mut data.kind {
+                        p.ordering = Some(ObjectOrdering::Fifo);
+                        p.upper_bound = "3".into();
+                        p.is_control = true;
+                        p.is_exception = true;
+                    }
+                })?;
+            }
+            for (a, b) in [(start, check), (out, invoice), (invoice, pay), (pay, end)] {
+                palette::connect(tx, d, EdgeTool::Flow, a, b)?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        crate::edit::apply(&mut doc, "arrange", &measure, |tx| {
+            arrange(tx, d, None, Direction::Down, &measure)
+        })
+        .unwrap();
+        doc.model().check().unwrap();
+
+        let scene = scene::build(doc.model(), d, &scene::Preview::default(), &measure);
+        let action = scene.node(check).unwrap().rect;
+        // The pins alone on their sides stand level with the action's bottom.
+        for p in [pin_node, out] {
+            let r = scene.node(p).unwrap().rect;
+            assert!((r.bottom() - action.bottom()).abs() < 0.01, "{r:?} {action:?}");
+            let texts: Vec<Rect> = scene.node(p).unwrap().rows.iter().map(|r| r.rect).collect();
+            assert!(texts.iter().all(|t| t.y >= action.bottom() - 0.01), "{texts:?}");
+        }
+        // Texts outside nodes are clear of every other node and of every line.
+        let borne = crate::composite::borne_nodes(doc.model(), d);
+        let frame_node = scene.nodes.iter().find(|n| n.element == Some(d)).unwrap();
+        let (frame, frame_id) = (frame_node.rect, frame_node.id);
+        for n in &scene.nodes {
+            let parameter = borne.get(&n.id).copied().flatten() == Some(frame_id);
+            for text in n.outside() {
+                assert!(
+                    parameter || frame.contains_rect(&text),
+                    "{text:?} outside the frame {frame:?}"
+                );
+                for other in &scene.nodes {
+                    // A pin's texts may touch its own action.
+                    let own = other.id == n.id
+                        || other.element == Some(d)
+                        || borne.get(&n.id).copied().flatten() == Some(other.id);
+                    assert!(own || !other.rect.intersects(&text), "{text:?} on {:?}", other.rect);
+                }
+                for edge in &scene.edges {
+                    let hits = edge.points.windows(2).any(|w| {
+                        let s = Rect::from_corners(w[0], w[1]);
+                        s.x < text.right()
+                            && s.right() > text.x
+                            && s.y < text.bottom()
+                            && s.bottom() > text.y
+                    });
+                    assert!(!hits, "{:?} runs over {text:?}", edge.points);
+                }
+            }
+        }
+        // The object node's properties stand below it, its triangle beside it.
+        assert!(scene.node(invoice).unwrap().outside().len() >= 4);
     }
 
     #[test]

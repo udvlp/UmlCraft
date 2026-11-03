@@ -345,6 +345,19 @@ enum Drag {
         start: MPoint,
         current: MPoint,
     },
+    /// Dragging the label of the duration or time constraint `constraint`.
+    ConstraintLabel {
+        constraint: Id,
+        start: MPoint,
+        current: MPoint,
+    },
+    /// Dragging a constraint label of the line `edge`, which takes the line's other constraint
+    /// labels along, as in Astah.
+    LineConstraint {
+        edge: Id,
+        start: MPoint,
+        current: MPoint,
+    },
     /// Dragging the «include» or «extend» of `edge`; `origin` is its top left corner at the
     /// start, `middle` the middle of the line.
     KeywordLabel {
@@ -1022,6 +1035,26 @@ impl DiagramCanvas {
                 if let Some((message, origin)) = label.filter(|_| !extend) {
                     self.workspace.update(cx, |ws, _| ws.select(vec![message]));
                     self.drag = Some(Drag::MessageLabel { message, origin, start: p, current: p });
+                    cx.notify();
+                    return;
+                }
+                // So can a duration or time constraint's.
+                let constraint = scene::constraint_label_at(&self.scene, p).filter(|_| !extend);
+                if let Some(constraint) = constraint {
+                    self.workspace.update(cx, |ws, _| ws.select(vec![constraint]));
+                    self.drag = Some(Drag::ConstraintLabel { constraint, start: p, current: p });
+                    cx.notify();
+                    return;
+                }
+                // So can the constraints of a line, all together.
+                let hit = scene::line_constraint_at(
+                    &self.scene,
+                    p,
+                    &FontMeasure::new(window, self.display),
+                );
+                if let Some(hit) = hit.filter(|_| !extend) {
+                    self.workspace.update(cx, |ws, _| ws.select(vec![hit.edge]));
+                    self.drag = Some(Drag::LineConstraint { edge: hit.edge, start: p, current: p });
                     cx.notify();
                     return;
                 }
@@ -1719,6 +1752,8 @@ impl DiagramCanvas {
             | Drag::Connect { current, .. }
             | Drag::Reorder { current, .. }
             | Drag::MessageLabel { current, .. }
+            | Drag::ConstraintLabel { current, .. }
+            | Drag::LineConstraint { current, .. }
             | Drag::KeywordLabel { current, .. }
             | Drag::HandleLine { current, .. } => *current = p,
             Drag::RegionLine { current, .. }
@@ -1852,6 +1887,18 @@ impl DiagramCanvas {
             {
                 let to = origin.offset(current.x - start.x, current.y - start.y);
                 self.update_workspace(cx, |ws| ws.place_message_label(message, to));
+            }
+            Some(Drag::ConstraintLabel { constraint, start, current })
+                if start.distance(current) > 2.0 =>
+            {
+                let by = MPoint::new(current.x - start.x, current.y - start.y);
+                self.update_workspace(cx, |ws| ws.move_constraint_label(constraint, by));
+            }
+            Some(Drag::LineConstraint { edge, start, current })
+                if start.distance(current) > 2.0 =>
+            {
+                let by = MPoint::new(current.x - start.x, current.y - start.y);
+                self.update_workspace(cx, |ws| ws.shift_line_constraints(edge, by));
             }
             Some(Drag::KeywordLabel { edge, origin, middle, start, current })
                 if start.distance(current) > 2.0 =>
@@ -2898,6 +2945,46 @@ impl Render for DiagramCanvas {
                                             false,
                                             s,
                                             moved.align,
+                                        );
+                                    }
+                                }
+                                Some(Drag::LineConstraint { edge, start, current }) => {
+                                    // The line's constraint labels where they will go.
+                                    let (dx, dy) = (current.x - start.x, current.y - start.y);
+                                    let s = p.c.selection;
+                                    let labels = scene.edge(*edge).into_iter().flat_map(|e| {
+                                        e.constraint_labels.iter().map(|c| &e.labels[c.index])
+                                    });
+                                    for label in labels {
+                                        let moved = scene::EdgeLabel {
+                                            anchor: label.anchor.offset(dx, dy),
+                                            ..label.clone()
+                                        };
+                                        p.text(
+                                            &moved.text,
+                                            draw::label_area(&moved),
+                                            FONT_SIZE,
+                                            false,
+                                            false,
+                                            s,
+                                            moved.align,
+                                        );
+                                    }
+                                }
+                                Some(Drag::ConstraintLabel { constraint, start, current }) => {
+                                    // The label where it will go.
+                                    let (dx, dy) = (current.x - start.x, current.y - start.y);
+                                    let s = p.c.selection;
+                                    let rows = scene.node(*constraint).into_iter();
+                                    for row in rows.flat_map(|n| n.rows.iter()) {
+                                        p.text(
+                                            &row.text,
+                                            row.rect.translate(dx, dy),
+                                            FONT_SIZE,
+                                            false,
+                                            false,
+                                            s,
+                                            LabelAlign::Left,
                                         );
                                     }
                                 }

@@ -152,7 +152,22 @@ impl NodeShape {
             Figure::Classifier { template: Some(t), .. } => self.rect.union(t),
             _ => self.rect,
         };
+        let rect = self.outside().iter().fold(rect, |r, o| r.union(o));
         self.rows.iter().fold(rect, |r, row| r.union(&row.rect))
+    }
+
+    /// What is drawn for the node outside its bounds, one rectangle each: texts such as a
+    /// pin's name or an object node's properties, and the triangle of an exception.
+    pub fn outside(&self) -> Vec<Rect> {
+        let inside = self.rect.inflate(0.5);
+        let mut out: Vec<Rect> =
+            self.rows.iter().map(|r| r.rect).filter(|r| !inside.contains_rect(r)).collect();
+        if let Figure::Pin { exception: Some(t), .. } | Figure::ObjectNode { exception: Some(t) } =
+            &self.figure
+        {
+            out.push(Rect::from_corners(Point::new(t[1].x, t[0].y), t[2]));
+        }
+        out
     }
 
     /// Whether the user may resize the node. Lifelines, activation bars and diagram frames
@@ -316,8 +331,12 @@ pub enum Figure {
     Diamond,
     /// Fork or join node: a filled bar.
     Bar,
-    /// Object node.
+    /// A box, such as an instance or a deployment's device.
     Rectangle,
+    /// Activity diagrams: an object node, with the triangle of an exception beside it.
+    ObjectNode {
+        exception: Option<[Point; 3]>,
+    },
     /// Send signal action: a pentagon pointing right.
     SendSignal,
     /// Accept event action: a box with a notch on its left.
@@ -327,9 +346,11 @@ pub enum Figure {
     /// Call behavior action: an action with a rake in its bottom right corner.
     CallBehavior,
     /// A pin on the border of an action. Without flows it shows which way objects go: an
-    /// arrow from the first point to the second.
+    /// arrow from the first point to the second. An exception pin has a triangle beside it:
+    /// its top, then the ends of its base.
     Pin {
         arrow: Option<[Point; 2]>,
+        exception: Option<[Point; 3]>,
     },
     /// Swimlane with its name above a line at `header`. Hollow like a system boundary.
     Partition {
@@ -576,8 +597,34 @@ pub struct EdgeShape {
     /// `end_labels`.
     pub association: bool,
     pub end_labels: Vec<EndLabel>,
+    /// The constraint labels (`{…}`) among the labels, one per constraint.
+    pub constraint_labels: Vec<ConstraintLabel>,
     /// A color of its own for the line and its arrow heads; unset, the theme's.
     pub stroke: Option<Color>,
+}
+
+/// A constraint shown on a line, among its labels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ConstraintLabel {
+    /// Its index in [`EdgeShape::labels`].
+    pub index: usize,
+    /// Which of the line's constraints it shows, the index into
+    /// [`Style::constraint_offsets`].
+    pub constraint: usize,
+    /// Its top left corner where it goes when not moved by hand, which its offset is
+    /// relative to.
+    pub default: Point,
+}
+
+/// A constraint label of a line, from [`line_constraint_at`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineConstraintHit {
+    pub edge: Id,
+    pub constraint: usize,
+    /// The label's top left corner as drawn.
+    pub anchor: Point,
+    /// Its top left corner when not moved by hand.
+    pub default: Point,
 }
 
 /// A role name or multiplicity among an edge's labels.
@@ -1211,6 +1258,7 @@ fn association_class_anchors(
                 free_labels: Vec::new(),
                 association: false,
                 end_labels: Vec::new(),
+                constraint_labels: Vec::new(),
                 stroke: edge.stroke,
             });
         }
@@ -1247,6 +1295,7 @@ fn free_line(p: &Presentation, preview: &Preview) -> Option<EdgeShape> {
         free_labels: Vec::new(),
         association: false,
         end_labels: Vec::new(),
+        constraint_labels: Vec::new(),
         stroke: None,
     })
 }
@@ -1709,7 +1758,7 @@ fn layout_activity_node(
     let h = line_height(FONT_SIZE);
     let figure = match props.node {
         ActivityNodeKind::Action => Figure::Action,
-        ActivityNodeKind::Object => Figure::Rectangle,
+        ActivityNodeKind::Object => Figure::ObjectNode { exception: None },
         ActivityNodeKind::Initial => Figure::Initial,
         ActivityNodeKind::ActivityFinal => Figure::ActivityFinal,
         ActivityNodeKind::FlowFinal => Figure::FlowFinal,
@@ -1721,7 +1770,9 @@ fn layout_activity_node(
         ActivityNodeKind::CallBehavior => Figure::CallBehavior,
         ActivityNodeKind::Connector => Figure::Circle,
         // Where a pin's texts go depends on the side of its action; `activity_borders` moves them.
-        ActivityNodeKind::InputPin | ActivityNodeKind::OutputPin => Figure::Pin { arrow: None },
+        ActivityNodeKind::InputPin | ActivityNodeKind::OutputPin => {
+            Figure::Pin { arrow: None, exception: None }
+        }
         ActivityNodeKind::ActivityParameter => Figure::Part,
     };
     // A centered line of `text` whose top is at `top`, at least as wide as `r`.
@@ -1848,7 +1899,64 @@ fn layout_activity_node(
                 .map(|(i, (t, role, element))| below(t, role, element, r, first + h * i as f32)),
         );
     }
+    // Astah marks an object node holding exceptions by a triangle 5 right of its top right
+    // corner, standing on the line of its top; an activity parameter shows none.
+    let figure = match figure {
+        Figure::ObjectNode { .. } if props.is_exception => Figure::ObjectNode {
+            exception: Some(exception_mark(r.right() + EXCEPTION_GAP, r.y - EXCEPTION_HEIGHT)),
+        },
+        f => f,
+    };
     (r, figure, rows)
+}
+
+/// Astah's exception triangle: 15 wide, 7.5·√2 high, 5 from the node.
+pub(crate) const EXCEPTION_WIDTH: f32 = 15.0;
+pub(crate) const EXCEPTION_HEIGHT: f32 = 7.5 * std::f32::consts::SQRT_2;
+pub(crate) const EXCEPTION_GAP: f32 = 5.0;
+
+/// The exception triangle whose box has its top left corner at (`x`, `y`): its top in the
+/// middle of the box's top, its base along the box's bottom. Astah draws it on whole pixels.
+fn exception_mark(x: f32, y: f32) -> [Point; 3] {
+    let p = |x: f32, y: f32| Point::new(x.round(), y.round());
+    [
+        p(x + EXCEPTION_WIDTH / 2.0, y),
+        p(x, y + EXCEPTION_HEIGHT),
+        p(x + EXCEPTION_WIDTH, y + EXCEPTION_HEIGHT),
+    ]
+}
+
+/// Where Astah puts the exception triangle of a pin on `side` of its action (0 top, 1 right,
+/// 2 bottom, 3 left): left of the pin and above its top, right of it for a pin on the right,
+/// and one triangle's height below the pin's top for a pin on the bottom.
+fn pin_exception(pin: Rect, side: u8) -> [Point; 3] {
+    let c = pin.center().x;
+    let x = if side == 1 {
+        c + PIN_SIZE / 2.0 + EXCEPTION_GAP
+    } else {
+        c - PIN_SIZE / 2.0 - EXCEPTION_GAP - EXCEPTION_WIDTH
+    };
+    let y = if side == 2 { pin.y + EXCEPTION_HEIGHT } else { pin.y - EXCEPTION_HEIGHT };
+    exception_mark(x, y)
+}
+
+/// What a pin whose square is `square` on `side` of its action covers as drawn: the square,
+/// its lines of text (`rows`, their sizes in order: name, state, properties), centered below
+/// it or stacked above it on the top side, and its exception triangle. The same as the pin's
+/// [`NodeShape::extent`].
+pub(crate) fn pin_cover(square: Rect, side: u8, rows: &[Size], exception: bool) -> Rect {
+    let width = rows.iter().map(|r| r.width).fold(0.0, f32::max);
+    let height: f32 = rows.iter().map(|r| r.height).sum();
+    let mut cover = square;
+    if !rows.is_empty() {
+        let y = if side == 0 { square.y - height } else { square.bottom() };
+        cover = cover.union(&Rect::new(square.center().x - width / 2.0, y, width, height));
+    }
+    if exception {
+        let t = pin_exception(square, side);
+        cover = cover.union(&Rect::from_corners(Point::new(t[1].x, t[0].y), t[2]));
+    }
+    cover
 }
 
 /// The height Astah gives a connector's name, which with the name's width sets the circle.
@@ -1925,17 +2033,26 @@ fn activity_borders(
         if !pin {
             continue;
         }
-        // The texts of a pin on the top of its action stand above it.
+        // The texts of a pin on the top of its action stand above it, stacked upward as Astah
+        // does: the name next to the pin, the state above it, and above those the properties
+        // in their order.
         if side == 0 && !node.rows.is_empty() {
             let height: f32 = node.rows.iter().map(|r| r.rect.height).sum();
-            let shift = -(height + node.rect.height);
-            node.rows.iter_mut().for_each(|r| r.rect = r.rect.translate(0.0, shift));
+            let head = (1 + usize::from(!props.in_state.is_empty())).min(node.rows.len());
+            let order: Vec<usize> = (head..node.rows.len()).chain((0..head).rev()).collect();
+            let mut y = node.rect.y - height;
+            for i in order {
+                let r = node.rows[i].rect;
+                node.rows[i].rect = r.translate(0.0, y - r.y);
+                y += r.height;
+            }
         }
         let arrow = node
             .element
             .filter(|e| !flowing.contains(e))
             .map(|_| pin_arrow(node.rect, side, props.node == ActivityNodeKind::InputPin));
-        node.figure = Figure::Pin { arrow };
+        let exception = props.is_exception.then(|| pin_exception(node.rect, side));
+        node.figure = Figure::Pin { arrow, exception };
     }
 }
 
@@ -2605,7 +2722,8 @@ pub fn with_contents(model: &Model, scene: &Scene, ids: &[Id]) -> Vec<Id> {
 }
 
 /// The size Astah gives the box of presentation `p` when it sizes it to its content, for
-/// classifier boxes that are sized automatically (`Style::auto_size`). Astah does that when the
+/// classifier boxes that are sized automatically (`Style::auto_size`) and for the height of
+/// state invariants. Astah does that when the
 /// content changes, not when it draws, so the bounds are only fitted while editing.
 pub fn fitted_size(model: &Model, p: &Presentation, measure: &dyn TextMeasure) -> Option<Size> {
     fitted_box(model, p, measure).map(|(size, _)| size)
@@ -2619,6 +2737,14 @@ pub fn fitted_box(
 ) -> Option<(Size, String)> {
     let bounds = p.bounds()?;
     let element = model.get(p.element?)?;
+    // A state invariant keeps its width; its height follows the lines its condition takes.
+    if matches!(element.kind(), ElementKind::StateInvariant(_)) {
+        let height = sequence::invariant_height(element.name(), bounds.width, measure);
+        return Some((
+            Size::new(bounds.width, height),
+            format!("{}\n{}", bounds.width, element.name()),
+        ));
+    }
     if !p.style.auto_size || p.style.iconic || !is_boxed_classifier(element.kind()) {
         return None;
     }
@@ -3095,6 +3221,7 @@ fn edge_for(
         free_labels: Vec::new(),
         association: false,
         end_labels: Vec::new(),
+        constraint_labels: Vec::new(),
         stroke: style.stroke,
     };
     // Role, multiplicity and whether the role is underlined (static), per end.
@@ -3269,56 +3396,51 @@ fn edge_for(
         let anchor = first.anchor.offset(0.0, line_height(FONT_SIZE));
         EdgeLabel { text, anchor, ..first.clone() }
     });
-    // Constraints stand below the name, one `{…}` per row, centered on the middle of the line
-    // (on the name when it was placed by hand): the first row's top 22.64 below the name's, or
-    // 9 below the middle without a name. They move along with the name; without one, a
-    // hand-placed name offset places them, and they stay where Astah puts them, across the
-    // line.
-    let constraint_rows: Vec<EdgeLabel> = {
+    // Constraints stand below the name, one `{…}` per row, each centered on the middle of the
+    // line: the first row's top 22.64 below the top of the name where Astah puts it (whether or
+    // not the name was moved by hand), or 9 below the middle without a name; rows 15.09 apart.
+    // A row moved by hand keeps its offset from that place (Astah's `localMovement`), so it
+    // follows the line but not the name. The rows not moved by hand move along with a name the
+    // layout moves out of the way, and come first among the labels so they do.
+    let (still, moved): (Vec<_>, Vec<_>) = {
         const BELOW_NAME: f32 = 22.64;
         const BELOW_MIDDLE: f32 = 9.0;
-        let rows = constraints.iter().map(|c| format!("{{{c}}}"));
-        let first_top = match (&name, placed.name) {
-            (Some(n), _) => {
+        let first_top = match &name {
+            Some(n) => {
                 let rows = 1 + usize::from(below.is_some());
-                Some(n.anchor.y + BELOW_NAME + (rows - 1) as f32 * LABEL_HEIGHT)
-            }
-            (None, Some(offset)) => Some(center.y + offset.y),
-            (None, None) => None,
-        };
-        let rows: Vec<String> = rows.collect();
-        let first_width = rows.first().map_or(0.0, |r| label_width(r, measure));
-        rows.into_iter()
-            .enumerate()
-            .map(|(i, text)| {
-                let width = label_width(&text, measure);
-                let (x, top) = match (&name, placed.name, first_top) {
-                    // Hand-placed: centered below the name, or on the first row, which starts
-                    // where the name would.
-                    (Some(n), Some(_), Some(top)) => {
-                        let middle = n.anchor.x + label_width(&n.text, measure) / 2.0;
-                        (middle - width / 2.0, top)
-                    }
-                    (None, Some(offset), Some(top)) => {
-                        (center.x + offset.x + (first_width - width) / 2.0, top)
-                    }
-                    (_, _, Some(top)) => (center.x - width / 2.0, top),
-                    _ => (center.x - width / 2.0, center.y + BELOW_MIDDLE),
+                let top = match placed.name {
+                    Some(_) => association_name(n.text.clone(), center, measure).anchor.y,
+                    None => n.anchor.y,
                 };
-                EdgeLabel {
+                top + BELOW_NAME + (rows - 1) as f32 * LABEL_HEIGHT
+            }
+            None => center.y + BELOW_MIDDLE,
+        };
+        constraints
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let text = format!("{{{c}}}");
+                let width = label_width(&text, measure);
+                let default =
+                    Point::new(center.x - width / 2.0, first_top + i as f32 * LABEL_HEIGHT);
+                let offset = style.constraint_offsets.get(i).copied().flatten();
+                let anchor = offset.map_or(default, |o| default.offset(o.x, o.y));
+                let label = EdgeLabel {
                     text,
-                    anchor: Point::new(x, top + i as f32 * LABEL_HEIGHT),
+                    anchor,
                     align: LabelAlign::Left,
                     underline: false,
                     keyword: false,
                     color: None,
-                }
+                };
+                (i, default, offset.is_some(), label)
             })
-            .collect()
+            .partition(|&(_, _, moved, _)| !moved)
     };
-    if name.is_some() || !constraint_rows.is_empty() {
+    if name.is_some() || !still.is_empty() {
         let lines = usize::from(name.is_some()) + usize::from(below.is_some());
-        let (index, lines) = (edge.labels.len(), lines + constraint_rows.len());
+        let (index, lines) = (edge.labels.len(), lines + still.len());
         let free = placed.name.is_none() && name.is_some();
         note_free(&mut edge.free_labels, index, free, LabelKind::Name, lines);
     }
@@ -3326,7 +3448,11 @@ fn edge_for(
     let colored = |l: EdgeLabel| EdgeLabel { color: style.font_color, ..l };
     edge.labels.extend(name.map(colored));
     edge.labels.extend(below.map(colored));
-    edge.labels.extend(constraint_rows);
+    for (constraint, default, _, label) in still.into_iter().chain(moved) {
+        let index = edge.labels.len();
+        edge.constraint_labels.push(ConstraintLabel { index, constraint, default });
+        edge.labels.push(label);
+    }
     let [(source_role, source_mult, source_static), (target_role, target_mult, target_static)] =
         ends;
     let (source_tip, source_from) = (pts[0], pts[1]);
@@ -3657,6 +3783,16 @@ pub fn message_label_at(scene: &Scene, p: Point, measure: &dyn TextMeasure) -> O
     })
 }
 
+/// The presentation of the duration or time constraint whose label lies under `p`, which can
+/// be moved on its own.
+pub fn constraint_label_at(scene: &Scene, p: Point) -> Option<Id> {
+    scene.nodes.iter().rev().find_map(|n| {
+        let constraint = matches!(n.figure, Figure::Duration { .. } | Figure::TimeTick { .. });
+        let hit = n.rows.iter().any(|r| r.rect.inflate(1.0).contains(p));
+        (constraint && hit).then_some(n.id)
+    })
+}
+
 /// The «include» or «extend» label under `p`: the edge's presentation, the label's top left
 /// corner and the middle of the line, which a label placed by hand is kept relative to.
 pub fn keyword_label_at(
@@ -3672,6 +3808,28 @@ pub fn keyword_label_at(
         }
         let (a, b) = route::middle_segment(&e.points, e.shape.is_curve());
         Some((e.id, label.anchor, middle(a, b)))
+    })
+}
+
+/// The constraint label (`{…}`) of a line under `p`, the topmost if several overlap.
+pub fn line_constraint_at(
+    scene: &Scene,
+    p: Point,
+    measure: &dyn TextMeasure,
+) -> Option<LineConstraintHit> {
+    scene.edges.iter().rev().filter(|e| !e.fixed).find_map(|e| {
+        e.constraint_labels.iter().rev().find_map(|c| {
+            let label = &e.labels[c.index];
+            let width = label_width(&label.text, measure);
+            Rect::new(label.anchor.x, label.anchor.y, width, LABEL_HEIGHT).contains(p).then_some(
+                LineConstraintHit {
+                    edge: e.id,
+                    constraint: c.constraint,
+                    anchor: label.anchor,
+                    default: c.default,
+                },
+            )
+        })
     })
 }
 
@@ -5238,6 +5396,93 @@ mod tests {
         assert!(node.extent().bottom() > node.rect.bottom() + 3.0 * line_height(FONT_SIZE));
     }
 
+    /// Control, effect and exception as Astah draws them (probe of 2026-11-03): `{effect}`
+    /// first and `{control}` before `{stream}`, the effect last on activity parameters, and
+    /// the exception triangle beside object nodes and pins on whole pixels.
+    #[test]
+    fn control_effect_and_exception_marks() {
+        use umlcraft_model::{ObjectEffect, ObjectOrdering};
+        let (mut doc, ids) = order_system();
+        let d = ids.activity_diagram;
+        let all = |node| ActivityNodeProps {
+            node,
+            ordering: Some(ObjectOrdering::Lifo),
+            upper_bound: "2".into(),
+            is_control: true,
+            effect: Some(ObjectEffect::Read),
+            is_stream: true,
+            is_exception: true,
+            ..Default::default()
+        };
+        let (object, parameter, action, pins) = doc
+            .edit("objects", |tx| {
+                let activity = tx.model().get(d).unwrap().owner().unwrap();
+                let object = tx.create(
+                    activity,
+                    ElementData::new("o", ElementKind::ActivityNode(all(ActivityNodeKind::Object))),
+                )?;
+                let object = tx.add_node(d, Some(object), Rect::new(400.0, 200.0, 67.35, 25.09))?;
+                let kind = ElementKind::ActivityNode(all(ActivityNodeKind::ActivityParameter));
+                let parameter = tx.create(activity, ElementData::new("p", kind))?;
+                let parameter =
+                    tx.add_node(d, Some(parameter), Rect::new(600.0, 200.0, 40.0, 25.0))?;
+                let a = ElementKind::activity_node(ActivityNodeKind::Action);
+                let a = tx.create(activity, ElementData::new("Ship", a))?;
+                let action = tx.add_node(d, Some(a), Rect::new(200.0, 200.0, 65.0, 23.09))?;
+                // One exception pin on each side: top, right, bottom, left.
+                let mut pins = Vec::new();
+                for at in [(240.0, 185.0), (265.0, 204.0), (230.0, 223.09), (185.0, 204.0)] {
+                    let mut p = ActivityNodeProps {
+                        node: ActivityNodeKind::OutputPin,
+                        is_exception: true,
+                        ..Default::default()
+                    };
+                    if pins.is_empty() {
+                        p.is_control = true;
+                    }
+                    let pin = tx.create(a, ElementData::new("x", ElementKind::ActivityNode(p)))?;
+                    let r = Rect::new(at.0, at.1, PIN_SIZE, PIN_SIZE);
+                    pins.push(tx.add_node(d, Some(pin), r)?);
+                }
+                Ok((object, parameter, action, pins))
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let texts = |id| -> Vec<String> {
+            scene.node(id).unwrap().rows.iter().map(|r| r.text.clone()).collect()
+        };
+        let lines = ["{ordering=LIFO}", "{upperBound=2}", "{control}"];
+        assert_eq!(texts(object), [&["o", "{read}"][..], &lines, &["{stream}"]].concat());
+        assert_eq!(texts(parameter), [&["p"][..], &lines, &["{read}", "{stream}"]].concat());
+        assert_eq!(texts(pins[0]), ["x", "{control}"]);
+
+        let mark = |id| match &scene.node(id).unwrap().figure {
+            Figure::ObjectNode { exception } | Figure::Pin { exception, .. } => *exception,
+            _ => None,
+        };
+        let p = |x: f32, y: f32| Point::new(x, y);
+        // Astah's polygons: (480,189) (472,200) (487,200) beside the object node …
+        assert_eq!(mark(object), Some([p(480.0, 189.0), p(472.0, 200.0), p(487.0, 200.0)]));
+        // … none on the parameter …
+        assert!(matches!(scene.node(parameter).unwrap().figure, Figure::Part));
+        // … and left of the pins, right of one on the right, lower for one on the bottom.
+        let expected = [
+            [p(228.0, 174.0), p(220.0, 185.0), p(235.0, 185.0)],
+            [p(293.0, 193.0), p(285.0, 204.0), p(300.0, 204.0)],
+            [p(218.0, 234.0), p(210.0, 244.0), p(225.0, 244.0)],
+            [p(173.0, 193.0), p(165.0, 204.0), p(180.0, 204.0)],
+        ];
+        for (pin, expected) in pins.iter().zip(expected) {
+            let r = scene.node(*pin).unwrap().rect;
+            assert_eq!(mark(*pin), Some(expected), "pin at {r:?}");
+        }
+        let _ = action;
+        // Drawn as a filled triangle after the pin's square.
+        let drawn = crate::draw::figure(scene.node(pins[0]).unwrap());
+        assert!(drawn.iter().any(|d| matches!(d, crate::draw::Primitive::Polygon { points, .. }
+            if points.len() == 3)));
+    }
+
     #[test]
     fn signal_time_call_and_connector_figures() {
         let (mut doc, ids) = order_system();
@@ -5571,6 +5816,139 @@ mod tests {
         assert!(node.rows.iter().any(|r| r.text == "+ x"));
         let line = scene.edges.iter().find(|e| e.id == edge).unwrap();
         assert!(!line.labels.iter().any(|l| l.text.starts_with('{')));
+    }
+
+    #[test]
+    fn a_line_s_constraint_labels_move_together_and_follow_the_line() {
+        use crate::palette::{EdgeTool, NodeTool};
+        let (mut doc, d, made) = class_diagram_with(&[
+            (NodeTool::Class, "A", Point::new(40.0, 40.0)),
+            (NodeTool::Class, "B", Point::new(440.0, 40.0)),
+        ]);
+        let [(_, na), (_, nb)] = made[..] else { panic!() };
+        let mut edge = Id::generate();
+        doc.edit("constrain", |tx| {
+            edge = crate::palette::connect(tx, d, EdgeTool::Association, na, nb)?;
+            let association = tx.model().view(d).unwrap().get(edge).unwrap().element.unwrap();
+            tx.rename(association, "link")?;
+            let constraints = vec!["xor".into(), "other".into(), "third".into()];
+            tx.update(association, |data| data.constraints = constraints)
+        })
+        .unwrap();
+        let rows = |doc: &umlcraft_model::Document| {
+            let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+            let line = scene.edges.iter().find(|e| e.id == edge).unwrap().clone();
+            let mut rows: Vec<(usize, Point, Point)> = line
+                .constraint_labels
+                .iter()
+                .map(|c| (c.constraint, line.labels[c.index].anchor, c.default))
+                .collect();
+            rows.sort_by_key(|r| r.0);
+            (scene, rows)
+        };
+        let (scene, before) = rows(&doc);
+        assert_eq!(before.len(), 3);
+        // Not moved, each stands where the layout puts it.
+        assert!(before.iter().all(|(_, at, default)| at.distance(*default) < 0.01));
+
+        // Moved by hand, all of them go together, as Astah's editor moves them.
+        doc.edit("move", |tx| {
+            crate::edit::shift_line_constraints(tx, d, edge, Point::new(80.0, 40.0))
+        })
+        .unwrap();
+        let (_, after) = rows(&doc);
+        for i in 0..3 {
+            assert!(after[i].1.distance(before[i].1.offset(80.0, 40.0)) < 0.01);
+        }
+        // The hit test finds it where it is drawn now.
+        let p = after[1].1.offset(2.0, 5.0);
+        let hit = line_constraint_at(&rows(&doc).0, p, &ApproxMeasure).expect("a hit");
+        assert_eq!((hit.edge, hit.constraint), (edge, 1));
+        assert!(line_constraint_at(&scene, p, &ApproxMeasure).is_none());
+
+        // It keeps its offset when the line moves, as in Astah.
+        doc.edit("node", |tx| {
+            tx.update_presentation(d, nb, |p| {
+                if let Shape::Node { bounds, .. } = &mut p.shape {
+                    bounds.y += 100.0;
+                }
+            })
+        })
+        .unwrap();
+        let (_, moved) = rows(&doc);
+        assert!((moved[1].1.y - moved[1].2.y - 40.0).abs() < 0.01);
+        assert!((moved[1].1.x - moved[1].2.x - 80.0).abs() < 0.01);
+        assert!(moved[1].2.y > before[1].2.y + 10.0, "the default follows the line");
+
+        // Offsets of their own, as imported from Astah, are shifted alike; moved back, no
+        // offset is kept.
+        doc.edit("own", |tx| {
+            tx.update_presentation(d, edge, |p| {
+                p.style.constraint_offsets = vec![None, Some(Point::new(80.0, 40.0)), None];
+            })
+        })
+        .unwrap();
+        doc.edit("shift", |tx| {
+            crate::edit::shift_line_constraints(tx, d, edge, Point::new(-80.0, -40.0))
+        })
+        .unwrap();
+        let view = doc.model().view(d).unwrap();
+        let offsets = &view.get(edge).unwrap().style.constraint_offsets;
+        assert_eq!(
+            offsets,
+            &[Some(Point::new(-80.0, -40.0)), None, Some(Point::new(-80.0, -40.0))]
+        );
+        doc.edit("back", |tx| {
+            crate::edit::shift_line_constraints(tx, d, edge, Point::new(80.0, 40.0))
+        })
+        .unwrap();
+        let view = doc.model().view(d).unwrap();
+        let offsets = &view.get(edge).unwrap().style.constraint_offsets;
+        assert_eq!(offsets, &[None, Some(Point::new(80.0, 40.0))]);
+        // That one moved back too, no offset is kept.
+        doc.edit("own", |tx| {
+            tx.update_presentation(d, edge, |p| p.style.constraint_offsets.clear())
+        })
+        .unwrap();
+        for by in [Point::new(5.0, 5.0), Point::new(-5.0, -5.0)] {
+            doc.edit("shift", |tx| crate::edit::shift_line_constraints(tx, d, edge, by)).unwrap();
+        }
+        let view = doc.model().view(d).unwrap();
+        assert!(view.get(edge).unwrap().style.constraint_offsets.is_empty());
+    }
+
+    #[test]
+    fn constraints_stay_where_astah_puts_them_when_the_name_was_moved_by_hand() {
+        use crate::palette::{EdgeTool, NodeTool};
+        let (mut doc, d, made) = class_diagram_with(&[
+            (NodeTool::Class, "A", Point::new(40.0, 40.0)),
+            (NodeTool::Class, "B", Point::new(440.0, 40.0)),
+        ]);
+        let [(_, na), (_, nb)] = made[..] else { panic!() };
+        let mut edge = Id::generate();
+        doc.edit("constrain", |tx| {
+            edge = crate::palette::connect(tx, d, EdgeTool::Association, na, nb)?;
+            let association = tx.model().view(d).unwrap().get(edge).unwrap().element.unwrap();
+            tx.rename(association, "link")?;
+            tx.update(association, |data| data.constraints = vec!["xor".into()])
+        })
+        .unwrap();
+        let at = |doc: &umlcraft_model::Document| {
+            let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+            let line = scene.edges.iter().find(|e| e.id == edge).unwrap();
+            line.labels.iter().find(|l| l.text == "{xor}").unwrap().anchor
+        };
+        let before = at(&doc);
+        // The name 40 lower, as Astah's `localMovement` keeps it: the constraint stays.
+        doc.edit("name", |tx| {
+            tx.update_presentation(d, edge, |p| {
+                if let Shape::Edge { labels, .. } = &mut p.shape {
+                    labels.name = Some(Point::new(-12.0, 41.45));
+                }
+            })
+        })
+        .unwrap();
+        assert!(at(&doc).distance(before) < 0.01, "{:?} vs {before:?}", at(&doc));
     }
 
     #[test]

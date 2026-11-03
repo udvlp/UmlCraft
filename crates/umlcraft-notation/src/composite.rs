@@ -174,7 +174,9 @@ const NEAR_BORDER: f32 = 10.0;
 /// Where a new node of `tool` goes on `host` (a node of `diagram`) when no place is given: a
 /// part below the class's name, right of the parts there or in a new row; a stub state along
 /// the bottom of its submachine state; a port on the first free place along the left border,
-/// then the right, top and bottom ones (exit points and output pins start on the right).
+/// then the right, top and bottom ones (exit points and output pins start on the right). A pin
+/// placed here knows nothing of the texts it will show; once it has its name and properties,
+/// [`crate::activity::place_pin`] finds it a place clear of the other pins' texts.
 pub fn free_spot(model: &Model, diagram: Id, host: Id, tool: NodeTool) -> Option<Point> {
     let view = model.view(diagram)?;
     let r = view.get(host)?.bounds()?;

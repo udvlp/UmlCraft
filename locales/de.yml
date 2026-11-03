@@ -397,6 +397,9 @@ prop:
   ordering: Reihenfolge
   upper_bound: Obergrenze
   stream: Stream
+  object_effect: Wirkung
+  object_control: Steuerung (Kontrollmarken)
+  object_exception: Ausnahme
   calls: Ruft auf
   submachine: Zustandsautomat
   return_type: Rückgabetyp
@@ -547,6 +550,7 @@ export_dropped:
   fontSize: Schriftgrößen einzelner Elemente
   containment: Enthaltenseins-Linien geschachtelter Klassen
   guardPosition: Wächterbedingungen oberhalb ihres Operanden
+  constraintPosition: Lage von Einschränkungen an Linien (Astah nimmt eine Verschiebung für alle Einschränkungen einer Assoziation)
   instanceNameVisibility: Ausgeblendete Namen von Instanzen
   instanceTypeVisibility: Ausgeblendete Classifier von Instanzen
 settings:

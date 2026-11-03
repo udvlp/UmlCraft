@@ -74,6 +74,11 @@ impl Primitive {
     }
 }
 
+/// The triangle Astah marks exception pins and object nodes with: filled, outlined 1 px.
+fn exception_mark(points: Option<[Point; 3]>) -> Option<Primitive> {
+    points.map(|p| Primitive::Polygon { points: p.to_vec(), fill: Paint::Fill })
+}
+
 fn line(points: Vec<Point>, style: LineStyle) -> Primitive {
     Primitive::Polyline { points, width: 1.0, style }
 }
@@ -411,15 +416,15 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             vec![line(vec![Point::new(r.x, r.y), Point::new(r.x, r.bottom())], solid)]
         }
         Figure::Activation => vec![frame(r, Paint::Fill)],
-        // Astah's rounded rectangle with arcs of 20 × 40, a 2 px border.
-        Figure::StateInvariant => vec![Primitive::Frame {
-            rect: r,
-            width: 2.0,
-            radius: 10.0_f32.min(r.height / 2.0).min(r.width / 2.0),
-            fill: Paint::Fill,
-            border: Paint::Line,
-            style: solid,
-        }],
+        // Astah's rounded rectangle with arcs of 20 × 40, a 2 px border: corners 10 wide and up
+        // to 20 high, which shows once the box holds more than one line.
+        Figure::StateInvariant => {
+            let outline = elliptic_corners(r, 10.0, 20.0);
+            vec![
+                Primitive::Polygon { points: outline.clone(), fill: Paint::Fill },
+                Primitive::Polyline { points: outline, width: 2.0, style: solid },
+            ]
+        }
         Figure::Termination => cross(r.center()),
         Figure::Duration { x, top, bottom } => {
             let (x, top, bottom) = (*x, *top, *bottom);
@@ -533,6 +538,11 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             style: solid,
         }],
         Figure::Rectangle => vec![frame(r, Paint::Fill)],
+        Figure::ObjectNode { exception } => {
+            let mut result = vec![frame(r, Paint::Fill)];
+            result.extend(exception_mark(*exception));
+            result
+        }
         // Astah: a pentagon pointing 18 to the right, outlined 2 px wide.
         Figure::SendSignal => {
             let tip = SIGNAL_POINT.min(r.width / 2.0);
@@ -591,7 +601,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
         }
         // Astah outlines pins 2 px wide; the arrow of a pin without flows is 1 px with a head
         // 5.2 long and 6 wide.
-        Figure::Pin { arrow } => {
+        Figure::Pin { arrow, exception } => {
             let mut result = vec![thick_frame(r)];
             if let Some([from, to]) = *arrow {
                 let length = from.distance(to).max(0.01);
@@ -601,6 +611,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                 result.push(line(vec![back.offset(-uy * 3.0, ux * 3.0), to], solid));
                 result.push(line(vec![back.offset(uy * 3.0, -ux * 3.0), to], solid));
             }
+            result.extend(exception_mark(*exception));
             result
         }
         // Astah outlines ports 2 px wide, like parts.
@@ -908,6 +919,31 @@ pub fn sequence(layout: &SequenceLayout) -> Vec<Primitive> {
 }
 
 /// The cross that ends a lifeline at `p`, 20 px wide with 2 px lines.
+/// The closed outline of `r` with elliptic corners `rx` wide and `ry` high (at most half the
+/// box), clockwise from the top edge, the first point repeated at the end.
+fn elliptic_corners(r: Rect, rx: f32, ry: f32) -> Vec<Point> {
+    const STEPS: usize = 8;
+    let (rx, ry) = (rx.min(r.width / 2.0), ry.min(r.height / 2.0));
+    // Each corner's center and the angle its arc starts at, going clockwise on screen.
+    let corners = [
+        (Point::new(r.right() - rx, r.y + ry), -std::f32::consts::FRAC_PI_2),
+        (Point::new(r.right() - rx, r.bottom() - ry), 0.0),
+        (Point::new(r.x + rx, r.bottom() - ry), std::f32::consts::FRAC_PI_2),
+        (Point::new(r.x + rx, r.y + ry), std::f32::consts::PI),
+    ];
+    let mut points: Vec<Point> = corners
+        .iter()
+        .flat_map(|&(c, start)| {
+            (0..=STEPS).map(move |i| {
+                let a = start + std::f32::consts::FRAC_PI_2 * i as f32 / STEPS as f32;
+                Point::new(c.x + rx * a.cos(), c.y + ry * a.sin())
+            })
+        })
+        .collect();
+    points.push(points[0]);
+    points
+}
+
 fn cross(p: Point) -> Vec<Primitive> {
     let d = crate::sequence_edit::CROSS / 2.0;
     vec![
