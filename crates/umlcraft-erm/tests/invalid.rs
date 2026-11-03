@@ -69,7 +69,7 @@ fn format_errors_say_what_and_where() {
         message("format-field-of-other-kind"),
         "x: field `weak` does not belong to type `attribute`"
     );
-    assert_eq!(message("format-bad-max"), "l1: `max` is a number or \"n\", not `many`");
+    assert_eq!(message("format-bad-max"), "l1: `max` is a number, \"n\" or \"m\", not `many`");
     assert_eq!(
         message("format-label-text-and-min"),
         "l1: a label has either `text` or `min` and `max`"

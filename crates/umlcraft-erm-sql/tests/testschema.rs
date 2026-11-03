@@ -109,8 +109,9 @@ fn the_report_counts() {
 }
 
 /// The table without the order of the tables and of a relationship's ends, which follow
-/// the source.
+/// the source (so does which end is `m`).
 fn unordered(table: &str) -> Vec<String> {
+    let table = table.replace("[0,m]", "[0,n]");
     let mut lines: Vec<String> = table
         .lines()
         .map(|l| {

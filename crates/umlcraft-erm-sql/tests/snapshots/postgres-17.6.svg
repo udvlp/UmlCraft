@@ -479,12 +479,12 @@
 <text x="1225" y="399.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
 <rect x="1000.3" y="185.4" width="21.4" height="13.2" fill="#ffffff"/>
 <text x="1011" y="195.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="1113.3" y="749.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1124" y="759.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
+<rect x="1111.78" y="749.4" width="24.45" height="13.2" fill="#ffffff"/>
+<text x="1124" y="759.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,m]</text>
 <rect x="698.3" y="960.4" width="21.4" height="13.2" fill="#ffffff"/>
 <text x="709" y="970.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="715.3" y="1133.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="726" y="1143.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
+<rect x="713.78" y="1133.4" width="24.45" height="13.2" fill="#ffffff"/>
+<text x="726" y="1143.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,m]</text>
 <rect x="850.3" y="1106.4" width="21.4" height="13.2" fill="#ffffff"/>
 <text x="861" y="1116.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
 <rect x="498.3" y="602.4" width="21.4" height="13.2" fill="#ffffff"/>
@@ -505,8 +505,8 @@
 <text x="677" y="573.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
 <rect x="508.3" y="935.4" width="21.4" height="13.2" fill="#ffffff"/>
 <text x="519" y="945.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="390.3" y="1115.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="401" y="1125.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
+<rect x="388.78" y="1115.4" width="24.45" height="13.2" fill="#ffffff"/>
+<text x="401" y="1125.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,m]</text>
 <rect x="283.3" y="181.4" width="21.4" height="13.2" fill="#ffffff"/>
 <text x="294" y="191.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
 <rect x="376.3" y="375.4" width="21.4" height="13.2" fill="#ffffff"/>

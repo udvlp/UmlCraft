@@ -302,21 +302,35 @@ pub enum LabelText {
 /// `[min,max]`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cardinality {
-    pub min: u32,
+    pub min: Min,
     pub max: Max,
 }
 
 impl Cardinality {
+    /// `[min,max]` with a number as the minimum.
     pub const fn new(min: u32, max: Max) -> Self {
-        Self { min, max }
+        Self { min: Min::Count(min), max }
     }
 }
 
 impl fmt::Display for Cardinality {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.max {
-            Max::Count(n) => write!(f, "[{},{n}]", self.min),
-            Max::Many => write!(f, "[{},n]", self.min),
+        write!(f, "[{},{}]", self.min, self.max)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Min {
+    Count(u32),
+    /// Any number, as many as there may be (`*`).
+    Any,
+}
+
+impl fmt::Display for Min {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Count(n) => write!(f, "{n}"),
+            Self::Any => f.write_str("*"),
         }
     }
 }
@@ -326,6 +340,25 @@ pub enum Max {
     Count(u32),
     /// Any number (`n`).
     Many,
+    /// Any number, named `m`: the second "many" side of a relationship (`[0,n]` to `[0,m]`).
+    ManyM,
+}
+
+impl Max {
+    /// `n` or `m`.
+    pub const fn is_many(self) -> bool {
+        matches!(self, Self::Many | Self::ManyM)
+    }
+}
+
+impl fmt::Display for Max {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Count(n) => write!(f, "{n}"),
+            Self::Many => f.write_str("n"),
+            Self::ManyM => f.write_str("m"),
+        }
+    }
 }
 
 impl Label {

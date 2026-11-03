@@ -10,8 +10,8 @@ use std::collections::HashSet;
 use crate::check::{IssueKind, Severity, allowed, check};
 use crate::create::SizeSet;
 use crate::model::{
-    Cardinality, Diagram, Id, Label, LabelPos, LabelText, Line, Link, Max, NodeKind, Point, Props,
-    Rect, Style, TextAlign,
+    Cardinality, Diagram, Id, Label, LabelPos, LabelText, Line, Link, Max, Min, NodeKind, Point,
+    Props, Rect, Style, TextAlign,
 };
 
 /// The smallest box a node or text can be given, so that it stays grabbable.
@@ -21,6 +21,25 @@ pub const MIN_SIZE: (f64, f64) = (20.0, 10.0);
 pub const NEW_LABEL_POS: LabelPos = LabelPos { x: 0.0, y: 15.0, dx: 0.0, dy: 0.0 };
 /// The cardinality a new participation gets.
 pub const NEW_CARDINALITY: Cardinality = Cardinality::new(0, Max::Many);
+
+/// The cardinality of a new line from `relationship`: `[0,n]`, or `[0,m]` if one of its
+/// lines has `n` already and none `m` (`[0,n]` to `[0,m]`).
+pub fn new_cardinality(d: &Diagram, relationship: &Id) -> Cardinality {
+    let maxes: Vec<Max> = d
+        .links
+        .iter()
+        .filter(|l| l.source == *relationship)
+        .filter_map(|l| match &l.label.as_ref()?.text {
+            LabelText::Cardinality(c) => Some(c.max),
+            LabelText::Text(_) => None,
+        })
+        .collect();
+    if maxes.contains(&Max::Many) && !maxes.contains(&Max::ManyM) {
+        Cardinality::new(0, Max::ManyM)
+    } else {
+        NEW_CARDINALITY
+    }
+}
 
 /// Something that can be selected and changed.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -157,8 +176,8 @@ pub fn connect(
         let relationship_like =
             matches!(sk, NodeKind::Relationship { .. } | NodeKind::AssociativeEntity);
         if relationship_like && tk.is_entity_like() && sk != tk {
-            link.label =
-                Some(Label { text: LabelText::Cardinality(NEW_CARDINALITY), pos: NEW_LABEL_POS });
+            let c = new_cardinality(d, source);
+            link.label = Some(Label { text: LabelText::Cardinality(c), pos: NEW_LABEL_POS });
         }
         if matches!(sk, NodeKind::IsA { .. }) {
             let has_super = d.links_of(source).any(|l| l.super_type && l.source == *source);
@@ -263,14 +282,28 @@ pub fn set_bounds(d: &mut Diagram, item: &Item, bounds: Rect) -> Result<()> {
     })
 }
 
-/// Makes the nodes as large as their names need (`size::fit`), keeping their centres.
-pub fn fit_to_text(d: &mut Diagram, nodes: &[Id]) -> Result<()> {
+/// Makes nodes as large as their names need (`size::fit`), keeping their centres, and free
+/// texts as large as their lines (`size::fit_text`).
+pub fn fit_to_text(d: &mut Diagram, ids: &[Id]) -> Result<()> {
     guarded(d, |d| {
-        for id in nodes {
-            let n = d.node_mut(id).ok_or_else(|| EditError::Missing(id.clone()))?;
-            let (w, h) = crate::size::fit(&n.kind, &n.name, (n.bounds.width, n.bounds.height));
-            let c = n.bounds.center();
-            n.bounds = Rect::new(c.x - w / 2.0, c.y - h / 2.0, w, h);
+        for id in ids {
+            if let Some(n) = d.node_mut(id) {
+                let (w, h) = crate::size::fit(&n.kind, &n.name, (n.bounds.width, n.bounds.height));
+                let c = n.bounds.center();
+                n.bounds = Rect::new(c.x - w / 2.0, c.y - h / 2.0, w, h);
+                continue;
+            }
+            // A free text keeps the side it is aligned to, and its middle height.
+            let t = d.texts.iter_mut().find(|t| t.id == *id);
+            let t = t.ok_or_else(|| EditError::Missing(id.clone()))?;
+            let (w, h) = crate::size::fit_text(t);
+            let b = t.bounds;
+            let x = match t.style.align.unwrap_or(TextAlign::Center) {
+                TextAlign::Left => b.x,
+                TextAlign::Center => b.center().x - w / 2.0,
+                TextAlign::Right => b.x + b.width - w,
+            };
+            t.bounds = Rect::new(x, b.center().y - h / 2.0, w, h);
         }
         Ok(())
     })
@@ -314,8 +347,8 @@ pub fn set_text(d: &mut Diagram, item: &Item, text: &str) -> Result<()> {
     })
 }
 
-/// What a typed label is: nothing (empty), a cardinality (`[0,n]`, `[ 1 , 5 ]`, `0..n`,
-/// `1..*`) or a free text.
+/// What a typed label is: nothing (empty), a cardinality (`[0,n]`, `[ 1 , 5 ]`, `[*,m]`,
+/// `0..n`, `1..*`) or a free text.
 pub fn parse_label(text: &str) -> Option<LabelText> {
     let t = text.trim();
     if t.is_empty() {
@@ -324,15 +357,21 @@ pub fn parse_label(text: &str) -> Option<LabelText> {
     let cardinality = || {
         let inner = t.strip_prefix('[').and_then(|r| r.strip_suffix(']')).unwrap_or(t);
         let (min, max) = inner.split_once(',').or_else(|| inner.split_once(".."))?;
-        let min: u32 = min.trim().parse().ok()?;
+        let min = match min.trim() {
+            "*" => Min::Any,
+            n => Min::Count(n.parse().ok()?),
+        };
         let max = match max.trim() {
-            "n" | "N" | "m" | "M" | "*" => Max::Many,
+            "n" | "N" | "*" => Max::Many,
+            "m" | "M" => Max::ManyM,
             m => Max::Count(m.parse().ok()?),
         };
-        if matches!(max, Max::Count(m) if m < min) {
+        if let (Min::Count(min), Max::Count(max)) = (min, max)
+            && max < min
+        {
             return None;
         }
-        Some(Cardinality::new(min, max))
+        Some(Cardinality { min, max })
     };
     Some(match cardinality() {
         Some(c) => LabelText::Cardinality(c),
@@ -600,9 +639,27 @@ mod tests {
         assert_eq!(parse_label(" [ 1 , 5 ] "), c(1, Max::Count(5)));
         assert_eq!(parse_label("1..*"), c(1, Max::Many));
         assert_eq!(parse_label("0,1"), c(0, Max::Count(1)));
+        assert_eq!(parse_label("[0,m]"), c(0, Max::ManyM));
+        let any = |max| Some(LabelText::Cardinality(Cardinality { min: Min::Any, max }));
+        assert_eq!(parse_label("[*,m]"), any(Max::ManyM));
+        assert_eq!(parse_label("*..*"), any(Max::Many));
         assert_eq!(parse_label("[5,1]"), Some(LabelText::Text("[5,1]".into())));
         assert_eq!(parse_label("leitet"), Some(LabelText::Text("leitet".into())));
         assert_eq!(parse_label("  "), None);
+    }
+
+    #[test]
+    fn the_second_many_end_of_a_relationship_is_m() {
+        let mut d = Diagram::new("t");
+        let r = add_node(&mut d, NodeKind::relationship(), "nimmt teil", Point::new(0.0, 0.0));
+        let mut maxes = Vec::new();
+        for name in ["A", "B", "C"] {
+            let e = add_node(&mut d, NodeKind::entity(), name, Point::new(100.0, 0.0));
+            let l = connect(&mut d, &r, &e, (None, None)).unwrap();
+            let label = d.link(&l).unwrap().label.clone().unwrap();
+            maxes.push(label.display());
+        }
+        assert_eq!(maxes, ["[0,n]", "[0,m]", "[0,n]"]);
     }
 
     #[test]

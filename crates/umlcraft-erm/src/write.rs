@@ -5,7 +5,7 @@
 use serde_json::Value;
 
 use crate::model::{
-    Caption, Diagram, Key, Label, LabelPos, LabelText, Line, Link, Max, Node, NodeKind, Point,
+    Caption, Diagram, Key, Label, LabelPos, LabelText, Line, Link, Max, Min, Node, NodeKind, Point,
     Props, Rect, Style, Text, TextAlign,
 };
 use crate::record::{
@@ -131,10 +131,14 @@ fn label(l: &Label) -> LabelRecord {
     match &l.text {
         LabelText::Text(t) => r.text = Some(t.clone()),
         LabelText::Cardinality(c) => {
-            r.min = Some(c.min);
+            r.min = Some(match c.min {
+                Min::Count(n) => MaxRecord::Count(n),
+                Min::Any => MaxRecord::Word("*".to_owned()),
+            });
             r.max = Some(match c.max {
                 Max::Count(n) => MaxRecord::Count(n),
                 Max::Many => MaxRecord::Word("n".to_owned()),
+                Max::ManyM => MaxRecord::Word("m".to_owned()),
             });
         }
     }

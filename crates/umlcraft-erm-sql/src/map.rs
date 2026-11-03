@@ -7,7 +7,8 @@
 //!   identifying relationship (S4); every other table an entity (S5).
 //! - Columns become attributes, except those of foreign keys: they are the relationships
 //!   (S6, S7). Cardinalities are read look-across: `[1,1]` at the referenced table says that
-//!   each row of the referencing one has exactly one.
+//!   each row of the referencing one has exactly one. The second end of a junction table's
+//!   relationship is `[0,m]` (`[0,n]` to `[0,m]`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -172,11 +173,13 @@ pub fn map(schema: &Schema, options: &Options) -> Import {
                     ..Props::default()
                 },
             );
-            for fk in fks {
+            for (k, fk) in fks.iter().enumerate() {
                 let role = (fks.iter().filter(|f| f.target == fk.target).count() > 1)
                     .then(|| relationship_name(&fk.columns, ""));
                 let target = m.target(&fk.target);
-                m.join(&r, &target, Cardinality::new(0, Max::Many), role, Line::Solid);
+                // `[0,n]` to `[0,m]`; a third and further ends are `n` again.
+                let max = if k == 1 { Max::ManyM } else { Max::Many };
+                m.join(&r, &target, Cardinality::new(0, max), role, Line::Solid);
             }
             m.attributes(&r, t, &own, &[], &[]);
             continue;

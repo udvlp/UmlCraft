@@ -3,8 +3,8 @@
 //! out, as in draw.io.
 
 use crate::geometry::{inner_inset, inset};
-use crate::metrics::{Metrics, NODE_FONT_SIZE};
-use crate::model::{Node, NodeKind, Rect};
+use crate::metrics::{Metrics, NODE_FONT_SIZE, line_height};
+use crate::model::{Node, NodeKind, Rect, Text};
 
 /// The text box: the node's box 1 px in on each side (draw.io's label bounds less its
 /// spacing), and also inside a second frame.
@@ -36,6 +36,17 @@ pub fn fit(kind: &NodeKind, name: &str, current: (f64, f64)) -> (f64, f64) {
     }
 }
 
+/// A size that fits a free text: its longest line and its lines, with 10 px room on each
+/// side, in 10 px steps.
+pub fn fit_text(t: &Text) -> (f64, f64) {
+    let size = t.style.font_size.unwrap_or(NODE_FONT_SIZE);
+    let lines: Vec<&str> = t.text.split('\n').collect();
+    let longest =
+        lines.iter().map(|l| Metrics::get().width(l, size, t.style.bold)).fold(0.0, f64::max);
+    let tens = |v: f64| (v / 10.0).ceil() * 10.0;
+    (tens(longest + 20.0), tens(lines.len() as f64 * line_height(size) + 10.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,5 +59,16 @@ mod tests {
         assert_eq!(fit(&NodeKind::relationship(), "hat", (60.0, 40.0)), (60.0, 40.0));
         assert_eq!(fit(&NodeKind::relationship(), "start_flughafen", (60.0, 40.0)).0, 140.0);
         assert_eq!(fit(&NodeKind::entity(), "Kunde", (100.0, 40.0)), (100.0, 40.0));
+    }
+
+    #[test]
+    fn free_texts_get_room_for_every_line() {
+        let mut d = crate::Diagram::new("t");
+        let id = d.add_text("Ein recht langer Hinweis\nzwei", crate::Point::default());
+        let t = d.texts.iter().find(|t| t.id == id).unwrap();
+        let (w, h) = fit_text(t);
+        let longest = Metrics::get().width("Ein recht langer Hinweis", NODE_FONT_SIZE, false);
+        assert!(w >= longest + 20.0 && w < longest + 30.0, "{w}");
+        assert_eq!(h, 40.0);
     }
 }

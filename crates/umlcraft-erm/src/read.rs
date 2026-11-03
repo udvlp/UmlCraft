@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::check::{Issue, Severity, check};
 use crate::model::{
-    Caption, Cardinality, Diagram, Id, Key, Label, LabelPos, LabelText, Line, Link, Max, Meta,
+    Caption, Cardinality, Diagram, Id, Key, Label, LabelPos, LabelText, Line, Link, Max, Meta, Min,
     Node, NodeKind, Point, Props, Rect, Style, Text, TextAlign,
 };
 use crate::record::{
@@ -204,25 +204,32 @@ fn position(r: &LabelRecord) -> LabelPos {
 }
 
 fn label(id: &str, r: LabelRecord) -> Result<Label, ReadError> {
-    let text = match (r.text.clone(), r.min, r.max.clone()) {
+    let text = match (r.text.clone(), r.min.clone(), r.max.clone()) {
         (Some(t), None, None) => LabelText::Text(t),
-        (None, Some(min), Some(max)) => LabelText::Cardinality(Cardinality::new(
-            min,
-            match max {
-                MaxRecord::Count(n) => Max::Count(n),
-                MaxRecord::Word(w) if w == "n" => Max::Many,
+        (None, Some(min), Some(max)) => LabelText::Cardinality(Cardinality {
+            min: match min {
+                MaxRecord::Count(n) => Min::Count(n),
+                MaxRecord::Word(w) if w == "*" => Min::Any,
                 MaxRecord::Word(w) => {
-                    return Err(field(id, format!("`max` is a number or \"n\", not `{w}`")));
+                    return Err(field(id, format!("`min` is a number or \"*\", not `{w}`")));
                 }
             },
-        )),
+            max: match max {
+                MaxRecord::Count(n) => Max::Count(n),
+                MaxRecord::Word(w) if w == "n" => Max::Many,
+                MaxRecord::Word(w) if w == "m" => Max::ManyM,
+                MaxRecord::Word(w) => {
+                    return Err(field(id, format!("`max` is a number, \"n\" or \"m\", not `{w}`")));
+                }
+            },
+        }),
         _ => return Err(field(id, "a label has either `text` or `min` and `max`")),
     };
     Ok(Label { pos: position(&r), text })
 }
 
 fn caption(id: &str, r: LabelRecord) -> Result<Caption, ReadError> {
-    match (&r.text, r.min, &r.max) {
+    match (&r.text, &r.min, &r.max) {
         (Some(t), None, None) => Ok(Caption { text: t.clone(), pos: position(&r) }),
         _ => Err(field(id, "a role has a `text` and no cardinality")),
     }

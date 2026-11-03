@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::model::{Diagram, Id, LabelPos, LabelText, Max, NodeKind, Point, Rect, Style};
+use crate::model::{Diagram, Id, LabelPos, LabelText, Max, Min, NodeKind, Point, Rect, Style};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Severity {
@@ -199,7 +199,9 @@ pub fn check(d: &Diagram) -> Vec<Issue> {
             if !participation {
                 push(&l.id, IssueKind::CardinalityOutsideParticipation);
             }
-            if matches!(c.max, Max::Count(max) if max < c.min) {
+            if let (Min::Count(min), Max::Count(max)) = (c.min, c.max)
+                && max < min
+            {
                 push(&l.id, IssueKind::BadCardinality);
             }
         }

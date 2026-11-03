@@ -3,7 +3,7 @@
 
 use pretty_assertions::assert_eq;
 use umlcraft_erm::{
-    Caption, Cardinality, Diagram, Id, Key, Label, LabelPos, LabelText, Line, Link, Max, Meta,
+    Caption, Cardinality, Diagram, Id, Key, Label, LabelPos, LabelText, Line, Link, Max, Meta, Min,
     Node, NodeKind, Point, Props, Rect, Severity, Style, Text, TextAlign, check, read, write,
 };
 
@@ -171,8 +171,16 @@ fn diagram(seed: u64) -> Diagram {
             if b.rng.chance(70) {
                 let text = if b.rng.chance(80) {
                     let min = b.rng.below(2) as u32;
-                    let max = if b.rng.chance(50) { Max::Many } else { Max::Count(1 + min) };
-                    LabelText::Cardinality(Cardinality::new(min, max))
+                    let max = match b.rng.below(3) {
+                        0 => Max::Many,
+                        1 => Max::ManyM,
+                        _ => Max::Count(1 + min),
+                    };
+                    let mut c = Cardinality::new(min, max);
+                    if max.is_many() && b.rng.chance(20) {
+                        c.min = Min::Any;
+                    }
+                    LabelText::Cardinality(c)
                 } else {
                     LabelText::Text(b.rng.text())
                 };

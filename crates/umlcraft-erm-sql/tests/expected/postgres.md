@@ -18,13 +18,13 @@
 | Entity | Vielflieger | meilen, stufe | |
 | Beziehung | hat | – | Flug [1,1]; fracht.Container [0,n] |
 | Beziehung | kunde_email | – | Kunde [0,1]; fracht.Fracht Stück [0,n] |
-| Beziehung | buchung_extra | anzahl, preis | Extra [0,n]; Ticket [0,n] |
-| Beziehung | einsatz | stunden | Flug [0,n]; Pilot [0,n]; Rolle [0,n] |
+| Beziehung | buchung_extra | anzahl, preis | Extra [0,n]; Ticket [0,m] |
+| Beziehung | einsatz | stunden | Flug [0,n]; Pilot [0,m]; Rolle [0,n] |
 | Beziehung | hat | – | Flugzeug [1,1]; Flug [0,n] |
 | Beziehung | hat | – | Gate [0,1]; Flug [0,n] |
 | Beziehung | start_flughafen | – | Flughafen [1,1]; Flug [0,n] |
 | Beziehung | ziel_flughafen | – | Flughafen [1,1]; Flug [0,n] |
-| Beziehung | flug_crew | – | Flug [0,n]; Mitarbeiter [0,n] |
+| Beziehung | flug_crew | – | Flug [0,n]; Mitarbeiter [0,m] |
 | Beziehung | hat | – | Fluggesellschaft [1,1]; Flugzeug [0,n] |
 | ident. Beziehung | hat | – | Flughafen [1,1]; Gate [0,n] ═ |
 | Beziehung | hat | – | Kunde [1,1]; Kunde_konto [0,1] |

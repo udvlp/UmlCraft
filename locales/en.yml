@@ -964,7 +964,7 @@ erm:
     not_null: NOT NULL
     line: Line
     label: Label
-    label_hint: "[0,1], [1,n], 0..* … become a cardinality, anything else free text, empty = none"
+    label_hint: "[0,1], [1,n], [*,m] (* = any), 0..* … become a cardinality, anything else free text, empty = none"
     role: Role
     line_style: Line style
     line_solid: solid

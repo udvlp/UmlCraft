@@ -964,7 +964,7 @@ erm:
     not_null: NOT NULL
     line: Linie
     label: Beschriftung
-    label_hint: "[0,1], [1,n], 0..* … wird Kardinalität, anderes freier Text, leer = keine"
+    label_hint: "[0,1], [1,n], [*,m] (* = beliebig), 0..* … wird Kardinalität, anderes freier Text, leer = keine"
     role: Rolle
     line_style: Linienart
     line_solid: durchgezogen

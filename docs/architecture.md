@@ -844,8 +844,10 @@ drawing rules were worked out from its source and exports, none of its code is u
   standard `Style` and database `Props` named as in Astah's ER model (`physicalName`,
   `datatype`, `lengthPrecision`, `notNull`, `defaultValue`, `comment`; kept, not drawn);
   `Link`s with optional fixed ports (draw.io's `exitX/Y`, `entryX/Y`), a `Label` (free text or
-  a `Cardinality`) and a role placed as draw.io places edge labels (`x` along the line from
-  -1 to 1, `y` px to its left, then an offset), a line style and waypoints; free `Text`s.
+  a `Cardinality`: minimum a number or `*` for any, maximum a number, `n` or `m`, the second
+  "many" side of a relationship) and a role placed as draw.io places edge labels (`x` along
+  the line from -1 to 1, `y` px to its left, then an offset), a line style and waypoints;
+  free `Text`s.
   Links point from an attribute to its owner, from a relationship to its participants, from
   an IS-A to its super- and subtypes (`superType` marks the supertype).
 - **Rules** (`check`). Twelve rules: unique ids, existing ends, the allowed pairs of kinds
@@ -859,10 +861,11 @@ drawing rules were worked out from its source and exports, none of its code is u
   relationship without its weak entity, a weak entity without one, an IS-A without its ends,
   a cardinality outside a participation), so that files of unfinished diagrams open.
 - **Editing** (`edit`, `history`, `hit`, `clip`). Each operation of the editor (add, connect
-  in the files' direction with `[0,n]` on a new participation, delete with own attributes and
-  attached lines, move, resize, rename, labels typed as `[0,n]` or `1..*` become
-  cardinalities, kinds, line styles, supertype, ports, styles, database properties) works on
-  a copy and is refused, leaving the diagram as it was, if it would make a new error.
+  in the files' direction with `[0,n]` on a new participation and `[0,m]` on the second,
+  delete with own attributes and attached lines, move, resize, rename, labels typed as
+  `[0,n]`, `[*,m]` or `1..*` become cardinalities, kinds, line styles, supertype, ports,
+  styles, database properties) works on a copy and is refused, leaving the diagram as it
+  was, if it would make a new error.
   `history::Editor` keeps the selection (`Item`: node, link, text, label), undo and redo as
   snapshots (200 steps), whether the diagram differs from the file, and stamps `modified`
   (and `created`, `author` for new diagrams) when it is saved. `hit` finds what is under the
@@ -956,9 +959,11 @@ drawing rules were worked out from its source and exports, none of its code is u
   1 px, Shift+arrows by 10, Ctrl+arrows resize; Delete, Ctrl+A/C/X/V/D, F2 or Enter and a
   double click edit the text in place (`text.rs`, with the usual cardinalities for a label),
   Escape cancels. The context menu adds an attribute, a relationship to a second entity, fits
-  sizes to their texts and releases line ends. Each mouse action is one undo step. Zoom
-  25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−, Ctrl+Shift+0 fits), panning with the wheel
-  (Shift: sideways), the middle button or Space and the left button; until the user zooms or
+  nodes and free texts to their texts and releases line ends. A new attribute from the
+  palette goes to the selected entity or relationship (not to a selected attribute). Each
+  mouse action is one undo step. Zoom 25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−,
+  Ctrl+Shift+0 fits), panning with the wheel (Shift: sideways), the middle button or Space
+  and the left button; until the user zooms or
   pans, the drawing is fitted into the window, at most at 100 %. Saving writes through a
   temporary file; closing with unsaved changes asks (save, discard, cancel), and quitting from
   the main window lists the ER diagrams with unsaved changes first. Read errors, refused edits
@@ -1002,7 +1007,8 @@ repeated in the code's comments).
   an identifying relationship and partial keys; every other table an entity named with a
   capital first letter (schemas other than `public` in front). Foreign key columns are not
   attributes, they are the relationships: `[1,1]` or `[0,1]` (nullable) at the referenced
-  table, `[0,n]` or `[0,1]` (unique) at the referencing one. A relationship is named after
+  table, `[0,n]` or `[0,1]` (unique) at the referencing one; a junction table's second end
+  is `[0,m]`. A relationship is named after
   the foreign key column without `_id` and the like, "hat" if that only repeats the target
   table; a self reference carries a role. A missing target becomes a placeholder entity.
   Options: all attributes, keys only or none, and the schemas to take. The `Report` counts

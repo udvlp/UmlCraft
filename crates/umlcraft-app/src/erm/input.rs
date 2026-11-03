@@ -523,8 +523,20 @@ impl ErmCanvas {
     ) {
         window.focus(&self.focus, cx);
         let name = shape.default_name();
+        // A new attribute goes to the selected entity or relationship; not to a selected
+        // attribute (parts of composite attributes are added with "Add attribute").
+        let owns = |id: &Id| {
+            self.diagram().node(id).is_some_and(|n| {
+                matches!(
+                    n.kind,
+                    NodeKind::Entity { .. }
+                        | NodeKind::AssociativeEntity
+                        | NodeKind::Relationship { .. }
+                )
+            })
+        };
         let owner = match (shape.kind(), self.selection()) {
-            (Some(NodeKind::Attribute { .. }), [Item::Node(id)]) if to_selection => {
+            (Some(NodeKind::Attribute { .. }), [Item::Node(id)]) if to_selection && owns(id) => {
                 Some(id.clone())
             }
             _ => None,
@@ -653,13 +665,16 @@ impl ErmCanvas {
     }
 
     pub(super) fn fit_to_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        let nodes: Vec<Id> = self
+        let ids: Vec<Id> = self
             .selection()
             .iter()
-            .filter_map(|i| if let Item::Node(id) = i { Some(id.clone()) } else { None })
+            .filter_map(|i| match i {
+                Item::Node(id) | Item::Text(id) => Some(id.clone()),
+                _ => None,
+            })
             .collect();
-        if !nodes.is_empty() {
-            self.apply(cx, |d| edit::fit_to_text(d, &nodes).map(|()| None));
+        if !ids.is_empty() {
+            self.apply(cx, |d| edit::fit_to_text(d, &ids).map(|()| None));
         }
     }
 
@@ -772,7 +787,6 @@ pub fn context_menu(
         [Item::Node(id)] => d.node(id).map(|n| n.kind),
         _ => None,
     };
-    let has_nodes = selection.iter().any(|i| matches!(i, Item::Node(_)));
     let has_links = selection.iter().any(|i| matches!(i, Item::Link(_)));
     let copyable = selection.iter().any(|i| matches!(i, Item::Node(_) | Item::Text(_)));
     let owner = single_node.is_some_and(|k| !matches!(k, NodeKind::IsA { .. }));
@@ -788,7 +802,7 @@ pub fn context_menu(
         .separator()
         .menu_with_disabled(t!("erm.add_attribute"), Box::new(AddAttribute), !owner)
         .menu_with_disabled(t!("erm.relationship_to"), Box::new(RelationshipTo), !entity)
-        .menu_with_disabled(t!("erm.fit_to_text"), Box::new(FitToText), !has_nodes)
+        .menu_with_disabled(t!("erm.fit_to_text"), Box::new(FitToText), !copyable)
         .menu_with_disabled(t!("erm.release_ends"), Box::new(ReleaseEnds), !has_links)
         .separator()
         .menu(t!("menu.select_all"), Box::new(SelectAll))

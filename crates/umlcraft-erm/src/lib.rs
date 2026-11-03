@@ -38,7 +38,7 @@ pub mod write;
 pub use check::{Issue, IssueKind, Severity, check};
 pub use edit::{EditError, End, Item};
 pub use model::{
-    Caption, Cardinality, Diagram, Id, Key, Label, LabelPos, LabelText, Line, Link, Max, Meta,
+    Caption, Cardinality, Diagram, Id, Key, Label, LabelPos, LabelText, Line, Link, Max, Meta, Min,
     Node, NodeKind, Point, Props, Rect, Style, Text, TextAlign,
 };
 pub use read::{ReadError, read, read_value};

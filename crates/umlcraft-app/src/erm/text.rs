@@ -14,7 +14,7 @@ use umlcraft_erm::{Rect as DRect, hit};
 use super::canvas::ErmCanvas;
 
 /// The cardinalities offered beside a label's field.
-const CARDINALITIES: [&str; 4] = ["[0,1]", "[1,1]", "[0,n]", "[1,n]"];
+const CARDINALITIES: [&str; 7] = ["[*,m]", "[*,n]", "[0,1]", "[0,m]", "[0,n]", "[1,1]", "[1,n]"];
 
 enum Field {
     Line(Entity<InputState>),
