@@ -27,7 +27,8 @@ pub fn parse(bytes: &[u8], dialect: Dialect) -> Schema {
             if matches!(text, Cow::Owned(_)) {
                 p.schema.recoded.push(statement.line);
             }
-            let s = Stmt::new(&text, dialect);
+            let database = p.schema.database.clone();
+            let s = Stmt::new(&text, dialect, database.as_deref());
             p.statement(&s, statement.line)
         };
         if !handled {
@@ -126,7 +127,7 @@ impl Parser {
             if a == b {
                 continue;
             }
-            if CONSTRAINT_START.iter().any(|k| s.is(a, k)) {
+            if s.starts_constraint(a) {
                 if !constraint(s, a, b, &mut table) {
                     self.problem(line, ProblemKind::Constraint, s.text(a, b));
                 }
@@ -180,7 +181,7 @@ impl Parser {
             };
             let table = self.schema.tables.get_mut(&found).expect("found above");
             let c = a + 1;
-            let ok = if CONSTRAINT_START.iter().any(|k| s.is(c, k)) {
+            let ok = if s.starts_constraint(c) {
                 constraint(s, c, b, table)
             } else {
                 let c = if s.is(c, "COLUMN") { c + 1 } else { c };
@@ -268,9 +269,8 @@ impl Parser {
     fn finish(mut self) -> Schema {
         // Partitions belong to their parent; older mysqldumps write a placeholder table for
         // each view and create the view later.
-        let before = self.schema.tables.len();
         self.schema.tables.retain(|k, _| !self.partitions.contains(k));
-        self.schema.partitions = before - self.schema.tables.len();
+        self.schema.partitions = self.partitions.len();
         self.schema.tables.retain(|k, _| !self.views.contains(k));
         self.schema
     }
@@ -342,6 +342,12 @@ fn constraint(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
         let Some(cols) = first_paren(i + 2).and_then(|p| s.ident_list(p)) else {
             return false;
         };
+        // Key columns are NOT NULL without saying so.
+        for c in &cols {
+            if let Some(c) = table.column_mut(c) {
+                c.not_null = true;
+            }
+        }
         table.primary_key = cols;
         return true;
     }
@@ -593,11 +599,24 @@ struct Stmt<'a> {
     src: &'a str,
     toks: Vec<Token>,
     dialect: Dialect,
+    database: Option<&'a str>,
 }
 
 impl<'a> Stmt<'a> {
-    fn new(src: &'a str, dialect: Dialect) -> Self {
-        Self { src, toks: lex(src, dialect.is_mysql()), dialect }
+    /// `database`: the dump's database, so far as it is known (MySQL).
+    fn new(src: &'a str, dialect: Dialect, database: Option<&'a str>) -> Self {
+        Self { src, toks: lex(src, dialect.is_mysql()), dialect, database }
+    }
+
+    /// Whether the part at `i` of a table's list is a key, index or check rather than a
+    /// column. `KEY`, `INDEX`, `FULLTEXT` and `SPATIAL` are reserved in MySQL only; in
+    /// PostgreSQL `key text` is a column. `EXCLUDE` is a constraint only with `USING` or `(`.
+    fn starts_constraint(&self, i: usize) -> bool {
+        let always = ["CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK"];
+        let mysql = ["KEY", "INDEX", "FULLTEXT", "SPATIAL"];
+        always.iter().any(|k| self.is(i, k))
+            || (self.dialect.is_mysql() && mysql.iter().any(|k| self.is(i, k)))
+            || (self.is(i, "EXCLUDE") && (self.is(i + 1, "USING") || self.punct(i + 1, b'(')))
     }
 
     fn word(&self, i: usize) -> Option<&str> {
@@ -650,8 +669,14 @@ impl<'a> Stmt<'a> {
     fn key_of(&self, mut parts: Vec<String>) -> Option<TableKey> {
         let name = parts.pop()?;
         Some(if self.dialect.is_mysql() {
-            // A database in front of the name: MySQL dumps hold one database.
-            TableKey::new("", name)
+            // A dump holds one database: its own name in front is left out, another one
+            // stays (a reference into another database is not in the dump).
+            match parts.pop() {
+                Some(db) if self.database.is_some_and(|own| !own.eq_ignore_ascii_case(&db)) => {
+                    TableKey::new(db, name)
+                }
+                _ => TableKey::new("", name),
+            }
         } else {
             TableKey::new(parts.pop().unwrap_or_else(|| "public".to_owned()), name)
         })
@@ -866,10 +891,41 @@ mod tests {
         let s = parse(sql.as_bytes(), Dialect::Postgres);
         let keys: Vec<_> = s.tables.keys().map(|k| k.to_string()).collect();
         assert_eq!(keys, ["p", "pay"]);
-        assert_eq!(s.partitions, 1);
+        assert_eq!(s.partitions, 2);
         let p = table(&s, "public", "p");
         assert_eq!(p.primary_key, ["id"]);
         assert_eq!(p.foreign_keys[0].target, TableKey::new("public", "t"));
+    }
+
+    #[test]
+    fn key_and_index_are_column_names_in_postgresql() {
+        let sql = "CREATE TABLE public.settings (id integer NOT NULL, key text NOT NULL, \
+                   index integer, value text, EXCLUDE USING gist (id WITH =));";
+        let s = parse(sql.as_bytes(), Dialect::Postgres);
+        let cols: Vec<_> =
+            table(&s, "public", "settings").columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(cols, ["id", "key", "index", "value"]);
+        assert_eq!(s.problems, []);
+    }
+
+    #[test]
+    fn primary_key_columns_are_not_null() {
+        let sql = "CREATE TABLE w (p_id int, nr int, x int, PRIMARY KEY (p_id, nr));";
+        let s = parse(sql.as_bytes(), Dialect::MySql);
+        let nn: Vec<_> = table(&s, "", "w").columns.iter().map(|c| c.not_null).collect();
+        assert_eq!(nn, [true, true, false]);
+    }
+
+    #[test]
+    fn references_into_another_mysql_database_keep_it() {
+        let sql = "-- Host: x    Database: shop\nCREATE TABLE `users` (id int);\n\
+                   CREATE TABLE `orders` (id int, u int, a int, \
+                   FOREIGN KEY (u) REFERENCES `auth`.`users` (id), \
+                   FOREIGN KEY (a) REFERENCES `shop`.`users` (id));";
+        let s = parse(sql.as_bytes(), Dialect::MySql);
+        let targets: Vec<_> =
+            table(&s, "", "orders").foreign_keys.iter().map(|f| f.target.to_string()).collect();
+        assert_eq!(targets, ["auth.users", "users"]);
     }
 
     #[test]
