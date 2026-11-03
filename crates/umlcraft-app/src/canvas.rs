@@ -18,6 +18,7 @@ use umlcraft_model::{
     Multiplicity, Navigability, Point as MPoint, Rect, Shape, SharedStyle, TypeRef,
 };
 use umlcraft_notation::draw::{self, Paint, Primitive};
+use umlcraft_notation::er;
 use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
@@ -846,6 +847,16 @@ impl DiagramCanvas {
         if compartment == Compartment::Attributes
             && let Some(owner) = self.selected_er_owner(cx)
         {
+            // An IE or IDEF1X table lists its attributes: a new row there.
+            if let Some(Figure::ErTable { compartments, .. }) =
+                self.scene.node(owner).map(|n| &n.figure)
+            {
+                let last = compartments.last().copied();
+                if let Some(hit) = last.and_then(|c| scene::compartment_of(&self.scene, owner, c)) {
+                    self.open_new_member(hit, window, cx);
+                }
+                return;
+            }
             // An ER attribute is a node of its own: made, then named in place.
             self.edit_when_drawn = self.workspace.update(cx, |ws, cx| {
                 cx.notify();
@@ -1730,7 +1741,8 @@ impl DiagramCanvas {
                     Compartment::Literals => {
                         menu.menu(t!("menu.add_literal"), Box::new(AddLiteral))
                     }
-                    Compartment::Slots => menu,
+                    // "Add attribute" above covers the rows of an ER table.
+                    Compartment::Slots | Compartment::ErKeys | Compartment::ErColumns => menu,
                 };
             }
             menu = menu.separator();
@@ -2189,7 +2201,15 @@ impl DiagramCanvas {
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
         let Some(view) = ws.active_diagram.and_then(|d| model.view(d)) else { return };
-        let Some(association) = view.get(hit.edge).and_then(|p| p.element) else { return };
+        let Some(mut association) = view.get(hit.edge).and_then(|p| p.element) else { return };
+        let mut end = hit.end;
+        // An IE or IDEF1X relationship line: each end is a participation's.
+        if let Some(ElementKind::ErRelationship(_)) = model.get(association).map(|e| e.kind()) {
+            let diagram = ws.active_diagram;
+            let part = diagram.and_then(|d| er::line_participation(model, d, hit.edge, hit.end));
+            let Some(part) = part else { return };
+            (association, end) = (part, 0);
+        }
         let text = match model.get(association).map(|e| e.kind()) {
             Some(ElementKind::Association(p)) => {
                 let Some(end) = p.ends.get(hit.end) else { return };
@@ -2213,7 +2233,7 @@ impl DiagramCanvas {
         let rect = Rect::new(hit.rect.x, hit.rect.y, hit.rect.width.max(80.0), hit.rect.height);
         self.open_editor(association, None, false, rect, text, false, window, cx);
         if let Some(edit) = &mut self.editing {
-            edit.end = Some((hit.end, hit.multiplicity));
+            edit.end = Some((end, hit.multiplicity));
         }
     }
 

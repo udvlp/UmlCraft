@@ -108,6 +108,13 @@ pub struct SetAssociationEnd {
     pub change: EndChange,
 }
 
+/// Draws the ER diagram shown in another notation, from the ribbon.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct SetErNotation {
+    pub notation: umlcraft_model::ErNotation,
+}
+
 /// Opens an entry of the "recent files" list.
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = umlcraft, no_json)]

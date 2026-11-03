@@ -48,7 +48,8 @@ pub fn describe(model: &Model, package: Id) -> String {
             .iter()
             .filter_map(|&c| model.get(c))
             .filter_map(|a| match a.kind() {
-                ElementKind::ErAttribute(p) => Some((a.name(), p)),
+                // Foreign key columns are their relationships here, as Chen draws them.
+                ElementKind::ErAttribute(p) if p.foreign_key.is_none() => Some((a.name(), p)),
                 _ => None,
             })
             .map(|(name, p)| {

@@ -13,9 +13,9 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
-use umlcraft_model::DiagramKind;
+use umlcraft_model::{DiagramKind, ErNotation};
 use umlcraft_notation::layout::{self, Direction};
-use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
+use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
 use umlcraft_reverse::SourceLanguage;
 
 use crate::icons::{self, fluent};
@@ -47,6 +47,10 @@ pub struct State {
     pub can_wrap: bool,
     /// On a sequence diagram: whether it shows message numbers, and whether flat ones.
     pub numbering: Option<(bool, bool)>,
+    /// On an ER diagram: its notation.
+    pub notation: Option<ErNotation>,
+    /// The tools of the diagram shown ([`palette::diagram_palette`]).
+    pub palette: Vec<Tool>,
     /// The chosen theme; `None` follows the system's appearance.
     pub theme: Option<bool>,
 }
@@ -236,7 +240,7 @@ pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
     match tab {
         RibbonTab::Home => home(state),
         RibbonTab::Diagram => match (state.diagram, state.structogram) {
-            (Some(kind), _) => diagram(kind, state.objects, state.tool, state.numbering),
+            (Some(_), _) => diagram(&state.palette, state.tool, state.numbering, state.notation),
             (None, Some(allowed)) => structogram(allowed),
             (None, None) => Vec::new(),
         },
@@ -388,15 +392,11 @@ pub fn tool_label(tool: Tool) -> String {
 }
 
 fn diagram(
-    kind: DiagramKind,
-    objects: bool,
+    tools: &[Tool],
     current: Tool,
     numbering: Option<(bool, bool)>,
+    notation: Option<ErNotation>,
 ) -> Vec<Group> {
-    let tools = match objects {
-        true => palette::object_palette(),
-        false => palette::palette(kind),
-    };
     let items = |which: ToolGroup, size: Size| -> Vec<Item> {
         tools
             .iter()
@@ -418,7 +418,11 @@ fn diagram(
                         | EdgeTool::LostMessage
                         | EdgeTool::DurationConstraint
                         | EdgeTool::TimeConstraint
-                        | EdgeTool::ErLine,
+                        | EdgeTool::ErLine
+                        | EdgeTool::ErIdentifying
+                        | EdgeTool::ErNonIdentifying
+                        | EdgeTool::ErManyToMany
+                        | EdgeTool::ErSubtype,
                     )
                     | Tool::Node(
                         NodeTool::StateInvariant
@@ -470,10 +474,33 @@ fn diagram(
         ("relations", items(ToolGroup::Relations, Size::Small)),
         ("notes", items(ToolGroup::Notes, Size::Small)),
         ("numbering", numbering),
+        ("notation", notation.map_or_else(Vec::new, notation_items)),
     ]
     .into_iter()
     .filter(|(_, items)| !items.is_empty())
     .map(|(id, items)| group(id, items))
+    .collect()
+}
+
+/// The notations an ER diagram can be drawn in, the current one checked.
+fn notation_items(current: ErNotation) -> Vec<Item> {
+    [
+        (ErNotation::Chen, "chen", "notationChen"),
+        (ErNotation::Ie, "ie", "notationIe"),
+        (ErNotation::Idef1x, "idef1x", "notationIdef1x"),
+    ]
+    .into_iter()
+    .map(|(notation, key, icon)| {
+        Item::new(
+            format!("notation-{key}"),
+            icons::own_icon(icon),
+            t!(format!("ribbon.notation.{key}")),
+        )
+        .tooltip(t!(format!("tool_tip.notation_{key}")))
+        .action(crate::SetErNotation { notation })
+        .size(Size::Small)
+        .selected(notation == current)
+    })
     .collect()
 }
 
@@ -1020,24 +1047,38 @@ pub fn render(
 mod tests {
     // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
     use super::{DIAGRAM_KINDS, RibbonTab, State, diagram, label_lines, tabs};
-    use umlcraft_model::DiagramKind;
+    use umlcraft_model::{DiagramKind, DiagramProps, ElementKind, ErNotation};
     use umlcraft_notation::palette::{self, Tool};
+
+    fn props(kind: DiagramKind) -> DiagramProps {
+        match ElementKind::diagram(kind) {
+            ElementKind::Diagram(p) => p,
+            _ => unreachable!(),
+        }
+    }
 
     #[test]
     fn every_tool_of_every_diagram_kind_is_in_one_group() {
-        for kind in DIAGRAM_KINDS {
-            let groups = diagram(kind, false, Tool::Select, None);
-            for tool in palette::palette(kind) {
+        let notations = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
+        let every = DIAGRAM_KINDS
+            .into_iter()
+            .flat_map(|kind| notations.map(|notation| DiagramProps { notation, ..props(kind) }));
+        for p in every {
+            let tools = palette::diagram_palette(&p);
+            let groups = diagram(&tools, Tool::Select, None, Some(p.notation));
+            for tool in tools {
                 let id = format!("tool-{}", tool.key());
                 let found = groups.iter().flat_map(|g| &g.items).filter(|i| i.id == id).count();
-                assert_eq!(found, 1, "{kind:?}: {tool:?}");
+                assert_eq!(found, 1, "{:?} {:?}: {tool:?}", p.diagram, p.notation);
             }
         }
     }
 
     #[test]
     fn an_object_diagram_starts_its_groups_with_object_and_link() {
-        let groups = diagram(DiagramKind::Class, true, Tool::Select, None);
+        let tools =
+            palette::diagram_palette(&DiagramProps { objects: true, ..props(DiagramKind::Class) });
+        let groups = diagram(&tools, Tool::Select, None, None);
         let first = |id: &str| groups.iter().find(|g| g.id == id).map(|g| g.items[0].id.clone());
         assert_eq!(first("elements").as_deref(), Some("tool-object"));
         assert_eq!(first("relations").as_deref(), Some("tool-link"));
@@ -1063,6 +1104,8 @@ mod tests {
             can_paste: false,
             can_wrap: false,
             numbering: None,
+            notation: None,
+            palette: Vec::new(),
             theme: None,
         };
         assert!(!tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));

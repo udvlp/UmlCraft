@@ -814,6 +814,64 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             ],
             fill: Paint::Fill,
         }],
+        Figure::ErTable { separators, rounded, .. } => {
+            let mut result = vec![Primitive::Frame {
+                rect: r,
+                width: 2.0,
+                radius: if *rounded { ER_ROUNDED.min(r.height / 2.0) } else { 0.0 },
+                fill: Paint::Fill,
+                border: Paint::Line,
+                style: solid,
+            }];
+            // The first separator is the box's top.
+            result.extend(
+                separators
+                    .iter()
+                    .skip(1)
+                    .map(|&y| line(vec![Point::new(r.x, y), Point::new(r.right(), y)], solid)),
+            );
+            result
+        }
+        Figure::ErSubtype { complete, idef1x: false } => {
+            // The half circle stands on the bar, its radius most of the bar's half.
+            let radius = r.width / 2.0 - 3.0;
+            let (c, base) = (r.center().x, r.bottom());
+            let arc: Vec<Point> = (0..=24)
+                .map(|i| {
+                    let a = std::f32::consts::PI * i as f32 / 24.0;
+                    Point::new(c - radius * a.cos(), base - radius * a.sin())
+                })
+                .collect();
+            let mut result = vec![
+                Primitive::Polygon { points: arc, fill: Paint::Fill },
+                line(vec![Point::new(r.x, base), Point::new(r.right(), base)], solid),
+            ];
+            if *complete {
+                let d = radius * FRAC_1_SQRT_2;
+                result
+                    .push(line(vec![Point::new(c - d, base), Point::new(c + d, base - d)], solid));
+                result
+                    .push(line(vec![Point::new(c + d, base), Point::new(c - d, base - d)], solid));
+            }
+            result
+        }
+        Figure::ErSubtype { complete, idef1x: true } => {
+            let radius = r.width / 2.0 - 3.0;
+            let center = Point::new(r.center().x, r.y + radius);
+            let bar = |y: f32| line(vec![Point::new(r.x, y), Point::new(r.right(), y)], solid);
+            let mut result = vec![Primitive::Ellipse {
+                center,
+                rx: radius,
+                ry: radius,
+                fill: Paint::Fill,
+                width: 1.0,
+            }];
+            result.push(bar(r.bottom() - 4.0));
+            if *complete {
+                result.push(bar(r.bottom()));
+            }
+            result
+        }
         Figure::Other => vec![Primitive::Frame {
             rect: r,
             width: 1.0,
@@ -1016,6 +1074,49 @@ fn marker(tip: Point, from: Point, marker: EndMarker) -> Vec<Primitive> {
                 line(vec![at(r, r), at(r, -r)], solid),
             ]
         }
+        EndMarker::ErOne
+        | EndMarker::ErZeroOne
+        | EndMarker::ErOneMany
+        | EndMarker::ErZeroMany
+        | EndMarker::ErDot
+        | EndMarker::ErOptional => er_marker(tip, &at, marker),
+    }
+}
+
+/// Corner radius of dependent entities in IE and IDEF1X.
+const ER_ROUNDED: f32 = 8.0;
+
+/// The marks of IE's ends, `back` from the tip: a bar across the line, a circle on it, and
+/// the crow's foot whose toes spread 6 to each side at the node.
+fn er_marker(tip: Point, at: &dyn Fn(f32, f32) -> Point, marker: EndMarker) -> Vec<Primitive> {
+    const CIRCLE: f32 = 4.0;
+    let solid = LineStyle::Solid;
+    let bar = |back: f32| line(vec![at(back, 6.0), at(back, -6.0)], solid);
+    let circle = |back: f32| Primitive::Ellipse {
+        center: at(back, 0.0),
+        rx: CIRCLE,
+        ry: CIRCLE,
+        fill: Paint::Background,
+        width: 1.0,
+    };
+    let crow = || line(vec![at(0.0, 6.0), at(12.0, 0.0), at(0.0, -6.0)], solid);
+    match marker {
+        EndMarker::ErOne => vec![bar(10.0)],
+        EndMarker::ErZeroOne => vec![bar(8.0), circle(16.0)],
+        EndMarker::ErOneMany => vec![crow(), bar(16.0)],
+        EndMarker::ErZeroMany => vec![crow(), circle(12.0 + CIRCLE)],
+        EndMarker::ErDot => vec![Primitive::Ellipse {
+            center: at(CIRCLE, 0.0),
+            rx: CIRCLE,
+            ry: CIRCLE,
+            fill: Paint::Line,
+            width: 1.0,
+        }],
+        EndMarker::ErOptional => vec![Primitive::Polygon {
+            points: vec![tip, at(6.0, 4.0), at(12.0, 0.0), at(6.0, -4.0)],
+            fill: Paint::Background,
+        }],
+        _ => Vec::new(),
     }
 }
 

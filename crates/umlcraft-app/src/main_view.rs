@@ -1584,6 +1584,12 @@ impl MainView {
             numbering: props
                 .filter(|p| p.diagram == DiagramKind::Sequence)
                 .map(|p| (!p.hide_message_numbers, p.flat_message_numbers)),
+            notation: props
+                .filter(|p| p.diagram == DiagramKind::EntityRelationship)
+                .map(|p| p.notation),
+            palette: props
+                .map(|p| umlcraft_notation::palette::diagram_palette(&p))
+                .unwrap_or_default(),
             theme: self.settings.dark,
         };
         let tabs = ribbon::tabs(&state);
@@ -2806,6 +2812,14 @@ impl Render for MainView {
             }))
             .on_action(cx.listener(|this, _: &ToggleFlatNumbers, _, cx| {
                 this.with_workspace(cx, |ws| ws.toggle_numbering(true))
+            }))
+            .on_action(cx.listener(|this, a: &crate::SetErNotation, _, cx| {
+                let notation = a.notation;
+                this.with_workspace(cx, move |ws| {
+                    if let Some(diagram) = ws.active_diagram {
+                        ws.set_er_notation(diagram, notation);
+                    }
+                })
             }))
             .on_action(cx.listener(move |this, _: &ZoomToFit, _, cx| {
                 match this.active_structogram(cx) {

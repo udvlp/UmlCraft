@@ -30,7 +30,7 @@ between releases is in the [changelog](CHANGELOG.md).
 | State machine | States with entry, do, exit and internal transitions, composite states, orthogonal states with regions one below the other or side by side, final states, initial, choice, junction, fork, join and history pseudostates, submachine states standing for another state machine (`include / Machine`), entry and exit points on the border of a state or the frame, stub states in submachine states, transitions labeled `trigger [guard] / effect`. A state dragged into another state or region becomes part of it |
 | Component and deployment | Components, artifacts and nodes with their icons, objects and instances, deployments |
 | Composite structure | The inside of a class or component: parts `name : Type [m]` drawn in it, ports on the border of the class and of typed parts, connectors between parts and ports, realizations and dependencies from ports to interfaces, which can be drawn as a circle or, when required, as a socket. A part dragged over its class's border takes the border along, and ports stay on their border when it moves or changes size |
-| Entity-relationship | Chen notation: entities (also weak and associative), attributes with keys and partial keys, derived, multivalued and composite attributes, relationships (binary, n-ary, identifying, with attributes) and IS-A (total, disjoint or overlapping); one line tool that makes what its ends call for; `[min,max]` cardinalities on the lines, read look-across, set from the context menu or edited in place, total participation as a double line; database properties of entities and attributes (physical name, type, length, not null, default). Arranged automatically like the UML diagrams; not exported to `.asta` |
+| Entity-relationship | Chen, IE (crow's feet) or IDEF1X, switched per diagram, which converts it and keeps the entities in place. IE and IDEF1X: tables with the primary key above a divider and the other columns below, foreign key columns marked `(FK)`, types and lengths optional, logical or physical names; identifying, non-identifying and many-to-many lines from parent to child that copy the parent's key into the child, cardinalities as crow's feet or IDEF1X dots, subtypes with their symbol and discriminator. Chen notation: entities (also weak and associative), attributes with keys and partial keys, derived, multivalued and composite attributes, relationships (binary, n-ary, identifying, with attributes) and IS-A (total, disjoint or overlapping); one line tool that makes what its ends call for; `[min,max]` cardinalities on the lines, read look-across, set from the context menu or edited in place, total participation as a double line; database properties of entities and attributes (physical name, type, length, not null, default, unique). Arranged automatically like the UML diagrams; Astah's ER diagrams are imported from and exported to `.asta` |
 
 Diagrams imported from `.asta` files keep their layout, sizes and colors. The properties panel
 sets per class box what it shows of its members (stereotypes, visibility, types, initial
@@ -40,7 +40,7 @@ line the color of its name and of the line.
 ## Files
 
 - **Open `.asta` files** (File › Import .asta project, or simply open the file): Astah project
-  files with the model, all UML diagram kinds above, positions, sizes, waypoints, line styles, notes,
+  files with the model, all UML diagram kinds above and ER diagrams, positions, sizes, waypoints, line styles, notes,
   free texts and lines, and colors. Anything UmlCraft cannot represent yet is skipped and reported.
 - **Export to `.asta`** (File › Export › .asta project …): writes `.asta` files through the
   official API of an installed Astah; without one the menu item explains what is missing. What
@@ -69,7 +69,8 @@ line the color of its name and of the line.
   MariaDB and PostgreSQL (`mysqldump`, `mariadb-dump`, `pg_dump` in plain format) become laid
   out ER diagrams in the open project, each in a package named after the database: tables
   become entities, junction tables relationships, foreign keys relationships with their
-  cardinalities, with all attributes, keys only or none. Tables without a primary key and
+  cardinalities, with all attributes, keys only or none, in Chen, IE or IDEF1X notation;
+  foreign key columns are kept as columns of their tables. Tables without a primary key and
   statements that could not be read are listed.
 
 ## Importing source code
@@ -211,8 +212,12 @@ can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
   regions, exception handlers, and signals as model elements of their own (a send signal or
   accept event action names its signal); pins not shown on a diagram are left out of the
   `.asta` export
-- Data flow diagrams, flowcharts, communication, timing, requirement, ER
-  and mind map diagrams and matrices in `.asta` files (skipped on import)
+- Data flow diagrams, flowcharts, communication, timing, requirement
+  and mind map diagrams and matrices in `.asta` files (skipped on import); of ER models, the
+  domains (their datatype is kept), entity types and indexes
+- ER diagrams in Chen notation are exported to `.asta` in IE notation, as Astah has no Chen;
+  relationships of more than two entities or with attributes of their own, `UNIQUE` and
+  disjoint or overlapping subtypes are left out of the export
 - Component and deployment diagrams are exported to `.asta` as class diagrams, because the API
   has no editors for them
 - Containment lines in the `.asta` export, which the API cannot draw (they are imported)

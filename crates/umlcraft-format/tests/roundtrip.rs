@@ -29,6 +29,13 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
             package,
             ElementData::new("Booking", ElementKind::diagram(DiagramKind::EntityRelationship)),
         )?;
+        let mut ie = ElementKind::diagram(DiagramKind::EntityRelationship);
+        if let ElementKind::Diagram(p) = &mut ie {
+            p.notation = ErNotation::Idef1x;
+            p.er_display = ErDisplay::Keys;
+            p.physical_names = true;
+        }
+        tx.create(package, ElementData::new("Tables", ie))?;
         let weak =
             ErEntityProps { weak: true, physical_name: "TICKET".into(), ..Default::default() };
         let customer = tx.create(
@@ -54,6 +61,13 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
         part.cardinality = Some(Cardinality::ONE_ONE);
         part.total = true;
         let part = tx.create(books, ElementData::new("", ElementKind::ErParticipation(part)))?;
+        let column = ErAttributeProps {
+            foreign_key: Some(books),
+            unique: true,
+            physical_name: "CUSTOMER_ID".into(),
+            ..Default::default()
+        };
+        tx.create(ticket, ElementData::new("customer", ElementKind::ErAttribute(column)))?;
         tx.create(
             books,
             ElementData::new(
@@ -65,7 +79,11 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
             package,
             ElementData::new(
                 "",
-                ElementKind::ErIsA(ErIsAProps { total: true, disjoint: Some(true) }),
+                ElementKind::ErIsA(ErIsAProps {
+                    total: true,
+                    disjoint: Some(true),
+                    ..Default::default()
+                }),
             ),
         )?;
         tx.create(
@@ -107,6 +125,11 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
         "\"type\": \"erIsA\"",
         "\"supertype\": true",
         "\"diagram\": \"entityRelationship\"",
+        "\"notation\": \"idef1x\"",
+        "\"erDisplay\": \"keys\"",
+        "\"physicalNames\": true",
+        "\"foreignKey\": ",
+        "\"unique\": true",
     ] {
         assert!(json.contains(written), "{written} missing in {json}");
     }
@@ -116,6 +139,11 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
     assert!(model.get(part).is_none(), "the participation goes with its entity");
     assert!(model.children(is_a).is_empty(), "so does the subtyping");
     assert!(model.get(ticket).is_some());
+    // Deleting the relationship keeps its foreign key column, as a plain column.
+    let books = model.elements().find(|e| e.name() == "bucht").unwrap().id();
+    doc.edit("delete", |tx| tx.delete(books)).unwrap();
+    let column = doc.model().elements().find(|e| e.name() == "customer").unwrap();
+    assert!(matches!(column.kind(), ElementKind::ErAttribute(p) if p.foreign_key.is_none()));
 }
 
 #[test]

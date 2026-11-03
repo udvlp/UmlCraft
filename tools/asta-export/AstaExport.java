@@ -34,6 +34,8 @@ import com.change_vision.jude.api.inf.editor.ClassDiagramEditor;
 import com.change_vision.jude.api.inf.editor.CompositeStructureDiagramEditor;
 import com.change_vision.jude.api.inf.editor.CompositeStructureModelEditor;
 import com.change_vision.jude.api.inf.editor.DiagramEditor;
+import com.change_vision.jude.api.inf.editor.ERDiagramEditor;
+import com.change_vision.jude.api.inf.editor.ERModelEditor;
 import com.change_vision.jude.api.inf.editor.SequenceDiagramEditor;
 import com.change_vision.jude.api.inf.editor.StateMachineDiagramEditor;
 import com.change_vision.jude.api.inf.editor.StructureDiagramEditor;
@@ -49,6 +51,14 @@ import com.change_vision.jude.api.inf.model.IAssociationClass;
 import com.change_vision.jude.api.inf.model.IAttribute;
 import com.change_vision.jude.api.inf.model.IClass;
 import com.change_vision.jude.api.inf.model.IClassifierTemplateParameter;
+import com.change_vision.jude.api.inf.model.IERAttribute;
+import com.change_vision.jude.api.inf.model.IERDatatype;
+import com.change_vision.jude.api.inf.model.IERDiagram;
+import com.change_vision.jude.api.inf.model.IEREntity;
+import com.change_vision.jude.api.inf.model.IERModel;
+import com.change_vision.jude.api.inf.model.IERRelationship;
+import com.change_vision.jude.api.inf.model.IERSchema;
+import com.change_vision.jude.api.inf.model.IERSubtypeRelationship;
 import com.change_vision.jude.api.inf.model.IConnector;
 import com.change_vision.jude.api.inf.model.IPort;
 import com.change_vision.jude.api.inf.model.ITemplateBinding;
@@ -295,8 +305,12 @@ public final class AstaExport {
                 return null;
             });
         }
+        erModel();
         for (String id : submachinesFirst(diagrams)) {
             attempt(id, () -> diagram(id));
+        }
+        for (String id : erDiagrams) {
+            attempt(id, () -> erDiagram(id));
         }
         // Call behavior actions call activities, which exist once their diagrams do.
         for (Map.Entry<IAction, String> c : calls.entrySet()) {
@@ -350,6 +364,441 @@ public final class AstaExport {
         }
     }
 
+
+    // ----- ER models --------------------------------------------------------------------------
+
+    /// Astah's ER node includes the name above the table (UmlCraft's starts at the box):
+    /// `scene::er_name_band` at 12 pt.
+    private static final double ER_NAME_BAND = 19.09375;
+
+    /// ER entities, relationships and IS-As in tree order; ER diagrams.
+    private final List<String> erElements = new ArrayList<>();
+    private final List<String> erDiagrams = new ArrayList<>();
+    private ERModelEditor erEditor;
+    private IERModel erModelElement;
+    private IERSchema erSchema;
+
+    private static final Set<String> ER_TYPES = Set.of("erEntity", "erRelationship", "erIsA");
+
+    /// Whether the package holds ER entities, relationships and diagrams and nothing else.
+    private boolean erOnly(String id) {
+        List<String> kids = children(id);
+        if (kids.isEmpty()) {
+            return false;
+        }
+        for (String c : kids) {
+            Map<String, Object> e = elements.get(c);
+            String type = type(e);
+            boolean er = ER_TYPES.contains(type)
+                || ("diagram".equals(type) && "entityRelationship".equals(text(e, "diagram")))
+                || ("package".equals(type) && erOnly(c));
+            if (!er) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void erStructure(String id) {
+        for (String c : children(id)) {
+            Map<String, Object> e = elements.get(c);
+            String type = type(e);
+            if ("package".equals(type)) {
+                erStructure(c);
+            } else if ("diagram".equals(type)) {
+                erDiagrams.add(c);
+            } else {
+                erElements.add(c);
+            }
+        }
+    }
+
+    /// The default schema of the project's ER model, made on first use. Astah has one ER model;
+    /// UmlCraft's packages are not kept there.
+    private IERSchema erSchema() throws Exception {
+        if (erSchema == null) {
+            erEditor = accessor.getModelEditorFactory().getERModelEditor();
+            // A UML package of that name would refuse it.
+            for (int n = 1; erModelElement == null; n++) {
+                String name = n == 1 ? "ER Model" : "ER Model " + n;
+                try {
+                    erModelElement = erEditor.createERModel(accessor.getProject(), name);
+                } catch (InvalidEditingException x) {
+                    if (!InvalidEditingException.NAME_DOUBLE_ERROR_KEY.equals(x.getKey()) || n > 20) {
+                        throw x;
+                    }
+                }
+            }
+            erSchema = erModelElement.getSchemata()[0];
+        }
+        return erSchema;
+    }
+
+    /// Entities first, then the relationships and subtypes that join them.
+    private void erModel() {
+        for (String id : erElements) {
+            if ("erEntity".equals(type(elements.get(id)))) {
+                attempt(id, () -> erEntity(id));
+            }
+        }
+        for (String id : erElements) {
+            String type = type(elements.get(id));
+            if ("erRelationship".equals(type)) {
+                attempt(id, () -> erRelationship(id));
+            } else if ("erIsA".equals(type)) {
+                attempt(id, () -> erIsA(id));
+            }
+        }
+    }
+
+    private List<String> erChildren(String id, String type) {
+        List<String> result = new ArrayList<>();
+        for (String c : children(id)) {
+            if (type.equals(type(elements.get(c)))) {
+                result.add(c);
+            }
+        }
+        return result;
+    }
+
+    private Object erEntity(String id) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        IERSchema schema = erSchema();
+        String physical = text(e, "physicalName");
+        IEREntity entity = (IEREntity) named(id, n -> erEditor.createEREntity(schema, n, physical.isEmpty() ? n : physical));
+        created.put(id, entity);
+        common(id, entity, Set.of());
+        if (flag(e, "associative")) {
+            drop("erAssociativeEntity");
+        }
+        erAttributes(id, entity);
+        return entity;
+    }
+
+    /// The columns of `owner`, the parts of composite attributes after their whole. Astah
+    /// makes the foreign key columns itself from the relationships (see `erForeignKeys`).
+    private void erAttributes(String owner, IEREntity entity) {
+        for (String a : erChildren(owner, "erAttribute")) {
+            Map<String, Object> p = elements.get(a);
+            if (!(p.get("foreignKey") instanceof String by && elements.containsKey(by))) {
+                attempt(a, () -> erAttribute(a, entity));
+            }
+            if (!erChildren(a, "erAttribute").isEmpty()) {
+                // Astah has no composite attributes; the parts become columns of their own.
+                drop("erCompositeAttribute");
+                erAttributes(a, entity);
+            }
+        }
+    }
+
+    private Object erAttribute(String id, IEREntity entity) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        String physical = text(e, "physicalName");
+        IERDatatype type = erDatatype(text(e, "datatype"));
+        IERAttribute a = (IERAttribute) named(id, n -> erEditor.createERAttribute(entity, n, physical.isEmpty() ? n : physical, type));
+        created.put(id, a);
+        erColumn(e, a);
+        common(id, a, Set.of());
+        return a;
+    }
+
+    /// Key, NOT NULL, default and length of a column, and what Astah's API cannot set.
+    private void erColumn(Map<String, Object> e, IERAttribute a) throws Exception {
+        // A partial key is part of the primary key in Astah.
+        if (e.get("key") instanceof String && !a.isPrimaryKey()) {
+            a.setPrimaryKey(true);
+        }
+        if (flag(e, "notNull") && !a.isNotNull()) {
+            a.setNotNull(true);
+        }
+        if (!text(e, "defaultValue").isEmpty()) {
+            a.setDefaultValue(text(e, "defaultValue"));
+        }
+        if (!text(e, "lengthPrecision").isEmpty()) {
+            a.setLengthPrecision(text(e, "lengthPrecision"));
+        }
+        for (String f : new String[] {"unique", "derived", "multivalued"}) {
+            if (flag(e, f)) {
+                drop("er" + Character.toUpperCase(f.charAt(0)) + f.substring(1));
+            }
+        }
+    }
+
+    /// Astah's SQL type of that name, ignoring case; else a new datatype of the ER model.
+    private IERDatatype erDatatype(String name) throws Exception {
+        IERSchema schema = erSchema();
+        IERDatatype[] types = schema.getDatatypes();
+        if (name.isEmpty()) {
+            for (IERDatatype t : types) {
+                if ("VARCHAR".equalsIgnoreCase(t.getName())) {
+                    return t;
+                }
+            }
+            return types[0];
+        }
+        for (IERDatatype t : types) {
+            if (t.getName().equalsIgnoreCase(name)) {
+                return t;
+            }
+        }
+        return erEditor.createERDatatype(erModelElement, name);
+    }
+
+    private record Participation(String id, String entity, int min, int max, String role) {
+        boolean many() {
+            return max < 0 || max > 1;
+        }
+    }
+
+    /// `[0,n]` as (0, -1), `[1,1]` as (1, 1); `*` as a lower bound is 0.
+    private static int[] cardinality(String text) {
+        String t = text.replace("[", "").replace("]", "").trim();
+        String[] parts = t.split(",");
+        if (parts.length != 2) {
+            return new int[] {0, -1};
+        }
+        java.util.function.Function<String, Integer> bound = s -> {
+            s = s.trim();
+            try {
+                return Integer.parseInt(s);
+            } catch (NumberFormatException x) {
+                return -1;
+            }
+        };
+        int min = Math.max(0, bound.apply(parts[0]));
+        return new int[] {min, bound.apply(parts[1])};
+    }
+
+    /// A binary relationship, from its parent (the side that is at most one) to its child;
+    /// relationships of more entities or with attributes of their own have no place in Astah.
+    private Object erRelationship(String id) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        List<Participation> parts = new ArrayList<>();
+        for (String p : erChildren(id, "erParticipation")) {
+            Map<String, Object> pe = elements.get(p);
+            int[] c = cardinality(text(pe, "cardinality"));
+            parts.add(new Participation(p, text(pe, "entity"), c[0], c[1], text(pe, "role")));
+        }
+        if (parts.size() != 2 || !erChildren(id, "erAttribute").isEmpty()) {
+            drop("erRelationship");
+            return null;
+        }
+        boolean identifying = flag(e, "identifying");
+        Participation parent = parts.get(0);
+        Participation child = parts.get(1);
+        boolean weakFirst = flag(elements.get(parent.entity()), "weak");
+        if ((identifying && weakFirst) || (!identifying && parent.many() && !child.many())) {
+            Participation t = parent;
+            parent = child;
+            child = t;
+        }
+        IEREntity p = (IEREntity) created.get(parent.entity());
+        IEREntity c = (IEREntity) created.get(child.entity());
+        if (p == null || c == null) {
+            drop("erRelationship");
+            return null;
+        }
+        List<IERAttribute> before = erColumns(c);
+        boolean manyToMany = !identifying && parent.many() && child.many();
+        IERRelationship r;
+        if (manyToMany) {
+            r = (IERRelationship) named(id, n -> erEditor.createMultiToMultiRelationship(p, c, n, n));
+        } else if (identifying) {
+            r = (IERRelationship) named(id, n -> erEditor.createIdentifyingRelationship(p, c, n, n));
+        } else {
+            r = (IERRelationship) named(id, n -> erEditor.createNonIdentifyingRelationship(p, c, n, n));
+            r.setParentRequired(parent.min() >= 1);
+        }
+        created.put(id, r);
+        if (!manyToMany) {
+            String cardinality = switch (child.max()) {
+                case -1 -> child.min() == 0 ? "0..*" : child.min() + "..*";
+                case 1 -> child.min() == 0 ? "0..1" : "1";
+                default -> child.min() == child.max() ? Integer.toString(child.max()) : child.min() + ".." + child.max();
+            };
+            try {
+                r.setCardinality(cardinality);
+            } catch (InvalidEditingException x) {
+                drop("erCardinality");
+            }
+        }
+        if (!parent.role().isEmpty()) {
+            r.setVerbPhraseParent(parent.role());
+        }
+        if (!child.role().isEmpty()) {
+            r.setVerbPhraseChild(child.role());
+        }
+        common(id, r, Set.of());
+        erForeignKeys(id, child.entity(), before, c);
+        return r;
+    }
+
+    private static List<IERAttribute> erColumns(IEREntity entity) {
+        List<IERAttribute> all = new ArrayList<>(List.of(entity.getPrimaryKeys()));
+        all.addAll(List.of(entity.getNonPrimaryKeys()));
+        return all;
+    }
+
+    /// The foreign key columns Astah just made in `entity` take the names and details of
+    /// UmlCraft's columns of `by`, in order.
+    private void erForeignKeys(String by, String child, List<IERAttribute> before, IEREntity entity) {
+        List<IERAttribute> made = erColumns(entity);
+        made.removeAll(before);
+        List<String> ours = new ArrayList<>();
+        for (String a : erChildren(child, "erAttribute")) {
+            if (by.equals(text(elements.get(a), "foreignKey"))) {
+                ours.add(a);
+            }
+        }
+        if (made.size() != ours.size()) {
+            if (!ours.isEmpty()) {
+                drop("erForeignKeyName");
+            }
+            return;
+        }
+        for (int i = 0; i < ours.size(); i++) {
+            String id = ours.get(i);
+            IERAttribute a = made.get(i);
+            created.put(id, a);
+            attempt(id, () -> {
+                Map<String, Object> e = elements.get(id);
+                a.setLogicalName(name(e));
+                if (!text(e, "physicalName").isEmpty()) {
+                    a.setPhysicalName(text(e, "physicalName"));
+                }
+                erColumn(e, a);
+                return a;
+            });
+        }
+    }
+
+    /// An IS-A: a subtype relationship from its supertype to each subtype. Astah's subtypes are
+    /// complete or not; disjoint or overlapping has no place there.
+    private Object erIsA(String id) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        String supertype = null;
+        List<String> subtypings = new ArrayList<>();
+        for (String s : erChildren(id, "erSubtyping")) {
+            if (flag(elements.get(s), "supertype")) {
+                supertype = text(elements.get(s), "entity");
+            } else {
+                subtypings.add(s);
+            }
+        }
+        IEREntity sup = supertype == null ? null : (IEREntity) created.get(supertype);
+        if (sup == null) {
+            drop("erIsA");
+            return null;
+        }
+        if (e.get("disjoint") instanceof Boolean) {
+            drop("erDisjoint");
+        }
+        IERAttribute discriminator = e.get("discriminator") instanceof String d && created.get(d) instanceof IERAttribute a ? a : null;
+        for (String s : subtypings) {
+            String subId = text(elements.get(s), "entity");
+            IEREntity sub = (IEREntity) created.get(subId);
+            if (sub == null) {
+                drop("erSubtyping");
+                continue;
+            }
+            attempt(s, () -> {
+                List<IERAttribute> before = erColumns(sub);
+                IERSubtypeRelationship r = (IERSubtypeRelationship) named(s,
+                    n -> erEditor.createSubtypeRelationship(sup, sub, n.isEmpty() ? sub.getName() : n, n.isEmpty() ? sub.getName() : n));
+                r.setConclusive(flag(e, "total"));
+                if (discriminator != null) {
+                    r.setDiscriminatorAttribute(discriminator);
+                }
+                created.put(s, r);
+                erForeignKeys(s, subId, before, sub);
+                return r;
+            });
+        }
+        return sup;
+    }
+
+    /// An ER diagram in IE or IDEF1X (Chen's is drawn as IE): its tables where UmlCraft has
+    /// them, the relationships and subtypes it shows between them.
+    private Object erDiagram(String id) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        IERSchema schema = erSchema();
+        ERDiagramEditor editor = accessor.getDiagramEditorFactory().getERDiagramEditor();
+        IERDiagram d = (IERDiagram) named(id, n -> editor.createERDiagram(schema, n));
+        String notation = text(e, "notation");
+        if (!"ie".equals(notation) && !"idef1x".equals(notation)) {
+            drop("erChenNotation");
+        }
+        d.setNotation("idef1x".equals(notation) ? "IDEF1X" : "IE");
+        d.setModelType(flag(e, "physicalNames") ? "Physical Model" : "Logical Model");
+        String display = text(e, "erDisplay");
+        d.setInitialDisplayLevel(switch (display) {
+            case "keys" -> "Primary Key";
+            case "name" -> "Entity";
+            default -> "Attribute";
+        });
+        editor.setDiagram(d);
+        double band = "name".equals(display) ? 0 : ER_NAME_BAND;
+        Map<String, INodePresentation> nodes = new HashMap<>();
+        Set<String> shown = new HashSet<>();
+        for (Map<String, Object> p : view(id)) {
+            if (!(p.get("element") instanceof String element)) {
+                continue;
+            }
+            shown.add(element);
+            if (!"node".equals(p.get("shape")) || !(created.get(element) instanceof IEREntity entity)) {
+                continue;
+            }
+            Map<String, Object> r = rect(id, p);
+            Point2D at = new Point2D.Double(num(r, "x"), num(r, "y") - band);
+            INodePresentation node = (INodePresentation) attempt(element, () -> editor.createNodePresentation(entity, at));
+            if (node != null) {
+                resize(node, num(r, "width"), num(r, "height") + band);
+                nodes.put(element, node);
+            }
+        }
+        for (String rel : erElements) {
+            Map<String, Object> re = elements.get(rel);
+            if ("erRelationship".equals(type(re)) && shown.contains(rel) && created.get(rel) instanceof IERRelationship r) {
+                INodePresentation parent = nodes.get(erEntityId(r.getParent()));
+                INodePresentation child = nodes.get(erEntityId(r.getChild()));
+                if (parent != null && child != null) {
+                    attempt(rel, () -> editor.createLinkPresentation(r, parent, child));
+                }
+            }
+            if ("erIsA".equals(type(re)) && shown.contains(rel)) {
+                List<ILinkPresentation> lines = new ArrayList<>();
+                for (String s : erChildren(rel, "erSubtyping")) {
+                    if (created.get(s) instanceof IERSubtypeRelationship r) {
+                        INodePresentation sup = nodes.get(erEntityId(r.getParent()));
+                        INodePresentation sub = nodes.get(erEntityId(r.getChild()));
+                        if (sup != null && sub != null) {
+                            Object line = attempt(s, () -> editor.createLinkPresentation(r, sup, sub));
+                            if (line instanceof ILinkPresentation l) {
+                                lines.add(l);
+                            }
+                        }
+                    }
+                }
+                if (lines.size() > 1) {
+                    attempt(rel, () -> editor.createSubtypeRelationshipGroup(lines.toArray(new ILinkPresentation[0]), "vertical"));
+                }
+            }
+        }
+        freeShapes(id, editor, 0);
+        common(id, d, Set.of());
+        return d;
+    }
+
+    /// The UmlCraft entity an Astah entity was made from.
+    private String erEntityId(IEREntity entity) {
+        for (Map.Entry<String, Object> c : created.entrySet()) {
+            if (c.getValue() == entity) {
+                return c.getKey();
+            }
+        }
+        return null;
+    }
+
     // ----- Packages, classifiers and their parts -----------------------------------------------
 
     /// Creates packages, classifiers, extension points and literals in tree order; features,
@@ -361,6 +810,12 @@ public final class AstaExport {
             String type = type(e);
             // An association class comes with its association (see `associationClass`).
             if ("class".equals(type) && associationClasses.containsKey(child)) {
+                continue;
+            }
+            // A package of ER content only (Astah's ER model or a schema, imported) goes into
+            // Astah's ER model.
+            if ("package".equals(type) && erOnly(child)) {
+                erStructure(child);
                 continue;
             }
             switch (type) {
@@ -376,14 +831,15 @@ public final class AstaExport {
                 case "attribute", "operation", "port" -> features.add(child);
                 case "association", "generalization", "realization", "dependency", "include", "extend" ->
                     relationships.add(child);
-                // Astah's ER diagrams are of another notation; Chen's has no place there.
                 case "diagram" -> {
                     if ("entityRelationship".equals(text(e, "diagram"))) {
-                        drop("erDiagram");
+                        erDiagrams.add(child);
                     } else {
                         diagrams.add(child);
                     }
                 }
+                // Attributes, participations and subtypings come with their owner.
+                case "erEntity", "erRelationship", "erIsA" -> erElements.add(child);
                 case "interaction" -> {
                     List<String> own = new ArrayList<>();
                     for (String d : children(child)) {

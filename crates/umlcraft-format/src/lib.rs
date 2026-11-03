@@ -24,7 +24,7 @@ use serde_json::Value;
 use umlcraft_model::{ElementRecord, Id, Model, ModelError, ModelRecords, Presentation};
 
 pub const FORMAT_ID: &str = "umlcraft";
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 pub const FILE_EXTENSION: &str = "ucraft";
 
 /// Upgrades a document from version `index + 1` to `index + 2`.
@@ -34,8 +34,10 @@ type Migration = fn(&mut Value) -> Result<(), FormatError>;
 /// them out once when opening them (`umlcraft_notation::sequence_edit::upgrade_document`).
 /// Version 3 keeps the tagged values of languages under UmlCraft's keys. Version 4 adds
 /// structograms (elements of type `structogram`); older files have none. Version 5 adds
-/// entity-relationship diagrams (`er…` elements); older files have none either.
-const MIGRATIONS: &[Migration] = &[|_| Ok(()), rename_language_tags, |_| Ok(()), |_| Ok(())];
+/// entity-relationship diagrams (`er…` elements); older files have none either. Version 6 adds
+/// the IE and IDEF1X notations and foreign key columns; older ER diagrams are Chen's.
+const MIGRATIONS: &[Migration] =
+    &[|_| Ok(()), rename_language_tags, |_| Ok(()), |_| Ok(()), |_| Ok(())];
 // One migration per version step.
 const _: () = assert!(MIGRATIONS.len() == FORMAT_VERSION as usize - 1);
 

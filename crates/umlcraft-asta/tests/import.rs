@@ -657,3 +657,57 @@ fn sample_composite_structure_diagram() {
     // Ports keep where Astah put their names.
     assert!(view.presentations().iter().filter(|p| p.style.name_offset.is_some()).count() >= 4);
 }
+
+#[test]
+fn sample_er_diagrams() {
+    let Some(path) = astah_file("Sample.asta") else { return };
+    let imported = umlcraft_asta::import(&path).unwrap();
+    let model = &imported.model;
+    model.check().unwrap();
+    assert!(!imported.skipped.contains_key("EntityRelationship"), "{:?}", imported.skipped);
+    assert!(!imported.skipped.contains_key("ERRelationshipEndImp"), "{:?}", imported.skipped);
+    let entity = |name| find(model, name, |k| matches!(k, ElementKind::ErEntity(_)));
+    let column = |owner: &umlcraft_model::Element, name: &str| {
+        let id = model.children_named(owner.id(), name)[0];
+        match model.get(id).unwrap().kind() {
+            ElementKind::ErAttribute(p) => p.clone(),
+            _ => panic!("{name} is no attribute"),
+        }
+    };
+    // OrderDetail is identified by its order: a weak entity whose key holds the order's key.
+    let detail = entity("OrderDetail");
+    assert!(matches!(detail.kind(), ElementKind::ErEntity(p) if p.weak));
+    let order_id = column(detail, "OrderID");
+    assert_eq!(order_id.key, Some(umlcraft_model::ErKey::Primary));
+    let by = model.get(order_id.foreign_key.expect("a foreign key")).unwrap();
+    assert!(matches!(by.kind(), ElementKind::ErRelationship(p) if p.identifying));
+    let product_id = column(detail, "ProductID");
+    assert_eq!(product_id.key, None);
+    assert!(product_id.foreign_key.is_some());
+    let customer_id = column(entity("Customer"), "CustomerID");
+    assert_eq!(
+        (customer_id.datatype.as_str(), customer_id.length_precision.as_str()),
+        ("VARCHAR", "20")
+    );
+    assert!(customer_id.not_null);
+
+    let er = diagrams(model, DiagramKind::EntityRelationship);
+    let notation = |name: &str| {
+        let d = er.iter().find(|d| d.name() == name).unwrap();
+        let ElementKind::Diagram(p) = d.kind() else { unreachable!() };
+        (p.notation, model.view(d.id()).unwrap())
+    };
+    let (ie, view) = notation("ER Diagram(IE)");
+    assert_eq!(ie, umlcraft_model::ErNotation::Ie);
+    assert_eq!(notation("ER Diagram(IDEF1X)").0, umlcraft_model::ErNotation::Idef1x);
+    // Four tables and three relationships, each a line between two of them.
+    let shown = |kind: fn(&ElementKind) -> bool| {
+        view.presentations()
+            .iter()
+            .filter(|p| p.element.and_then(|e| model.get(e)).is_some_and(|e| kind(e.kind())))
+            .count()
+    };
+    assert_eq!(shown(|k| matches!(k, ElementKind::ErEntity(_))), 4);
+    assert_eq!(shown(|k| matches!(k, ElementKind::ErRelationship(_))), 3);
+    assert_eq!(shown(|k| matches!(k, ElementKind::ErAttribute(_))), 0);
+}

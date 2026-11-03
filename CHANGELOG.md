@@ -3,6 +3,26 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **ER diagrams in IE and IDEF1X notation**: besides Chen, an ER diagram can be drawn with
+  crow's feet (IE) or in IDEF1X, chosen per diagram in the ribbon or the properties;
+  switching converts the diagram and keeps the entities where they are. Entities are tables
+  with the primary key above a divider and the other columns below, foreign key columns
+  marked `(FK)`, with or without types, with logical or physical names, all columns, keys
+  only or the name alone. Identifying, non-identifying and many-to-many relationships are
+  drawn from parent to child and copy the parent's key into the child; making a relationship
+  identifying moves those columns into the child's key. Subtypes have their symbol and a
+  discriminator. The sample project shows its database in both notations.
+- **Astah's ER diagrams**: `.asta` files bring their ER models along (entities, columns with
+  their keys, types, lengths, defaults and foreign keys, relationships with cardinalities and
+  verb phrases, subtypes and their groups, the diagrams in IE or IDEF1X with their layout),
+  and the `.asta` export writes them back. Chen diagrams go out in IE notation.
+- **SQL dumps** keep their foreign key columns as columns of the tables, and the import
+  dialog offers the notation.
+- **AI clients** create ER diagrams in a notation, switch it with `update_element`, add
+  columns with `add_member` and set `unique`, `foreign_key` and the discriminator.
+
 ## 0.18.0 – 2026-11-03
 
 - **ER diagrams**: a new diagram kind for entity-relationship diagrams in Chen notation, in

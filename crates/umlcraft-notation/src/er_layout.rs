@@ -158,6 +158,29 @@ pub fn arrange(tx: &mut Tx<'_>, diagram: Id, measure: &dyn TextMeasure) -> Resul
     Ok(g.nodes.iter().zip(before).filter(|(n, b)| n.bounds != *b).map(|(n, _)| n.id).collect())
 }
 
+/// Places the attributes of `diagram` around their owners, which stay where they are: for a
+/// diagram turned from IE or IDEF1X back into Chen.
+pub fn arrange_attributes(tx: &mut Tx<'_>, diagram: Id, measure: &dyn TextMeasure) -> Result<()> {
+    let scene = scene::build(tx.model(), diagram, &Preview::default(), measure);
+    let Some(mut g) = Graph::of(tx.model(), diagram, &scene)? else { return Ok(()) };
+    if g.attributes.iter().all(Vec::is_empty) && g.parts.is_empty() {
+        return Ok(());
+    }
+    let mut labels = label_rects(&g, &scene, measure);
+    for _ in 0..3 {
+        place_attributes(&mut g, &scene, &labels);
+        write(tx, diagram, &g)?;
+        let scene = scene::build(tx.model(), diagram, &Preview::default(), measure);
+        let moved = label_rects(&g, &scene, measure);
+        let mut attributes = g.nodes.iter().filter(|n| n.attribute).map(|n| n.bounds);
+        if !attributes.any(|a| moved.iter().any(|l| overlap(&a, l))) {
+            break;
+        }
+        labels.extend(moved);
+    }
+    Ok(())
+}
+
 /// Writes the places of the nodes and the routes of the lines.
 fn write(tx: &mut Tx<'_>, diagram: Id, g: &Graph) -> Result<()> {
     for n in &g.nodes {
@@ -247,14 +270,22 @@ impl Graph {
         // The lines, and for the core graph each hub's ends: (hub, other, upper).
         let mut lines = Vec::new();
         let mut ends: Vec<(usize, usize, bool)> = Vec::new();
+        let mut direct_lines: Vec<(usize, usize)> = Vec::new();
         for p in view.presentations() {
             let Shape::Edge { source, target, .. } = p.shape else { continue };
             let (Some(&s), Some(&t)) = (node_of.get(&source), node_of.get(&target)) else {
                 continue;
             };
             let element = p.element.and_then(|e| model.get(e));
-            let core_line = element.is_some_and(|e| is_hub_line(e.kind()));
+            // In IE and IDEF1X a relationship between two entities is a line, its parent
+            // (the source) above the child.
+            let direct =
+                element.is_some_and(|e| matches!(e.kind(), ElementKind::ErRelationship(_)));
+            let core_line = direct || element.is_some_and(|e| is_hub_line(e.kind()));
             lines.push(Line { id: p.id, ends: [s, t], core: core_line, waypoints: Vec::new() });
+            if direct && s != t {
+                direct_lines.push((s, t));
+            }
             let hub_of = |hub: Id| if element_of(s) == Some(hub) { (s, t) } else { (t, s) };
             match element.map(|e| e.kind()) {
                 Some(ElementKind::ErParticipation(p)) => {
@@ -269,7 +300,12 @@ impl Graph {
                 _ => {}
             }
         }
-        let edges = core_edges(&ends, &position, model, &nodes, view);
+        let mut edges = core_edges(&ends, &position, model, &nodes, view);
+        for (s, t) in direct_lines {
+            if let (Some(&upper), Some(&lower)) = (position.get(&s), position.get(&t)) {
+                edges.push(Edge { upper, lower, hierarchy: false });
+            }
+        }
         Ok(Some(Self { nodes, lines, core, position, attributes, parts: ordered, edges }))
     }
 }

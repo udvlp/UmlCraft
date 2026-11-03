@@ -16,10 +16,10 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
     ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Cardinality, Color,
-    DiagramKind, ElementData, ElementKind, ErKey, Id, InstanceKind, InstanceProps,
-    InteractionOperator, LifelineProps, LinkEnd, LinkProps, MessageSort, Model, Multiplicity,
-    Navigability, ObjectEffect, ObjectOrdering, ParameterDirections, Presentation, Shape, Style,
-    TemplateParameterKind, TypeRef, Visibility,
+    DiagramKind, ElementData, ElementKind, ErDisplay, ErKey, ErNotation, Id, InstanceKind,
+    InstanceProps, InteractionOperator, LifelineProps, LinkEnd, LinkProps, MessageSort, Model,
+    Multiplicity, Navigability, ObjectEffect, ObjectOrdering, ParameterDirections, Presentation,
+    Shape, Style, TemplateParameterKind, TypeRef, Visibility,
 };
 use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
@@ -167,6 +167,9 @@ pub struct PropertiesPanel {
     er_key: Entity<Choice>,
     /// IS-A: subtypes not stated, disjoint or overlapping.
     disjoint: Entity<Choice>,
+    /// ER diagrams: Chen, IE or IDEF1X, and what IE and IDEF1X tables list.
+    er_notation: Entity<Choice>,
+    er_display: Entity<Choice>,
     parameter_kind: Entity<Choice>,
     sort: Entity<Choice>,
     operator: Entity<Choice>,
@@ -234,6 +237,21 @@ const DISJOINT: [Option<bool>; 3] = [None, Some(true), Some(false)];
 
 fn er_key_items() -> Vec<SharedString> {
     ["prop.er_key_none", "prop.er_key_primary", "prop.er_key_partial"]
+        .map(|k| t!(k).to_string().into())
+        .to_vec()
+}
+
+const ER_NOTATIONS: [ErNotation; 3] = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
+const ER_DISPLAYS: [ErDisplay; 3] = [ErDisplay::Attributes, ErDisplay::Keys, ErDisplay::Name];
+
+fn er_notation_items() -> Vec<SharedString> {
+    ["ribbon.notation.chen", "ribbon.notation.ie", "ribbon.notation.idef1x"]
+        .map(|k| t!(k).to_string().into())
+        .to_vec()
+}
+
+fn er_display_items() -> Vec<SharedString> {
+    ["prop.er_display_attributes", "prop.er_display_keys", "prop.er_display_name"]
         .map(|k| t!(k).to_string().into())
         .to_vec()
 }
@@ -455,6 +473,8 @@ impl PropertiesPanel {
         let cardinality = cx.new(|cx| InputState::new(window, cx).placeholder("[0,n]"));
         let er_key = cx.new(|cx| SelectState::new(er_key_items(), None, window, cx));
         let disjoint = cx.new(|cx| SelectState::new(disjoint_items(), None, window, cx));
+        let er_notation = cx.new(|cx| SelectState::new(er_notation_items(), None, window, cx));
+        let er_display = cx.new(|cx| SelectState::new(er_display_items(), None, window, cx));
         let parameter_kind =
             cx.new(|cx| SelectState::new(parameter_kind_items(), None, window, cx));
         let sort = cx.new(|cx| SelectState::new(sort_items(), None, window, cx));
@@ -669,6 +689,37 @@ impl PropertiesPanel {
             },
         ));
         subscriptions.push(cx.subscribe_in(
+            &er_notation,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(n) = selected(state, cx).and_then(|ix| ER_NOTATIONS.get(ix).copied())
+                else {
+                    return;
+                };
+                let Some(diagram) = this.shown_id() else { return };
+                // Switching converts what the diagram shows, which a plain change does not.
+                this.workspace.update(cx, |ws, cx| {
+                    ws.set_er_notation(diagram, n);
+                    cx.notify();
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &er_display,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(d) = selected(state, cx).and_then(|ix| ER_DISPLAYS.get(ix).copied())
+                else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::Diagram(p) = &mut data.kind {
+                        p.er_display = d;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
             &disjoint,
             window,
             |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
@@ -775,6 +826,8 @@ impl PropertiesPanel {
             cardinality,
             er_key,
             disjoint,
+            er_notation,
+            er_display,
             parameter_kind,
             sort,
             operator,
@@ -1447,6 +1500,12 @@ impl PropertiesPanel {
                 let k = ER_KEYS.iter().position(|&k| k == p.key);
                 choose(&self.er_key, k, locale_changed.then(er_key_items), window, cx);
             }
+            ElementKind::Diagram(p) if p.diagram == DiagramKind::EntityRelationship => {
+                let n = ER_NOTATIONS.iter().position(|&n| n == p.notation);
+                choose(&self.er_notation, n, locale_changed.then(er_notation_items), window, cx);
+                let d = ER_DISPLAYS.iter().position(|&d| d == p.er_display);
+                choose(&self.er_display, d, locale_changed.then(er_display_items), window, cx);
+            }
             ElementKind::ErIsA(p) => {
                 let d = DISJOINT.iter().position(|&d| d == p.disjoint);
                 choose(&self.disjoint, d, locale_changed.then(disjoint_items), window, cx);
@@ -1842,6 +1901,31 @@ impl PropertiesPanel {
             |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
         let workspace = self.workspace.clone();
         match kind {
+            ElementKind::Diagram(p) if p.diagram == DiagramKind::EntityRelationship => {
+                body = body.child(field(
+                    t!("prop.er_notation").into(),
+                    Select::new(&self.er_notation).small().into_any_element(),
+                ));
+                if p.notation.lists_attributes() {
+                    body = body
+                        .child(field(
+                            t!("prop.er_display").into(),
+                            Select::new(&self.er_display).small().into_any_element(),
+                        ))
+                        .child(flag(
+                            "er-physical-names",
+                            t!("prop.er_physical_names").into(),
+                            p.physical_names,
+                            workspace.clone(),
+                            id,
+                            |d, v| {
+                                if let ElementKind::Diagram(p) = &mut d.kind {
+                                    p.physical_names = v;
+                                }
+                            },
+                        ));
+                }
+            }
             ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => {
                 body = body
                     .child(flag(
@@ -2213,21 +2297,45 @@ impl PropertiesPanel {
                                 p.not_null = v;
                             }
                         },
+                    ))
+                    .child(flag(
+                        "er-unique",
+                        t!("prop.er_unique").into(),
+                        p.unique,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErAttribute(p) = &mut d.kind {
+                                p.unique = v;
+                            }
+                        },
                     ));
+                // A foreign key column: of which relationship, by its name.
+                let model = self.workspace.read(cx).doc.model();
+                if let Some(by) = p.foreign_key.and_then(|r| model.get(r)) {
+                    let name = match by.name() {
+                        "" => t!("prop.er_unnamed").to_string(),
+                        name => name.to_owned(),
+                    };
+                    body = body.child(field(
+                        t!("prop.er_foreign_key").into(),
+                        div().text_sm().child(name).into_any_element(),
+                    ));
+                }
             }
             ElementKind::ErRelationship(p) => {
-                body = body.child(flag(
-                    "er-identifying",
-                    t!("prop.er_identifying").into(),
-                    p.identifying,
-                    workspace.clone(),
-                    id,
-                    |d, v| {
-                        if let ElementKind::ErRelationship(p) = &mut d.kind {
-                            p.identifying = v;
-                        }
-                    },
-                ));
+                // Its foreign key columns move into or out of the child's key with it.
+                let identifying = Checkbox::new("er-identifying")
+                    .label(t!("prop.er_identifying").to_string())
+                    .checked(p.identifying)
+                    .on_click(move |checked: &bool, _, cx| {
+                        let checked = *checked;
+                        workspace.update(cx, |ws, cx| {
+                            ws.set_er_identifying(id, checked);
+                            cx.notify();
+                        });
+                    });
+                body = body.child(identifying);
             }
             ElementKind::ErIsA(p) => {
                 body = body

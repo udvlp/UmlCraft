@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run --release -p umlcraft-erm-sql --example sql-import -- DUMP… \
-//!     [--attributes all|keys|none] [--out DIR]
+//!     [--attributes all|keys|none] [--notation chen|ie|idef1x] [--out DIR]
 //! ```
 //!
 //! With `--out`, each dump is written as `DIR/<name>.ucraft` and `DIR/<name>.svg`.
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use umlcraft_erm_sql::{Attributes, Options, import, read};
-use umlcraft_model::{Document, Model};
+use umlcraft_model::{Document, ErNotation, Model};
 use umlcraft_notation::er_layout;
 use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
 
@@ -20,9 +20,17 @@ fn main() {
     let mut dumps = Vec::new();
     let mut out: Option<PathBuf> = None;
     let mut attributes = Attributes::All;
+    let mut notation = ErNotation::Chen;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out = args.next().map(PathBuf::from),
+            "--notation" => {
+                notation = match args.next().as_deref() {
+                    Some("ie") => ErNotation::Ie,
+                    Some("idef1x") => ErNotation::Idef1x,
+                    _ => ErNotation::Chen,
+                }
+            }
             "--attributes" => {
                 attributes = match args.next().as_deref() {
                     Some("keys") => Attributes::Keys,
@@ -47,7 +55,7 @@ fn main() {
         };
         let parsed = start.elapsed();
         let file_name = path.file_name().map(|f| f.to_string_lossy().into_owned());
-        let options = Options { attributes, file_name, ..Options::default() };
+        let options = Options { attributes, file_name, notation, ..Options::default() };
         let mut doc = Document::new(Model::new("sql"));
         let root = doc.model().root();
         let mut result = None;

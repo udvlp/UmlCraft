@@ -23,7 +23,9 @@ bounds. `report.txt` gets one line per finding, tab-separated:
 
 - `dropped <key> <count>`: something the API cannot express, e.g. `query`, `extendCondition`,
   `templateParameterBounds` (Astah keeps one bound per template parameter),
-  `variadicTemplateParameter`, or `templateParameter` for those of operations;
+  `variadicTemplateParameter`, or `templateParameter` for those of operations; for ER
+  diagrams `erChenNotation` (a Chen diagram written in IE), `erRelationship`, `erUnique`,
+  `erDisjoint`, `erCardinality` and the like;
 - `problem <text>`: a single element that failed;
 - `error <text>`: the export failed as a whole.
 

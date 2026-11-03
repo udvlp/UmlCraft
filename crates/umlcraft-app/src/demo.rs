@@ -8,15 +8,15 @@ use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationProps, AttributeProps,
     Cardinality, ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd, DiagramKind,
     DirectedProps, Document, ElementData, ElementKind, ErAttributeProps, ErEntityProps, ErIsAProps,
-    ErKey, ErRelationshipProps, ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps,
-    InteractionOperandProps, InteractionOperator, InternalTransitionProps, LifelineProps,
-    LinkProps, MessageSort, Model, ModelError, Multiplicity, Navigability, OperationProps,
-    ParameterProps, Point, Presentation, PseudostateKind, Rect, Regions, Result, Shape, SlotProps,
-    StateProps, StructogramProps, TransitionProps, Tx, TypeRef, Visibility,
+    ErKey, ErNotation, ErRelationshipProps, ExtendProps, Id, IncludeProps, InstanceKind,
+    InstanceProps, InteractionOperandProps, InteractionOperator, InternalTransitionProps,
+    LifelineProps, LinkProps, MessageSort, Model, ModelError, Multiplicity, Navigability,
+    OperationProps, ParameterProps, Point, Presentation, PseudostateKind, Rect, Regions, Result,
+    Shape, SlotProps, StateProps, StructogramProps, TransitionProps, Tx, TypeRef, Visibility,
 };
-use umlcraft_notation::er;
 use umlcraft_notation::scene::{self, TextMeasure};
 use umlcraft_notation::sequence_edit;
+use umlcraft_notation::{clipboard, er};
 use umlcraft_nsd::{Color, Element as Block, ForLoop, Provenance, RootKind, Sequence, lines};
 
 /// The sample project, its boxes measured with `measure`.
@@ -1239,9 +1239,15 @@ impl Builder<'_, '_> {
             ("Dock", entity(true), (820.0, 220.0, 100.0, 40.0)),
             ("belongs to", relationship(true), (830.0, 340.0, 80.0, 50.0)),
             ("Station", entity(false), (820.0, 470.0, 100.0, 40.0)),
-            ("", ElementKind::ErIsA(ErIsAProps { total: true, disjoint: Some(true) }), {
-                (470.0, 330.0, 80.0, 50.0)
-            }),
+            (
+                "",
+                ElementKind::ErIsA(ErIsAProps {
+                    total: true,
+                    disjoint: Some(true),
+                    ..Default::default()
+                }),
+                { (470.0, 330.0, 80.0, 50.0) },
+            ),
             ("E-bike", entity(false), (370.0, 450.0, 100.0, 40.0)),
             ("Classic bike", entity(false), (550.0, 450.0, 100.0, 40.0)),
         ] {
@@ -1304,6 +1310,23 @@ impl Builder<'_, '_> {
         for subtype in [bike, ebike, classic] {
             er::connect(self.tx, d, is_a.1, subtype.1)?;
         }
+        // The columns that hold the relationships, which Chen leaves to the diamonds: a dock is
+        // identified by its station, and knows the bike parked at it.
+        for (name, key, by) in [("stationId", primary, belongs), ("serialNo", None, parked)] {
+            let props = ErAttributeProps { key, foreign_key: Some(by.0), ..Default::default() };
+            self.create(dock.0, name, ElementKind::ErAttribute(props))?;
+        }
+        // The same tables as IE draws them, entities where they are in Chen.
+        let tables = self.diagram(owner, "Database (IE)", DiagramKind::EntityRelationship)?;
+        let shown: Vec<Id> = self
+            .tx
+            .model()
+            .view(d)
+            .map_or_else(Vec::new, |v| v.presentations().iter().map(|p| p.id).collect());
+        if let Some(clip) = clipboard::copy(self.tx.model(), d, &shown) {
+            clipboard::paste(self.tx, tables, &clip, Point::new(0.0, 0.0), true)?;
+        }
+        er::set_notation(self.tx, tables, ErNotation::Ie, self.measure)?;
         Ok(())
     }
 }

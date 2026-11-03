@@ -34,8 +34,9 @@ pub use element::{
     TimeConstraintProps, TransitionProps, TypeExpr, TypeRef, Visibility,
 };
 pub use er::{
-    Cardinality, CardinalityMax, CardinalityMin, ErAttributeProps, ErEntityProps, ErIsAProps,
-    ErKey, ErParticipationProps, ErRelationshipProps, ErSubtypingProps, ParseCardinalityError,
+    Cardinality, CardinalityMax, CardinalityMin, ErAttributeProps, ErDisplay, ErEntityProps,
+    ErIsAProps, ErKey, ErNotation, ErParticipationProps, ErRelationshipProps, ErSubtypingProps,
+    ParseCardinalityError,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

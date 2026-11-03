@@ -7,8 +7,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::diagram::DiagramKind;
 use crate::er::{
-    ErAttributeProps, ErEntityProps, ErIsAProps, ErParticipationProps, ErRelationshipProps,
-    ErSubtypingProps,
+    ErAttributeProps, ErDisplay, ErEntityProps, ErIsAProps, ErNotation, ErParticipationProps,
+    ErRelationshipProps, ErSubtypingProps,
 };
 use crate::id::Id;
 
@@ -1124,6 +1124,15 @@ pub struct DiagramProps {
     /// Class diagrams: an object diagram, whose palette starts with Object and Link.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub objects: bool,
+    /// ER diagrams: Chen, IE or IDEF1X.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub notation: ErNotation,
+    /// ER diagrams in IE or IDEF1X: what the entities list.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub er_display: ErDisplay,
+    /// ER diagrams: show the physical names of entities and attributes (the database's).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub physical_names: bool,
 }
 
 /// Marks what a source import made and may change or delete on a new import: associations made
@@ -1283,6 +1292,10 @@ pub enum RefRole {
     ErIsA,
     /// The super- or subtype of an ER subtyping.
     ErSubtype,
+    /// The relationship or subtyping an ER foreign key column belongs to.
+    ErForeignKey,
+    /// The attribute that tells the subtypes of an IS-A apart.
+    ErDiscriminator,
 }
 
 impl RefRole {
@@ -1355,6 +1368,10 @@ impl RefRole {
             ),
             Self::ErParticipant | Self::ErSubtype => matches!(target, ElementKind::ErEntity(_)),
             Self::ErIsA => matches!(target, ElementKind::ErIsA(_)),
+            Self::ErForeignKey => {
+                matches!(target, ElementKind::ErRelationship(_) | ElementKind::ErSubtyping(_))
+            }
+            Self::ErDiscriminator => matches!(target, ElementKind::ErAttribute(_)),
             Self::Client | Self::Supplier | Self::Annotated => !matches!(
                 target,
                 ElementKind::Model | ElementKind::Diagram(_) | ElementKind::Structogram(_)
@@ -1454,6 +1471,9 @@ impl ElementKind {
             hide_frame: false,
             hide_return_values: false,
             objects: false,
+            notation: ErNotation::Chen,
+            er_display: ErDisplay::Attributes,
+            physical_names: false,
         })
     }
 
@@ -1790,6 +1810,12 @@ impl ElementKind {
                 f(p.is_a, RefRole::ErIsA);
                 f(p.entity, RefRole::ErSubtype);
             }
+            Self::ErAttribute(p) => {
+                p.foreign_key.iter().for_each(|&id| f(id, RefRole::ErForeignKey))
+            }
+            Self::ErIsA(p) => {
+                p.discriminator.iter().for_each(|&id| f(id, RefRole::ErDiscriminator))
+            }
             _ => {}
         }
     }
@@ -1894,6 +1920,8 @@ impl ElementKind {
                 f(&mut p.is_a);
                 f(&mut p.entity);
             }
+            Self::ErAttribute(p) => p.foreign_key.iter_mut().for_each(f),
+            Self::ErIsA(p) => p.discriminator.iter_mut().for_each(f),
             _ => {}
         }
     }
@@ -1981,6 +2009,8 @@ impl ElementKind {
             Self::Extend(p) => unlink_vec(&mut p.extension_points),
             Self::Comment(p) => unlink_vec(&mut p.annotated),
             Self::Structogram(p) => unlink_opt(&mut p.operation),
+            Self::ErAttribute(p) => unlink_opt(&mut p.foreign_key),
+            Self::ErIsA(p) => unlink_opt(&mut p.discriminator),
             _ => false,
         }
     }
@@ -2268,6 +2298,24 @@ mod tests {
         assert!(RefRole::ErParticipant.accepts(&entity) && !RefRole::ErParticipant.accepts(&is_a));
         assert!(RefRole::ErIsA.accepts(&is_a) && RefRole::ErSubtype.accepts(&associative));
         assert!(!entity.is_classifier() && !attribute.is_classifier());
+        // A foreign key column refers to its relationship weakly: deleting the relationship
+        // keeps the column; so does the IS-A's discriminator.
+        let mut column = ElementKind::ErAttribute(ErAttributeProps {
+            foreign_key: Some(a),
+            ..Default::default()
+        });
+        assert_eq!(column.references(), [(a, RefRole::ErForeignKey)]);
+        assert!(!RefRole::ErForeignKey.is_strong() && !column.is_relationship());
+        assert!(RefRole::ErForeignKey.accepts(&relationship));
+        assert!(RefRole::ErForeignKey.accepts(&subtyping));
+        assert!(!RefRole::ErForeignKey.accepts(&entity));
+        assert!(column.unlink(a, "r") && column.references().is_empty());
+        let mut is_a =
+            ElementKind::ErIsA(ErIsAProps { discriminator: Some(b), ..Default::default() });
+        assert!(
+            RefRole::ErDiscriminator.accepts(&attribute) && !RefRole::ErDiscriminator.is_strong()
+        );
+        assert!(is_a.unlink(b, "kind") && is_a.references().is_empty());
     }
 
     #[test]

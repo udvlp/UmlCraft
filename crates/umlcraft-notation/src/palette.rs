@@ -141,6 +141,14 @@ pub enum EdgeTool {
     /// ER diagrams: one line for everything; what it becomes follows from its ends (see
     /// [`crate::er::connect`]).
     ErLine,
+    /// ER diagrams in IE and IDEF1X: relationships from the parent to the child, which gets
+    /// the parent's primary key as foreign key columns (in its own key when identifying), and
+    /// many-to-many ones without (see [`crate::er::relate`]).
+    ErIdentifying,
+    ErNonIdentifying,
+    ErManyToMany,
+    /// ER diagrams in IE and IDEF1X: from a supertype to a subtype.
+    ErSubtype,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -320,10 +328,28 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
 
 /// Tools offered for a diagram, in palette order.
 pub fn diagram_palette(props: &DiagramProps) -> Vec<Tool> {
+    if props.diagram == DiagramKind::EntityRelationship && props.notation.lists_attributes() {
+        return listing_palette();
+    }
     match props.objects {
         true => object_palette(),
         false => palette(props.diagram),
     }
+}
+
+/// Tools offered for an ER diagram in IE or IDEF1X: entities, whose attributes are rows added
+/// to them, and the relationship and subtype lines.
+fn listing_palette() -> Vec<Tool> {
+    use EdgeTool as E;
+    use NodeTool as N;
+    let nodes = [N::ErEntity, N::ErWeakEntity, N::Note];
+    let edges =
+        [E::ErIdentifying, E::ErNonIdentifying, E::ErManyToMany, E::ErSubtype, E::NoteAnchor];
+    std::iter::once(Tool::Select)
+        .chain(nodes.map(Tool::Node))
+        .chain(edges.map(Tool::Edge))
+        .chain([Tool::Text, Tool::Line])
+        .collect()
 }
 
 /// The lines a diagram drawn with `props` offers from an element of kind `source` to one of
@@ -732,6 +758,10 @@ impl EdgeTool {
             Self::DurationConstraint => "durationConstraint",
             Self::TimeConstraint => "timeConstraint",
             Self::ErLine => "erLine",
+            Self::ErIdentifying => "erIdentifying",
+            Self::ErNonIdentifying => "erNonIdentifying",
+            Self::ErManyToMany => "erManyToMany",
+            Self::ErSubtype => "erSubtype",
         }
     }
 
@@ -833,6 +863,13 @@ impl EdgeTool {
                     && !matches!(target, K::Diagram(_) | K::Model)
             }
             Self::ErLine => !same && crate::er::joins(source, target).is_some(),
+            // A plain relationship may join an entity to itself (a manager of employees).
+            Self::ErNonIdentifying | Self::ErManyToMany => {
+                matches!((source, target), (K::ErEntity(_), K::ErEntity(_)))
+            }
+            Self::ErIdentifying | Self::ErSubtype => {
+                !same && matches!((source, target), (K::ErEntity(_), K::ErEntity(_)))
+            }
         }
     }
 
@@ -869,8 +906,14 @@ impl EdgeTool {
                 ConnectorEnd::new(source, None),
                 ConnectorEnd::new(target, None),
             )),
-            // What it becomes depends on the kinds of its ends; `er::connect` makes it.
-            Self::NoteAnchor | Self::ErLine => None,
+            // What it becomes depends on the kinds of its ends; `er::connect` makes it, and
+            // `er::relate` the lines of IE and IDEF1X.
+            Self::NoteAnchor
+            | Self::ErLine
+            | Self::ErIdentifying
+            | Self::ErNonIdentifying
+            | Self::ErManyToMany
+            | Self::ErSubtype => None,
             Self::DurationConstraint => {
                 Some(ElementKind::DurationConstraint(DurationConstraintProps {
                     from: source,
@@ -1260,6 +1303,9 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
     }
     if tool == EdgeTool::ErLine {
         return crate::er::connect(tx, diagram, source, target);
+    }
+    if let Some(line) = crate::er::IeLine::of(tool) {
+        return crate::er::relate(tx, diagram, line, source, target);
     }
     if matches!(tool, EdgeTool::DurationConstraint | EdgeTool::TimeConstraint) {
         if (source == target) != (tool == EdgeTool::TimeConstraint) {

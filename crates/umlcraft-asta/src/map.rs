@@ -33,6 +33,7 @@ use umlcraft_notation::shared;
 use crate::jser::{Graph, ObjId, Value};
 
 mod diagrams;
+mod er;
 mod sequence;
 
 /// The result of an import.
@@ -360,6 +361,8 @@ struct Importer<'g> {
     /// Generalization presentations in a shared group: the style and where the common line
     /// runs (y for the vertical style, x for the horizontal one), before shifting.
     shared: HashMap<ObjId, (SharedStyle, f32)>,
+    /// What the ER model leaves for later.
+    er: er::ErPending,
 }
 
 /// Most bound types expanded for one type; real ones such as `Map<String, List<Order>>` need
@@ -392,6 +395,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         type_budget: Cell::new(MAX_TYPE_NODES),
         association_classes: HashMap::new(),
         shared: HashMap::new(),
+        er: er::ErPending::default(),
     };
     let root_id = im.model.root();
     im.walk(root, root_id);
@@ -408,6 +412,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     for (owner, relationship) in std::mem::take(&mut im.relationships) {
         im.relationship(owner, relationship);
     }
+    im.er_relationships();
     // Parts may be association ends, created with their association.
     for (owner, connector) in std::mem::take(&mut im.connectors) {
         im.connector(owner, connector);
@@ -549,7 +554,15 @@ impl Importer<'_> {
         }
         for ownership in self.r.list(object, "ownedElementOwnership") {
             let Some(child) = self.r.obj(ownership, "ownedElement") else { continue };
-            if is_foreign_notation(&self.r.tagged_values(child)) {
+            let tags = self.r.tagged_values(child);
+            if er::is_er_model(&tags) {
+                let data = self.data(child, ElementKind::Package, &[]);
+                if let Some(package) = self.create(id, data, Some(child)) {
+                    self.er_walk(child, package);
+                }
+                continue;
+            }
+            if is_foreign_notation(&tags) {
                 self.skip(child);
                 continue;
             }
@@ -1560,6 +1573,7 @@ impl Importer<'_> {
             ("USequenceDiagramImp", _) => DiagramKind::Sequence,
             ("UActivityDiagramImp", _) => DiagramKind::Activity,
             ("UStateChartDiagramImp", _) => DiagramKind::StateMachine,
+            ("UERDiagramImp", _) => DiagramKind::EntityRelationship,
             (_, "Class Diagram") => DiagramKind::Class,
             (_, "UseCase Diagram") => DiagramKind::UseCase,
             (_, "Component Diagram") => DiagramKind::Component,
@@ -1581,6 +1595,11 @@ impl Importer<'_> {
             }
         }
         let mut data = self.data(object, ElementKind::diagram(kind), &[]);
+        if let ElementKind::Diagram(props) = &mut data.kind
+            && kind == DiagramKind::EntityRelationship
+        {
+            self.er_diagram_props(object, props);
+        }
         if let ElementKind::Diagram(props) = &mut data.kind {
             let off = |field| self.r.g.bool_field(object, field) == Some(false);
             props.hide_message_numbers = kind == DiagramKind::Sequence && off("indexVisible");

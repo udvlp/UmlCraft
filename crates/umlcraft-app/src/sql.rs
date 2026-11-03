@@ -1,4 +1,5 @@
-//! "Import SQL dump as ER diagram …": a file, a small dialog (dialect, attributes, schemas),
+//! "Import SQL dump as ER diagram …": a file, a small dialog (dialect, notation, attributes,
+//! schemas),
 //! and the import into the project: a package named after the database with an ER diagram,
 //! which opens. What was found goes to the status bar; hints and problems to a message.
 
@@ -17,6 +18,7 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_erm_sql::ir::ProblemKind;
 use umlcraft_erm_sql::{Attributes, Dialect, DumpError, Hint, Options, Report, Schema};
+use umlcraft_model::ErNotation;
 
 use crate::main_view::MainView;
 
@@ -52,14 +54,16 @@ pub fn prompt(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
     .detach();
 }
 
-/// The dialect, the attributes and the schemas to take.
+/// The dialect, the notation, the attributes and the schemas to take.
 struct Choice {
     dialect: Dialect,
+    notation: ErNotation,
     attributes: Attributes,
     schemas: BTreeSet<usize>,
 }
 
 const ATTRIBUTES: [Attributes; 3] = [Attributes::All, Attributes::Keys, Attributes::None];
+const NOTATIONS: [ErNotation; 3] = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
 
 fn choose(
     view: WeakEntity<MainView>,
@@ -77,6 +81,7 @@ fn choose(
     let schemas = schema.schemas();
     let choice = Rc::new(RefCell::new(Choice {
         dialect: detected,
+        notation: ErNotation::Chen,
         attributes: Attributes::All,
         schemas: (0..schemas.len()).collect(),
     }));
@@ -100,6 +105,16 @@ fn choose(
                 c1.borrow_mut().dialect = Dialect::ALL[ix];
                 window.refresh();
             });
+        let c3 = choice.clone();
+        let notations = RadioGroup::horizontal("sql-import-notation")
+            .children(
+                ["chen", "ie", "idef1x"].map(|k| t!(format!("ribbon.notation.{k}")).to_string()),
+            )
+            .selected_index(NOTATIONS.iter().position(|&n| n == current.notation))
+            .on_change(move |&ix, window, _| {
+                c3.borrow_mut().notation = NOTATIONS[ix];
+                window.refresh();
+            });
         let c2 = choice.clone();
         let attributes = RadioGroup::horizontal("sql-import-attributes")
             .children([
@@ -121,6 +136,7 @@ fn choose(
                     .child(t!("sql.found", file = file.as_str(), count = tables).to_string()),
             )
             .child(section(t!("sql.dialect").to_string(), dialects))
+            .child(section(t!("sql.notation").to_string(), notations))
             .child(section(
                 t!("sql.attributes").to_string(),
                 v_flex()
@@ -170,6 +186,7 @@ fn choose(
                     attributes: c.attributes,
                     schemas: (picked.len() < schemas.len()).then_some(picked),
                     file_name: Some(file_name(&job.0)),
+                    notation: c.notation,
                 };
                 run(view.clone(), job.clone(), c.dialect, options, window, cx);
             }

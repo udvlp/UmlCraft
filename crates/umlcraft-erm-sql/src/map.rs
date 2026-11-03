@@ -17,7 +17,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use umlcraft_model::{
     Cardinality, CardinalityMax, DiagramKind, ElementData, ElementKind, ErAttributeProps,
-    ErEntityProps, ErKey, ErParticipationProps, ErRelationshipProps, Id, Rect, Result, Tx,
+    ErEntityProps, ErKey, ErNotation, ErParticipationProps, ErRelationshipProps, Id, Rect, Result,
+    Tx,
 };
 use umlcraft_notation::er_layout;
 use umlcraft_notation::palette::default_size_for;
@@ -44,6 +45,8 @@ pub struct Options {
     /// The dump's file name, for the package's name (if the dump names no database) and its
     /// documentation.
     pub file_name: Option<String>,
+    /// How the diagram draws the tables: Chen (by default), IE or IDEF1X.
+    pub notation: ErNotation,
 }
 
 /// Where the import went and what it found.
@@ -110,6 +113,9 @@ pub fn import(
     measure: &dyn TextMeasure,
 ) -> Result<Import> {
     let result = map(tx, owner, schema, options)?;
+    if options.notation != ErNotation::Chen {
+        umlcraft_notation::er::set_notation(tx, result.diagram, options.notation, measure)?;
+    }
     er_layout::arrange(tx, result.diagram, measure)?;
     Ok(result)
 }
@@ -221,6 +227,7 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
                 identifying,
                 None,
             )?;
+            m.foreign_columns(owner.0, t, fk, r.0)?;
             let nullable = fk.columns.iter().any(|c| !t.column(c).is_some_and(|c| c.not_null));
             let near_target =
                 Cardinality::new(if nullable { 0 } else { 1 }, CardinalityMax::Count(1));
@@ -470,6 +477,47 @@ impl Mapper<'_, '_> {
         Ok(())
     }
 
+    /// The columns of `fk` as foreign key columns of `owner` belonging to `relationship`,
+    /// without nodes: Chen draws the relationship instead, IE and IDEF1X list them. Those in the
+    /// primary key are keys.
+    fn foreign_columns(
+        &mut self,
+        owner: Id,
+        t: &Table,
+        fk: &ForeignKey,
+        relationship: Id,
+    ) -> Result<()> {
+        for name in &fk.columns {
+            let Some(c) = t.column(name) else { continue };
+            let key = t.primary_key.contains(name).then_some(ErKey::Primary);
+            let take = match self.attributes {
+                Attributes::All => true,
+                Attributes::Keys => key.is_some(),
+                Attributes::None => false,
+            };
+            // A column of two foreign keys belongs to the first.
+            let taken = !self.tx.model().children_named(owner, name).is_empty();
+            if !take || taken {
+                continue;
+            }
+            let (datatype, length) = split_type(&c.datatype);
+            let props = ErAttributeProps {
+                key,
+                physical_name: c.name.clone(),
+                datatype,
+                length_precision: length.unwrap_or_default(),
+                not_null: c.not_null,
+                default_value: c.default.clone().unwrap_or_default(),
+                foreign_key: Some(relationship),
+                ..Default::default()
+            };
+            let mut data = ElementData::new(c.name.clone(), ElementKind::ErAttribute(props));
+            data.documentation = c.comment.clone().unwrap_or_default();
+            self.tx.create(owner, data)?;
+        }
+        Ok(())
+    }
+
     /// S6: the columns `names` in table order as attributes of `owner`.
     fn attributes(
         &mut self,
@@ -508,6 +556,7 @@ impl Mapper<'_, '_> {
                 length_precision: length.unwrap_or_default(),
                 not_null: c.not_null,
                 default_value: c.default.clone().unwrap_or_default(),
+                ..Default::default()
             };
             let mut data = ElementData::new(c.name.clone(), ElementKind::ErAttribute(props));
             data.documentation = c.comment.clone().unwrap_or_default();
@@ -522,7 +571,8 @@ impl Mapper<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use umlcraft_model::{Document, Model};
+    use umlcraft_model::{Document, Model, Presentation};
+    use umlcraft_notation::scene::ApproxMeasure;
 
     use super::*;
     use crate::{Dialect, parse::parse};
@@ -638,6 +688,43 @@ mod tests {
             ElementKind::ErAttribute(a) if a.key == Some(ErKey::Partial)
         ));
         model.check().unwrap();
+    }
+
+    #[test]
+    fn foreign_keys_become_columns_and_ie_draws_them_in_the_tables() {
+        let sql = "CREATE TABLE p (id int PRIMARY KEY);\nCREATE TABLE q (id int PRIMARY KEY);\n\
+                   CREATE TABLE pq (p_id int, q_id int, nr int, PRIMARY KEY (p_id, q_id, nr), \
+                   FOREIGN KEY (p_id) REFERENCES p (id), FOREIGN KEY (q_id) REFERENCES q (id));";
+        let schema = parse(sql.as_bytes(), Dialect::MySql);
+        let mut doc = Document::new(Model::new("m"));
+        let root = doc.model().root();
+        let options = Options { notation: ErNotation::Ie, ..Options::default() };
+        let mut result = None;
+        doc.edit("import", |tx| {
+            result = Some(import(tx, root, &schema, &options, &ApproxMeasure)?);
+            Ok(())
+        })
+        .unwrap();
+        let (model, import) = (doc.model(), result.unwrap());
+        model.check().unwrap();
+        let pq = model.children_named(import.package, "Pq")[0];
+        for column in ["p_id", "q_id"] {
+            let c = model.children_named(pq, column)[0];
+            let ElementKind::ErAttribute(a) = model.get(c).unwrap().kind() else { panic!() };
+            assert_eq!(a.key, Some(ErKey::Primary), "{column}");
+            let by = a.foreign_key.and_then(|r| model.get(r)).map(|r| r.kind().type_name());
+            assert_eq!(by, Some("erRelationship"), "{column}");
+        }
+        // No attribute nodes; the two relationships are lines between the tables.
+        let view = model.view(import.diagram).unwrap();
+        let kind = |p: &Presentation| p.element.and_then(|e| model.get(e)).map(|e| e.kind());
+        let nodes = view.presentations().iter().filter(|p| p.bounds().is_some());
+        assert_eq!(nodes.clone().count(), 3);
+        assert!(nodes.clone().all(|p| matches!(kind(p), Some(ElementKind::ErEntity(_)))));
+        let lines = view.presentations().iter().filter(|p| p.endpoints().is_some());
+        assert!(lines.clone().all(|p| matches!(kind(p), Some(ElementKind::ErRelationship(_)))));
+        assert_eq!(lines.count(), 2);
+        assert!(er_layout::overlaps(model, import.diagram, &ApproxMeasure).is_empty());
     }
 
     #[test]

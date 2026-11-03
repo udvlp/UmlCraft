@@ -73,6 +73,7 @@ ribbon:
     nsd_loops: Loops
     nsd_element: Element
     numbering: Numbering
+    notation: Notation
   paste: Paste
   cut: Cut
   copy: Copy
@@ -84,6 +85,10 @@ ribbon:
   route_lines: Route lines
   message_numbers: Numbers
   flat_numbers: Straight through
+  notation:
+    chen: Chen
+    ie: IE (crow's foot)
+    idef1x: IDEF1X
   light: Light
   dark: Dark
   files: Files …
@@ -260,6 +265,10 @@ tool:
   erIdentifyingRelationship: Identifying
   erIsA: IS-A
   erLine: Line
+  erIdentifying: Identifying
+  erNonIdentifying: Non-identifying
+  erManyToMany: Many to many
+  erSubtype: Subtype
   callBehavior: Call behavior
   sendSignal: Send signal
   acceptEvent: Accept event
@@ -296,6 +305,13 @@ tool_tip:
   port: "A port: click on or near the border of a class or a part. A port of a part belongs to the class that is the part's type"
   erAssociativeEntity: "A relationship that is also an entity: entities take part in it, attributes belong to it"
   erPartialKeyAttribute: "Partial key of a weak entity: identifies it together with the key of its owner entity"
+  erIdentifying: "Drag from the parent to the child: its key becomes part of the child's key, the child depends on it"
+  erNonIdentifying: "Drag from the parent to the child: its key becomes a foreign key of the child"
+  erManyToMany: "Drag from one entity to the other: each can have many of the other"
+  erSubtype: "Drag from the supertype to the subtype: the subtype takes the supertype's key. Further subtypes join the same symbol"
+  notation_chen: "Entities as boxes, attributes as ovals, relationships as diamonds"
+  notation_ie: "Entities as tables with their columns, relationships as lines with crow's feet"
+  notation_idef1x: "Entities as tables with their columns and types, relationships as lines with a dot at the child"
   erLine: "One line for everything: attribute to what it describes, relationship to an entity (with [0,n]), IS-A to a super- or subtype (the first one to the supertype)"
 diagram:
   class: Class diagram
@@ -439,6 +455,15 @@ prop:
   er_datatype: Data type
   er_length_precision: Length/precision
   er_not_null: NOT NULL
+  er_unique: Unique
+  er_foreign_key: Foreign key of
+  er_unnamed: (unnamed relationship)
+  er_notation: Notation
+  er_display: Tables show
+  er_display_attributes: All attributes
+  er_display_keys: Primary keys only
+  er_display_name: Names only
+  er_physical_names: Physical names (database)
   er_default_value: Default value
   er_identifying: Identifying
   er_cardinality: Cardinality
@@ -560,6 +585,20 @@ export_dropped:
   deploymentDiagram: Deployment diagrams (exported as class diagrams)
   compositeStructureDiagram: Composite structure diagrams (exported as class diagrams without parts and ports)
   erDiagram: ER diagrams
+  erChenNotation: ER diagrams in Chen notation (exported in IE notation)
+  erRelationship: ER relationships of more than two entities or with attributes of their own
+  erAssociativeEntity: Associative entities (exported as entities)
+  erCompositeAttribute: Composite attributes (their parts exported as columns)
+  erUnique: UNIQUE of columns
+  erDerived: Derived attributes (exported as columns)
+  erMultivalued: Multivalued attributes (exported as columns)
+  erDisjoint: Disjoint or overlapping subtypes
+  erIsA: IS-As without a supertype
+  erSubtyping: Subtypes that could not be exported
+  erCardinality: Cardinalities Astah does not take
+  erForeignKeyName: Names of foreign key columns (Astah's own names are kept)
+  erEntity: ER entities
+  erAttribute: ER attributes
   port: Ports
   connector: Connectors
   pin: Pins not shown with their action
@@ -623,6 +662,7 @@ project:
   untitled: New project
 edit:
   create: Create
+  notation: Change notation
   change_kind: Change kind
   connect: Connect
   move: Move
@@ -907,6 +947,7 @@ sql:
   found: "%{file}: %{count} tables found."
   dialect: SQL dialect
   detected: "%{dialect} (detected)"
+  notation: Notation
   attributes: Attributes
   attributes_all: all
   attributes_keys: keys only

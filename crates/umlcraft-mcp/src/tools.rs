@@ -8,14 +8,14 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 use umlcraft_model::{
-    ActivityNodeKind, DiagramKind, ElementData, ElementKind, ErKey, Id, InteractionOperator,
-    MessageSort, Model, ModelError, Point, Rect, Shape, SharedStyle, StateInvariantProps,
-    TerminationProps, Tx, Visibility,
+    ActivityNodeKind, DiagramKind, ElementData, ElementKind, ErDisplay, ErKey, ErNotation, Id,
+    InteractionOperator, MessageSort, Model, ModelError, Point, Rect, Shape, SharedStyle,
+    StateInvariantProps, TerminationProps, Tx, Visibility,
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview, TextMeasure};
 use umlcraft_notation::{
-    activity, autoroute, composite, edit, layout, member, sequence_edit, state_edit, svg,
+    activity, autoroute, composite, edit, er, layout, member, sequence_edit, state_edit, svg,
 };
 
 use crate::base64;
@@ -201,6 +201,19 @@ pub fn list() -> Vec<Value> {
                              look-across, e.g. [0,1], [1,n], [0,m]; \"\" for none."),
         "role": text("ER participations: the entity's role, when it takes part twice."),
         "physical_name": text("ER entities and attributes: the name in the database."),
+        "unique": flag("ER attributes: the column is UNIQUE."),
+        "foreign_key": text("ER attributes: the id of the relationship or subtyping whose \
+                             foreign key the column is (IE, IDEF1X: marked (FK)), or \"\"."),
+        "discriminator": text("IS-A: the id of the supertype's attribute that tells the \
+                               subtypes apart, or \"\"."),
+        "notation": { "type": "string", "enum": ["chen", "ie", "idef1x"],
+                      "description": "ER diagrams: how they are drawn. Switching converts what \
+                                      the diagram shows and keeps its entities in place: IE \
+                                      and IDEF1X list the attributes in the tables and draw \
+                                      relationships between two entities as lines." },
+        "er_display": { "type": "string", "enum": ["attributes", "keys", "name"],
+                        "description": "ER diagrams in IE or IDEF1X: what the tables list." },
+        "physical_names": flag("ER diagrams in IE or IDEF1X: the names in the database."),
         "datatype": text("ER attributes: the column's type, e.g. VARCHAR."),
         "length_precision": text("ER attributes: length or precision, e.g. 10,2."),
         "not_null": flag("ER attributes: the column is NOT NULL."),
@@ -327,6 +340,12 @@ pub fn list() -> Vec<Value> {
                 "kind": { "type": "string", "enum": kinds },
                 "name": text("Its name."),
                 "owner": id("Package (or class) to put it in; the model's root if omitted."),
+                "notation": { "type": "string", "enum": ["chen", "ie", "idef1x"],
+                              "description": "ER diagrams: Chen (by default), IE with crow's \
+                                              feet, or IDEF1X. IE and IDEF1X have identifying, \
+                                              non-identifying, many-to-many and subtype lines \
+                                              drawn from parent to child, which copy the \
+                                              parent's key into the child." },
             }),
             &["kind", "name"],
         ),
@@ -428,10 +447,12 @@ pub fn list() -> Vec<Value> {
             "add_member",
             "Adds an attribute, operation or enumeration literal to a classifier, written as \
              in a class box: `- name : String [0..1] = \"x\"`, `+ total(tax : double) : int`, \
-             `RED`. Types name classes of the model or are kept as text.",
+             `RED`. Types name classes of the model or are kept as text. ER entities take \
+             columns, `name` or `name : TYPE(length)`: rows of their tables in IE and IDEF1X.",
             json!({
-                "owner": id("The class, interface, enumeration or data type."),
+                "owner": id("The class, interface, enumeration or data type, or the ER entity."),
                 "text": text("The member as it reads in the box."),
+                "key": flag("ER columns: part of the primary key."),
             }),
             &["owner", "text"],
         ),
@@ -833,24 +854,32 @@ fn on_diagram(model: &Model, diagram: Id, id: Id) -> Result<Id, String> {
     )
 }
 
-/// The tool of `kind`'s palette with `key`.
-fn diagram_tool(kind: DiagramKind, key: &str) -> Result<Tool, String> {
-    let tools = palette::palette(kind);
+/// The tools `diagram` offers: its kind's, an object diagram's, or those of an ER notation.
+fn tools_of(model: &Model, diagram: Id, kind: DiagramKind) -> Vec<Tool> {
+    match model.get(diagram).map(|d| d.kind()) {
+        Some(ElementKind::Diagram(p)) => palette::diagram_palette(p),
+        _ => palette::palette(kind),
+    }
+}
+
+/// The tool of `diagram`'s palette with `key`.
+fn diagram_tool(model: &Model, diagram: Id, kind: DiagramKind, key: &str) -> Result<Tool, String> {
+    let tools = tools_of(model, diagram, kind);
     tools.iter().copied().find(|t| t.key() == key).ok_or_else(|| {
         let keys: Vec<&str> = tools.iter().map(|t| t.key()).filter(|k| *k != "select").collect();
         format!("a {} diagram has no tool `{key}`; it has: {}", diagram_key(kind), keys.join(", "))
     })
 }
 
-fn node_tool(kind: DiagramKind, key: &str) -> Result<NodeTool, String> {
-    match diagram_tool(kind, key)? {
+fn node_tool(model: &Model, diagram: Id, kind: DiagramKind, key: &str) -> Result<NodeTool, String> {
+    match diagram_tool(model, diagram, kind, key)? {
         Tool::Node(tool) => Ok(tool),
         _ => Err(format!("`{key}` draws no element; `connect` draws relationships")),
     }
 }
 
-fn edge_tool(kind: DiagramKind, key: &str) -> Result<EdgeTool, String> {
-    match diagram_tool(kind, key)? {
+fn edge_tool(model: &Model, diagram: Id, kind: DiagramKind, key: &str) -> Result<EdgeTool, String> {
+    match diagram_tool(model, diagram, kind, key)? {
         Tool::Edge(tool) => Ok(tool),
         _ => Err(format!("`{key}` draws no relationship; `create_element` draws elements")),
     }
@@ -1065,7 +1094,7 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
             nodes.push(node);
         }
     }
-    let tools = palette::palette(kind);
+    let tools = tools_of(model, diagram, kind);
     let keys = |node: bool| -> Vec<&str> {
         tools
             .iter()
@@ -1154,15 +1183,24 @@ fn create_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
         .ok_or_else(|| format!("no diagram kind `{key}`"))?;
     let name = str_arg(args, "name")?.to_owned();
     let owner = opt_id(args, "owner")?.unwrap_or(host.document().model().root());
-    let diagram =
-        change(host, "create_diagram", |tx| edit::create_diagram(tx, owner, kind, &name))?;
+    let notation = pick(args, "notation", &ER_NOTATIONS)?;
+    if notation.is_some() && kind != DiagramKind::EntityRelationship {
+        return Err("only ER diagrams take `notation`".into());
+    }
+    let diagram = change_measured(host, "create_diagram", |tx, measure| {
+        let diagram = edit::create_diagram(tx, owner, kind, &name)?;
+        if let Some(notation) = notation {
+            er::set_notation(tx, diagram, notation, measure)?;
+        }
+        Ok(diagram)
+    })?;
     host.show_diagram(diagram);
     Ok(Reply::json(json!({ "diagram": diagram, "kind": key, "name": name })))
 }
 
 fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
-    let tool = node_tool(kind, str_arg(args, "tool")?)?;
+    let tool = node_tool(host.document().model(), diagram, kind, str_arg(args, "tool")?)?;
     let model = host.document().model();
     let on_lifeline = matches!(tool, NodeTool::StateInvariant | NodeTool::Termination);
     let origin = match (opt_num(args, "x"), opt_num(args, "y"), opt_id(args, "on")?) {
@@ -1288,7 +1326,7 @@ fn show_element(host: &mut dyn Host, args: &Value) -> Outcome {
 
 fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
-    let tool = edge_tool(kind, str_arg(args, "tool")?)?;
+    let tool = edge_tool(host.document().model(), diagram, kind, str_arg(args, "tool")?)?;
     let name = opt_str(args, "name").map(str::to_owned);
     let model = host.document().model();
     let source = on_diagram(model, diagram, id_arg(args, "source")?)?;
@@ -1343,7 +1381,12 @@ fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     let literal = matches!(owner_kind, ElementKind::Enumeration(_))
         && !text.contains('(')
         && !text.contains(':');
-    let data = if literal {
+    let column = matches!(owner_kind, ElementKind::ErEntity(_) | ElementKind::ErRelationship(_));
+    let data = if column {
+        let key = args.get("key").and_then(Value::as_bool).unwrap_or(false);
+        let (name, props) = er::parse_column(&text, key);
+        ElementData::new(name, ElementKind::ErAttribute(props))
+    } else if literal {
         ElementData::new(text.clone(), ElementKind::EnumerationLiteral)
     } else if text.contains('(') {
         ElementData::new("", ElementKind::operation(None))
@@ -1355,16 +1398,17 @@ fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     }
     let member = change(host, "add_member", |tx| {
         let member = tx.create(owner, data)?;
-        if !literal {
+        if !literal && !column {
             member::apply_member_text(tx, member, &text)?;
         }
         Ok(member)
     })?;
     let model = host.document().model();
+    let shown = if literal || column { text } else { member::member_text(model, member) };
     Ok(Reply::json(json!({
         "id": member,
         "kind": kind_name(model, member),
-        "text": if literal { text } else { member::member_text(model, member) },
+        "text": shown,
     })))
 }
 
@@ -1410,10 +1454,20 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     set_activity_node(model, id, &mut settings, args)?;
     set_submachine(model, id, &mut settings, args)?;
     set_er(&mut settings, args)?;
+    let notation = pick(args, "notation", &ER_NOTATIONS)?;
+    let is_er_diagram =
+        matches!(&kind, ElementKind::Diagram(p) if p.diagram == DiagramKind::EntityRelationship);
+    if notation.is_some() && !is_er_diagram {
+        return Err(format!("a {} has no `notation`", kind.type_name()));
+    }
+    let identifying = match &settings {
+        ElementKind::ErRelationship(p) if args.get("identifying").is_some() => Some(p.identifying),
+        _ => None,
+    };
     let is_alt = |kind: &ElementKind| matches!(kind, ElementKind::CombinedFragment(p) if p.operator == InteractionOperator::Alt);
     let becomes_alt = is_alt(&settings) && !is_alt(&kind);
     let recovered = args.get("covered").is_some();
-    change(host, "update_element", |tx| {
+    change_measured(host, "update_element", |tx, measure| {
         if let Some(text) = &text {
             member::apply_member_text(tx, id, text)?;
         }
@@ -1453,6 +1507,13 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         // Frames span the lifelines they cover once these are given.
         if recovered {
             sequence_edit::cover(tx, id)?;
+        }
+        // Foreign key columns move into or out of the child's key.
+        if let Some(identifying) = identifying {
+            er::set_identifying(tx, id, identifying)?;
+        }
+        if let Some(notation) = notation {
+            er::set_notation(tx, id, notation, measure)?;
         }
         sequence_edit::tidy_all(tx)
     })?;
@@ -1500,8 +1561,17 @@ fn pick<T: Copy>(args: &Value, key: &str, names: &[(&str, T)]) -> Result<Option<
     }
 }
 
-/// The settings of the elements of ER diagrams `update_element` takes.
-const ER_KEYS: [&str; 15] = [
+const ER_NOTATIONS: [(&str, ErNotation); 3] =
+    [("chen", ErNotation::Chen), ("ie", ErNotation::Ie), ("idef1x", ErNotation::Idef1x)];
+
+/// The settings of the elements of ER diagrams `update_element` takes; `notation` is set on
+/// its own, as switching converts the diagram.
+const ER_KEYS: [&str; 20] = [
+    "unique",
+    "foreign_key",
+    "discriminator",
+    "er_display",
+    "physical_names",
     "weak",
     "associative",
     "key",
@@ -1529,7 +1599,34 @@ fn set_er(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
         let text = || {
             value.as_str().map(|s| s.trim().to_owned()).ok_or_else(|| format!("`{key}` is text"))
         };
+        // An id, or "" for none.
+        let reference = || -> Result<Option<Id>, String> {
+            let text = text()?;
+            if text.is_empty() { Ok(None) } else { parse_id(&text).map(Some) }
+        };
         match (key, &mut *kind) {
+            ("unique", ElementKind::ErAttribute(p)) => p.unique = flag()?,
+            ("foreign_key", ElementKind::ErAttribute(p)) => p.foreign_key = reference()?,
+            ("discriminator", ElementKind::ErIsA(p)) => p.discriminator = reference()?,
+            ("er_display", ElementKind::Diagram(p))
+                if p.diagram == DiagramKind::EntityRelationship =>
+            {
+                p.er_display = match text()?.as_str() {
+                    "attributes" => ErDisplay::Attributes,
+                    "keys" => ErDisplay::Keys,
+                    "name" => ErDisplay::Name,
+                    other => {
+                        return Err(format!(
+                            "`er_display` is one of attributes, keys, name, not `{other}`"
+                        ));
+                    }
+                }
+            }
+            ("physical_names", ElementKind::Diagram(p))
+                if p.diagram == DiagramKind::EntityRelationship =>
+            {
+                p.physical_names = flag()?
+            }
             ("weak", ElementKind::ErEntity(p)) => p.weak = flag()?,
             ("associative", ElementKind::ErEntity(p)) => p.associative = flag()?,
             ("physical_name", ElementKind::ErEntity(p)) => p.physical_name = text()?,
@@ -2338,6 +2435,72 @@ mod tests {
             &json!({ "ids": [Id::generate().to_string()] }),
         );
         assert!(unknown.is_error);
+    }
+
+    #[test]
+    fn an_ie_diagram_copies_keys_and_switches_notation() {
+        let mut host = Headless::new();
+        let d = run(
+            &mut host,
+            "create_diagram",
+            json!({ "kind": "entity_relationship", "name": "Shop", "notation": "ie" }),
+        );
+        let d = id(&d["diagram"]);
+        let shown = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let tools = shown.to_string();
+        assert!(tools.contains("erIdentifying") && !tools.contains("erLine"), "{tools}");
+        let entity = |host: &mut Headless, name: &str| {
+            let e = run(
+                host,
+                "create_element",
+                json!({ "diagram": d, "tool": "erEntity", "name": name }),
+            );
+            id(&e["element"])
+        };
+        let customer = entity(&mut host, "Customer");
+        let order = entity(&mut host, "Order");
+        run(
+            &mut host,
+            "add_member",
+            json!({ "owner": customer, "text": "id : INTEGER", "key": true }),
+        );
+        let places = run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "erNonIdentifying", "source": customer, "target": order }),
+        );
+        let places = id(&places["element"]);
+        let model = host.document().model();
+        let fk = |model: &Model| -> Vec<(String, Option<ErKey>)> {
+            model
+                .children(parse_id(&order).unwrap())
+                .iter()
+                .filter_map(|&c| model.get(c))
+                .filter_map(|c| match c.kind() {
+                    ElementKind::ErAttribute(p) if p.foreign_key.is_some() => {
+                        Some((c.name().to_owned(), p.key))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(fk(model), [("id".to_owned(), None)]);
+        run(&mut host, "update_element", json!({ "id": places, "identifying": true }));
+        assert_eq!(fk(host.document().model()), [("id".to_owned(), Some(ErKey::Primary))]);
+        run(
+            &mut host,
+            "update_element",
+            json!({ "id": d, "notation": "chen", "er_display": "keys" }),
+        );
+        let chen = run(&mut host, "get_diagram", json!({ "diagram": d })).to_string();
+        assert!(chen.contains("erLine") && !chen.contains("erIdentifying\""), "{chen}");
+        let bad = call(
+            &mut host,
+            &Access::default(),
+            "update_element",
+            &json!({ "id": customer, "notation": "ie" }),
+        );
+        assert!(bad.is_error);
     }
 
     #[test]

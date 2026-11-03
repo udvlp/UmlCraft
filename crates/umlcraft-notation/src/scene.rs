@@ -5,10 +5,11 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Color, DiagramKind,
-    EdgeLabels, Element, ElementKind, Id, InstanceKind, LineShape, LinkEnd, MessageSort, Model,
-    Navigability, Point, Presentation, PseudostateKind, Qualifier, Rect, Regions, Shape, Size,
-    StateProps, Style, TransitionProps, View,
+    ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Cardinality, CardinalityMax,
+    CardinalityMin, Color, DiagramKind, DiagramProps, EdgeLabels, Element, ElementKind, ErDisplay,
+    Id, InstanceKind, LineShape, LinkEnd, MessageSort, Model, Navigability, Point, Presentation,
+    PseudostateKind, Qualifier, Rect, Regions, Shape, Size, StateProps, Style, TransitionProps,
+    View,
 };
 
 use crate::labels::{self, FreeLabel, LabelKind};
@@ -107,6 +108,12 @@ impl NodeShape {
     /// below the figure, so that a line from below stops under the name instead of crossing it.
     pub fn clip_rect(&self) -> Rect {
         let r = self.rect;
+        // An IE or IDEF1X table's name stands above it, and lines end above the name, as in
+        // Astah.
+        if matches!(self.figure, Figure::ErTable { .. }) {
+            let top = self.rows.iter().map(|row| row.rect.y).fold(r.y, f32::min);
+            return Rect::new(r.x, top, r.width, r.bottom() - top);
+        }
         if !matches!(self.figure, Figure::Actor | Figure::Robustness(_)) {
             return r;
         }
@@ -194,6 +201,10 @@ pub enum Compartment {
     Literals,
     /// An object's slots, one per attribute of its class.
     Slots,
+    /// ER diagrams in IE and IDEF1X: an entity's primary key.
+    ErKeys,
+    /// ER diagrams in IE and IDEF1X: an entity's other attributes, or a relationship's.
+    ErColumns,
 }
 
 /// A compartment of a classifier box under a point, for adding a member to it.
@@ -213,7 +224,7 @@ pub struct CompartmentHit {
 /// or literals, not an object's slots.
 pub fn compartment_at(scene: &Scene, p: Point) -> Option<CompartmentHit> {
     scene.nodes.iter().rev().filter(|n| n.rect.contains(p)).find_map(|n| {
-        let Figure::Classifier { separators, .. } = &n.figure else { return None };
+        let (separators, _) = n.figure.compartments()?;
         compartment_hit(n, separators.iter().rposition(|&y| y <= p.y)?)
     })
 }
@@ -221,13 +232,13 @@ pub fn compartment_at(scene: &Scene, p: Point) -> Option<CompartmentHit> {
 /// The compartment `compartment` of the box `node` shows, if it shows one.
 pub fn compartment_of(scene: &Scene, node: Id, compartment: Compartment) -> Option<CompartmentHit> {
     let n = scene.node(node)?;
-    let Figure::Classifier { compartments, .. } = &n.figure else { return None };
+    let (_, compartments) = n.figure.compartments()?;
     compartment_hit(n, compartments.iter().position(|&c| c == compartment)?)
 }
 
 /// The `i`th compartment of the box `n`, unless it lists an object's slots.
 fn compartment_hit(n: &NodeShape, i: usize) -> Option<CompartmentHit> {
-    let Figure::Classifier { separators, compartments, .. } = &n.figure else { return None };
+    let (separators, compartments) = n.figure.compartments()?;
     let compartment = *compartments.get(i)?;
     if compartment == Compartment::Slots {
         return None;
@@ -421,6 +432,21 @@ pub enum Figure {
     },
     /// ER diagrams: an IS-A, a triangle pointing up to the supertype.
     ErIsA,
+    /// ER diagrams in IE and IDEF1X: an entity (or a relationship drawn as a box) with a thick
+    /// frame and its name above it, listing its attributes in compartments: the primary key,
+    /// then the others, each below the line at the separator of the same index (the first is
+    /// the box's top). Dependent entities have rounded corners.
+    ErTable {
+        separators: Vec<f32>,
+        compartments: Vec<Compartment>,
+        rounded: bool,
+    },
+    /// ER diagrams in IE and IDEF1X: an IS-A's subtype symbol. IE: a half circle on a bar,
+    /// crossed when the subtypes are complete; IDEF1X: a circle over a bar, two when complete.
+    ErSubtype {
+        complete: bool,
+        idef1x: bool,
+    },
     Other,
 }
 
@@ -444,6 +470,16 @@ pub enum HeadIcon {
 }
 
 impl Figure {
+    /// The compartments of a box that lists members: the y of the line above each and what
+    /// each lists.
+    fn compartments(&self) -> Option<(&[f32], &[Compartment])> {
+        match self {
+            Self::Classifier { separators, compartments, .. }
+            | Self::ErTable { separators, compartments, .. } => Some((separators, compartments)),
+            _ => None,
+        }
+    }
+
     /// The figure's outline, where edges end.
     fn outline(&self) -> Outline {
         match self {
@@ -590,6 +626,65 @@ pub enum EndMarker {
     Cross,
     /// A circle with a cross inside at the end: the owner of a nested element.
     Containment,
+    /// ER diagrams in IE: exactly one, a bar across the line.
+    ErOne,
+    /// ER diagrams in IE: zero or one, a circle and a bar.
+    ErZeroOne,
+    /// ER diagrams in IE: one or more, a bar and a crow's foot.
+    ErOneMany,
+    /// ER diagrams in IE: zero or more, a circle and a crow's foot.
+    ErZeroMany,
+    /// ER diagrams in IDEF1X: a filled dot at the child.
+    ErDot,
+    /// ER diagrams in IDEF1X: a small hollow diamond at a parent that may be missing.
+    ErOptional,
+}
+
+/// The marker at an end of an ER line in IE or IDEF1X, from the cardinality there, and the
+/// text beside it for what the marker does not say. In IDEF1X a parent (an end of at most one,
+/// facing one of more, or the source of a one-to-one line) has no dot, a diamond when it may be
+/// missing; a child has a dot, with `P` for one or more, `Z` for zero or one, or its count.
+pub fn er_end(
+    idef1x: bool,
+    cardinality: Option<Cardinality>,
+    other: Option<Cardinality>,
+    source: bool,
+) -> (EndMarker, Option<String>) {
+    let Some(c) = cardinality else { return (EndMarker::None, None) };
+    let zero = matches!(c.min, CardinalityMin::Count(0) | CardinalityMin::Any);
+    let one = c.max == CardinalityMax::Count(1);
+    if idef1x {
+        let other_one = other.is_none_or(|o| o.max == CardinalityMax::Count(1));
+        if one && (!other_one || source) {
+            return (if zero { EndMarker::ErOptional } else { EndMarker::None }, None);
+        }
+        let text = match (c.min, c.max) {
+            (CardinalityMin::Count(0), CardinalityMax::Many | CardinalityMax::ManyM) => None,
+            (CardinalityMin::Count(1), CardinalityMax::Many | CardinalityMax::ManyM) => {
+                Some("P".to_owned())
+            }
+            (CardinalityMin::Count(0), CardinalityMax::Count(1)) => Some("Z".to_owned()),
+            (CardinalityMin::Count(a), CardinalityMax::Count(b)) if a == b => Some(a.to_string()),
+            _ => Some(c.to_string()),
+        };
+        return (EndMarker::ErDot, text);
+    }
+    let marker = match (zero, one) {
+        (false, true) => EndMarker::ErOne,
+        (true, true) => EndMarker::ErZeroOne,
+        (false, false) => EndMarker::ErOneMany,
+        (true, false) => EndMarker::ErZeroMany,
+    };
+    let plain = matches!(c.min, CardinalityMin::Count(0 | 1))
+        && matches!(c.max, CardinalityMax::Count(1) | CardinalityMax::Many | CardinalityMax::ManyM);
+    (marker, (!plain).then(|| c.to_string()))
+}
+
+/// The ends of an ER line in IE or IDEF1X, the source's first: each one's cardinality and verb
+/// phrase (the participation's role).
+pub(crate) struct ErEnds {
+    pub idef1x: bool,
+    pub ends: [(Option<Cardinality>, String); 2],
 }
 
 #[derive(Clone, Debug)]
@@ -1032,12 +1127,21 @@ impl Line {
 pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMeasure) -> Scene {
     let Some(view) = model.view(diagram) else { return Scene::empty() };
     let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let listing = model.get(diagram).and_then(|d| ErListing::of(d.kind()));
+    // IE and IDEF1X list the attributes in their owners' boxes.
+    let listed = |p: &Presentation| {
+        listing.is_some()
+            && p.element
+                .and_then(|e| model.get(e))
+                .is_some_and(|e| matches!(e.kind(), ElementKind::ErAttribute(_)))
+    };
     let mut nodes: Vec<NodeShape> = view
         .presentations()
         .iter()
+        .filter(|p| !listed(p))
         .filter_map(|p| {
             let bounds = preview.rect(p.id, p.bounds()?);
-            Some(layout_node(model, p, bounds, kind, measure))
+            Some(layout_node(model, p, bounds, kind, listing, measure))
         })
         .collect();
     let is_sequence = kind == Some(DiagramKind::Sequence);
@@ -1194,6 +1298,10 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                     .map(|end| end.qualifiers.iter().map(|q| qualifier_text(model, q)).collect()),
                 _ => Default::default(),
             };
+            let er = listing.and_then(|l| {
+                let entity = |node: &Id| view.get(*node).and_then(|n| n.element);
+                er_ends(model, element?, entity(source), entity(target), l.idef1x)
+            });
             let mut edge = edge_for(
                 p.id,
                 element.map(|e| e.kind()),
@@ -1210,10 +1318,13 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 to_lollipop,
                 labels,
                 &p.style,
+                er.as_ref(),
                 measure,
             );
-            // A total IS-A has a double line to its supertype.
-            if let Some(ElementKind::ErSubtyping(s)) = element.map(|e| e.kind()) {
+            // A total IS-A has a double line to its supertype, in Chen.
+            if listing.is_none()
+                && let Some(ElementKind::ErSubtyping(s)) = element.map(|e| e.kind())
+            {
                 let total = matches!(
                     model.get(s.is_a).map(|e| e.kind()),
                     Some(ElementKind::ErIsA(i)) if i.total
@@ -1444,18 +1555,32 @@ fn is_interface(model: &Model, element: Option<Id>) -> bool {
         .is_some_and(|e| matches!(e.kind(), ElementKind::Interface(_)))
 }
 
-/// Lays out the node `p` in `bounds`, as it is drawn on a diagram of `kind`.
+/// Lays out the node `p` in `bounds`, as it is drawn on a diagram of `kind`; on ER diagrams
+/// in IE or IDEF1X, as `listing` says.
 fn layout_node(
     model: &Model,
     p: &Presentation,
     bounds: Rect,
     kind: Option<DiagramKind>,
+    listing: Option<ErListing>,
     measure: &dyn TextMeasure,
 ) -> NodeShape {
     let element = p.element.and_then(|e| model.get(e));
     let composite = kind == Some(DiagramKind::CompositeStructure);
     let (rect, figure, rows) = match (element, &p.shape) {
         (_, Shape::Text { text, .. }) => layout_text(text, &p.style, bounds, measure),
+        (Some(e), _) if listing.is_some() && matches!(e.kind(), ElementKind::ErIsA(_)) => {
+            layout_er_subtype(model, e, &p.style, bounds, listing.unwrap_or_default(), measure)
+        }
+        (Some(e), _)
+            if listing.is_some()
+                && matches!(
+                    e.kind(),
+                    ElementKind::ErEntity(_) | ElementKind::ErRelationship(_)
+                ) =>
+        {
+            layout_er_table(model, e, &p.style, bounds, listing.unwrap_or_default(), measure)
+        }
         (Some(e), _) if composite && matches!(e.kind(), ElementKind::Class(_)) => {
             layout_structured(model, e, &p.style, bounds, measure)
         }
@@ -2564,7 +2689,7 @@ pub fn region_shapes(r: Rect, top: f32, layout: &Regions, regions: &[Id]) -> Vec
 /// Heights do not depend on the font, so an estimate of text widths will do.
 pub fn state_regions(model: &Model, p: &Presentation) -> Vec<RegionShape> {
     let Some(bounds) = p.bounds() else { return Vec::new() };
-    match layout_node(model, p, bounds, None, &ApproxMeasure).figure {
+    match layout_node(model, p, bounds, None, None, &ApproxMeasure).figure {
         Figure::State { regions, .. } => regions,
         _ => Vec::new(),
     }
@@ -2573,7 +2698,7 @@ pub fn state_regions(model: &Model, p: &Presentation) -> Vec<RegionShape> {
 /// The outline lines to node `p` end at. It does not depend on the font.
 pub fn outline_of(model: &Model, p: &Presentation) -> Outline {
     let Some(bounds) = p.bounds() else { return Outline::Rect };
-    layout_node(model, p, bounds, None, &ApproxMeasure).figure.outline()
+    layout_node(model, p, bounds, None, None, &ApproxMeasure).figure.outline()
 }
 
 /// Region shapes' dividing lines, as offsets from the state's top (or left) edge in the form
@@ -2701,6 +2826,265 @@ fn layout_er(
         rows.push(line.place(at, LabelAlign::Left));
     }
     (r, figure, rows)
+}
+
+/// How an ER diagram in IE or IDEF1X draws its elements.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ErListing {
+    pub idef1x: bool,
+    pub display: ErDisplay,
+    /// The database's names instead of the logical ones.
+    pub physical: bool,
+}
+
+impl ErListing {
+    /// The listing of a diagram element, if it is an ER diagram in IE or IDEF1X.
+    pub fn of(kind: &ElementKind) -> Option<Self> {
+        match kind {
+            ElementKind::Diagram(DiagramProps {
+                diagram: DiagramKind::EntityRelationship,
+                notation,
+                er_display,
+                physical_names,
+                ..
+            }) if notation.lists_attributes() => Some(Self {
+                idef1x: *notation == umlcraft_model::ErNotation::Idef1x,
+                display: *er_display,
+                physical: *physical_names,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Gap between the name above an IE or IDEF1X box and the box.
+const ER_NAME_GAP: f32 = 3.0;
+
+/// The height of an IE or IDEF1X table's name above its box, at `font_size`: Astah's node
+/// includes it (19.1 at 12 pt in `Sample.asta`), UmlCraft's starts at the box.
+pub fn er_name_band(font_size: f32) -> f32 {
+    line_height(font_size) + ER_NAME_GAP + 1.0
+}
+
+/// Room after the names of an IE or IDEF1X box, before the types or `(FK)`, as Astah leaves it.
+const ER_COLUMN_GAP: f32 = 6.0;
+/// Room between the types of an IDEF1X box and `(FK)`.
+const ER_FOREIGN_KEY_GAP: f32 = 3.3;
+/// How far the parts of a composite attribute are indented below it.
+const ER_PART_INDENT: f32 = 10.0;
+/// What follows a foreign key column.
+pub const ER_FOREIGN_KEY: &str = "(FK)";
+
+/// The name an ER element shows: its physical name where the diagram asks for those and it has
+/// one, else its own.
+pub fn er_name(e: &Element, physical: bool) -> &str {
+    let physical_name = match e.kind() {
+        ElementKind::ErEntity(p) => p.physical_name.as_str(),
+        ElementKind::ErAttribute(p) => p.physical_name.as_str(),
+        _ => "",
+    };
+    if physical && !physical_name.is_empty() { physical_name } else { e.name() }
+}
+
+/// An attribute's type as IDEF1X shows it: `VARCHAR (20)`.
+fn er_type(p: &umlcraft_model::ErAttributeProps) -> String {
+    match (p.datatype.trim(), p.length_precision.trim()) {
+        ("", _) => String::new(),
+        (t, "") => t.to_owned(),
+        (t, l) => format!("{t} ({l})"),
+    }
+}
+
+/// An entity (or a relationship drawn as a box) in IE or IDEF1X: its name in bold above the
+/// box, its primary key in the first compartment, the other attributes in the second (a
+/// relationship has only that), parts of composite attributes indented below them. Each row has
+/// the name, in IDEF1X the type, and `(FK)` after a foreign key column, in columns. The box is
+/// as high as its content and at least as wide as stored.
+fn layout_er_table(
+    model: &Model,
+    e: &Element,
+    style: &Style,
+    bounds: Rect,
+    listing: ErListing,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    const PAD_X: f32 = BOX_PAD_X;
+    const PAD_Y: f32 = BOX_PAD_Y;
+    let size = style.font_size.unwrap_or(FONT_SIZE);
+    let h = line_height(size);
+    let entity = matches!(e.kind(), ElementKind::ErEntity(_));
+    // The attributes in order, each with its indent; parts follow their whole.
+    fn collect<'m>(
+        model: &'m Model,
+        owner: &Element,
+        indent: f32,
+        out: &mut Vec<(&'m Element, f32)>,
+    ) {
+        for c in owner.children().iter().filter_map(|&c| model.get(c)) {
+            if matches!(c.kind(), ElementKind::ErAttribute(_)) {
+                out.push((c, indent));
+                collect(model, c, indent + ER_PART_INDENT, out);
+            }
+        }
+    }
+    let mut attributes = Vec::new();
+    collect(model, e, 0.0, &mut attributes);
+    let is_key = |a: &Element| matches!(a.kind(), ElementKind::ErAttribute(p) if p.key.is_some());
+    let (keys, others): (Vec<_>, Vec<_>) = attributes.iter().copied().partition(|(a, _)| is_key(a));
+    let compartments: Vec<(Compartment, Vec<(&Element, f32)>)> = match (entity, listing.display) {
+        (_, ErDisplay::Name) => Vec::new(),
+        (true, ErDisplay::Keys) => vec![(Compartment::ErKeys, keys)],
+        (true, ErDisplay::Attributes) => {
+            vec![(Compartment::ErKeys, keys), (Compartment::ErColumns, others)]
+        }
+        (false, ErDisplay::Keys) => Vec::new(),
+        (false, ErDisplay::Attributes) => vec![(Compartment::ErColumns, attributes.clone())],
+    };
+    let props = |a: &Element| match a.kind() {
+        ElementKind::ErAttribute(p) => Some(p.clone()),
+        _ => None,
+    };
+    let foreign = |a: &Element| props(a).is_some_and(|p| p.foreign_key.is_some());
+    let kind_text = |a: &Element| props(a).map(|p| er_type(&p)).unwrap_or_default();
+    let all = compartments.iter().flat_map(|(_, rows)| rows.iter());
+    let name_w = all
+        .clone()
+        .map(|(a, indent)| indent + measure.width(er_name(a, listing.physical), size, false))
+        .fold(0.0, f32::max);
+    let type_w = if listing.idef1x {
+        all.clone().map(|(a, _)| measure.width(&kind_text(a), size, false)).fold(0.0, f32::max)
+    } else {
+        0.0
+    };
+    let fk_w = measure.width(ER_FOREIGN_KEY, size, false);
+    let any_fk = all.clone().any(|(a, _)| foreign(a));
+    let type_x = PAD_X + name_w + ER_COLUMN_GAP;
+    let fk_x = if type_w > 0.0 { type_x + type_w + ER_FOREIGN_KEY_GAP } else { type_x };
+    let content_w = if any_fk {
+        fk_x + fk_w + PAD_X
+    } else if type_w > 0.0 {
+        type_x + type_w + PAD_X
+    } else {
+        PAD_X + name_w + PAD_X
+    };
+    let block = |n: usize| 2.0 * PAD_Y + n as f32 * h;
+    let content_h = if compartments.is_empty() {
+        block(1)
+    } else {
+        compartments.iter().map(|(_, rows)| block(rows.len())).sum()
+    };
+    let width = bounds.width.max(content_w).max(MIN_CLASSIFIER_WIDTH);
+    let r = Rect::new(bounds.x, bounds.y, width, content_h);
+
+    let mut name = Line::new(er_name(e, listing.physical), size, RowRole::Name, Some(e.id()));
+    name.bold = true;
+    let w = name.width(measure);
+    // Showing names only, the name stands in the box, as in Astah; otherwise above it.
+    let name = if compartments.is_empty() {
+        name.place(Rect::new(r.x, r.y + PAD_Y, r.width, h), LabelAlign::Center)
+    } else {
+        name.place(Rect::new(r.x, r.y - ER_NAME_GAP - h, w, h), LabelAlign::Left)
+    };
+    let mut rows = vec![name];
+    let mut separators = Vec::new();
+    let mut kinds = Vec::new();
+    let mut y = r.y;
+    for (compartment, attributes) in &compartments {
+        separators.push(y);
+        kinds.push(*compartment);
+        y += PAD_Y;
+        for (a, indent) in attributes {
+            let cell = |text: &str, x: f32, role: RowRole| {
+                let line = Line::new(text, size, role, Some(a.id()));
+                let w = line.width(measure);
+                line.place(Rect::new(r.x + x, y, w, h), LabelAlign::Left)
+            };
+            let name = er_name(a, listing.physical);
+            let mut row = cell(name, PAD_X + indent, RowRole::Member);
+            row.rect.width = (r.width - 2.0 * PAD_X - indent).max(row.rect.width);
+            rows.push(row);
+            let kind = kind_text(a);
+            if listing.idef1x && !kind.is_empty() {
+                rows.push(cell(&kind, type_x, RowRole::Stereotype));
+            }
+            if foreign(a) {
+                rows.push(cell(ER_FOREIGN_KEY, fk_x, RowRole::Stereotype));
+            }
+            y += h;
+        }
+        y += PAD_Y;
+    }
+    let weak = matches!(e.kind(), ElementKind::ErEntity(p) if p.weak);
+    // Dependent: weak, or identified through a foreign key (a subtype, an identifying child).
+    let rounded = entity && (weak || attributes.iter().any(|(a, _)| is_key(a) && foreign(a)));
+    (r, Figure::ErTable { separators, compartments: kinds, rounded }, rows)
+}
+
+/// Width and height of the IE subtype symbol: a half circle on a bar.
+const ER_SUBTYPE_IE: Size = Size::new(24.0, 12.0);
+/// Width and height of the IDEF1X subtype symbol: a circle over one or two bars.
+const ER_SUBTYPE_IDEF1X: Size = Size::new(24.0, 26.0);
+
+/// An IS-A in IE or IDEF1X: the subtype symbol, its size fixed, centered where the IS-A is;
+/// the name of the discriminator beside it.
+fn layout_er_subtype(
+    model: &Model,
+    e: &Element,
+    style: &Style,
+    bounds: Rect,
+    listing: ErListing,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    let ElementKind::ErIsA(p) = e.kind() else { return (bounds, Figure::Other, Vec::new()) };
+    let s = if listing.idef1x { ER_SUBTYPE_IDEF1X } else { ER_SUBTYPE_IE };
+    let c = bounds.center();
+    let r = Rect::new(c.x - s.width / 2.0, c.y - s.height / 2.0, s.width, s.height);
+    let size = style.font_size.unwrap_or(FONT_SIZE);
+    let h = line_height(size);
+    let rows = p
+        .discriminator
+        .and_then(|d| model.get(d))
+        .map(|d| {
+            let line = Line::new(er_name(d, listing.physical), size, RowRole::Stereotype, None);
+            let w = line.width(measure);
+            line.place(Rect::new(r.right() + 2.0, r.bottom() - h, w, h), LabelAlign::Left)
+        })
+        .into_iter()
+        .collect();
+    (r, Figure::ErSubtype { complete: p.total, idef1x: listing.idef1x }, rows)
+}
+
+/// What the ends of the line of ER element `element` show in IE or IDEF1X, from `source` to
+/// `target` (the elements of its end nodes): a relationship drawn as a line from its
+/// participations, a participation of a relationship drawn as a box at its entity.
+fn er_ends(
+    model: &Model,
+    element: &Element,
+    source: Option<Id>,
+    target: Option<Id>,
+    idef1x: bool,
+) -> Option<ErEnds> {
+    let end = |p: &umlcraft_model::ErParticipationProps| (p.cardinality, p.role.clone());
+    match element.kind() {
+        ElementKind::ErRelationship(_) => {
+            let parts: Vec<&umlcraft_model::ErParticipationProps> = element
+                .children()
+                .iter()
+                .filter_map(|&c| match model.get(c)?.kind() {
+                    ElementKind::ErParticipation(p) => Some(p),
+                    _ => None,
+                })
+                .collect();
+            let first = parts.iter().position(|p| Some(p.entity) == source)?;
+            let second =
+                (0..parts.len()).find(|&i| i != first && Some(parts[i].entity) == target)?;
+            Some(ErEnds { idef1x, ends: [end(parts[first]), end(parts[second])] })
+        }
+        ElementKind::ErParticipation(p) => {
+            Some(ErEnds { idef1x, ends: [(None, String::new()), end(p)] })
+        }
+        _ => None,
+    }
 }
 
 /// Use case ellipse as Astah draws it: the bold name centered, and with extension points a line
@@ -3320,6 +3704,8 @@ fn edge_for(
     to_lollipop: bool,
     placed: &EdgeLabels,
     style: &Style,
+    // ER diagrams in IE and IDEF1X: what the ends show.
+    er: Option<&ErEnds>,
     measure: &dyn TextMeasure,
 ) -> EdgeShape {
     // The line runs from the source anchor through the waypoints to the target anchor; it is
@@ -3506,6 +3892,31 @@ fn edge_for(
         // ER diagrams: plain lines. A participation has its cardinality and role at the
         // entity, like an association's multiplicity at its end; an attribute's line shows
         // the attribute, whose name is in the ellipse.
+        // In IE and IDEF1X the ends show the cardinalities as markers (a relationship between
+        // two entities is one line), the roles as verb phrases.
+        Some(ElementKind::ErRelationship(_) | ElementKind::ErParticipation(_)) if er.is_some() => {
+            let er = er.expect("checked");
+            edge.association = true;
+            let [(a, a_role), (b, b_role)] = &er.ends;
+            let (source_marker, source_text) = er_end(er.idef1x, *a, *b, true);
+            let (target_marker, target_text) = er_end(er.idef1x, *b, *a, false);
+            edge.source_marker = source_marker;
+            edge.target_marker = target_marker;
+            let role = |r: &String| (!r.is_empty()).then(|| r.clone());
+            ends = [(role(a_role), source_text, false), (role(b_role), target_text, false)];
+            label = None;
+            // As Astah draws it: a relationship whose child may have no parent is dashed.
+            let optional_parent = |c: &Option<Cardinality>| {
+                c.is_some_and(|c| {
+                    matches!(c.min, CardinalityMin::Count(0) | CardinalityMin::Any)
+                        && c.max == CardinalityMax::Count(1)
+                })
+            };
+            let identifying = matches!(kind, Some(ElementKind::ErRelationship(p)) if p.identifying);
+            if !identifying && (optional_parent(a) || optional_parent(b)) {
+                edge.line = LineStyle::Dashed;
+            }
+        }
         Some(ElementKind::ErParticipation(p)) => {
             edge.association = true;
             edge.double = p.total;

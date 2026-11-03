@@ -384,6 +384,15 @@ Objects bring their slot values (`UAttributeLinkImp`, whose value is an instance
 value text); links (`ULinkImp`) have no owner in Astah and go into the package of their first
 object, their ends' navigability and aggregation come from the tagged values
 `object_navigable_type` and `object_aggregation_kind`.
+Astah's ER model (`map/er.rs`) becomes a package with its schemas and ER packages; its
+datatype and domain models are left out (a column typed by a domain gets the domain's
+datatype). Entities and columns bring their logical and physical names, keys, `NOT NULL`,
+defaults, `UNIQUE` and lengths from the entity's constraints and tags; relationships their
+participations from the ends' multiplicities, verb phrases as roles, `identifying` (the
+child weak); subtype relationships one IS-A per supertype and group (`conclusive` → total,
+discriminator). Foreign key columns are resolved once all relationships exist. ER diagrams
+keep notation, display level and model type; entity bounds lose the name band again, and a
+subtype group becomes the IS-A node at its symbol with right-angled lines to the subtypes.
 The format details are kept in local notes (`docs/asta-format.md`) that are not published.
 Two examples help when exploring files: `asta-dump` (raw objects) and `asta-import` (the
 resulting model).
@@ -629,6 +638,19 @@ through its official API (`astah-api.jar`):
   extension points of extends, return parameters, parameter multiplicity and default values.
   Structograms, which Astah does not have, are taken out of the model before writing
   (`without_structograms`) and counted as dropped.
+- ER diagrams: packages holding only ER content go into Astah's ER model
+  (`ERModelEditor.createERModel`, numbered when a UML package already has its name), entities
+  into its default schema. Columns are created with their key, `NOT NULL`, default, length and
+  datatype (Astah's, found by name, or a new one); foreign key columns are not created, Astah
+  makes them when the relationship is (`createIdentifyingRelationship`,
+  `createNonIdentifyingRelationship`, `createMultiToMultiRelationship`, with parent required,
+  cardinality and verb phrases), and the export gives them UmlCraft's names. Subtypes become
+  subtype relationships (`conclusive`, discriminator), several of one supertype a group
+  (`createSubtypeRelationshipGroup`). Diagrams get notation, display level and model type;
+  nodes are placed one name band higher and that much taller, as Astah's bounds include the
+  name. Chen diagrams are exported in IE (`erChenNotation`); relationships of more than two
+  entities or with attributes, `UNIQUE` (no API call) and disjointness are reported as
+  dropped.
 - System boundaries, which Astah does not have, become what Astah users draw instead: a
   rectangle (`createRect`) and the name as a text (`createText`) centered at its top. The
   importer turns a rectangle on a use case diagram back into a boundary, named by the text
@@ -830,10 +852,11 @@ FILE.nsd` draws a file.
 
 ## Entity-relationship diagrams
 
-ER diagrams in Chen notation are a diagram kind of the project like the UML ones
+ER diagrams are a diagram kind of the project like the UML ones
 (`DiagramKind::EntityRelationship`): their elements live in the model tree, they open as tabs
 of the main window and are edited on the same canvas, with the same undo, clipboard, export
-and file. Entities (also weak and associative ones), attributes (keys, partial keys, derived,
+and file. Each diagram has a notation, Chen, IE (crow's feet) or IDEF1X (see "IE and IDEF1X"
+below); the model is the same for all three. Entities (also weak and associative ones), attributes (keys, partial keys, derived,
 multivalued, composite), relationships (binary, n-ary, identifying, with attributes) and
 generalization (IS-A), with `[min,max]` on the lines read look-across (`[1,1]` at `Kunde` on
 `Kunde – bucht – Ticket`: every ticket has one customer). The shapes are Chen's as draw.io
@@ -854,7 +877,8 @@ diagrams from SQL dumps.
   one is the `supertype`. Both ends are strong references: deleting either deletes the line.
   `Cardinality` has a minimum (a number or `*`) and a maximum (a number, `n`, or `m` for the
   second "many" side of a relationship), written `[0,n]` and read also as `0..*`, `1`, `*`.
-  The file format went to version 5 for these kinds (no migration needed).
+  The file format went to version 5 for these kinds and to 6 for the IE and IDEF1X
+  properties (no migration needed; older versions refuse the newer files).
 - **Connecting** (`notation/src/er.rs`). The palette has one line tool, `erLine`; what it makes
   follows from its ends (`joins`): an attribute and what it describes (the attribute moves
   under its owner), a relationship or associative entity and an entity (a participation with
@@ -896,9 +920,52 @@ diagrams from SQL dumps.
   the project as one undo step: a package named after the database with an ER diagram, which
   opens. The counts go to a notice; tables without a primary key, placeholder entities and
   statements that could not be read are listed in a message.
-- **Elsewhere.** The MCP tools know the kind (`entity_relationship`) and set the ER properties
-  with `update_element`; the `.asta` export leaves ER diagrams and their elements out and
-  says so.
+- **Elsewhere.** The MCP tools know the kind (`entity_relationship`), create a diagram in a
+  notation (`create_diagram`'s `notation`), switch it and set the ER properties with
+  `update_element`, and add columns with `add_member` (`name : TYPE(length)`, `key`);
+  `get_diagram` lists the tools of the diagram's notation. The `.asta` import and export
+  carry Astah's ER models (see their sections).
+
+### IE and IDEF1X
+
+- **Model.** `DiagramProps` has `notation` (`ErNotation`), `erDisplay` (all columns, keys,
+  the name; Astah's display level) and `physicalNames` (Astah's physical model), all skipped
+  when default. A foreign key column is an `ErAttribute` of the child with `foreignKey`, a
+  weak reference to the relationship or subtyping it comes from, so SQL dumps and Astah keep
+  their real column names; Chen leaves such columns out. `unique` is a column's `UNIQUE`, an
+  IS-A's `discriminator` a weak reference to an attribute of the supertype; `total` is
+  Astah's "complete", the child of an identifying relationship is `weak` (a dependent
+  entity).
+- **Drawing** (`scene`, figure `ErTable`). The name above the box (centered inside when only
+  the name is shown), primary key rows above a divider, the others below, compartments
+  `ErKeys` and `ErColumns` for hit tests and new rows; `(FK)` after foreign key columns,
+  aligned in a column (`ER_COLUMN_GAP`, `ER_FOREIGN_KEY_GAP`); rounded corners for weak
+  entities. As in Astah, the node's bounds include the name band (`er_name_band`), so lines
+  end above the name. A binary relationship without attributes of its own is one edge on the
+  `ErRelationship` from the parent (the "one" side) to the child, dashed when it is not
+  identifying and the parent is optional; its participations stay in the model and give the
+  ends: IE markers for one, zero or one, one or more, zero or more; IDEF1X a diamond at an
+  optional parent and a dot at the child with `P`, `Z` or a number. Other cardinalities keep
+  their text. An IS-A is the subtype symbol (IE: a half circle on a bar with a cross when
+  complete; IDEF1X: a circle over one or two bars) with the discriminator beside it;
+  attributes are rows, not nodes.
+- **Editing** (`notation/src/er.rs`). `palette::diagram_palette` gives IE and IDEF1X the
+  tools identifying, non-identifying, many-to-many and subtype instead of `erLine`. Drawing
+  one from parent to child creates the relationship, both participations (parent `[1,1]`,
+  child `[0,n]`, many-to-many `[0,n]` both) and the edge, and copies the parent's primary key
+  into the child as foreign key columns, into its key when identifying; a subtype line
+  copies the supertype's key into the subtype's key. `set_identifying` moves those columns
+  into the child's key or out of it. `set_notation` converts a diagram in one `Tx`: Chen →
+  IE/IDEF1X removes the attribute nodes and their lines and replaces each binary
+  relationship node and its two participation edges by one edge; the way back puts the
+  relationship node between its entities and the attributes around their owners with
+  `er_layout`'s attribute pass. Entities and IS-As keep their places. `parse_column` reads a
+  row typed into a table (`name : TYPE(length)`).
+- **App.** The ribbon's diagram tab has a Notation group; the properties panel of an ER
+  diagram the notation, and in IE and IDEF1X what the tables show and physical names; a
+  column's properties show `unique` and the relationship its foreign key belongs to. A double
+  click below a table's last row adds a column. The sample project has "Database (IE)", a copy
+  of "Database" in IE. The SQL import's dialog offers the notation.
 
 ### SQL import
 

@@ -1922,3 +1922,164 @@ fn constraint_labels_through_astah() {
     assert_eq!(offsets("c1"), []);
     assert_eq!(offsets("complete"), []);
 }
+
+/// An IE diagram drawn as in UmlCraft: tables with keys, a non-identifying and an identifying
+/// relationship whose foreign key columns UmlCraft made, and two subtypes.
+#[test]
+fn er_diagrams_through_astah() {
+    use umlcraft_model::{ErAttributeProps, ErKey, ErNotation};
+    use umlcraft_notation::er::{self, IeLine};
+    let mut doc = Document::new(Model::new("er"));
+    let root = doc.model().root();
+    doc.edit("tables", |tx| {
+        let package = tx.create(root, ElementData::new("db", ElementKind::Package))?;
+        let kind = ElementKind::diagram(DiagramKind::EntityRelationship);
+        let diagram = tx.create(package, ElementData::new("Tables", kind))?;
+        er::set_notation(tx, diagram, ErNotation::Ie, &ApproxMeasure)?;
+        let node = |tx: &mut umlcraft_model::Tx<'_>, name: &str, key: &str, x: f32, y: f32| {
+            let entity = tx.create(
+                package,
+                ElementData::new(name, ElementKind::ErEntity(Default::default())),
+            )?;
+            let props = ErAttributeProps {
+                key: Some(ErKey::Primary),
+                datatype: "INT".into(),
+                not_null: true,
+                ..Default::default()
+            };
+            tx.create(entity, ElementData::new(key, ElementKind::ErAttribute(props)))?;
+            tx.add_node(diagram, Some(entity), Rect::new(x, y, 120.0, 60.0))
+        };
+        let customer = node(tx, "Customer", "customer id", 40.0, 40.0)?;
+        let order = node(tx, "Order", "order no", 300.0, 40.0)?;
+        let line = node(tx, "Order line", "line no", 560.0, 40.0)?;
+        let person = node(tx, "Person", "person id", 40.0, 300.0)?;
+        let employee = node(tx, "Employee", "staff no", 300.0, 420.0)?;
+        let student = node(tx, "Student", "student no", 560.0, 420.0)?;
+        er::relate(tx, diagram, IeLine::NonIdentifying, customer, order)?;
+        er::relate(tx, diagram, IeLine::Identifying, order, line)?;
+        er::relate(tx, diagram, IeLine::Subtype, person, employee)?;
+        er::relate(tx, diagram, IeLine::Subtype, person, student)?;
+        Ok(())
+    })
+    .unwrap();
+    let Some((model, report)) = through_astah_reporting(doc.model(), "er") else { return };
+    assert!(report.dropped.is_empty(), "{:?}", report.dropped);
+    let entity = |name: &str| {
+        model
+            .elements()
+            .find(|e| e.name() == name && matches!(e.kind(), ElementKind::ErEntity(_)))
+            .unwrap()
+    };
+    let columns = |name: &str| -> Vec<String> {
+        model
+            .children(entity(name).id())
+            .iter()
+            .filter_map(|&c| model.get(c))
+            .filter_map(|a| match a.kind() {
+                ElementKind::ErAttribute(p) => Some(format!(
+                    "{}{}{}",
+                    a.name(),
+                    if p.key.is_some() { " key" } else { "" },
+                    if p.foreign_key.is_some() { " fk" } else { "" }
+                )),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    assert_eq!(columns("Order"), ["customer id fk", "order no key"]);
+    assert_eq!(columns("Order line"), ["line no key", "order no key fk"]);
+    assert_eq!(columns("Employee"), ["person id key fk", "staff no key"]);
+    assert!(matches!(entity("Order line").kind(), ElementKind::ErEntity(p) if p.weak));
+    let identifying: Vec<bool> = model
+        .elements()
+        .filter_map(|e| match e.kind() {
+            ElementKind::ErRelationship(p) => Some(p.identifying),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(identifying.len(), 2);
+    assert!(identifying.contains(&true) && identifying.contains(&false));
+    let subtypes = model
+        .elements()
+        .filter(|e| matches!(e.kind(), ElementKind::ErSubtyping(p) if !p.supertype))
+        .count();
+    assert_eq!(subtypes, 2);
+    let [diagram] = model
+        .elements()
+        .filter(|e| e.kind().as_diagram() == Some(DiagramKind::EntityRelationship))
+        .collect::<Vec<_>>()[..]
+    else {
+        panic!("one ER diagram")
+    };
+    let ElementKind::Diagram(p) = diagram.kind() else { unreachable!() };
+    assert_eq!(p.notation, ErNotation::Ie);
+    let view = model.view(diagram.id()).unwrap();
+    // Six tables, two relationship lines, the subtype symbol with its three lines.
+    assert_eq!(view.presentations().iter().filter(|p| p.bounds().is_some()).count(), 7);
+    assert_eq!(view.presentations().iter().filter(|p| p.is_edge()).count(), 5);
+}
+
+/// Astah's own ER diagrams come back from an export as they were: tables, columns with their
+/// keys and foreign keys, relationships and the notation of each diagram.
+#[test]
+fn sample_er_model_through_astah() {
+    let home = std::env::var_os("ASTAH_HOME").map_or_else(
+        || std::path::PathBuf::from(r"C:\Program Files\astah-professional"),
+        std::path::PathBuf::from,
+    );
+    let sample = home.join("Sample.asta");
+    if !sample.exists() {
+        skip("Sample.asta not found");
+        return;
+    }
+    let original = umlcraft_asta::import(&sample).unwrap().model;
+    let Some(astah) = Astah::find() else {
+        skip("no Astah installation with the API found");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("umlcraft-sample-er-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("sample.asta");
+    match umlcraft_asta_export::export(&astah, &original, &file) {
+        Err(umlcraft_asta_export::ExportError::License) => {
+            skip("Astah's license check refused saving");
+            return;
+        }
+        result => {
+            result.unwrap();
+        }
+    };
+    let back = umlcraft_asta::import(&file).unwrap().model;
+    std::fs::remove_dir_all(&dir).unwrap();
+    let er = |model: &Model| -> BTreeSet<String> {
+        model
+            .elements()
+            .filter_map(|e| match e.kind() {
+                ElementKind::ErEntity(p) => Some(format!("entity {} weak={}", e.name(), p.weak)),
+                ElementKind::ErAttribute(p) => Some(format!(
+                    "column {}.{} {:?} {} {} fk={}",
+                    model.get(e.owner()?).map_or("", |o| o.name()),
+                    e.name(),
+                    p.key,
+                    p.datatype,
+                    p.length_precision,
+                    p.foreign_key.is_some()
+                )),
+                ElementKind::ErRelationship(p) => {
+                    Some(format!("relationship identifying={}", p.identifying))
+                }
+                ElementKind::Diagram(p) if p.diagram == DiagramKind::EntityRelationship => {
+                    let shown = model.view(e.id()).map_or(0, |v| v.presentations().len());
+                    Some(format!("diagram {} {:?} {shown}", e.name(), p.notation))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let (before, after) = (er(&original), er(&back));
+    assert!(before.len() > 20, "{before:#?}");
+    assert_eq!(before, after);
+}

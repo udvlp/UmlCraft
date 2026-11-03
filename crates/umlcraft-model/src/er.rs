@@ -6,6 +6,11 @@
 //! the ownership tree. A participation joins a relationship (or an associative entity) to an
 //! entity and belongs to the relationship; a subtyping joins an IS-A to one of its entities and
 //! belongs to the IS-A.
+//!
+//! The same elements are drawn in IE (crow's feet) and IDEF1X as well, chosen per diagram
+//! ([`ErNotation`]): there an entity lists its attributes, a relationship between two entities
+//! is a line, and the foreign key columns a relationship gives its child are attributes of
+//! their own ([`ErAttributeProps::foreign_key`]), which Chen leaves out.
 
 use std::fmt;
 use std::str::FromStr;
@@ -64,6 +69,46 @@ pub struct ErAttributeProps {
     pub not_null: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_value: String,
+    /// The column's values are unique.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub unique: bool,
+    /// A foreign key column: the relationship (or the subtyping of a subtype) it belongs to,
+    /// which copied it from the parent's primary key. Deleting that one keeps the column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_key: Option<Id>,
+}
+
+/// How an ER diagram draws its elements.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErNotation {
+    /// Entities as rectangles, attributes as ellipses, relationships as rhombi.
+    #[default]
+    Chen,
+    /// Information Engineering: entities listing their attributes, relationships as lines with
+    /// crow's feet.
+    Ie,
+    /// IDEF1X: as IE, with dots and diamonds at the ends of the lines.
+    Idef1x,
+}
+
+impl ErNotation {
+    /// IE and IDEF1X: entities list their attributes, binary relationships are lines.
+    pub fn lists_attributes(self) -> bool {
+        self != Self::Chen
+    }
+}
+
+/// What the entities of an IE or IDEF1X diagram show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErDisplay {
+    #[default]
+    Attributes,
+    /// Only the primary keys.
+    Keys,
+    /// Only the name.
+    Name,
 }
 
 /// A rhombus; an identifying relationship (of a weak entity) has a second one inside.
@@ -83,6 +128,9 @@ pub struct ErIsAProps {
     pub total: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disjoint: Option<bool>,
+    /// The supertype's attribute that tells the subtypes apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discriminator: Option<Id>,
 }
 
 /// How often an entity takes part in a relationship, read look-across: `[1,1]` at `Kunde` on

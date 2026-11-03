@@ -218,6 +218,12 @@ fn insert_tree<'c>(
         None => tx.model().element(owner)?.children().len(),
     };
     let is_copy = |id: &Id| map.values().any(|v| v == id);
+    // A foreign key column copied without its relationship is a plain column of the copy.
+    if let ElementKind::ErAttribute(p) = &mut data.kind
+        && p.foreign_key.is_some_and(|r| !is_copy(&r))
+    {
+        p.foreign_key = None;
+    }
     let references = data.kind.references();
     if references
         .iter()

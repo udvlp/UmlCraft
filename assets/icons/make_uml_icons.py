@@ -219,6 +219,20 @@ ICONS = {
                                   path('M10 7.25L13.5 10L10 12.75L6.5 10Z')],
     'erIsA': [path('M10 4L17.5 16H2.5Z')],
     'erLine': [path('M2.5 15.5L17.5 4.5')],
+    # ER lines in IE notation, from the parent at the left to the child at the right: exactly
+    # one or at most one parent to many children, many to many, and a subtype group.
+    'erIdentifying': [path('M2.5 10H17.5'), path('M5 7V13M7.5 7V13'),
+                      path('M17.5 6L12.5 10L17.5 14')],
+    'erNonIdentifying': [path('M2.5 10H4.5M9.5 10H17.5'), path('M3.5 7V13'), circle(7, 10, 2.5),
+                         path('M17.5 6L12.5 10L17.5 14')],
+    'erManyToMany': [path('M2.5 10H17.5'), path('M2.5 6L7.5 10L2.5 14'),
+                     path('M17.5 6L12.5 10L17.5 14')],
+    'erSubtype': [path('M10 2.5V6'), path('M5.5 10.5A4.5 4.5 0 0 1 14.5 10.5Z'),
+                  path('M4 10.5H16'), path('M6.5 10.5V17.5M13.5 10.5V17.5')],
+    # The notations of an ER diagram: Chen's relationship diamond, a crow's foot, IDEF1X's dot.
+    'notationChen': [path('M10 5L15 10L10 15L5 10Z'), path('M2.5 10H5M15 10H17.5')],
+    'notationIe': [path('M2.5 10H17.5'), path('M5 7V13'), path('M17.5 6L12.5 10L17.5 14')],
+    'notationIdef1x': [path('M2.5 10H13.5'), dot(15.5, 10, 2)],
     # Structogram elements, drawn as Structorizer draws them
     'nsdInstruction': [rect(2.5, 5.5, 15, 9), path('M5.5 10H14.5')],
     'nsdCall': [rect(2.5, 5.5, 15, 9), path('M5 5.5V14.5M15 5.5V14.5')],

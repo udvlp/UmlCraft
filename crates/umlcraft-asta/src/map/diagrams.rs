@@ -193,6 +193,11 @@ impl Importer<'_> {
                 self.shared.insert(member, (style, at));
             }
         }
+        // ER subtype lines join the IS-A drawn for them.
+        let (subtypes, edges): (Vec<ObjId>, Vec<ObjId>) = edges
+            .into_iter()
+            .partition(|&p| self.r.class(p) == "ERSubtypeRelationshipPresentation");
+        self.er_subtype_presentations(diagram, &subtypes, &presentation_of, shift);
         // Note anchors come last: they may end on another line.
         let (anchors, lines): (Vec<ObjId>, Vec<ObjId>) =
             edges.into_iter().partition(|&p| self.r.class(p) == "NoteAnchorPresentation");
@@ -312,15 +317,11 @@ impl Importer<'_> {
             let offsets = if vertical { side } else { stacked };
             Regions { vertical, separators: offsets.into_iter().map(|o| o as f32).collect() }
         });
-        Some((
-            p,
-            NodeData {
-                element: Some(element),
-                bounds: Rect::new(origin.x, origin.y, width, height),
-                style,
-                regions,
-            },
-        ))
+        let mut bounds = Rect::new(origin.x, origin.y, width, height);
+        if class == "EREntityPresentation" {
+            bounds = self.er_table_bounds(diagram, bounds, &style);
+        }
+        Some((p, NodeData { element: Some(element), bounds, style, regions }))
     }
 
     /// The comment shown by a note, created on first use next to the diagram.

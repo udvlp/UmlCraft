@@ -407,6 +407,31 @@ impl Workspace {
         });
     }
 
+    /// Draws the ER diagram `diagram` in `notation`, keeping where its entities are, as one
+    /// undo step.
+    pub fn set_er_notation(&mut self, diagram: Id, notation: umlcraft_model::ErNotation) {
+        if umlcraft_notation::er::notation(self.doc.model(), diagram) == notation {
+            return;
+        }
+        let label = t!("edit.notation").to_string();
+        let measure = &*self.measure;
+        let result = edit::apply(&mut self.doc, label, measure, |tx| {
+            umlcraft_notation::er::set_notation(tx, diagram, notation, measure)
+        });
+        self.selection.clear();
+        self.report(result);
+    }
+
+    /// Makes the ER relationship `relationship` identifying or not, with its foreign key
+    /// columns in or out of the child's key, as one undo step.
+    pub fn set_er_identifying(&mut self, relationship: Id, identifying: bool) {
+        let label = t!("edit.properties").to_string();
+        let result = self.edit(label, |tx| {
+            umlcraft_notation::er::set_identifying(tx, relationship, identifying)
+        });
+        self.report(result);
+    }
+
     /// Adds an operand to a combined fragment and selects it.
     pub fn add_operand(&mut self, fragment: Id) {
         let label = t!("edit.create").to_string();
@@ -1242,9 +1267,18 @@ impl Workspace {
                 .with_visibility(Visibility::Private),
             scene::Compartment::Operations => ElementData::new("", ElementKind::operation(None)),
             scene::Compartment::Literals => ElementData::new(text, ElementKind::EnumerationLiteral),
+            scene::Compartment::ErKeys | scene::Compartment::ErColumns => {
+                let key = compartment == scene::Compartment::ErKeys;
+                ElementData::new(
+                    "",
+                    ElementKind::ErAttribute(umlcraft_notation::er::parse_column(text, key).1),
+                )
+            }
             scene::Compartment::Slots => return None,
         };
         let literal = compartment == scene::Compartment::Literals;
+        let column =
+            matches!(compartment, scene::Compartment::ErKeys | scene::Compartment::ErColumns);
         let label = t!("edit.create").to_string();
         let result = self.edit(label, |tx| {
             let index = after
@@ -1254,7 +1288,10 @@ impl Workspace {
                 Some(index) => tx.create_at(owner, index, data)?,
                 None => tx.create(owner, data)?,
             };
-            if !literal {
+            if column {
+                let name = umlcraft_notation::er::parse_column(text, false).0;
+                tx.update(member, |data| data.name = name)?;
+            } else if !literal {
                 member::apply_member_text(tx, member, text)?;
             }
             Ok(member)

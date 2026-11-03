@@ -73,6 +73,7 @@ ribbon:
     nsd_loops: Schleifen
     nsd_element: Element
     numbering: Nummerierung
+    notation: Notation
   paste: Einfügen
   cut: Ausschneiden
   copy: Kopieren
@@ -84,6 +85,10 @@ ribbon:
   route_lines: Linien führen
   message_numbers: Nummern
   flat_numbers: Durchgehend
+  notation:
+    chen: Chen
+    ie: IE (Krähenfuß)
+    idef1x: IDEF1X
   light: Hell
   dark: Dunkel
   files: Dateien …
@@ -260,6 +265,10 @@ tool:
   erIdentifyingRelationship: Identifizierend
   erIsA: IS-A
   erLine: Linie
+  erIdentifying: Identifizierend
+  erNonIdentifying: Nicht identifizierend
+  erManyToMany: Viele zu viele
+  erSubtype: Subtyp
   callBehavior: Verhaltensaufruf
   sendSignal: Signal senden
   acceptEvent: Ereignis annehmen
@@ -296,6 +305,13 @@ tool_tip:
   port: "Ein Port: auf oder nahe den Rand einer Klasse oder eines Parts klicken. Ein Port eines Parts gehört zu der Klasse, die der Typ des Parts ist"
   erAssociativeEntity: "Eine Beziehung, die zugleich Entity ist: Entities nehmen an ihr teil, Attribute gehören ihr"
   erPartialKeyAttribute: "Teilschlüssel einer schwachen Entity: identifiziert sie zusammen mit dem Schlüssel ihrer Eigentümer-Entity"
+  erIdentifying: "Vom Elternteil zum Kind ziehen: sein Schlüssel wird Teil des Schlüssels des Kinds, das Kind hängt von ihm ab"
+  erNonIdentifying: "Vom Elternteil zum Kind ziehen: sein Schlüssel wird Fremdschlüssel des Kinds"
+  erManyToMany: "Von einer Entity zur anderen ziehen: jede kann viele der anderen haben"
+  erSubtype: "Vom Obertyp zum Subtyp ziehen: der Subtyp übernimmt den Schlüssel des Obertyps. Weitere Subtypen hängen am selben Symbol"
+  notation_chen: "Entities als Rechtecke, Attribute als Ovale, Beziehungen als Rauten"
+  notation_ie: "Entities als Tabellen mit ihren Spalten, Beziehungen als Linien mit Krähenfüßen"
+  notation_idef1x: "Entities als Tabellen mit Spalten und Typen, Beziehungen als Linien mit einem Punkt am Kind"
   erLine: "Eine Linie für alles: Attribut zu dem, was es beschreibt, Beziehung zu einer Entity (mit [0,n]), IS-A zu Ober- oder Untertyp (die erste zum Obertyp)"
 diagram:
   class: Klassendiagramm
@@ -439,6 +455,15 @@ prop:
   er_datatype: Datentyp
   er_length_precision: Länge/Genauigkeit
   er_not_null: NOT NULL
+  er_unique: Eindeutig
+  er_foreign_key: Fremdschlüssel von
+  er_unnamed: (unbenannte Beziehung)
+  er_notation: Notation
+  er_display: Tabellen zeigen
+  er_display_attributes: Alle Attribute
+  er_display_keys: Nur Primärschlüssel
+  er_display_name: Nur Namen
+  er_physical_names: Physische Namen (Datenbank)
   er_default_value: Standardwert
   er_identifying: Identifizierend
   er_cardinality: Kardinalität
@@ -560,6 +585,20 @@ export_dropped:
   deploymentDiagram: Verteilungsdiagramme (als Klassendiagramme exportiert)
   compositeStructureDiagram: Kompositionsstrukturdiagramme (als Klassendiagramme ohne Parts und Ports exportiert)
   erDiagram: ER-Diagramme
+  erChenNotation: ER-Diagramme in Chen-Notation (in IE-Notation exportiert)
+  erRelationship: ER-Beziehungen zwischen mehr als zwei Entities oder mit eigenen Attributen
+  erAssociativeEntity: Assoziative Entities (als Entities exportiert)
+  erCompositeAttribute: Zusammengesetzte Attribute (ihre Teile als Spalten exportiert)
+  erUnique: UNIQUE von Spalten
+  erDerived: Abgeleitete Attribute (als Spalten exportiert)
+  erMultivalued: Mehrwertige Attribute (als Spalten exportiert)
+  erDisjoint: Disjunkte oder überlappende Subtypen
+  erIsA: IS-As ohne Obertyp
+  erSubtyping: Subtypen, die sich nicht exportieren ließen
+  erCardinality: Kardinalitäten, die Astah nicht annimmt
+  erForeignKeyName: Namen von Fremdschlüsselspalten (Astahs eigene Namen bleiben)
+  erEntity: ER-Entities
+  erAttribute: ER-Attribute
   port: Ports
   connector: Konnektoren
   pin: Pins, die nicht mit ihrer Aktion gezeigt werden
@@ -623,6 +662,7 @@ project:
   untitled: Neues Projekt
 edit:
   create: Anlegen
+  notation: Notation ändern
   change_kind: Art ändern
   connect: Verbinden
   move: Verschieben
@@ -907,6 +947,7 @@ sql:
   found: "%{file}: %{count} Tabellen gefunden."
   dialect: SQL-Dialekt
   detected: "%{dialect} (erkannt)"
+  notation: Notation
   attributes: Attribute
   attributes_all: alle
   attributes_keys: nur Schlüssel
