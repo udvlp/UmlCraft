@@ -197,43 +197,42 @@ pub fn inside(d: &Diagram, r: &Rect) -> Vec<Item> {
     out
 }
 
-/// The connection points of a node as ports (relative to its box), as draw.io offers them:
-/// a rectangle has its corners and the quarters of each side, an ellipse and a rhombus the
-/// corners and middles of their box (projected onto the outline), the IS-A triangle the
-/// quarters of its base, its tip and the middles of its sides.
+/// The connection points of a node as ports (relative to its box). Every box offers points
+/// along its border, clockwise from the top left corner: a rectangle every quarter of a side,
+/// an ellipse and a rhombus its corners and the middles of its sides (both are projected onto
+/// the outline when a line is drawn). The IS-A triangle offers its tip, the middles of its
+/// slanted sides and three points on its base.
 pub fn connection_ports(kind: &NodeKind) -> Vec<Point> {
-    let p = Point::new;
     match Outline::of(kind) {
-        Outline::Rectangle => {
-            let q = [0.0, 0.25, 0.5, 0.75, 1.0];
-            let mut out = Vec::with_capacity(16);
-            for x in q {
-                out.push(p(x, 0.0));
-            }
-            for y in &q[1..4] {
-                out.push(p(0.0, *y));
-                out.push(p(1.0, *y));
-            }
-            for x in q {
-                out.push(p(x, 1.0));
-            }
-            out
-        }
-        Outline::Ellipse | Outline::Rhombus => vec![
-            p(0.0, 0.0),
-            p(1.0, 0.0),
-            p(0.0, 1.0),
-            p(1.0, 1.0),
-            p(0.5, 0.0),
-            p(0.5, 1.0),
-            p(0.0, 0.5),
-            p(1.0, 0.5),
-        ],
-        // draw.io's east-pointing triangle turned to point north: (x, y) → (y, 1 − x).
+        Outline::Rectangle => around_box(4),
+        Outline::Ellipse | Outline::Rhombus => around_box(2),
         Outline::Triangle => {
-            vec![p(0.25, 1.0), p(0.5, 1.0), p(0.75, 1.0), p(0.0, 0.5), p(1.0, 0.5), p(0.5, 0.0)]
+            [(0.5, 0.0), (0.75, 0.5), (0.75, 1.0), (0.5, 1.0), (0.25, 1.0), (0.25, 0.5)]
+                .into_iter()
+                .map(|(x, y)| Point::new(x, y))
+                .collect()
         }
     }
+}
+
+/// `parts` points on each side of the unit box, clockwise from the top left corner, each
+/// corner once.
+fn around_box(parts: u32) -> Vec<Point> {
+    let mut out = Vec::with_capacity(4 * parts as usize);
+    // Each side from its first corner on: top, right, bottom, left.
+    let sides = [
+        ((0.0, 0.0), (1.0, 0.0)),
+        ((1.0, 0.0), (0.0, 1.0)),
+        ((1.0, 1.0), (-1.0, 0.0)),
+        ((0.0, 1.0), (0.0, -1.0)),
+    ];
+    for ((x, y), (dx, dy)) in sides {
+        for k in 0..parts {
+            let t = f64::from(k) / f64::from(parts);
+            out.push(Point::new(x + t * dx, y + t * dy));
+        }
+    }
+    out
 }
 
 /// The connection point of `node` nearest to `p` within `tolerance`, as port and as point.
@@ -357,8 +356,31 @@ mod tests {
     }
 
     #[test]
-    fn connection_points_are_draw_ios() {
+    fn connection_points_go_around_the_shape() {
         assert_eq!(connection_ports(&NodeKind::entity()).len(), 16);
+        let p = Point::new;
+        assert_eq!(
+            connection_ports(&NodeKind::attribute()),
+            [
+                p(0.0, 0.0),
+                p(0.5, 0.0),
+                p(1.0, 0.0),
+                p(1.0, 0.5),
+                p(1.0, 1.0),
+                p(0.5, 1.0),
+                p(0.0, 1.0),
+                p(0.0, 0.5)
+            ]
+        );
+        // The triangle's points lie on its outline.
+        let (mut d, ..) = diagram();
+        let i = d.add_is_a(Point::new(0.0, 0.0), crate::create::SizeSet::Compact);
+        let n = d.node(&i).unwrap();
+        for port in connection_ports(&n.kind) {
+            let b = &n.bounds;
+            let on_box = Point::new(b.x + port.x * b.width, b.y + port.y * b.height);
+            assert!(distance(port_point(n, port), on_box) < 1e-9, "{port:?}");
+        }
         assert_eq!(connection_ports(&NodeKind::attribute()).len(), 8);
         assert_eq!(connection_ports(&NodeKind::relationship()).len(), 8);
         assert_eq!(connection_ports(&NodeKind::is_a()).len(), 6);

@@ -20,12 +20,22 @@ use umlcraft_erm::{Diagram, Key, Line, NodeKind, Props, Style, TextAlign};
 
 use super::canvas::ErmCanvas;
 
-/// draw.io's first colours (fill, line, font); empty is the standard look.
-const FILLS: [&str; 8] =
-    ["", "#dae8fc", "#d5e8d4", "#ffe6cc", "#fff2cc", "#f8cecc", "#e1d5e7", "#f5f5f5"];
-const STROKES: [&str; 8] =
-    ["", "#6c8ebf", "#82b366", "#d79b00", "#d6b656", "#b85450", "#9673a6", "#666666"];
-const FONTS: [&str; 6] = ["", "#ff0000", "#0000ff", "#008000", "#d79b00", "#666666"];
+/// Colours offered for lines and texts: the standard look (empty), then the colours the main
+/// window offers first.
+fn line_colors() -> Vec<String> {
+    let featured = crate::properties::FEATURED_COLORS.iter();
+    let hex = featured.map(|c| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b));
+    std::iter::once(String::new()).chain(hex).collect()
+}
+
+/// Colours offered for fills: the standard look (white), then the same colours lightened to a
+/// fifth of their strength, so that text stays readable on them.
+fn fill_colors() -> Vec<String> {
+    let light = |v: u8| v + (255 - v) / 5 * 4;
+    let featured = crate::properties::FEATURED_COLORS.iter();
+    let hex = featured.map(|c| format!("#{:02x}{:02x}{:02x}", light(c.r), light(c.g), light(c.b)));
+    std::iter::once(String::new()).chain(hex).collect()
+}
 
 /// The text fields of the panel.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -285,11 +295,11 @@ impl PropsPanel {
                 Self::change(&canvas, cx, |d, items| edit::set_style(d, items, |s| f(s, v)))
             })
         };
-        let swatches = |paint: Paint, colors: &'static [&'static str], current: &Option<String>| {
+        let swatches = |paint: Paint, colors: Vec<String>, current: &Option<String>| {
             let current = current.clone().unwrap_or_default();
-            h_flex().gap_0p5().flex_wrap().children(colors.iter().map(|&c| {
+            h_flex().gap_0p5().flex_wrap().children(colors.into_iter().map(|c| {
                 let canvas = canvas.clone();
-                let fill = if c.is_empty() { cx.theme().background } else { rgb(hex(c)).into() };
+                let fill = if c.is_empty() { cx.theme().background } else { rgb(hex(&c)).into() };
                 Button::new(SharedString::from(format!("erm-{paint:?}-{c}")))
                     .xsmall()
                     .outline()
@@ -299,10 +309,10 @@ impl PropsPanel {
                     .tooltip(if c.is_empty() {
                         t!("erm.prop.standard").to_string()
                     } else {
-                        c.to_owned()
+                        c.clone()
                     })
                     .on_click(move |_, _, cx| {
-                        let value = (!c.is_empty()).then(|| c.to_owned());
+                        let value = (!c.is_empty()).then(|| c.clone());
                         Self::change(&canvas, cx, |d, items| {
                             edit::set_style(d, items, |s| match paint {
                                 Paint::Fill => s.fill = value.clone(),
@@ -317,11 +327,11 @@ impl PropsPanel {
             .gap_1()
             .child(section_title(cx, "erm.prop.style"))
             .child(div().text_xs().child(t!("erm.prop.fill").to_string()))
-            .child(swatches(Paint::Fill, &FILLS, &style.fill))
+            .child(swatches(Paint::Fill, fill_colors(), &style.fill))
             .child(div().text_xs().child(t!("erm.prop.stroke").to_string()))
-            .child(swatches(Paint::Stroke, &STROKES, &style.stroke))
+            .child(swatches(Paint::Stroke, line_colors(), &style.stroke))
             .child(div().text_xs().child(t!("erm.prop.font_color").to_string()))
-            .child(swatches(Paint::Font, &FONTS, &style.font_color))
+            .child(swatches(Paint::Font, line_colors(), &style.font_color))
             .children(self.input(Field::FontSize, "erm.prop.font_size"))
             .child(flag("erm-bold", "erm.prop.bold", style.bold, |s, v| s.bold = v))
             .child(flag("erm-italic", "erm.prop.italic", style.italic, |s, v| s.italic = v))
@@ -570,5 +580,22 @@ impl Render for PropsPanel {
             }
         }
         v_flex().id("erm-props").size_full().overflow_y_scroll().p_2().text_sm().child(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fill_colors, line_colors};
+
+    #[test]
+    fn colours_are_the_main_windows_and_fills_light_versions_of_them() {
+        let (lines, fills) = (line_colors(), fill_colors());
+        assert_eq!(lines.len(), 13);
+        assert_eq!(fills.len(), lines.len());
+        assert_eq!((lines[0].as_str(), fills[0].as_str()), ("", ""));
+        assert_eq!(lines[1], "#000000");
+        // Black becomes a light grey, pure red a light red; white parts stay white.
+        assert_eq!(fills[1], "#cccccc");
+        assert!(fills.contains(&"#ffcccc".to_owned()), "{fills:?}");
     }
 }

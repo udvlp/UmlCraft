@@ -88,7 +88,7 @@ pub fn bind_keys(cx: &mut App) {
         crate::key(cx, "enter", EditText, c),
         crate::key(cx, "secondary-shift-f", FitToText, c),
     ];
-    // As draw.io: 1 px, with Shift one grid step; with Ctrl the size.
+    // Arrows move by 1 px, with Shift by a grid step; with Ctrl they change the size.
     for (name, x, y) in [("left", -1, 0), ("right", 1, 0), ("up", 0, -1), ("down", 0, 1)] {
         keys.push(crate::key(cx, name, Nudge { dx: x, dy: y }, c));
         let step = canvas::GRID as i32;

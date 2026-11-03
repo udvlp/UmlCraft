@@ -14,8 +14,7 @@ use crate::model::{
     Rect, Style, TextAlign,
 };
 
-/// The smallest box a node or text can be given (draw.io keeps cells at least 1 px; this
-/// keeps them grabbable).
+/// The smallest box a node or text can be given, so that it stays grabbable.
 pub const MIN_SIZE: (f64, f64) = (20.0, 10.0);
 /// Where the cardinality of a new participation sits: in the middle of the line, 15 px beside
 /// it (`docs/plan-erm-phase-4.md` D5).

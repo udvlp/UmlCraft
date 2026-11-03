@@ -355,8 +355,8 @@ fn draw_link(d: &Diagram, link: &Link, out: &mut Vec<Primitive>) {
     }
 }
 
-/// Where a label is drawn: its anchor on whole pixels (draw.io places HTML labels with
-/// `Math.round`) and the box of its lines, centred on the anchor.
+/// Where a label is drawn: its anchor on whole pixels (as in draw.io's exports) and the box of
+/// its lines, centred on the anchor.
 pub fn label_box(points: &[Point], text: &str, pos: &LabelPos) -> (Point, Rect) {
     let exact = label_anchor(points, pos);
     let anchor = Point::new((exact.x + 0.5).floor(), (exact.y + 0.5).floor());

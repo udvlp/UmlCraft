@@ -3,7 +3,8 @@
 //! it (selection, grips, connection points, rubber band, outlines while dragging), which never
 //! reach an export. The image is made again after each change – while dragging in the
 //! background, one at a time – and at most 8192 px on its longer side. The paper is white in
-//! the dark theme too, as in draw.io, with draw.io's grid (10 px, every fourth line stronger).
+//! the dark theme too, with a 10 px grid; selection and grips are in the theme's blue, as on
+//! the main window's canvas.
 //!
 //! Mouse and keys are in `input.rs`, in-place editing in `text.rs`.
 
@@ -42,15 +43,10 @@ const ZOOM_STEP: f32 = 1.25;
 const MAX_RASTER: f32 = 8192.0;
 /// Space around the drawing at 100 % and when fitted.
 const MARGIN: f32 = 20.0;
-/// draw.io's grid: 10 px apart, every fourth line in full colour, the others at 20 %.
+/// The grid the editor snaps to; its lines are hidden when they come closer than
+/// `GRID_MIN_STEP` on screen.
 pub const GRID: f32 = 10.0;
-const GRID_STEPS: i32 = 4;
-/// draw.io's colours of the selection and its grips (`Graph.js`).
-pub const SELECTION: u32 = 0x00a8ff;
-pub const HANDLE_FILL: u32 = 0x29b6f2;
-pub const HANDLE_STROKE: u32 = 0x0088cf;
-pub const CONNECT_FILL: u32 = 0xcee7ff;
-const GRID_COLOR: u32 = 0xe6e6e6;
+const GRID_MIN_STEP: f32 = 5.0;
 /// Size of a grip on screen, and how near the mouse has to be to take it.
 pub const HANDLE_SIZE: f32 = 7.0;
 pub const HANDLE_GRAB: f32 = 6.0;
@@ -603,6 +599,7 @@ impl Render for ErmCanvas {
                 canvas(
                     move |bounds, _, _| area.set(bounds),
                     move |bounds, _, window, cx| {
+                        let colors = MarkColors::of(cx);
                         let scale = window.scale_factor();
                         if this.read(cx).drag.is_some() {
                             // Follows drags outside the canvas too.
@@ -647,7 +644,7 @@ impl Render for ErmCanvas {
                         };
                         window.with_content_mask(Some(ContentMask { bounds }), |window| {
                             if grid {
-                                paint_grid(window, bounds, origin, zoom);
+                                paint_grid(window, bounds, origin, zoom, colors.grid);
                             }
                             if let Some(Shown { image, size: (w, h), scale: raster_scale, view }) =
                                 raster
@@ -661,7 +658,7 @@ impl Render for ErmCanvas {
                                 );
                                 window.paint_image(b, b, Corners::default(), image, 0, false).ok();
                             }
-                            paint_marks(window, &marks, &rect, &at);
+                            paint_marks(window, &marks, &rect, &at, &colors);
                         });
                     },
                 )
@@ -687,13 +684,44 @@ impl Render for ErmCanvas {
     }
 }
 
-/// draw.io's grid over the visible area, aligned to the diagram's origin.
-fn paint_grid(window: &mut Window, bounds: Bounds<Pixels>, origin: Point<Pixels>, zoom: f32) {
+/// The colours of the grid and of the editor's marks, from the theme (as on the main window's
+/// canvas: selection and grips in the theme's blue).
+struct MarkColors {
+    grid: Hsla,
+    selection: Hsla,
+    /// Inside grips that are not filled (labels).
+    paper: Hsla,
+    /// A target a line may not join.
+    refused: Hsla,
+}
+
+impl MarkColors {
+    fn of(cx: &App) -> Self {
+        let theme = cx.theme();
+        // On the white paper, in either theme.
+        let a = if theme.is_dark() { 0.2 } else { 0.45 };
+        Self {
+            grid: Hsla { a, ..theme.border },
+            selection: theme.blue,
+            paper: white(),
+            refused: theme.danger,
+        }
+    }
+}
+
+/// The grid over the visible area, aligned to the diagram's origin; none when its lines would
+/// come too close to tell apart.
+fn paint_grid(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    origin: Point<Pixels>,
+    zoom: f32,
+    color: Hsla,
+) {
     let step = GRID * zoom;
-    // Below 4 px the grid would be a grey wash: only every fourth line then.
-    let (step, every) = if step < 4.0 { (step * GRID_STEPS as f32, 1) } else { (step, GRID_STEPS) };
-    let minor = rgba((GRID_COLOR << 8) | 0x33);
-    let major = rgb(GRID_COLOR);
+    if step < GRID_MIN_STEP {
+        return;
+    }
     let first = |o: Pixels, start: Pixels| (f32::from(start - o) / step).floor() as i32;
     let (x0, y0) = (first(origin.x, bounds.origin.x), first(origin.y, bounds.origin.y));
     let columns = (f32::from(bounds.size.width) / step).ceil() as i32 + 1;
@@ -701,20 +729,12 @@ fn paint_grid(window: &mut Window, bounds: Bounds<Pixels>, origin: Point<Pixels>
     for i in x0..=x0 + columns {
         let x = (origin.x + px(i as f32 * step)).floor();
         let line = Bounds::new(point(x, bounds.origin.y), size(px(1.0), bounds.size.height));
-        if i.rem_euclid(every) == 0 {
-            window.paint_quad(fill(line, major));
-        } else {
-            window.paint_quad(fill(line, minor));
-        }
+        window.paint_quad(fill(line, color));
     }
     for j in y0..=y0 + rows {
         let y = (origin.y + px(j as f32 * step)).floor();
         let line = Bounds::new(point(bounds.origin.x, y), size(bounds.size.width, px(1.0)));
-        if j.rem_euclid(every) == 0 {
-            window.paint_quad(fill(line, major));
-        } else {
-            window.paint_quad(fill(line, minor));
-        }
+        window.paint_quad(fill(line, color));
     }
 }
 
@@ -723,12 +743,13 @@ fn paint_marks(
     marks: &Marks,
     rect: &dyn Fn(&DRect) -> Bounds<Pixels>,
     at: &dyn Fn(umlcraft_erm::Point) -> Point<Pixels>,
+    colors: &MarkColors,
 ) {
-    let selection = rgb(SELECTION);
-    let grip = |p: Point<Pixels>, fill_color: u32| {
+    let selection = colors.selection;
+    let grip = |p: Point<Pixels>, fill_color: Hsla| {
         let half = px(HANDLE_SIZE / 2.0);
         let b = Bounds::new(point(p.x - half, p.y - half), size(half * 2.0, half * 2.0));
-        quad(b, px(1.0), rgb(fill_color), px(1.0), rgb(HANDLE_STROKE), BorderStyle::Solid)
+        quad(b, px(1.0), fill_color, px(1.0), selection, BorderStyle::Solid)
     };
     for points in &marks.lines {
         let mut path = PathBuilder::stroke(px(3.0));
@@ -766,7 +787,7 @@ fn paint_marks(
         ));
     }
     if let Some((b, allowed)) = marks.target {
-        let color = if allowed { selection } else { rgb(0xe53935) };
+        let color = if allowed { selection } else { colors.refused };
         let b = rect(&b).dilate(px(2.0));
         window.paint_quad(quad(
             b,
@@ -778,7 +799,7 @@ fn paint_marks(
         ));
     }
     for p in &marks.points {
-        // draw.io's connection points: small crosses.
+        // Connection points: small crosses.
         let c = at(*p);
         let s = px(3.0);
         let mut path = PathBuilder::stroke(px(1.5));
@@ -787,7 +808,7 @@ fn paint_marks(
         path.move_to(point(c.x + s, c.y - s));
         path.line_to(point(c.x - s, c.y + s));
         if let Ok(path) = path.build() {
-            window.paint_path(path, rgb(HANDLE_STROKE));
+            window.paint_path(path, selection);
         }
     }
     if let Some((a, b)) = marks.rubber {
@@ -810,10 +831,10 @@ fn paint_marks(
         ));
     }
     for p in &marks.handles {
-        window.paint_quad(grip(at(*p), HANDLE_FILL));
+        window.paint_quad(grip(at(*p), selection));
     }
     for p in &marks.label_handles {
-        window.paint_quad(grip(at(*p), CONNECT_FILL));
+        window.paint_quad(grip(at(*p), colors.paper));
     }
 }
 

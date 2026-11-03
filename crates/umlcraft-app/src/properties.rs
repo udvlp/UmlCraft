@@ -60,7 +60,7 @@ const PARAMETER_KINDS: [TemplateParameterKind; 2] =
 const DIRECTIONS: [ParameterDirections; 3] =
     [ParameterDirections::Explicit, ParameterDirections::Hidden, ParameterDirections::All];
 /// Colors offered first for names and lines: black, grays and the plain colors of diagrams.
-const FEATURED_COLORS: [Color; 12] = [
+pub(crate) const FEATURED_COLORS: [Color; 12] = [
     Color::rgb(0x00, 0x00, 0x00),
     Color::rgb(0x80, 0x80, 0x80),
     Color::rgb(0xc0, 0xc0, 0xc0),

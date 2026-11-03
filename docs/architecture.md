@@ -866,8 +866,10 @@ import follows in a later step.
   `history::Editor` keeps the selection (`Item`: node, link, text, label), undo and redo as
   snapshots (200 steps), whether the diagram differs from the file, and stamps `modified`
   (and `created`, `author` for new diagrams) when it is saved. `hit` finds what is under the
-  mouse on the exact outlines, what a rubber band holds, the grips of a box and draw.io's
-  connection points (rectangle 16, ellipse and rhombus 8, IS-A triangle 6). `clip` copies the
+  mouse on the exact outlines, what a rubber band holds, the grips of a box and the
+  connection points (around the box clockwise: a rectangle every quarter of a side, an ellipse
+  and a rhombus the corners and side middles; the IS-A triangle its tip, the middles of its
+  slanted sides and three points on its base). `clip` copies the
   selected nodes and texts with the lines between them as the text of a `.ucerm` file and
   pastes it with new ids. `tests/editing.rs` runs 50 × 200 random operations: no error rule
   breaks, a refused operation changes nothing, and the result survives writing and reading.
@@ -926,10 +928,12 @@ import follows in a later step.
   name and origin when nothing is selected). The canvas (`canvas.rs`) is an entity of its own,
   so that it can later become a tab of the main window. It shows the SVG export (transparent)
   rasterized with resvg like the structogram view (it uses `nsd::rasterize`, its fonts and
-  `write_file`) on white paper with draw.io's grid (10 px, every fourth line stronger), never
+  `write_file`) on white paper with a 10 px grid in the colour of the main canvas's, never
   in an export; a new image right after each edit, in the background while dragging, at most
   8192 px. Selection, grips, connection points, rubber band and the outlines of what is
-  dragged are painted over it. Mouse and keys (`input.rs`) follow draw.io: click,
+  dragged are painted over it in the theme's blue, as on the main canvas; the colours offered
+  for fills, lines and texts are the main window's (`properties::FEATURED_COLORS`), fills
+  lightened. Mouse and keys (`input.rs`) follow draw.io: click,
   Shift/Ctrl+click and rubber band select; dragging moves with the top left corner on the grid
   (Alt: free), grips resize (Shift keeps the proportions), labels are dragged, a line is drawn
   from a connection point to another node (on a point: fixed port, on the shape: floating; not
