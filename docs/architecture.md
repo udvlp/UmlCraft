@@ -847,9 +847,11 @@ drawing rules were worked out from its source and exports, none of its code is u
   a `Cardinality`: minimum a number or `*` for any, maximum a number, `n` or `m`, the second
   "many" side of a relationship) and a role placed as draw.io places edge labels (`x` along
   the line from -1 to 1, `y` px to its left, then an offset), a line style and waypoints;
-  free `Text`s.
-  Links point from an attribute to its owner, from a relationship to its participants, from
-  an IS-A to its super- and subtypes (`superType` marks the supertype).
+  free `Text`s. Links point from an attribute to its owner, from a relationship to its
+  participants, from an IS-A to its super- and subtypes (`superType` marks the supertype).
+- **New elements** (`create`) get the sizes of the flight example the feature started from
+  (entity 100 × 40, attribute 70 × 28, relationship 60 × 40) or those of draw.io's library
+  (`SizeSet::Palette`); `connect` only joins allowed kinds.
 - **Rules** (`check`). Twelve rules: unique ids, existing ends, the allowed pairs of kinds
   (`check::allowed`), one owner per attribute and no composite cycles, at least two
   participants per relationship, one weak entity per identifying relationship, one supertype
@@ -876,9 +878,6 @@ drawing rules were worked out from its source and exports, none of its code is u
   selected nodes and texts with the lines between them as the text of a `.ucerm` file and
   pastes it with new ids. `tests/editing.rs` runs 50 × 200 random operations: no error rule
   breaks, a refused operation changes nothing, and the result survives writing and reading.
-- **New elements** (`create`) get the sizes of the flight example the feature started from
-  (entity 100 × 40, attribute 70 × 28, relationship 60 × 40) or those of draw.io's library
-  (`SizeSet::Palette`); `connect` only joins allowed kinds.
 - **File** (`read`, `write`): `.ucerm`, pretty-printed JSON like `.ucraft` (`format`
   `umlcraft-erm`, `formatVersion` 1, `meta`, `nodes`, `links`, `texts` sorted by id, new ids
   UUIDv7), default values left out, whole numbers without `.0`, LF and a final newline. The
@@ -936,7 +935,8 @@ drawing rules were worked out from its source and exports, none of its code is u
   resvg differ from draw.io's PNGs in at most the share of pixels `tests/drawio_deviations.txt`
   allows each file, with the reason (text smoothing, right-angle routing, stroke widths).
 - **App** (`umlcraft-app/src/erm`). An ER diagram opens in a window of its own, outside the
-  project: File → "New ER diagram" or "Open ER diagram (.ucerm)", the command line or "Open
+  project: File › "New ER diagram" or "Open ER diagram (.ucerm)", the ribbon's New diagram
+  button, the command line or "Open
   with" (`MainView::open` hands `.ucerm` over and keeps the project; a file already open
   brings its window to the front). The window (`window.rs`) is a frame with a title bar like
   the main window's, a toolbar (save, undo, zoom, grid, SVG and PNG export, properties), the
@@ -963,14 +963,14 @@ drawing rules were worked out from its source and exports, none of its code is u
   palette goes to the selected entity or relationship (not to a selected attribute). Each
   mouse action is one undo step. Zoom 25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−,
   Ctrl+Shift+0 fits), panning with the wheel (Shift: sideways), the middle button or Space
-  and the left button; until the user zooms or
-  pans, the drawing is fitted into the window, at most at 100 %. Saving writes through a
+  and the left button; until the user zooms or pans, the drawing is fitted into the window,
+  at most at 100 %. Saving writes through a
   temporary file; closing with unsaved changes asks (save, discard, cancel), and quitting from
   the main window lists the ER diagrams with unsaved changes first. Read errors, refused edits
   and the warnings of `check` (live) are told in the UI's language (`erm.*`, an element by its
   name, a line by its ends); a click on a warning selects the element. ER diagrams do not go
   into the recent files (the list opens projects). "Arrange" in the toolbar and the context
-  menu runs `layout::arrange` as one undo step. File → "Import SQL dump as ER diagram …"
+  menu runs `layout::arrange` as one undo step. File › "Import SQL dump as ER diagram …"
   (`import.rs`) reads the dump in the background, asks in a small dialog for the dialect
   (detected one preselected), the attributes (all, keys only, none) and, if there are several,
   the schemas, imports in the background and opens a window with the unsaved result; above
@@ -981,8 +981,7 @@ drawing rules were worked out from its source and exports, none of its code is u
 ### SQL import
 
 `umlcraft-erm-sql` turns a dump of `mysqldump`, `mariadb-dump` or `pg_dump` (plain format)
-into a diagram, after the rules S1–S11 in `docs/erm-spec.md` (a local note; the rules are
-repeated in the code's comments).
+into a diagram. Its rules are written down in the comments of `map.rs`.
 
 - **Dialect** (`dialect`): the dump tools' header in the first 2 KB, else backticks or
   `ENGINE=` outside comments mean MySQL, else PostgreSQL; the database's name from
