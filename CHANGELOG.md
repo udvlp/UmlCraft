@@ -5,6 +5,14 @@ today.
 
 ## Unreleased
 
+- **ER diagrams**: File › New ER diagram and Open ER diagram (.ucerm) … open
+  entity-relationship diagrams in Chen notation, drawn like draw.io's ER shapes, in a window of
+  their own: entities, weak and associative entities, attributes (keys, partial keys, derived,
+  multivalued, composite), relationships (binary, n-ary, identifying, with attributes) and
+  IS-A, with `[min,max]` on the lines. They are drawn from a palette and connected at draw.io's
+  connection points, edited in place and in the properties, arranged automatically, and
+  exported as SVG and PNG. File › Import SQL dump as ER diagram … turns a dump of MySQL,
+  MariaDB or PostgreSQL into a laid-out diagram, with all attributes, keys only or none.
 - **Light or dark as the system**: without a theme of its own, UmlCraft follows the system's
   appearance and switches along with it. The View tab and the settings choose between System,
   Light and Dark.

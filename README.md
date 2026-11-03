@@ -64,6 +64,17 @@ line the color of its name and of the line.
   (`continue`, labels …) is listed. New structograms and imported methods use German keywords
   (`solange ?`, `für i := 1 bis n`, `gib x`) or Structorizer's English ones, as chosen in the
   settings; by default as the user interface.
+- **ER diagrams** (File › New ER diagram, Open ER diagram (.ucerm) …, Import SQL dump as ER
+  diagram …): entity-relationship diagrams in Chen notation as draw.io's ER shapes draw them –
+  entities as rectangles, attributes as ellipses, relationships as rhombi and `[min,max]` on
+  the lines (read look-across), with weak and associative entities, keys and partial keys,
+  derived, multivalued and composite attributes, n-ary relationships with attributes and IS-A.
+  Each diagram opens in a window of its own and is saved as a `.ucerm` file; the editor works
+  as draw.io does (palette, connection points, grid, in-place text, properties, undo, copy and
+  paste between windows), arranges a diagram automatically and exports SVG and PNG. Dumps of
+  MySQL, MariaDB and PostgreSQL (`mysqldump`, `mariadb-dump`, `pg_dump` in plain format)
+  become finished diagrams: tables become entities, junction tables relationships, foreign
+  keys relationships with their cardinalities, with all attributes, keys only or none.
 
 ## Importing source code
 
@@ -306,6 +317,9 @@ one.
 | `crates/umlcraft-nsd` | Structorizer's `.nsd` structograms: model, reading and writing, layout, drawing, SVG, editing |
 | `crates/umlcraft-nsd-code` | Methods of source files as structograms (Java, C#, Python, C++; tree-sitter) |
 | `tools/nsd-metrics` | The Java tool that writes the text metrics `umlcraft-nsd` lays structograms out with |
+| `crates/umlcraft-erm` | ER diagrams in Chen notation: model, `.ucerm` files, rules, editing, layout, drawing, SVG |
+| `crates/umlcraft-erm-sql` | ER diagrams from SQL dumps of MySQL, MariaDB and PostgreSQL |
+| `tools/erm-metrics` | The script that writes the Liberation Sans metrics `umlcraft-erm` measures texts with |
 | `crates/umlcraft-mcp` | MCP server: tools on a project, the protocol, the bridge to the running app |
 | `crates/umlcraft-cli` | `umlcraft-cli`: the MCP server for AI clients and its setup |
 | `crates/umlcraft-screenshot` | The app window as an image, for the MCP server's `screenshot` (Windows) |

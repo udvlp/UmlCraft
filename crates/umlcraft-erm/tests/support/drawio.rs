@@ -1,5 +1,5 @@
 //! Test helper, not a feature: reads uncompressed draw.io files with ER shapes into our model
-//! (as `refs/tools/drawio2ucerm.py` does), and the SVG images draw.io exports of them.
+//! (as the script that made the fixtures does), and the SVG images draw.io exports of them.
 
 use std::collections::HashMap;
 
@@ -134,7 +134,8 @@ pub fn read(xml: &str) -> Read {
             let bounds =
                 Rect::new(number(g, "x"), number(g, "y"), number(g, "width"), number(g, "height"));
             let font_style = number(s, "fontStyle") as u32;
-            // Formatting inside HTML values (Steven's free text: <font color><b>…</b></font>).
+            // Formatting inside HTML values (the flight example's free text:
+            // <font color><b>…</b></font>).
             let html_color = c.value.split("color=\"").nth(1).and_then(|r| r.split('"').next());
             let st = Style {
                 fill: s.get("fillColor").filter(|v| v.starts_with('#')).cloned(),

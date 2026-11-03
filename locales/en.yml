@@ -103,6 +103,7 @@ menu:
   import_structogram: Import structogram (.nsd) …
   open_erm: Open ER diagram (.ucerm) …
   new_erm: New ER diagram
+  import_sql: Import SQL dump as ER diagram …
   export: Export
   export_svg: Diagram as SVG …
   export_png: Diagram as PNG …
@@ -663,6 +664,7 @@ kind:
   comment: Note
   diagram: Diagram
   structogram: Structogram
+  erDiagram: ER diagram
   activity: Activity
   activityNode: Activity node
   activityEdge: Flow
@@ -884,6 +886,32 @@ erm:
   cannot_join: These elements cannot be joined.
   edit_missing: The element no longer exists.
   edit_not_applicable: This is not possible for this element.
+  arrange: Arrange
+  arrange_tip: Lay out the whole diagram automatically (as the SQL import does); waypoints and fixed connection points are lost
+  import_title: Import SQL dump
+  import_found: "%{file}: %{count} tables found."
+  import_dialect: SQL dialect
+  import_detected: "%{dialect} (detected)"
+  import_attributes: Attributes
+  import_attributes_all: all
+  import_attributes_keys: keys only
+  import_attributes_none: none
+  import_attributes_hint: Large schemas get very wide with all attributes.
+  import_schemas: Schemas
+  import_button: Import
+  import_failed: The SQL dump could not be imported.
+  import_no_tables: The file holds no tables (CREATE TABLE), or none in the chosen schemas.
+  import_pg_custom: The file is in pg_dump's archive format. Please export it as plain SQL (pg_dump -Fp) and import that file.
+  import_compressed: The file is compressed. Please unpack it first.
+  import_summary: "Imported from %{file} (%{dialect}): %{tables} tables → %{entities} entities, %{relationships} relationships, %{attributes} attributes; %{skipped} statements skipped"
+  import_no_key: "%{table}: no primary key, the entity has no key attribute"
+  import_placeholder: "%{table}: referred to but not in the dump (placeholder entity)"
+  import_recoded: "Line %{line}: not UTF-8, read as Windows-1252"
+  import_problem: "Line %{line}: %{what} not understood: %{text}"
+  import_problem_statement: statement
+  import_problem_column: column
+  import_problem_constraint: key
+  import_unknown_table: "Line %{line}: about a table that is not in the dump: %{text}"
   shape:
     entity: Entity
     weak_entity: Weak entity
@@ -937,7 +965,7 @@ erm:
     not_null: NOT NULL
     line: Line
     label: Label
-    label_hint: "[0,1], [1,n], 0..* … become a cardinality, anything else free text, empty = none"
+    label_hint: "[0,1], [1,n], [*,m] (* = any), 0..* … become a cardinality, anything else free text, empty = none"
     role: Role
     line_style: Line style
     line_solid: solid

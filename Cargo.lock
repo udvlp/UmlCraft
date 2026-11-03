@@ -6832,6 +6832,7 @@ dependencies = [
  "umlcraft-asta",
  "umlcraft-asta-export",
  "umlcraft-erm",
+ "umlcraft-erm-sql",
  "umlcraft-format",
  "umlcraft-mcp",
  "umlcraft-model",
@@ -6888,7 +6889,20 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "umlcraft-model",
+ "umlcraft-notation",
  "uuid",
+]
+
+[[package]]
+name = "umlcraft-erm-sql"
+version = "0.17.0"
+dependencies = [
+ "encoding_rs",
+ "indexmap",
+ "pretty_assertions",
+ "thiserror 2.0.21",
+ "umlcraft-erm",
 ]
 
 [[package]]

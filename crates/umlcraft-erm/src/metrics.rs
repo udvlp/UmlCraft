@@ -12,7 +12,7 @@ pub const LABEL_FONT_SIZE: f64 = 11.0;
 /// Line height as a multiple of the font size (`mxConstants.LINE_HEIGHT`).
 pub const LINE_HEIGHT: f64 = 1.2;
 /// The baseline below the middle of its line, per px of font size: 3.5 px at 12 px, measured
-/// in draw.io's exports (`refs/notes/schrift.md`).
+/// in draw.io's exports.
 pub const BASELINE: f64 = 3.5 / 12.0;
 /// Underlines: their middle below the baseline and their thickness, per px of font size
 /// (1.5 px and 1 px at 12 px, measured like the baseline).
@@ -135,7 +135,7 @@ pub fn line_height(size: f64) -> f64 {
 mod tests {
     use super::*;
 
-    /// Ink widths draw.io gave these words (Liberation Sans, `refs/notes/schrift.md`) are the
+    /// Ink widths draw.io gave these words (Liberation Sans, measured in its exports) are the
     /// advances minus the side bearings; the advances are a little wider.
     #[test]
     fn widths_match_draw_io() {

@@ -1,5 +1,6 @@
 //! Our drawing compared with draw.io's exports of the same diagrams. Needs the references
-//! (`UMLCRAFT_ERM_REFS` pointing at `~/git/UmlCraft-refs/erm`, see `docs/architecture.md`);
+//! (`UMLCRAFT_ERM_REFS` pointing at a folder outside the repository, see
+//! `docs/architecture.md`);
 //! without them the test passes without checking anything.
 //!
 //! - Line ends: every straight line of every reference file within 0.05 px of draw.io's.

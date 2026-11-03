@@ -19,8 +19,8 @@ use umlcraft_erm::edit::Item;
 use super::canvas::ErmCanvas;
 use super::props::PropsPanel;
 use super::{
-    ExportErmPng, ExportErmPngTransparent, ExportErmSvg, PlaceShape, ToggleGrid, ToggleProperties,
-    file_stem,
+    Arrange, ExportErmPng, ExportErmPngTransparent, ExportErmSvg, PlaceShape, ToggleGrid,
+    ToggleProperties, file_stem,
 };
 use crate::{
     ExportPng, ExportSvg, Quit, Redo, ResetZoom, SaveProject, SaveProjectAs, Undo, ZoomIn, ZoomOut,
@@ -65,6 +65,11 @@ pub struct ErmWindow {
     props: Entity<PropsPanel>,
     show_props: bool,
     notes_open: bool,
+    /// What the import said, while it is shown.
+    import: Option<super::import::ImportNote>,
+    import_open: bool,
+    /// Where an imported diagram is saved by default: next to its dump.
+    import_dir: Option<PathBuf>,
     /// The window title set last.
     title: String,
     /// Closing was confirmed (saved or discarded).
@@ -94,10 +99,26 @@ impl ErmWindow {
             props,
             show_props: true,
             notes_open: false,
+            import: None,
+            import_open: false,
+            import_dir: None,
             title: String::new(),
             close_confirmed: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Shows what an import found under the canvas; saving starts in `dir`.
+    pub fn imported(
+        &mut self,
+        note: super::import::ImportNote,
+        dir: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        self.import_open = !note.lines.is_empty();
+        self.import = Some(note);
+        self.import_dir = dir;
+        cx.notify();
     }
 
     /// Whether closing would lose changes.
@@ -135,7 +156,10 @@ impl ErmWindow {
         cx: &mut Context<Self>,
         then: Option<AfterSave>,
     ) {
-        let directory = crate::main_view::start_directory(self.path.as_deref());
+        let directory = match (&self.path, &self.import_dir) {
+            (None, Some(dir)) => dir.clone(),
+            _ => crate::main_view::start_directory(self.path.as_deref()),
+        };
         let diagram = self.canvas.read(cx).diagram().clone();
         let suggested = format!(
             "{}.{}",
@@ -242,7 +266,10 @@ impl ErmWindow {
             Export::Svg => "svg",
             Export::Png { .. } => "png",
         };
-        let directory = crate::main_view::start_directory(self.path.as_deref());
+        let directory = match (&self.path, &self.import_dir) {
+            (None, Some(dir)) => dir.clone(),
+            _ => crate::main_view::start_directory(self.path.as_deref()),
+        };
         let suggested = format!("{}.{extension}", file_stem(&diagram, self.path.as_deref()));
         let rx = cx.prompt_for_new_path(&directory, Some(&suggested));
         cx.spawn_in(window, async move |_, cx| {
@@ -371,6 +398,14 @@ impl ErmWindow {
                     .toggled(grid)
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleGrid), cx)),
             )
+            .child(
+                Button::new("erm-arrange")
+                    .ghost()
+                    .small()
+                    .label(t!("erm.arrange"))
+                    .tooltip(t!("erm.arrange_tip"))
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(Arrange), cx)),
+            )
             .child(divider())
             .child(
                 Button::new("export-svg")
@@ -416,46 +451,49 @@ impl ErmWindow {
     fn notes_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let canvas = self.canvas.read(cx);
         let d = canvas.diagram();
-        let notes: Vec<(umlcraft_erm::Id, String)> = canvas
+        let notes: Vec<(Option<umlcraft_erm::Id>, String)> = canvas
             .issues
             .iter()
-            .map(|i| (i.element.clone(), super::issue_text(Some(d), i)))
+            .map(|i| (Some(i.element.clone()), super::issue_text(Some(d), i)))
             .collect();
         let refused = canvas.refused.clone();
         let relating = canvas.relating.is_some();
-        if notes.is_empty() && refused.is_none() && !relating {
+        if notes.is_empty() && refused.is_none() && !relating && self.import.is_none() {
             return None;
         }
         let summary = t!("erm.notes", count = notes.len()).to_string();
-        let arrow = if self.notes_open { "▾" } else { "▸" };
-        let list = (self.notes_open && !notes.is_empty()).then(|| {
-            let canvas = self.canvas.clone();
-            v_flex().id("erm-notes").max_h(px(140.0)).overflow_y_scroll().pl_4().children(
-                notes.iter().enumerate().map(|(i, (element, text))| {
-                    let canvas = canvas.clone();
-                    let element = element.clone();
-                    div()
-                        .id(("erm-note", i))
-                        .text_xs()
-                        .cursor_pointer()
-                        .hover(|s| s.underline())
-                        .child(text.clone())
-                        .on_click(move |_, _, cx| {
-                            let element = element.clone();
-                            canvas.update(cx, |c, cx| {
-                                let d = c.diagram();
-                                let item = if d.node(&element).is_some() {
-                                    Item::Node(element)
-                                } else if d.link(&element).is_some() {
-                                    Item::Link(element)
-                                } else {
-                                    Item::Text(element)
-                                };
-                                c.select(vec![item], cx);
-                            });
-                        })
-                }),
-            )
+        let arrow = |open: bool| if open { "▾" } else { "▸" };
+        let list =
+            (self.notes_open && !notes.is_empty()).then(|| self.note_list("erm-notes", &notes));
+        let import = self.import.as_ref().map(|note| {
+            let toggle = div()
+                .id("erm-import-toggle")
+                .flex_1()
+                .when(!note.lines.is_empty(), |t| t.cursor_pointer())
+                .child(if note.lines.is_empty() {
+                    note.summary.clone()
+                } else {
+                    format!("{} {}", arrow(self.import_open), note.summary)
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.import_open = !this.import_open;
+                    cx.notify();
+                }));
+            let close = div()
+                .id("erm-import-close")
+                .px_1()
+                .cursor_pointer()
+                .text_color(cx.theme().muted_foreground)
+                .child("×")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.import = None;
+                    cx.notify();
+                }));
+            v_flex()
+                .child(h_flex().gap_2().child(toggle).child(close))
+                .when(self.import_open && !note.lines.is_empty(), |c| {
+                    c.child(self.note_list("erm-import-notes", &note.lines))
+                })
         });
         Some(
             v_flex()
@@ -464,6 +502,7 @@ impl ErmWindow {
                 .border_t_1()
                 .border_color(cx.theme().border)
                 .text_sm()
+                .children(import)
                 .children(refused.map(|r| div().text_color(cx.theme().danger).child(r)))
                 .when(relating, |c| c.child(div().child(t!("erm.relationship_hint").to_string())))
                 .when(!notes.is_empty(), |c| {
@@ -472,7 +511,7 @@ impl ErmWindow {
                             .id("erm-notes-toggle")
                             .cursor_pointer()
                             .text_color(cx.theme().warning)
-                            .child(format!("{arrow} {summary}"))
+                            .child(format!("{} {summary}", arrow(self.notes_open)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.notes_open = !this.notes_open;
                                 cx.notify();
@@ -480,6 +519,36 @@ impl ErmWindow {
                     )
                 })
                 .children(list),
+        )
+    }
+
+    /// Lines under the canvas; one about an element selects it when clicked.
+    fn note_list(
+        &self,
+        id: &'static str,
+        lines: &[(Option<umlcraft_erm::Id>, String)],
+    ) -> Stateful<Div> {
+        let canvas = self.canvas.clone();
+        v_flex().id(id).max_h(px(140.0)).overflow_y_scroll().pl_4().children(
+            lines.iter().enumerate().map(|(i, (element, text))| {
+                let canvas = canvas.clone();
+                let line = div().id((id, i)).text_xs().child(text.clone());
+                let Some(element) = element.clone() else { return line };
+                line.cursor_pointer().hover(|s| s.underline()).on_click(move |_, _, cx| {
+                    let element = element.clone();
+                    canvas.update(cx, |c, cx| {
+                        let d = c.diagram();
+                        let item = if d.node(&element).is_some() {
+                            Item::Node(element)
+                        } else if d.link(&element).is_some() {
+                            Item::Link(element)
+                        } else {
+                            Item::Text(element)
+                        };
+                        c.select(vec![item], cx);
+                    });
+                })
+            }),
         )
     }
 }
@@ -559,6 +628,9 @@ impl Render for ErmWindow {
             }))
             .on_action(cx.listener(|this, a: &ToggleGrid, w, cx| {
                 this.canvas.update(cx, |c, cx| c.toggle_grid(a, w, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Arrange, w, cx| {
+                this.canvas.update(cx, |c, cx| c.arrange(w, cx))
             }))
             .on_action(cx.listener(|this, a: &PlaceShape, w, cx| {
                 this.canvas.update(cx, |c, cx| c.place_shape(a.shape, w, cx))

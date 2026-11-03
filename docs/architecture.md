@@ -835,8 +835,8 @@ attributes (keys, partial keys, derived, multivalued, composite), relationships 
 n-ary, identifying, with attributes) and generalization (IS-A), with `[min,max]` on the lines
 read look-across (`[1,1]` at `Kunde` on `Kunde – bucht – Ticket`: every ticket has one
 customer). They are drawn like the ER shapes of draw.io; draw.io is Apache-2.0 licensed, its
-drawing rules were worked out from its source and exports, none of its code is used. The SQL
-import follows in a later step.
+drawing rules were worked out from its source and exports, none of its code is used.
+`umlcraft-erm-sql` makes such diagrams from SQL dumps.
 
 - **Model** (`model`). A `Diagram` is a graph like draw.io's: `Node`s with a typed `NodeKind`
   (`Entity { weak }`, `AssociativeEntity`, `Attribute { key, derived, multivalued }`,
@@ -844,10 +844,14 @@ import follows in a later step.
   standard `Style` and database `Props` named as in Astah's ER model (`physicalName`,
   `datatype`, `lengthPrecision`, `notNull`, `defaultValue`, `comment`; kept, not drawn);
   `Link`s with optional fixed ports (draw.io's `exitX/Y`, `entryX/Y`), a `Label` (free text or
-  a `Cardinality`) and a role placed as draw.io places edge labels (`x` along the line from
-  -1 to 1, `y` px to its left, then an offset), a line style and waypoints; free `Text`s.
-  Links point from an attribute to its owner, from a relationship to its participants, from
-  an IS-A to its super- and subtypes (`superType` marks the supertype).
+  a `Cardinality`: minimum a number or `*` for any, maximum a number, `n` or `m`, the second
+  "many" side of a relationship) and a role placed as draw.io places edge labels (`x` along
+  the line from -1 to 1, `y` px to its left, then an offset), a line style and waypoints;
+  free `Text`s. Links point from an attribute to its owner, from a relationship to its
+  participants, from an IS-A to its super- and subtypes (`superType` marks the supertype).
+- **New elements** (`create`) get the sizes of the flight example the feature started from
+  (entity 100 × 40, attribute 70 × 28, relationship 60 × 40) or those of draw.io's library
+  (`SizeSet::Palette`); `connect` only joins allowed kinds.
 - **Rules** (`check`). Twelve rules: unique ids, existing ends, the allowed pairs of kinds
   (`check::allowed`), one owner per attribute and no composite cycles, at least two
   participants per relationship, one weak entity per identifying relationship, one supertype
@@ -859,10 +863,11 @@ import follows in a later step.
   relationship without its weak entity, a weak entity without one, an IS-A without its ends,
   a cardinality outside a participation), so that files of unfinished diagrams open.
 - **Editing** (`edit`, `history`, `hit`, `clip`). Each operation of the editor (add, connect
-  in the files' direction with `[0,n]` on a new participation, delete with own attributes and
-  attached lines, move, resize, rename, labels typed as `[0,n]` or `1..*` become
-  cardinalities, kinds, line styles, supertype, ports, styles, database properties) works on
-  a copy and is refused, leaving the diagram as it was, if it would make a new error.
+  in the files' direction with `[0,n]` on a new participation and `[0,m]` on the second,
+  delete with own attributes and attached lines, move, resize, rename, labels typed as
+  `[0,n]`, `[*,m]` or `1..*` become cardinalities, kinds, line styles, supertype, ports,
+  styles, database properties) works on a copy and is refused, leaving the diagram as it
+  was, if it would make a new error.
   `history::Editor` keeps the selection (`Item`: node, link, text, label), undo and redo as
   snapshots (200 steps), whether the diagram differs from the file, and stamps `modified`
   (and `created`, `author` for new diagrams) when it is saved. `hit` finds what is under the
@@ -873,9 +878,6 @@ import follows in a later step.
   selected nodes and texts with the lines between them as the text of a `.ucerm` file and
   pastes it with new ids. `tests/editing.rs` runs 50 × 200 random operations: no error rule
   breaks, a refused operation changes nothing, and the result survives writing and reading.
-- **New elements** (`create`) get the sizes of the flight example the feature started from
-  (entity 100 × 40, attribute 70 × 28, relationship 60 × 40) or those of draw.io's library
-  (`SizeSet::Palette`); `connect` only joins allowed kinds.
 - **File** (`read`, `write`): `.ucerm`, pretty-printed JSON like `.ucraft` (`format`
   `umlcraft-erm`, `formatVersion` 1, `meta`, `nodes`, `links`, `texts` sorted by id, new ids
   UUIDv7), default values left out, whole numbers without `.0`, LF and a final newline. The
@@ -906,6 +908,21 @@ import follows in a later step.
   Labels sit on whole pixels as draw.io puts its HTML labels. PNG images are the SVG
   rasterized by the app (`png.rs`). `cargo run -p umlcraft-erm --example erm-svg --
   FILE.ucerm [OUT.svg]` draws a file.
+- **Layout** (`layout`). `arrange` lays out any diagram, for the SQL import and the editor's
+  "Arrange". Entities, relationships and IS-As form the core graph; a relationship goes
+  below the entity on its "one" side (the line whose cardinality has the maximum 1, which is
+  the referenced table after an import) and above the others, an IS-A below its supertype.
+  Each core node reserves room for its attributes, the boxes go to
+  `umlcraft_notation::layout::layered` (unchanged, a dependency of this crate), and a second
+  round reserves the room on the sides that turned out to be free of lines. Attributes then
+  go around their owner, keys first: rows of four above and below, columns of three at the
+  sides, 30 px away, the free sides first and further out ring by ring; one that would cover a
+  node, a line or a label slides along its side, moves out or takes the nearest free place
+  around its owner. Lines float; several lines between the same two nodes get a waypoint
+  each; labels sit in the middle of their line and change side or move along it when they
+  would cover something. Everything ends on the 10 px grid from (20, 20). `overlaps` lists
+  what still covers what (the tests require none), `crossings` the lines that run through a
+  node (straight long edges of the layered layout).
 - **Tests.** `tests/roundtrip.rs` reads and writes back byte for byte the flight example
   (drawn in draw.io, translated by the reference tools), a file with every Chen shape and one
   with labels moved by offsets as today's draw.io GUI writes them; `tests/invalid.rs` has one
@@ -918,7 +935,8 @@ import follows in a later step.
   resvg differ from draw.io's PNGs in at most the share of pixels `tests/drawio_deviations.txt`
   allows each file, with the reason (text smoothing, right-angle routing, stroke widths).
 - **App** (`umlcraft-app/src/erm`). An ER diagram opens in a window of its own, outside the
-  project: File → "New ER diagram" or "Open ER diagram (.ucerm)", the command line or "Open
+  project: File › "New ER diagram" or "Open ER diagram (.ucerm)", the ribbon's New diagram
+  button, the command line or "Open
   with" (`MainView::open` hands `.ucerm` over and keeps the project; a file already open
   brings its window to the front). The window (`window.rs`) is a frame with a title bar like
   the main window's, a toolbar (save, undo, zoom, grid, SVG and PNG export, properties), the
@@ -941,15 +959,71 @@ import follows in a later step.
   1 px, Shift+arrows by 10, Ctrl+arrows resize; Delete, Ctrl+A/C/X/V/D, F2 or Enter and a
   double click edit the text in place (`text.rs`, with the usual cardinalities for a label),
   Escape cancels. The context menu adds an attribute, a relationship to a second entity, fits
-  sizes to their texts and releases line ends. Each mouse action is one undo step. Zoom
-  25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−, Ctrl+Shift+0 fits), panning with the wheel
-  (Shift: sideways), the middle button or Space and the left button; until the user zooms or
-  pans, the drawing is fitted into the window, at most at 100 %. Saving writes through a
+  nodes and free texts to their texts and releases line ends. A new attribute from the
+  palette goes to the selected entity or relationship (not to a selected attribute). Each
+  mouse action is one undo step. Zoom 25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−,
+  Ctrl+Shift+0 fits), panning with the wheel (Shift: sideways), the middle button or Space
+  and the left button; until the user zooms or pans, the drawing is fitted into the window,
+  at most at 100 %. Saving writes through a
   temporary file; closing with unsaved changes asks (save, discard, cancel), and quitting from
   the main window lists the ER diagrams with unsaved changes first. Read errors, refused edits
   and the warnings of `check` (live) are told in the UI's language (`erm.*`, an element by its
   name, a line by its ends); a click on a warning selects the element. ER diagrams do not go
-  into the recent files (the list opens projects).
+  into the recent files (the list opens projects). "Arrange" in the toolbar and the context
+  menu runs `layout::arrange` as one undo step. File › "Import SQL dump as ER diagram …"
+  (`import.rs`) reads the dump in the background, asks in a small dialog for the dialect
+  (detected one preselected), the attributes (all, keys only, none) and, if there are several,
+  the schemas, imports in the background and opens a window with the unsaved result; above
+  its warnings a line sums up what was found, and opens into the hints (clickable: tables
+  without a primary key, placeholder entities) and the statements that could not be read.
+  Saving starts next to the dump.
+
+### SQL import
+
+`umlcraft-erm-sql` turns a dump of `mysqldump`, `mariadb-dump` or `pg_dump` (plain format)
+into a diagram. Its rules are written down in the comments of `map.rs`.
+
+- **Dialect** (`dialect`): the dump tools' header in the first 2 KB, else backticks or
+  `ENGINE=` outside comments mean MySQL, else PostgreSQL; the database's name from
+  mysqldump's header line. `read` refuses `pg_dump`'s archive format and compressed files.
+- **Splitter** (`split`): statements from bytes, because data may be binary and need not be
+  UTF-8 and lines may be megabytes long. It knows strings (backslash escapes in MySQL and in
+  PostgreSQL's `E'…'`), quoted names, `--`, `#` and `/* */` comments, MySQL's and MariaDB's
+  version comments (their content is code; MariaDB's sandbox line is dropped), `DELIMITER`,
+  `$tag$` bodies, the data after `COPY … FROM stdin;` and psql's backslash commands.
+- **Parser** (`parse`, `ir`): its own small tokenizer instead of a full SQL parser, because
+  only a few statements matter and a dump's many options must not cost a table. It reads
+  `CREATE TABLE` (columns with their type as written, NOT NULL, default, comment, generated;
+  inline and table keys and references; `PARTITION OF`), `ALTER TABLE … ADD` keys, references
+  and columns, `ATTACH PARTITION`, `CREATE UNIQUE INDEX` on plain columns, `COMMENT ON TABLE |
+  COLUMN`, `USE`/`CREATE DATABASE` for the name and `CREATE VIEW` (older mysqldumps write a
+  placeholder table for each view first). Everything else is counted by its first words;
+  what cannot be read becomes a `Problem` with its line and costs only itself. A statement
+  that is not UTF-8 is read as Windows-1252. Partitions are folded into their parent.
+- **Mapping** (`map`): junction tables (key = two or more foreign keys, not referred to)
+  become relationships between the tables they join, with their other columns as
+  attributes; a table whose key is a foreign key plus columns of its own a weak entity with
+  an identifying relationship and partial keys; every other table an entity named with a
+  capital first letter (schemas other than `public` in front). Foreign key columns are not
+  attributes, they are the relationships: `[1,1]` or `[0,1]` (nullable) at the referenced
+  table, `[0,n]` or `[0,1]` (unique) at the referencing one; a junction table's second end
+  is `[0,m]`. A relationship is named after
+  the foreign key column without `_id` and the like, "hat" if that only repeats the target
+  table; a self reference carries a role. A missing target becomes a placeholder entity.
+  Options: all attributes, keys only or none, and the schemas to take. The `Report` counts
+  tables, entities, relationships, attributes and skipped statements and lists hints and
+  problems. `import` maps and lays out.
+- **Tests.** The test schema (every import case, `tests/fixtures/schema`) as dumped by MySQL
+  8.4 and 9.7, MariaDB 11.8 and PostgreSQL 16 and 17.6, three dumps each (without data, with
+  data, with routines): the splitter finds as many statements as the prototype the rules
+  were checked with, every dump gives the expected table (`tests/expected/*.md`, the form of
+  the specification), the sources give the same, the laid-out result has no warnings and no
+  overlaps, and its picture stays as it is (`tests/snapshots`, `UMLCRAFT_ERM_BLESS=1`). With
+  `UMLCRAFT_ERM_REFS`, `tests/corpus.rs` imports Sakila, Pagila, Employees, Chinook and
+  Northwind (27 dumps, outside the repository for their licences) and compares them with the
+  prototype's results. `cargo run --release -p umlcraft-erm-sql --example sql-import --
+  DUMP… [--attributes keys] [--out DIR]` prints counts, size, overlaps and times (a 40 MB
+  dump of INSERTs reads in well under a second) and writes `.ucerm` and SVG.
 
 ## MCP server
 

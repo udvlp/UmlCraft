@@ -14,7 +14,7 @@ use umlcraft_erm::{Diagram, Id, NodeKind, Point as DPoint, Rect as DRect, clip};
 use super::canvas::{ErmCanvas, GRID, HANDLE_GRAB, Redraw, band};
 use super::palette::{DraggedShape, Shape};
 use super::{
-    AddAttribute, Duplicate, EditText, FitToText, Grow, Nudge, RelationshipTo, ReleaseEnds,
+    AddAttribute, Arrange, Duplicate, EditText, FitToText, Grow, Nudge, RelationshipTo, ReleaseEnds,
 };
 use crate::{Copy, Cut, DeleteSelection, Paste, SelectAll};
 
@@ -335,7 +335,10 @@ impl ErmCanvas {
         let free = ev.modifiers.alt;
         let screen = |dx: f64, dy: f64, zoom: f32| (dx.abs().max(dy.abs()) as f32) * zoom;
         let zoom = self.zoom;
-        let d = self.diagram().clone();
+        // One copy of the diagram, only for the drags that preview a change.
+        let previews =
+            matches!(self.drag, Some(Drag::Move { .. } | Drag::Resize { .. } | Drag::Label { .. }));
+        let mut base = previews.then(|| self.diagram().clone());
         let mut preview: Option<Diagram> = None;
         let selection = self.movable();
         // Computed apart from `self.drag` where they need `self`.
@@ -367,12 +370,12 @@ impl ErmCanvas {
                     return;
                 }
                 *moved = true;
-                let (mx, my) = match hit::bounds_of(&d, &selection) {
+                let Some(mut p) = base.take() else { return };
+                let (mx, my) = match hit::bounds_of(&p, &selection) {
                     Some(b) if !free => snap_move(&b, rx, ry),
                     _ => (rx, ry),
                 };
                 (*dx, *dy) = (mx, my);
-                let mut p = d.clone();
                 if edit::move_items(&mut p, &selection, mx, my).is_ok() {
                     preview = Some(p);
                 }
@@ -381,14 +384,14 @@ impl ErmCanvas {
                 let shift = ev.modifiers.shift;
                 let r = handle.resize(original, p.x - start.x, p.y - start.y, MIN_SIZE, shift);
                 *bounds = if free || shift { r } else { snap_resized(*handle, r) };
-                let mut p = d.clone();
+                let Some(mut p) = base.take() else { return };
                 if edit::set_bounds(&mut p, item, *bounds).is_ok() {
                     preview = Some(p);
                 }
             }
             Some(Drag::Label { link, start, dx, dy }) => {
                 (*dx, *dy) = ((p.x - start.x).round(), (p.y - start.y).round());
-                let mut p = d.clone();
+                let Some(mut p) = base.take() else { return };
                 if edit::move_label(&mut p, link, *dx, *dy).is_ok() {
                     preview = Some(p);
                 }
@@ -523,8 +526,20 @@ impl ErmCanvas {
     ) {
         window.focus(&self.focus, cx);
         let name = shape.default_name();
+        // A new attribute goes to the selected entity or relationship; not to a selected
+        // attribute (parts of composite attributes are added with "Add attribute").
+        let owns = |id: &Id| {
+            self.diagram().node(id).is_some_and(|n| {
+                matches!(
+                    n.kind,
+                    NodeKind::Entity { .. }
+                        | NodeKind::AssociativeEntity
+                        | NodeKind::Relationship { .. }
+                )
+            })
+        };
         let owner = match (shape.kind(), self.selection()) {
-            (Some(NodeKind::Attribute { .. }), [Item::Node(id)]) if to_selection => {
+            (Some(NodeKind::Attribute { .. }), [Item::Node(id)]) if to_selection && owns(id) => {
                 Some(id.clone())
             }
             _ => None,
@@ -653,13 +668,31 @@ impl ErmCanvas {
     }
 
     pub(super) fn fit_to_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        let nodes: Vec<Id> = self
+        let ids: Vec<Id> = self
             .selection()
             .iter()
-            .filter_map(|i| if let Item::Node(id) = i { Some(id.clone()) } else { None })
+            .filter_map(|i| match i {
+                Item::Node(id) | Item::Text(id) => Some(id.clone()),
+                _ => None,
+            })
             .collect();
-        if !nodes.is_empty() {
-            self.apply(cx, |d| edit::fit_to_text(d, &nodes).map(|()| None));
+        if !ids.is_empty() {
+            self.apply(cx, |d| edit::fit_to_text(d, &ids).map(|()| None));
+        }
+    }
+
+    /// Lays the whole diagram out anew (as the SQL import does): one undo step, then the
+    /// view shows all of it. Waypoints and fixed connection points are dropped.
+    pub(super) fn arrange(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.diagram().nodes.is_empty() {
+            return;
+        }
+        let done = self.apply(cx, |d| {
+            umlcraft_erm::layout::arrange(d);
+            Ok(None)
+        });
+        if done {
+            self.zoom_to_fit(&crate::ZoomToFit, window, cx);
         }
     }
 
@@ -757,7 +790,6 @@ pub fn context_menu(
         [Item::Node(id)] => d.node(id).map(|n| n.kind),
         _ => None,
     };
-    let has_nodes = selection.iter().any(|i| matches!(i, Item::Node(_)));
     let has_links = selection.iter().any(|i| matches!(i, Item::Link(_)));
     let copyable = selection.iter().any(|i| matches!(i, Item::Node(_) | Item::Text(_)));
     let owner = single_node.is_some_and(|k| !matches!(k, NodeKind::IsA { .. }));
@@ -773,10 +805,11 @@ pub fn context_menu(
         .separator()
         .menu_with_disabled(t!("erm.add_attribute"), Box::new(AddAttribute), !owner)
         .menu_with_disabled(t!("erm.relationship_to"), Box::new(RelationshipTo), !entity)
-        .menu_with_disabled(t!("erm.fit_to_text"), Box::new(FitToText), !has_nodes)
+        .menu_with_disabled(t!("erm.fit_to_text"), Box::new(FitToText), !copyable)
         .menu_with_disabled(t!("erm.release_ends"), Box::new(ReleaseEnds), !has_links)
         .separator()
         .menu(t!("menu.select_all"), Box::new(SelectAll))
+        .menu_with_disabled(t!("erm.arrange"), Box::new(Arrange), d.nodes.is_empty())
 }
 
 #[cfg(test)]

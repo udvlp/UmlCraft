@@ -335,7 +335,7 @@ fn home(state: &State) -> Vec<Group> {
     ]
 }
 
-/// A button whose menu creates a diagram of the chosen kind, or a structogram.
+/// A button whose menu creates a diagram of the chosen kind, a structogram or an ER diagram.
 fn new_diagram() -> Item {
     let mut item = Item::new("new-diagram", fluent("document_add"), t!("ribbon.new_diagram"));
     for kind in DIAGRAM_KINDS {
@@ -352,11 +352,9 @@ fn new_diagram() -> Item {
             );
         }
     }
-    item.menu_separator().menu_icon_entry(
-        t!("kind.structogram"),
-        icons::structogram_icon(),
-        NewStructogram,
-    )
+    item.menu_separator()
+        .menu_icon_entry(t!("kind.structogram"), icons::structogram_icon(), NewStructogram)
+        .menu_icon_entry(t!("kind.erDiagram"), icons::er_diagram_icon(), crate::erm::NewErm)
 }
 
 /// Which group of the diagram tab a tool belongs to.

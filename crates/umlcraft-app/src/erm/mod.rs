@@ -3,9 +3,11 @@
 //! edited there. The window is a frame (`window`) around the canvas (`canvas`, with the mouse
 //! and keys in `input` and in-place editing in `text`), the palette (`palette`) and the
 //! properties (`props`), so that the canvas can later become a tab of the main window. The
-//! editing itself (rules, undo, hit tests, clipboard) is in the crate.
+//! editing itself (rules, undo, hit tests, clipboard) is in the crate. `import` makes a
+//! diagram from an SQL dump (crate `umlcraft-erm-sql`).
 
 mod canvas;
+mod import;
 mod input;
 mod palette;
 mod props;
@@ -28,6 +30,10 @@ actions!(
         OpenErm,
         // Opens a window with a new, empty diagram.
         NewErm,
+        // Asks for an SQL dump and opens a window with the diagram made from it.
+        ImportSql,
+        // Lays the whole diagram out anew (as the SQL import does).
+        Arrange,
         ExportErmSvg,
         // White background, as the app's other PNG images.
         ExportErmPng,
@@ -148,6 +154,21 @@ pub fn prompt_open(window: &mut Window, cx: &mut App) {
         handle.update(cx, |_, window, cx| open(path, window, cx)).ok();
     })
     .detach();
+}
+
+/// Asks for an SQL dump and imports it into a new window; errors are shown over `window`.
+pub fn prompt_import_sql(window: &mut Window, cx: &mut App) {
+    import::prompt(window, cx);
+}
+
+/// Opens a window with an imported diagram, unsaved, its notes saying what was found; it is
+/// saved next to the dump by default.
+fn open_imported(diagram: Diagram, note: import::ImportNote, dump: &Path, cx: &mut App) {
+    if let Some((handle, view)) = window::open(None, diagram, cx) {
+        let dir = dump.parent().map(Path::to_path_buf);
+        view.update(cx, |w, cx| w.imported(note, dir, cx)).ok();
+        OPEN.with_borrow_mut(|open| open.push(Open { key: None, handle, view }));
+    }
 }
 
 /// Opens a window with a new, empty diagram.
@@ -398,6 +419,7 @@ mod tests {
         let sources = [
             include_str!("mod.rs"),
             include_str!("canvas.rs"),
+            include_str!("import.rs"),
             include_str!("input.rs"),
             include_str!("palette.rs"),
             include_str!("props.rs"),
@@ -416,6 +438,7 @@ mod tests {
         for shape in super::Shape::ALL {
             keys.push(format!("erm.shape.{}", shape.key()));
         }
+        keys.push("menu.import_sql".to_owned());
         assert!(keys.len() > 80, "{} keys found", keys.len());
         for locale in ["de", "en"] {
             for key in &keys {

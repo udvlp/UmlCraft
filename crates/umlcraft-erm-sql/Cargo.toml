@@ -1,0 +1,21 @@
+[package]
+name = "umlcraft-erm-sql"
+description = "Entity-relationship diagrams from SQL dumps of MySQL, MariaDB and PostgreSQL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+umlcraft-erm.workspace = true
+indexmap.workspace = true
+# Statements that are not UTF-8 are read as Windows-1252 (dumps of latin1 databases).
+encoding_rs.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

@@ -185,6 +185,7 @@ pub(crate) struct LinkRecord {
 }
 
 /// A count or `"n"`.
+/// A number, or a word: `max` `"n"`/`"m"`, `min` `"*"`.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub(crate) enum MaxRecord {
@@ -198,7 +199,7 @@ pub(crate) struct LabelRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min: Option<u32>,
+    pub min: Option<MaxRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<MaxRecord>,
     #[serde(default, skip_serializing_if = "is_zero", serialize_with = "num")]
