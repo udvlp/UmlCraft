@@ -6894,6 +6894,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "umlcraft-erm-sql"
+version = "0.17.0"
+dependencies = [
+ "encoding_rs",
+ "indexmap",
+ "pretty_assertions",
+ "thiserror 2.0.21",
+ "umlcraft-erm",
+]
+
+[[package]]
 name = "umlcraft-format"
 version = "0.17.0"
 dependencies = [

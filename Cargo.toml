@@ -22,6 +22,7 @@ umlcraft-reverse = { path = "crates/umlcraft-reverse" }
 umlcraft-nsd = { path = "crates/umlcraft-nsd" }
 umlcraft-nsd-code = { path = "crates/umlcraft-nsd-code" }
 umlcraft-erm = { path = "crates/umlcraft-erm" }
+umlcraft-erm-sql = { path = "crates/umlcraft-erm-sql" }
 umlcraft-mcp = { path = "crates/umlcraft-mcp" }
 umlcraft-screenshot = { path = "crates/umlcraft-screenshot" }
 
