@@ -29,7 +29,7 @@ between releases is in the [changelog](CHANGELOG.md).
 | Activity | Actions, initial and final nodes, decision, merge, fork and join, object nodes (also in a state, `Order [filled]`), flows with guards, partitions (also nested) |
 | State machine | States with entry, do, exit and internal transitions, composite states, orthogonal states with regions one below the other or side by side, final states, initial, choice, junction, fork, join and history pseudostates, transitions labeled `trigger [guard] / effect`. A state dragged into another state or region becomes part of it |
 | Component and deployment | Components, artifacts and nodes with their icons, objects and instances, deployments |
-| Composite structure | The inside of a class or component: parts `name : Type [m]` drawn in it, ports on the border of the class and of typed parts, connectors between parts and ports, realizations and dependencies from ports to interfaces. A part dragged over its class's border takes the border along, and ports stay on their border when it moves or changes size |
+| Composite structure | The inside of a class or component: parts `name : Type [m]` drawn in it, ports on the border of the class and of typed parts, connectors between parts and ports, realizations and dependencies from ports to interfaces, which can be drawn as a circle or, when required, as a socket. A part dragged over its class's border takes the border along, and ports stay on their border when it moves or changes size |
 
 Diagrams imported from `.asta` files keep their layout, sizes and colors. The properties panel
 sets per class box what it shows of its members (stereotypes, visibility, types, initial

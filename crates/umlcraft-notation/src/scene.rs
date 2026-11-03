@@ -3428,6 +3428,37 @@ mod tests {
         assert_eq!(circle.rect.size(), umlcraft_model::Size::new(24.0, 24.0));
         let edge = scene.edge(realization).unwrap();
         assert!(edge.line == LineStyle::Solid && edge.target_marker == EndMarker::None);
+
+        // One Order requires, drawn as a socket: open away from Order, a plain line without
+        // «use».
+        let (interface, dependency) = doc
+            .edit("socket", |tx| {
+                let (i, ni) = crate::palette::create_node(
+                    tx,
+                    d,
+                    crate::palette::NodeTool::Interface,
+                    Point::new(600.0, 300.0),
+                    "R",
+                )?;
+                tx.update_presentation(d, ni, |p| {
+                    p.style.iconic = true;
+                    p.style.socket = true;
+                })?;
+                let u =
+                    crate::palette::connect(tx, d, crate::palette::EdgeTool::Dependency, node, ni)?;
+                let usage = tx.model().view(d).and_then(|v| v.get(u)).and_then(|p| p.element);
+                tx.update(usage.unwrap(), |data| data.stereotypes = vec!["use".into()])?;
+                Ok((i, u))
+            })
+            .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let socket = scene.nodes.iter().find(|n| n.element == Some(interface)).unwrap();
+        let Figure::Socket { open } = socket.figure else { panic!("not a socket") };
+        let away = socket.rect.center().offset(-order.rect.center().x, -order.rect.center().y);
+        assert!(open.x * away.x + open.y * away.y > 0.0, "{open:?} opens toward Order");
+        let edge = scene.edge(dependency).unwrap();
+        assert!(edge.line == LineStyle::Solid && edge.target_marker == EndMarker::None);
+        assert!(edge.labels.iter().all(|l| !l.text.contains("use")), "{:?}", edge.labels);
     }
 
     #[test]

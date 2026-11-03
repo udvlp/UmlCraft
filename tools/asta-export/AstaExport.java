@@ -1966,6 +1966,10 @@ public final class AstaExport {
         if ("interface".equals(type)) {
             boolean iconic = style != null && Boolean.TRUE.equals(style.get("iconic"));
             node.setProperty("notation_type", iconic ? "icon" : "normal");
+            // Astah draws a socket only for a port's usage (`portInterfaces`), not here.
+            if (iconic && Boolean.TRUE.equals(style.get("socket"))) {
+                drop("socket");
+            }
         }
         // Without a color of its own a node gets Astah's usual default, not the API's white.
         String fill = ownFill(style);

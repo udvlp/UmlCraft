@@ -306,6 +306,7 @@ prop:
   hide_slots: Slots ausblenden
   hide_empty_slots: Slots ohne Wert ausblenden
   iconic: Als Kreis darstellen
+  socket: Als Socket darstellen (benötigt)
   condition: Bedingung
   extension_points: Erweiterungspunkte
   owner: Besitzer

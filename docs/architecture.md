@@ -306,8 +306,8 @@ changed size beyond it, a port that did not move keeps its side and its distance
 its host moves or changes size, a port that moved snaps onto the nearest border, and a port
 goes along when its host is removed from the diagram. Lines on these diagrams start straight
 and Arrange is not offered. An iconic interface with `Style::socket` is drawn as a socket
-(`Figure::Socket`), its opening turned away from its first line; the `.asta` import sets it for
-interfaces a port requires. The `.asta` import reads parts, ports, connectors, ball and socket;
+(`Figure::Socket`), its opening turned away from its first line; the properties panel sets it
+for an interface shown as a circle, the `.asta` import for interfaces a port requires. The `.asta` import reads parts, ports, connectors, ball and socket;
 the export recreates them through `CompositeStructureDiagramEditor` and writes a component's
 parts as association ends, as Astah takes no attributes on components.
 

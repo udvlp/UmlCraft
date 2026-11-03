@@ -12,6 +12,10 @@ today.
   bike rental this way. AI clients create them as `composite_structure` and place parts and
   ports with `create_element` and `on`. Astah's `.asta` files bring them along both ways, with
   the interfaces a port provides drawn as a ball and those it requires as a socket.
+- **Required interfaces as sockets**: an interface shown as a circle can be shown as a socket
+  instead (properties panel, "Show as socket"), the half circle of an interface a class or
+  port requires. Its opening turns away from its line, and a dependency to it is drawn as a
+  plain line without «use».
 - **Structograms in the dark theme**: the editor draws structograms in the dark colours of the
   diagrams, light lines and texts on dark grey, with the elements' own colours dimmed, instead
   of a bright white sheet. Exports and the clipboard keep Structorizer's black on white.
