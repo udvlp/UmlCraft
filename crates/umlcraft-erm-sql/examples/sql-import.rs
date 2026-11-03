@@ -5,13 +5,15 @@
 //!     [--attributes all|keys|none] [--out DIR]
 //! ```
 //!
-//! With `--out`, each dump is written as `DIR/<name>.ucerm` and `DIR/<name>.svg`.
+//! With `--out`, each dump is written as `DIR/<name>.ucraft` and `DIR/<name>.svg`.
 
 use std::path::PathBuf;
 use std::time::Instant;
 
-use umlcraft_erm::{layout, svg, write};
 use umlcraft_erm_sql::{Attributes, Options, import, read};
+use umlcraft_model::{Document, Model};
+use umlcraft_notation::er_layout;
+use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -45,19 +47,30 @@ fn main() {
         };
         let parsed = start.elapsed();
         let file_name = path.file_name().map(|f| f.to_string_lossy().into_owned());
-        let result = import(&schema, &Options { attributes, file_name, ..Options::default() });
+        let options = Options { attributes, file_name, ..Options::default() };
+        let mut doc = Document::new(Model::new("sql"));
+        let root = doc.model().root();
+        let mut result = None;
+        doc.edit("import", |tx| {
+            result = Some(import(tx, root, &schema, &options, &ApproxMeasure)?);
+            Ok(())
+        })
+        .expect("the import makes a valid model");
+        let result = result.expect("imported");
         let total = start.elapsed();
-        let d = &result.diagram;
+        let model = doc.model();
         let r = &result.report;
-        let overlaps = layout::overlaps(d);
-        let crossings = layout::crossings(d);
-        let (w, h) = d.nodes.iter().fold((0.0f64, 0.0f64), |(w, h), n| {
-            (w.max(n.bounds.x + n.bounds.width), h.max(n.bounds.y + n.bounds.height))
-        });
+        let overlaps = er_layout::overlaps(model, result.diagram, &ApproxMeasure);
+        let view = model.view(result.diagram).expect("the diagram");
+        let (w, h) = view
+            .presentations()
+            .iter()
+            .filter_map(|p| p.bounds())
+            .fold((0.0f32, 0.0f32), |(w, h), b| (w.max(b.right()), h.max(b.bottom())));
         println!(
             "{}: {} ({:.1} MB) {} tables, {} entities, {} relationships, {} attributes, {} \
-             skipped, {} problems, {} hints | {w:.0} × {h:.0} px, {} overlaps, {} lines \
-             through nodes | parse {:.0} ms, total {:.0} ms",
+             skipped, {} problems, {} hints | {w:.0} × {h:.0} px, {} overlaps | parse {:.0} ms, \
+             total {:.0} ms",
             path.display(),
             r.dialect,
             bytes.len() as f64 / 1e6,
@@ -69,7 +82,6 @@ fn main() {
             r.problems.len(),
             r.hints.len(),
             overlaps.len(),
-            crossings.len(),
             parsed.as_secs_f64() * 1e3,
             total.as_secs_f64() * 1e3,
         );
@@ -87,8 +99,11 @@ fn main() {
                 parent.unwrap_or_default(),
                 stem.file_name().unwrap_or_default().to_string_lossy()
             );
-            std::fs::write(dir.join(format!("{name}.ucerm")), write(d)).expect("written");
-            std::fs::write(dir.join(format!("{name}.svg")), svg::render(d)).expect("written");
+            let text = umlcraft_format::to_string(model);
+            std::fs::write(dir.join(format!("{name}.ucraft")), text).expect("written");
+            let scene = scene::build(model, result.diagram, &Preview::default(), &ApproxMeasure);
+            let svg = umlcraft_notation::svg::render(&scene, &ApproxMeasure);
+            std::fs::write(dir.join(format!("{name}.svg")), svg).expect("written");
         }
     }
     if failed {

@@ -1,519 +1,318 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1691" height="1679" viewBox="10 10 1691 1679">
-<rect x="10" y="10" width="1691" height="1679" fill="#ffffff"/>
-<g transform="translate(0.5,0.5)">
-<polyline points="1014.33,433.81 970,446.15" fill="none" stroke="#000000"/>
-<polyline points="1000.13,462.86 970,461.67" fill="none" stroke="#000000"/>
-<polyline points="1018.07,493.23 970,476.92" fill="none" stroke="#000000"/>
-<polyline points="1014,258 1290,120" fill="none" stroke="#000000"/>
-<polyline points="983.44,287.81 927.37,440" fill="none" stroke="#000000"/>
-<polyline points="1000,1420 1000,1280" fill="none" stroke="#000000"/>
-<polyline points="998.91,1459.69 991.11,1600" fill="none" stroke="#000000"/>
-<polyline points="1101.42,1427.95 1049.48,1434.14" fill="none" stroke="#000000"/>
-<polyline points="1102.96,1458.37 1043.15,1447.67" fill="none" stroke="#000000"/>
-<polyline points="282.77,1060.15 643.91,860" fill="none" stroke="#000000"/>
-<polyline points="252.06,1082.61 90.53,1240" fill="none" stroke="#000000"/>
-<polyline points="272.78,1085.56 340,1220" fill="none" stroke="#000000"/>
-<polyline points="265,1018 265,1050" fill="none" stroke="#000000"/>
-<polyline points="1077.26,1592.54 1040,1604.35" fill="none" stroke="#000000"/>
-<polyline points="1070.16,1622.8 1040,1621.6" fill="none" stroke="#000000"/>
-<polyline points="1079.28,1654.5 1040,1639.13" fill="none" stroke="#000000"/>
-<polyline points="767.26,812.54 730,824.35" fill="none" stroke="#000000"/>
-<polyline points="760.1,842.93 730,841.74" fill="none" stroke="#000000"/>
-<polyline points="844.35,877.24 730,851.28" fill="none" stroke="#000000"/>
-<polyline points="592.74,812.54 630,824.35" fill="none" stroke="#000000"/>
-<polyline points="599.9,842.93 630,841.74" fill="none" stroke="#000000"/>
-<polyline points="551.55,875.39 630,853.75" fill="none" stroke="#000000"/>
-<polyline points="595.77,619.48 407.06,480" fill="none" stroke="#000000"/>
-<polyline points="615.45,646.36 673.33,820" fill="none" stroke="#000000"/>
-<polyline points="713.42,614.38 648.42,460" fill="none" stroke="#000000"/>
-<polyline points="716.62,647.75 683.81,820" fill="none" stroke="#000000"/>
-<polyline points="467.61,255.03 626.47,120" fill="none" stroke="#000000"/>
-<polyline points="457.24,287.93 671.93,820" fill="none" stroke="#000000"/>
-<polyline points="645.58,250.18 649.41,120" fill="none" stroke="#000000"/>
-<polyline points="646.21,289.63 678.77,820" fill="none" stroke="#000000"/>
-<polyline points="702.08,981.3 683.13,860" fill="none" stroke="#000000"/>
-<polyline points="700.84,1018.15 654.58,1220" fill="none" stroke="#000000"/>
-<polyline points="165.48,45.35 228.64,80" fill="none" stroke="#000000"/>
-<polyline points="233,47.63 252.88,80" fill="none" stroke="#000000"/>
-<polyline points="297,47.63 277.12,80" fill="none" stroke="#000000"/>
-<polyline points="364.52,45.35 301.36,80" fill="none" stroke="#000000"/>
-<polyline points="350.1,102.93 320,101.83" fill="none" stroke="#000000"/>
-<polyline points="554.99,45.49 615.15,80" fill="none" stroke="#000000"/>
-<polyline points="622.15,47.7 639.39,80" fill="none" stroke="#000000"/>
-<polyline points="685.89,47.52 663.64,80" fill="none" stroke="#000000"/>
-<polyline points="753.88,45.16 687.88,80" fill="none" stroke="#000000"/>
-<polyline points="548.26,403.03 430,443.08" fill="none" stroke="#000000"/>
-<polyline points="466.74,485.74 430,474.78" fill="none" stroke="#000000"/>
-<polyline points="399.65,510.16 387.81,480" fill="none" stroke="#000000"/>
-<polyline points="299.77,462.71 330,461.48" fill="none" stroke="#000000"/>
-<polyline points="287.32,251.79 267.94,120" fill="none" stroke="#000000"/>
-<polyline points="297.2,285.2 370.53,440" fill="none" stroke="#000000"/>
-<polyline points="721.93,428.58 690,433.04" fill="none" stroke="#000000"/>
-<polyline points="723.7,457.74 690,450.43" fill="none" stroke="#000000"/>
-<polyline points="788.89,257.41 667.65,120" fill="none" stroke="#000000"/>
-<polyline points="786.98,280.92 657.37,418.63" fill="none" stroke="#000000"/>
-<polyline points="789.89,283.66 660.28,421.37" fill="none" stroke="#000000"/>
-<polyline points="1226.12,45.16 1292.12,80" fill="none" stroke="#000000"/>
-<polyline points="1294.11,47.52 1316.36,80" fill="none" stroke="#000000"/>
-<polyline points="1361.95,47.71 1342.12,80" fill="none" stroke="#000000"/>
-<polyline points="1433.88,45.16 1367.88,80" fill="none" stroke="#000000"/>
-<polyline points="1411.93,88.58 1380,93.04" fill="none" stroke="#000000"/>
-<polyline points="1413.7,117.74 1380,110.43" fill="none" stroke="#000000"/>
-<polyline points="1325.01,405.49 1264.85,440" fill="none" stroke="#000000"/>
-<polyline points="1390.02,463.52 1280,461.03" fill="none" stroke="#000000"/>
-<polyline points="1369.69,503.27 1280,475.43" fill="none" stroke="#000000"/>
-<polyline points="1303.16,252.11 1326.47,120" fill="none" stroke="#000000"/>
-<polyline points="1294.08,286.06 1237.37,440" fill="none" stroke="#000000"/>
-<polyline points="731.93,1228.58 700,1233.04" fill="none" stroke="#000000"/>
-<polyline points="772.29,1259.02 700,1247.74" fill="none" stroke="#000000"/>
-<polyline points="700.79,1400.26 703.91,1321.97 663.15,1260" fill="none" stroke="#000000"/>
-<polyline points="689.21,1403.6 646.09,1338.03 649.2,1260" fill="none" stroke="#000000"/>
-<polyline points="157.26,1232.54 120,1244.35" fill="none" stroke="#000000"/>
-<polyline points="150.1,1262.93 120,1261.74" fill="none" stroke="#000000"/>
-<polyline points="159.28,1294.5 120,1279.13" fill="none" stroke="#000000"/>
-<polyline points="431.93,1228.58 400,1233.04" fill="none" stroke="#000000"/>
-<polyline points="436.41,1256.8 400,1249.6" fill="none" stroke="#000000"/>
-<polyline points="207.26,772.54 170,784.35" fill="none" stroke="#000000"/>
-<polyline points="200.13,802.86 170,801.67" fill="none" stroke="#000000"/>
-<polyline points="209.28,834.5 170,819.13" fill="none" stroke="#000000"/>
-<polyline points="183.55,619.03 355.29,480" fill="none" stroke="#000000"/>
-<polyline points="163.16,646.16 123.96,779.44" fill="none" stroke="#000000"/>
-<polyline points="167,647.29 127.8,780.56" fill="none" stroke="#000000"/>
-<polyline points="1087.26,1232.54 1050,1244.35" fill="none" stroke="#000000"/>
-<polyline points="1080.1,1262.93 1050,1261.74" fill="none" stroke="#000000"/>
-<polyline points="1089.28,1294.5 1050,1279.13" fill="none" stroke="#000000"/>
-<polyline points="1022,992 725,860" fill="none" stroke="#000000"/>
-<polyline points="1037.21,1018.14 1003.08,1240" fill="none" stroke="#000000"/>
-<polyline points="1440.4,256.4 1344.12,120" fill="none" stroke="#000000"/>
-<polyline points="1443.02,285.35 1009.09,1240" fill="none" stroke="#000000"/>
-<polyline points="1621.93,428.58 1590,433.04" fill="none" stroke="#000000"/>
-<polyline points="1623.7,457.74 1590,450.43" fill="none" stroke="#000000"/>
-<polyline points="1574.85,260.1 1360.59,120" fill="none" stroke="#000000"/>
-<polyline points="1585.08,286.72 1545.88,420" fill="none" stroke="#000000"/>
-<rect x="870" y="440" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="920" y="463.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Fracht Stück</text>
-<g transform="translate(0.5,0.5)">
-<rect x="940" y="1600" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="990" y="1623.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Extra</text>
-<g transform="translate(0.5,0.5)">
-<rect x="630" y="820" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="680" y="843.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Flug</text>
-<g transform="translate(0.5,0.5)">
-<rect x="210" y="80" width="110" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="265" y="103.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Fluggesellschaft</text>
-<g transform="translate(0.5,0.5)">
-<rect x="600" y="80" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="650" y="103.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Flughafen</text>
-<g transform="translate(0.5,0.5)">
-<rect x="330" y="440" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="380" y="463.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Flugzeug</text>
-<g transform="translate(0.5,0.5)">
-<rect x="590" y="420" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-<rect x="595" y="425" width="90" height="30" fill="none" stroke="#000000"/>
-</g>
-<text x="640" y="443.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Gate</text>
-<g transform="translate(0.5,0.5)">
-<rect x="1280" y="80" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1330" y="103.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Kunde</text>
-<g transform="translate(0.5,0.5)">
-<rect x="1180" y="440" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1230" y="463.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Kunde_konto</text>
-<g transform="translate(0.5,0.5)">
-<rect x="600" y="1220" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="650" y="1243.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Mitarbeiter</text>
-<g transform="translate(0.5,0.5)">
-<rect x="20" y="1240" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="70" y="1263.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Pilot</text>
-<g transform="translate(0.5,0.5)">
-<rect x="300" y="1220" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="350" y="1243.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Rolle</text>
-<g transform="translate(0.5,0.5)">
-<rect x="70" y="780" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-<rect x="75" y="785" width="90" height="30" fill="none" stroke="#000000"/>
-</g>
-<text x="120" y="803.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Sitzplatz</text>
-<g transform="translate(0.5,0.5)">
-<rect x="950" y="1240" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1000" y="1263.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Ticket</text>
-<g transform="translate(0.5,0.5)">
-<rect x="1490" y="420" width="100" height="40" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1540" y="443.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Vielflieger</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1050" cy="424" rx="50" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1050" y="427.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Sendungs Nr</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1040" cy="464" rx="40" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1040" y="467.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">Gewicht kg</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1050" cy="504" rx="50" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1050" y="507.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">flug_nummer</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="990,250 1050,270 990,290 930,270" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="990" y="273.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">kunde_email</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="1000,1420 1070,1440 1000,1460 930,1440" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1000" y="1443.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">buchung_extra</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1135" cy="1424" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1135" y="1427.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">anzahl</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1135" cy="1464" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1135" y="1467.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">preis</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="265,1050 300,1070 265,1090 230,1070" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="265" y="1073.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">einsatz</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="265" cy="1004" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="265" y="1007.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">stunden</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1105" cy="1584" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="1100.33,1589 1109.67,1589" fill="none" stroke="#000000"/>
-</g>
-<text x="1105" y="1587.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1115" cy="1624" rx="45" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1115" y="1627.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">bezeichnung</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1105" cy="1664" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1105" y="1667.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">preis</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="795" cy="804" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="790.33,809 799.67,809" fill="none" stroke="#000000"/>
-</g>
-<text x="795" y="807.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="795" cy="844" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="795" y="847.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">nummer</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="875" cy="884" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="875" y="887.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">preis</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="565" cy="804" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="565" y="807.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">start_zeit</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="565" cy="844" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="565" y="847.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">end_zeit</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="520" cy="884" rx="40" ry="14" fill="#ffffff" stroke="#000000" stroke-dasharray="3 3"/>
-</g>
-<text x="520" y="887.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">dauer_min</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="610,610 640,630 610,650 580,630" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="610" y="633.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="720,610 750,630 720,650 690,630" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="720" y="633.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="450,250 520,270 450,290 380,270" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="450" y="273.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">start_flughafen</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="645,250 710,270 645,290 580,270" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="645" y="273.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">ziel_flughafen</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="705,980 750,1000 705,1020 660,1000" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="705" y="1003.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">flug_crew</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="145" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="140.33,39 149.67,39" fill="none" stroke="#000000"/>
-</g>
-<text x="145" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="225" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="225" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">name</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="305" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="305" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">adresse</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="385" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="385" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">telefon</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="385" cy="104" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="385" y="107.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">email</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="535" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="530.33,39 539.67,39" fill="none" stroke="#000000"/>
-</g>
-<text x="535" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="615" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="615" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">name</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="695" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="695" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">stadt</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="775" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="775" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">land</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="575" cy="394" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="570.33,399 579.67,399" fill="none" stroke="#000000"/>
-</g>
-<text x="575" y="397.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="495" cy="494" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="495" y="497.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">modell</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="405" cy="524" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="405" y="527.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">sitze</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="245" cy="464" rx="55" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="245" y="467.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">geschwindigkeit</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="290,250 320,270 290,290 260,270" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="290" y="273.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="755" cy="424" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="733,429 777,429" fill="none" stroke="#000000" stroke-dasharray="1 1"/>
-</g>
-<text x="755" y="427.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">nummer</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="755" cy="464" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="755" y="467.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">terminal</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="800,250 830,270 800,290 770,270" fill="#ffffff" stroke="#000000"/>
-<polygon points="800,254 826,270 800,286 774,270" fill="none" stroke="#000000"/>
-</g>
-<text x="800" y="273.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1205" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="1200.33,39 1209.67,39" fill="none" stroke="#000000"/>
-</g>
-<text x="1205" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1285" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1285" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">vorname</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1370" cy="34" rx="40" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1370" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">nachname</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1455" cy="34" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1455" y="37.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">adresse</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1445" cy="84" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1445" y="87.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">email</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1445" cy="124" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1445" y="127.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">telefon</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1345" cy="394" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="1340.33,399 1349.67,399" fill="none" stroke="#000000"/>
-</g>
-<text x="1345" y="397.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1425" cy="464" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1425" y="467.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">login</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1405" cy="514" rx="55" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1405" y="517.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">passwort_hash</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="1300,250 1330,270 1300,290 1270,270" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1300" y="273.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="765" cy="1224" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="760.33,1229 769.67,1229" fill="none" stroke="#000000"/>
-</g>
-<text x="765" y="1227.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="805" cy="1264" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="805" y="1267.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">name</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="700,1400 760,1420 700,1440 640,1420" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="700" y="1423.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">vorgesetzter</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="185" cy="1224" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="180.33,1229 189.67,1229" fill="none" stroke="#000000"/>
-</g>
-<text x="185" y="1227.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="185" cy="1264" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="185" y="1267.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">name</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="185" cy="1304" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="185" y="1307.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">lizenz</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="465" cy="1224" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="460.33,1229 469.67,1229" fill="none" stroke="#000000"/>
-</g>
-<text x="465" y="1227.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="475" cy="1264" rx="45" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="475" y="1267.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">bezeichnung</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="235" cy="764" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="221.66,769 248.34,769" fill="none" stroke="#000000" stroke-dasharray="1 1"/>
-</g>
-<text x="235" y="767.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">reihe</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="240" cy="804" rx="40" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="212.31,809 267.69,809" fill="none" stroke="#000000" stroke-dasharray="1 1"/>
-</g>
-<text x="240" y="807.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">buchstabe</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="235" cy="844" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="235" y="847.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">klasse</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="170,610 200,630 170,650 140,630" fill="#ffffff" stroke="#000000"/>
-<polygon points="170,614 196,630 170,646 144,630" fill="none" stroke="#000000"/>
-</g>
-<text x="170" y="633.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1115" cy="1224" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-<polyline points="1110.33,1229 1119.67,1229" fill="none" stroke="#000000"/>
-</g>
-<text x="1115" y="1227.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">id</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1115" cy="1264" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1115" y="1267.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">status</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1115" cy="1304" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1115" y="1307.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">sitzplatz</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="1040,980 1070,1000 1040,1020 1010,1000" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1040" y="1003.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="1450,250 1480,270 1450,290 1420,270" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1450" y="273.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1655" cy="424" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1655" y="427.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">meilen</text>
-<g transform="translate(0.5,0.5)">
-<ellipse cx="1655" cy="464" rx="35" ry="14" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1655" y="467.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">stufe</text>
-<g transform="translate(0.5,0.5)">
-<polygon points="1590,250 1620,270 1590,290 1560,270" fill="#ffffff" stroke="#000000"/>
-</g>
-<text x="1590" y="273.5" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="12" text-anchor="middle" fill="#000000">hat</text>
-<rect x="1134.3" y="170.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1145" y="180.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,1]</text>
-<rect x="958.3" y="362.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="969" y="372.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="975.3" y="1343.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="986" y="1353.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="996.78" y="1523.4" width="24.45" height="13.2" fill="#ffffff"/>
-<text x="1009" y="1533.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,m]</text>
-<rect x="445.3" y="941.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="456" y="951.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="168.78" y="1164.4" width="24.45" height="13.2" fill="#ffffff"/>
-<text x="181" y="1174.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,m]</text>
-<rect x="308.3" y="1139.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="319" y="1149.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="482.3" y="554.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="493" y="564.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="647.3" y="722.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="658" y="732.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="657.3" y="535.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="668" y="545.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,1]</text>
-<rect x="703.3" y="730.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="714" y="740.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="527.3" y="170.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="538" y="180.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="567.3" y="542.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="578" y="552.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="622.3" y="178.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="633" y="188.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="672.3" y="653.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="683" y="663.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="668.3" y="916.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="679" y="926.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="678.78" y="1116.4" width="24.45" height="13.2" fill="#ffffff"/>
-<text x="691" y="1126.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,m]</text>
-<rect x="253.3" y="181.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="264" y="191.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="336.3" y="350.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="347" y="360.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="707.3" y="191.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="718" y="201.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="723.3" y="354.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="734" y="364.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="1290.3" y="177.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1301" y="187.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="1268.3" y="361.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1279" y="371.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,1]</text>
-<rect x="679.3" y="1317.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="690" y="1327.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,1]</text>
-<rect x="669.74" y="1283.4" width="60.53" height="13.2" fill="#ffffff"/>
-<text x="700" y="1293.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">vorgesetzter</text>
-<rect x="621.3" y="1331.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="632" y="1341.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="249.3" y="532.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="260" y="542.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="148.3" y="710.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="159" y="720.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="856.3" y="932.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="867" y="942.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="1023.3" y="1124.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1034" y="1134.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="1370.3" y="190.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1381" y="200.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="1228.3" y="761.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1239" y="771.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,n]</text>
-<rect x="1449.3" y="195.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1460" y="205.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[1,1]</text>
-<rect x="1568.3" y="350.4" width="21.4" height="13.2" fill="#ffffff"/>
-<text x="1579" y="360.21" font-family="Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" font-size="11" text-anchor="middle" fill="#000000">[0,1]</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="2440" height="2240" viewBox="10 10 1830 1680" font-family="Arial, Helvetica, sans-serif" xml:space="preserve">
+<rect x="10" y="10" width="1830" height="1680" fill="#ffffff"/>
+<rect x="950" y="470" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="960.4" y="494.51" font-size="12">Fracht Stück</text>
+<rect x="1050" y="1600" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1083.5" y="1624.51" font-size="12">Extra</text>
+<rect x="680" y="860" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="716.8" y="884.51" font-size="12">Flug</text>
+<rect x="200" y="80" width="115.6" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="205" y="104.51" font-size="12">Fluggesellschaft</text>
+<rect x="650" y="80" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="670.3" y="104.51" font-size="12">Flughafen</text>
+<rect x="380" y="460" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="403.6" y="484.51" font-size="12">Flugzeug</text>
+<rect x="660" y="440" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<rect x="664" y="444" width="92" height="32" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="696.8" y="464.51" font-size="12">Gate</text>
+<rect x="1390" y="80" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1422" y="104.51" font-size="12">Kunde</text>
+<rect x="1260" y="460" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1273.5" y="484.51" font-size="12">Kunde_konto</text>
+<rect x="630" y="1220" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="643.7" y="1244.51" font-size="12">Mitarbeiter</text>
+<rect x="20" y="1240" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="53.5" y="1264.51" font-size="12">Pilot</text>
+<rect x="310" y="1220" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="343.5" y="1244.51" font-size="12">Rolle</text>
+<rect x="60" y="820" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<rect x="64" y="824" width="92" height="32" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="80.3" y="844.51" font-size="12">Sitzplatz</text>
+<rect x="1060" y="1240" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1090.2" y="1264.51" font-size="12">Ticket</text>
+<rect x="1620" y="440" width="100" height="40" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1633.7" y="464.51" font-size="12">Vielflieger</text>
+<ellipse cx="1120.16" cy="454.17" rx="40.16" ry="24.17" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1091.66" y="451.14" font-size="12">Sendungs</text>
+<text x="1113.56" y="466.23" font-size="12">Nr</text>
+<ellipse cx="1120" cy="514.17" rx="40" ry="24.17" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1096.9" y="511.14" font-size="12">Gewicht</text>
+<text x="1113.4" y="526.23" font-size="12">kg</text>
+<ellipse cx="1134.16" cy="575" rx="54.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1097.16" y="579.51" font-size="12">flug_nummer</text>
+<polygon points="1096.6,250 1173.2,275 1096.6,300 1020,275" fill="#ffffff" stroke="#000000"/>
+<text x="1060.3" y="279.51" font-size="12">kunde_email</text>
+<polygon points="1119.8,1420 1209.6,1445 1119.8,1470 1030,1445" fill="#ffffff" stroke="#000000"/>
+<text x="1076.9" y="1449.51" font-size="12">buchung_extra</text>
+<ellipse cx="1280" cy="1425" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1260.2" y="1429.51" font-size="12">anzahl</text>
+<ellipse cx="1280" cy="1465" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1263.5" y="1469.51" font-size="12">preis</text>
+<polygon points="220.2,1040 270.4,1065 220.2,1090 170,1065" fill="#ffffff" stroke="#000000"/>
+<text x="197.1" y="1069.51" font-size="12">einsatz</text>
+<ellipse cx="220" cy="995" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="196.9" y="999.51" font-size="12">stunden</text>
+<ellipse cx="1220" cy="1585" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="1213.4,1591.79 1226.6,1591.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1213.4" y="1589.51" font-size="12">id</text>
+<ellipse cx="1234.16" cy="1625" rx="54.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1197.86" y="1629.51" font-size="12">bezeichnung</text>
+<ellipse cx="1220" cy="1665" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1203.5" y="1669.51" font-size="12">preis</text>
+<ellipse cx="850" cy="845" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="843.4,851.79 856.6,851.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="843.4" y="849.51" font-size="12">id</text>
+<ellipse cx="930" cy="885" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="906.5" y="889.51" font-size="12">nummer</text>
+<ellipse cx="630" cy="845" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="613.5" y="849.51" font-size="12">preis</text>
+<ellipse cx="599.5" cy="885" rx="49.5" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="566.5" y="889.51" font-size="12">start_zeit</text>
+<ellipse cx="680.16" cy="975" rx="40.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="653.76" y="979.51" font-size="12">end_zeit</text>
+<ellipse cx="844.83" cy="805" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="0"/>
+<polyline points="889.66,805 889.49,806.31 888.98,807.6 888.13,808.88 886.96,810.13 885.46,811.34 883.66,812.5 881.55,813.6 879.17,814.64 876.53,815.61 873.65,816.49 870.54,817.29 867.25,817.99 863.78,818.59 860.16,819.1 856.43,819.49 852.62,819.77 848.74,819.94 844.83,820 840.92,819.94 837.05,819.77 833.23,819.49 829.5,819.1 825.88,818.59 822.42,817.99 819.12,817.29 816.01,816.49 813.13,815.61 810.49,814.64 808.11,813.6 806.01,812.5 804.2,811.34 802.7,810.13 801.53,808.88 800.68,807.6 800.17,806.31 800,805 800.17,803.69 800.68,802.4 801.53,801.12 802.7,799.87 804.2,798.66 806.01,797.5 808.11,796.4 810.49,795.36 813.13,794.39 816.01,793.51 819.12,792.71 822.42,792.01 825.88,791.41 829.5,790.9 833.23,790.51 837.05,790.23 840.92,790.06 844.83,790 848.74,790.06 852.62,790.23 856.43,790.51 860.16,790.9 863.78,791.41 867.25,792.01 870.54,792.71 873.65,793.51 876.53,794.39 879.17,795.36 881.55,796.4 883.66,797.5 885.46,798.66 886.96,799.87 888.13,801.12 888.98,802.4 889.49,803.69 889.66,805" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="5 5"/>
+<text x="814.83" y="809.51" font-size="12">dauer_min</text>
+<polygon points="660,640 700,665 660,690 620,665" fill="#ffffff" stroke="#000000"/>
+<text x="650.1" y="669.51" font-size="12">hat</text>
+<polygon points="790,640 830,665 790,690 750,665" fill="#ffffff" stroke="#000000"/>
+<text x="780.1" y="669.51" font-size="12">hat</text>
+<polygon points="463,250 566,275 463,300 360,275" fill="#ffffff" stroke="#000000"/>
+<text x="413.5" y="279.51" font-size="12">start_flughafen</text>
+<polygon points="726.4,250 822.8,275 726.4,300 630,275" fill="#ffffff" stroke="#000000"/>
+<text x="680.2" y="279.51" font-size="12">ziel_flughafen</text>
+<polygon points="733.4,1030 796.8,1055 733.4,1080 670,1055" fill="#ffffff" stroke="#000000"/>
+<text x="703.7" y="1059.51" font-size="12">flug_crew</text>
+<ellipse cx="120" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="113.4,41.79 126.6,41.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="113.4" y="39.51" font-size="12">id</text>
+<ellipse cx="210" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="194" y="39.51" font-size="12">name</text>
+<ellipse cx="300" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="276.9" y="39.51" font-size="12">adresse</text>
+<ellipse cx="390" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="366.9" y="39.51" font-size="12">telefon</text>
+<ellipse cx="390" cy="105" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="373.5" y="109.51" font-size="12">email</text>
+<ellipse cx="570" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="563.4,41.79 576.6,41.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="563.4" y="39.51" font-size="12">id</text>
+<ellipse cx="660" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="644" y="39.51" font-size="12">name</text>
+<ellipse cx="750" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="733.5" y="39.51" font-size="12">stadt</text>
+<ellipse cx="840" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="826.8" y="39.51" font-size="12">land</text>
+<ellipse cx="590" cy="445" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="583.4,451.79 596.6,451.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="583.4" y="449.51" font-size="12">id</text>
+<ellipse cx="630" cy="505" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="610.2" y="509.51" font-size="12">modell</text>
+<ellipse cx="670" cy="545" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="653.5" y="549.51" font-size="12">sitze</text>
+<ellipse cx="272.83" cy="485" rx="72.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="223.33" y="489.51" font-size="12">geschwindigkeit</text>
+<polygon points="260,250 300,275 260,300 220,275" fill="#ffffff" stroke="#000000"/>
+<text x="250.1" y="279.51" font-size="12">hat</text>
+<ellipse cx="830" cy="445" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="810.2,451.79 849.8,451.79" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="806.5" y="449.51" font-size="12">nummer</text>
+<ellipse cx="830.16" cy="485" rx="40.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="803.76" y="489.51" font-size="12">terminal</text>
+<polygon points="920,250 960,277.09 920,304.19 880,277.09" fill="#ffffff" stroke="#000000"/>
+<polygon points="920,255.42 952,277.09 920,298.77 888,277.09" fill="none" stroke="#000000"/>
+<text x="910.1" y="281.61" font-size="12">hat</text>
+<ellipse cx="1300" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="1293.4,41.79 1306.6,41.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1293.4" y="39.51" font-size="12">id</text>
+<ellipse cx="1390" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1366" y="39.51" font-size="12">vorname</text>
+<ellipse cx="1480.16" cy="35" rx="40.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1450.66" y="39.51" font-size="12">nachname</text>
+<ellipse cx="1580" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1556.9" y="39.51" font-size="12">adresse</text>
+<ellipse cx="1560" cy="85" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1543.5" y="89.51" font-size="12">email</text>
+<ellipse cx="1600" cy="125" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1576.9" y="129.51" font-size="12">telefon</text>
+<ellipse cx="1430" cy="425" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="1423.4,431.79 1436.6,431.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1423.4" y="429.51" font-size="12">id</text>
+<ellipse cx="1510" cy="485" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1493.5" y="489.51" font-size="12">login</text>
+<ellipse cx="1533.5" cy="525" rx="63.5" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1490.5" y="529.51" font-size="12">passwort_hash</text>
+<polygon points="1390,250 1430,275 1390,300 1350,275" fill="#ffffff" stroke="#000000"/>
+<text x="1380.1" y="279.51" font-size="12">hat</text>
+<ellipse cx="800" cy="1225" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="793.4,1231.79 806.6,1231.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="793.4" y="1229.51" font-size="12">id</text>
+<ellipse cx="840" cy="1265" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="824" y="1269.51" font-size="12">name</text>
+<polygon points="733.2,1400 816.4,1425 733.2,1450 650,1425" fill="#ffffff" stroke="#000000"/>
+<text x="693.6" y="1429.51" font-size="12">vorgesetzter</text>
+<ellipse cx="190" cy="1225" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="183.4,1231.79 196.6,1231.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="183.4" y="1229.51" font-size="12">id</text>
+<ellipse cx="190" cy="1265" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="174" y="1269.51" font-size="12">name</text>
+<ellipse cx="190" cy="1305" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="170.2" y="1309.51" font-size="12">lizenz</text>
+<ellipse cx="480" cy="1225" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="473.4,1231.79 486.6,1231.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="473.4" y="1229.51" font-size="12">id</text>
+<ellipse cx="494.16" cy="1265" rx="54.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="457.86" y="1269.51" font-size="12">bezeichnung</text>
+<ellipse cx="230" cy="805" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="213.5,811.79 246.5,811.79" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="213.5" y="809.51" font-size="12">reihe</text>
+<ellipse cx="234.83" cy="845" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="205.13,851.79 264.53,851.79" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="205.13" y="849.51" font-size="12">buchstabe</text>
+<ellipse cx="230" cy="885" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="210.2" y="889.51" font-size="12">klasse</text>
+<polygon points="170,640 210,667.09 170,694.19 130,667.09" fill="#ffffff" stroke="#000000"/>
+<polygon points="170,645.42 202,667.09 170,688.77 138,667.09" fill="none" stroke="#000000"/>
+<text x="160.1" y="671.61" font-size="12">hat</text>
+<ellipse cx="1230" cy="1225" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="1223.4,1231.79 1236.6,1231.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1223.4" y="1229.51" font-size="12">id</text>
+<ellipse cx="1230" cy="1265" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1210.2" y="1269.51" font-size="12">status</text>
+<ellipse cx="1234.83" cy="1305" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1205.13" y="1309.51" font-size="12">sitzplatz</text>
+<polygon points="1150,1030 1190,1055 1150,1080 1110,1055" fill="#ffffff" stroke="#000000"/>
+<text x="1140.1" y="1059.51" font-size="12">hat</text>
+<polygon points="1550,250 1590,275 1550,300 1510,275" fill="#ffffff" stroke="#000000"/>
+<text x="1540.1" y="279.51" font-size="12">hat</text>
+<ellipse cx="1790" cy="445" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1770.2" y="449.51" font-size="12">meilen</text>
+<ellipse cx="1790" cy="485" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="1773.5" y="489.51" font-size="12">stufe</text>
+<polygon points="1720,250 1760,275 1720,300 1680,275" fill="#ffffff" stroke="#000000"/>
+<text x="1710.1" y="279.51" font-size="12">hat</text>
+<polyline points="1050,475.09 1084.17,464.9" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1050,500.07 1082.05,506.53" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1031.57,510 1112.47,561.26" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1126.51,259.76 1400.75,120" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1376.39" y="149.66" font-size="12">[0,1]</text>
+<polyline points="1086.8,296.8 1008.99,470" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="979.66" y="449.96" font-size="12">[0,n]</text>
+<polyline points="1118.5,1420.36 1111.06,1280" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1113.49" y="1302.48" font-size="12">[0,n]</text>
+<polyline points="1117.06,1469.24 1102.26,1600" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1066.68" y="1585.18" font-size="12">[0,m]</text>
+<polyline points="1181.8,1437.26 1242.05,1429.74" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1181.8,1452.74 1242.05,1460.26" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="249.24,1054.46 680,898.14" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="652.72" y="926.66" font-size="12">[0,n]</text>
+<polyline points="206.28,1083.07 85.41,1240" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="63.97" y="1216.34" font-size="12">[0,m]</text>
+<polyline points="234.49,1082.88 344.02,1220" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="290.67" y="1213.93" font-size="12">[0,n]</text>
+<polyline points="220.13,1040.04 220.04,1010" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1150,1605.42 1188.43,1594.21" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1150,1621.86 1180.48,1623" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1150,1638.75 1191.72,1654.39" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="780,865.42 818.43,854.21" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="780,881.25 890.09,884" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="680,862.5 659.24,855.23" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="680,881.92 648.6,883.12" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="719.51,900 687.89,960.28" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="760.62,860 824.39,818.35" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="642.51,650.93 454.86,500" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="486.88" y="518.53" font-size="12">[1,1]</text>
+<polyline points="666.76,685.77 723.49,860" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="680.47" y="855.16" font-size="12">[0,n]</text>
+<polyline points="782.16,644.9 717.8,480" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="733.54" y="507.22" font-size="12">[0,1]</text>
+<polyline points="784.06,686.29 735.58,860" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="748.8" y="840.52" font-size="12">[0,n]</text>
+<polyline points="488.48,256.18 672.91,120" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="652.63" y="150.63" font-size="12">[1,1]</text>
+<polyline points="472.97,297.58 721.17,860" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="659.38" y="817.67" font-size="12">[0,n]</text>
+<polyline points="722.77,250.94 703.02,120" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="712.49" y="153.9" font-size="12">[1,1]</text>
+<polyline points="726.55,299.96 729.88,860" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="733.65" y="819.33" font-size="12">[0,n]</text>
+<polyline points="732.92,1030.19 730.39,900" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="732.23" y="923.1" font-size="12">[0,n]</text>
+<polyline points="726.92,1077.45 685.77,1220" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="653.18" y="1202.07" font-size="12">[0,m]</text>
+<polyline points="215.4,80 144.89,46.74" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="243.09,80 220.63,49.46" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="270.78,80 290.54,49.57" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="298.48,80 365.74,46.93" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="315.6,102.19 350.2,103.49" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="660,80 594,47" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="687.69,80 668.99,49.62" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="715.38,80 738.91,49.41" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="743.08,80 814.87,46.67" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="480,469.06 555.45,452.56" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="480,486.25 592.05,500.26" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="480,493.54 637.57,536.22" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="380,481.59 344.81,482.71" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="259.69,250.19 258.05,120" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="259.78" y="143.23" font-size="12">[1,1]</text>
+<polyline points="273.65,291.47 413.41,460" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="359.92" y="454.56" font-size="12">[0,n]</text>
+<polyline points="760,453.75 792.05,449.74" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="760,470.4 795.08,477.7" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="901.72,262.38 724.85,120" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="756.86" y="138.54" font-size="12">[1,1]</text>
+<polyline points="903.81,293.84 734.28,441.51" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="901.19,290.83 731.65,438.49" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="737.67" y="399.76" font-size="12">[0,n]</text>
+<polyline points="1396.92,80 1325.13,46.67" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1424.62,80 1401.09,49.41" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1452.36,80 1471.13,49.62" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1483.08,80 1554.87,46.67" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1490,93.75 1522.05,89.74" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1490,107.81 1563.08,119.23" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1353.64,460 1404.67,436.61" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1360,481.25 1470.09,484" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1360,490.07 1485.17,515.27" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1396.06,253.79 1434.29,120" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1430.09" y="162.25" font-size="12">[1,1]</text>
+<polyline points="1382.16,295.1 1317.81,460" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1287.25" y="440.65" font-size="12">[0,1]</text>
+<polyline points="730,1233.75 762.05,1229.74" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="730,1247.81 803.08,1259.23" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="733.75,1400.17 735.43,1324.21 693.17,1260" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="710.54" y="1277.03" font-size="12">vorgesetzter</text>
+<text x="729.07" y="1305.18" font-size="12">[0,1]</text>
+<polyline points="719.46,1404.13 677.77,1340.79 679.56,1260" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="682.7" y="1311.9" font-size="12">[0,n]</text>
+<polyline points="120,1245.42 158.43,1234.21" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="120,1262.08 150.24,1263.34" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="120,1278.75 161.72,1294.39" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="410,1233.75 442.05,1229.74" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="410,1249.32 449.23,1256.63" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="160,825.42 198.43,814.21" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="160,842 190.32,843.22" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="160,858.75 201.72,874.39" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="189.4,653.14 402.21,500" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="381.61" y="530.58" font-size="12">[1,1]</text>
+<polyline points="164.28,689.69 118.83,820.66" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="160.5,688.38 115.05,819.34" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="85.5" y="801.22" font-size="12">[0,n]</text>
+<polyline points="1160,1245.42 1198.43,1234.21" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1160,1262.08 1190.24,1263.34" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1160,1278.02 1204.33,1294.01" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1126,1045 778,900" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="788.85" y="897.35" font-size="12">[1,1]</text>
+<polyline points="1145.65,1077.28 1113.9,1240" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1079.61" y="1223.64" font-size="12">[0,n]</text>
+<polyline points="1538.72,257.05 1452.57,120" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1487.68" y="166.24" font-size="12">[1,1]</text>
+<polyline points="1541.27,294.54 1118.93,1240" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1135.7" y="1225.27" font-size="12">[0,n]</text>
+<polyline points="1720,453.75 1752.05,449.74" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1720,470.42 1755.03,477.72" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="1700,262.5 1472,120" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1504.65" y="133.6" font-size="12">[1,1]</text>
+<polyline points="1714.22,296.39 1675.41,440" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="1642.46" y="422.36" font-size="12">[0,1]</text>
 </svg>

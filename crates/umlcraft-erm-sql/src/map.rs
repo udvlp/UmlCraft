@@ -1,5 +1,5 @@
-//! The tables of a dump as a Chen diagram, by the rules S1–S11 in their order (S1,
-//! partitions, is done by the parser; S2 same foreign key twice → once; S3–S11 below).
+//! The tables of a dump as a Chen diagram in the model, by the rules S1–S11 in their order
+//! (S1, partitions, is done by the parser; S2 same foreign key twice → once; S3–S11 below).
 //!
 //! - A junction table (its primary key is the columns of two or more foreign keys, nothing
 //!   else refers to it) becomes a relationship between the tables it joins (S3).
@@ -9,13 +9,19 @@
 //!   (S6, S7). Cardinalities are read look-across: `[1,1]` at the referenced table says that
 //!   each row of the referencing one has exactly one. The second end of a junction table's
 //!   relationship is `[0,m]` (`[0,n]` to `[0,m]`).
+//!
+//! Everything goes into a new package named after the database, with an ER diagram of the
+//! same name that shows it, laid out by [`er_layout`].
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use umlcraft_erm::{
-    Caption, Cardinality, Diagram, Id, Key, Label, LabelPos, LabelText, Line, Link, Max, Node,
-    NodeKind, Props, Rect, Style, layout, size,
+use umlcraft_model::{
+    Cardinality, CardinalityMax, DiagramKind, ElementData, ElementKind, ErAttributeProps,
+    ErEntityProps, ErKey, ErParticipationProps, ErRelationshipProps, Id, Rect, Result, Tx,
 };
+use umlcraft_notation::er_layout;
+use umlcraft_notation::palette::default_size_for;
+use umlcraft_notation::scene::TextMeasure;
 
 use crate::dialect::Dialect;
 use crate::ir::{ForeignKey, Problem, Schema, Table, TableKey};
@@ -35,15 +41,17 @@ pub struct Options {
     pub attributes: Attributes,
     /// The schemas to take (PostgreSQL); `None` takes all.
     pub schemas: Option<Vec<String>>,
-    /// The dump's file name, for the diagram's name (if the dump names no database) and
-    /// origin.
+    /// The dump's file name, for the package's name (if the dump names no database) and its
+    /// documentation.
     pub file_name: Option<String>,
 }
 
-/// The diagram and what the import found.
+/// Where the import went and what it found.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Import {
-    pub diagram: Diagram,
+    /// The new package, and the ER diagram in it.
+    pub package: Id,
+    pub diagram: Id,
     pub report: Report,
 }
 
@@ -81,22 +89,29 @@ pub enum Hint {
 
 impl Hint {
     /// The element the hint is about.
-    pub fn element(&self) -> Option<&Id> {
+    pub fn element(&self) -> Option<Id> {
         match self {
-            Self::NoPrimaryKey { element, .. } | Self::NotInDump { element, .. } => Some(element),
+            Self::NoPrimaryKey { element, .. } | Self::NotInDump { element, .. } => Some(*element),
             Self::Recoded { .. } => None,
         }
     }
 }
 
-/// The comment a placeholder entity gets.
+/// The documentation a placeholder entity gets.
 pub const PLACEHOLDER_COMMENT: &str = "not in the dump";
 
-/// Maps and lays out: the finished diagram.
-pub fn import(schema: &Schema, options: &Options) -> Import {
-    let mut result = map(schema, options);
-    layout::arrange(&mut result.diagram);
-    result
+/// Maps the tables into a new package under `owner` and lays out its diagram, with the text
+/// widths of `measure`.
+pub fn import(
+    tx: &mut Tx<'_>,
+    owner: Id,
+    schema: &Schema,
+    options: &Options,
+    measure: &dyn TextMeasure,
+) -> Result<Import> {
+    let result = map(tx, owner, schema, options)?;
+    er_layout::arrange(tx, result.diagram, measure)?;
+    Ok(result)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -106,8 +121,8 @@ enum Class {
     Junction,
 }
 
-/// Maps without laying out: the nodes have their sizes, all at (0, 0).
-pub fn map(schema: &Schema, options: &Options) -> Import {
+/// Maps without laying out: the nodes have the palette's sizes, all at (0, 0).
+pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Result<Import> {
     let tables: Vec<&Table> = schema
         .tables
         .values()
@@ -138,21 +153,30 @@ pub fn map(schema: &Schema, options: &Options) -> Import {
         .map(|(t, fks)| classify(t, fks, referenced.contains(&t.key)))
         .collect();
 
+    let name = package_name(schema, options);
+    let origin = match &options.file_name {
+        Some(f) => format!("SQL: {f} ({})", schema.dialect),
+        None => format!("SQL ({})", schema.dialect),
+    };
+    let mut data = ElementData::new(name.clone(), ElementKind::Package);
+    data.documentation = origin;
+    let package = tx.create(owner, data)?;
+    let kind = ElementKind::diagram(DiagramKind::EntityRelationship);
+    let diagram = tx.create(package, ElementData::new(name, kind))?;
     let mut m = Mapper {
-        d: Diagram::new(diagram_name(schema, options)),
+        tx,
+        package,
+        diagram,
         entities: HashMap::new(),
         hints: Vec::new(),
         attributes: options.attributes,
+        counts: [0; 3],
     };
-    m.d.meta.origin = Some(match &options.file_name {
-        Some(f) => format!("SQL: {f} ({})", schema.dialect),
-        None => format!("SQL ({})", schema.dialect),
-    });
     for (t, class) in tables.iter().zip(&classes) {
         if *class == Class::Junction {
             continue;
         }
-        let id = m.entity(&t.key, *class == Class::Weak, t.comment.clone());
+        let (id, _) = m.entity(&t.key, *class == Class::Weak, t.comment.clone())?;
         if t.primary_key.is_empty() {
             let table = t.key.to_string();
             m.hints.push(Hint::NoPrimaryKey { element: id, table });
@@ -164,75 +188,65 @@ pub fn map(schema: &Schema, options: &Options) -> Import {
         let own: Vec<&str> =
             t.columns.iter().map(|c| c.name.as_str()).filter(|c| !fk_cols.contains(c)).collect();
         if *class == Class::Junction {
-            let r = m.node(
-                NodeKind::relationship(),
-                &t.key.to_string(),
-                Props {
-                    physical_name: Some(t.key.to_string()),
-                    comment: t.comment.clone(),
-                    ..Props::default()
-                },
-            );
+            let r = m.relationship(&t.key.to_string(), false, t.comment.clone())?;
             for (k, fk) in fks.iter().enumerate() {
                 let role = (fks.iter().filter(|f| f.target == fk.target).count() > 1)
                     .then(|| relationship_name(&fk.columns, ""));
-                let target = m.target(&fk.target);
+                let target = m.target(&fk.target)?;
                 // `[0,n]` to `[0,m]`; a third and further ends are `n` again.
-                let max = if k == 1 { Max::ManyM } else { Max::Many };
-                m.join(&r, &target, Cardinality::new(0, max), role, Line::Solid);
+                let max = if k == 1 { CardinalityMax::ManyM } else { CardinalityMax::Many };
+                m.join(r, target, Cardinality::new(0, max), role, false)?;
             }
-            m.attributes(&r, t, &own, &[], &[]);
+            m.attributes(r, t, &own, &[], &[])?;
             continue;
         }
-        let owner = m.entities[&t.key].clone();
+        let owner = m.entities[&t.key];
         let in_pk: Vec<&ForeignKey> = if *class == Class::Weak { in_key(t, fks) } else { vec![] };
         if *class == Class::Weak {
             let id_cols: HashSet<&str> =
                 in_pk.iter().flat_map(|fk| fk.columns.iter().map(String::as_str)).collect();
             let partial: Vec<&str> =
                 t.primary_key.iter().map(String::as_str).filter(|c| !id_cols.contains(c)).collect();
-            m.attributes(&owner, t, &own, &[], &partial);
+            m.attributes(owner, t, &own, &[], &partial)?;
         } else {
             let keys: Vec<&str> =
                 t.primary_key.iter().map(String::as_str).filter(|c| !fk_cols.contains(c)).collect();
-            m.attributes(&owner, t, &own, &keys, &[]);
+            m.attributes(owner, t, &own, &keys, &[])?;
         }
         for fk in fks {
             let identifying = in_pk.contains(&fk);
-            let other = m.target(&fk.target);
-            let r = m.node(
-                NodeKind::Relationship { identifying },
+            let other = m.target(&fk.target)?;
+            let r = m.relationship(
                 &relationship_name(&fk.columns, &fk.target.name),
-                Props::default(),
-            );
+                identifying,
+                None,
+            )?;
             let nullable = fk.columns.iter().any(|c| !t.column(c).is_some_and(|c| c.not_null));
-            let near_target = Cardinality::new(if nullable { 0 } else { 1 }, Max::Count(1));
+            let near_target =
+                Cardinality::new(if nullable { 0 } else { 1 }, CardinalityMax::Count(1));
             let near_source = if unique(t, fk) {
-                Cardinality::new(0, Max::Count(1))
+                Cardinality::new(0, CardinalityMax::Count(1))
             } else {
-                Cardinality::new(0, Max::Many)
+                Cardinality::new(0, CardinalityMax::Many)
             };
             if fk.target == t.key {
                 // S8: the line of the referenced side carries the role.
                 let role = relationship_name(&fk.columns, "");
-                m.join(&r, &other, near_target, Some(role), Line::Solid);
-                m.join(&r, &owner, near_source, None, Line::Solid);
+                m.join(r, other, near_target, Some(role), false)?;
+                m.join(r, owner, near_source, None, false)?;
             } else {
                 // A weak entity takes part totally in its identifying relationship.
-                let line = if identifying { Line::Double } else { Line::Solid };
-                m.join(&r, &other, near_target, None, Line::Solid);
-                m.join(&r, &owner, near_source, None, line);
+                m.join(r, other, near_target, None, false)?;
+                m.join(r, owner, near_source, None, identifying)?;
             }
         }
     }
-    let count = |f: fn(&NodeKind) -> bool| m.d.nodes.iter().filter(|n| f(&n.kind)).count();
-    let entities = count(|k| matches!(k, NodeKind::Entity { .. }));
-    let relationships = count(|k| matches!(k, NodeKind::Relationship { .. }));
-    let attributes = count(NodeKind::is_attribute);
+    let [entities, relationships, attributes] = m.counts;
     let mut hints = m.hints;
     hints.extend(schema.recoded.iter().map(|&line| Hint::Recoded { line }));
-    Import {
-        diagram: m.d,
+    Ok(Import {
+        package,
+        diagram,
         report: Report {
             dialect: schema.dialect,
             tables: tables.len(),
@@ -243,7 +257,7 @@ pub fn map(schema: &Schema, options: &Options) -> Import {
             skipped: schema.skipped.clone(),
             problems: schema.problems.clone(),
         },
-    }
+    })
 }
 
 /// S3/S4/S5.
@@ -368,7 +382,8 @@ pub fn split_type(datatype: &str) -> (String, Option<String>) {
     (base, Some(inside))
 }
 
-fn diagram_name(schema: &Schema, options: &Options) -> String {
+/// The database's name if the dump names it, else the file's without its extension.
+fn package_name(schema: &Schema, options: &Options) -> String {
     if let Some(db) = &schema.database {
         return db.clone();
     }
@@ -379,77 +394,99 @@ fn diagram_name(schema: &Schema, options: &Options) -> String {
     stem.unwrap_or("SQL").to_owned()
 }
 
-struct Mapper {
-    d: Diagram,
-    entities: HashMap<TableKey, Id>,
+struct Mapper<'a, 'b> {
+    tx: &'a mut Tx<'b>,
+    package: Id,
+    diagram: Id,
+    /// Each table's entity and its node.
+    entities: HashMap<TableKey, (Id, Id)>,
     hints: Vec<Hint>,
     attributes: Attributes,
+    /// Entities, relationships, attributes made.
+    counts: [usize; 3],
 }
 
-impl Mapper {
-    fn node(&mut self, kind: NodeKind, name: &str, props: Props) -> Id {
-        let (w, h) = umlcraft_erm::create::SizeSet::Compact.size(&kind);
-        let (w, h) = size::fit(&kind, name, (w, h));
-        let id = Id::generate();
-        self.d.nodes.push(Node {
-            id: id.clone(),
-            kind,
-            name: name.to_owned(),
-            bounds: Rect::new(0.0, 0.0, w, h),
-            style: Style::default(),
-            props,
-        });
-        id
+impl Mapper<'_, '_> {
+    /// A new element owned by `owner`, shown on the diagram: (element, node).
+    fn node(&mut self, owner: Id, data: ElementData) -> Result<(Id, Id)> {
+        let size = default_size_for(&data.kind);
+        let element = self.tx.create(owner, data)?;
+        let bounds = Rect::new(0.0, 0.0, size.width, size.height);
+        let node = self.tx.add_node(self.diagram, Some(element), bounds)?;
+        Ok((element, node))
     }
 
-    fn entity(&mut self, key: &TableKey, weak: bool, comment: Option<String>) -> Id {
-        let props = Props { physical_name: Some(key.to_string()), comment, ..Props::default() };
-        let id = self.node(NodeKind::Entity { weak }, &entity_name(key), props);
-        self.entities.insert(key.clone(), id.clone());
-        id
+    fn entity(&mut self, key: &TableKey, weak: bool, comment: Option<String>) -> Result<(Id, Id)> {
+        let props = ErEntityProps { weak, physical_name: key.to_string(), ..Default::default() };
+        let mut data = ElementData::new(entity_name(key), ElementKind::ErEntity(props));
+        data.documentation = comment.unwrap_or_default();
+        let ids = self.node(self.package, data)?;
+        self.entities.insert(key.clone(), ids);
+        self.counts[0] += 1;
+        Ok(ids)
+    }
+
+    fn relationship(
+        &mut self,
+        name: &str,
+        identifying: bool,
+        comment: Option<String>,
+    ) -> Result<(Id, Id)> {
+        let kind = ElementKind::ErRelationship(ErRelationshipProps { identifying });
+        let mut data = ElementData::new(name, kind);
+        data.documentation = comment.unwrap_or_default();
+        self.counts[1] += 1;
+        self.node(self.package, data)
     }
 
     /// The entity of a referenced table; S10: a placeholder if it is not there.
-    fn target(&mut self, key: &TableKey) -> Id {
-        if let Some(id) = self.entities.get(key) {
-            return id.clone();
+    fn target(&mut self, key: &TableKey) -> Result<(Id, Id)> {
+        if let Some(&ids) = self.entities.get(key) {
+            return Ok(ids);
         }
-        let id = self.entity(key, false, Some(PLACEHOLDER_COMMENT.to_owned()));
-        self.hints.push(Hint::NotInDump { element: id.clone(), table: key.to_string() });
-        id
+        let ids = self.entity(key, false, Some(PLACEHOLDER_COMMENT.to_owned()))?;
+        self.hints.push(Hint::NotInDump { element: ids.0, table: key.to_string() });
+        Ok(ids)
     }
 
-    fn join(&mut self, r: &Id, e: &Id, c: Cardinality, role: Option<String>, line: Line) {
-        let mut link = Link::new(r.clone(), e.clone());
-        link.label = Some(Label {
-            text: LabelText::Cardinality(c),
-            pos: LabelPos { y: layout::LABEL_OFFSET, ..LabelPos::default() },
-        });
-        link.role = role.map(|text| Caption {
-            text,
-            pos: LabelPos { y: -layout::LABEL_OFFSET, ..LabelPos::default() },
-        });
-        link.line = line;
-        self.d.links.push(link);
+    /// The line from relationship `r` to entity `e`.
+    fn join(
+        &mut self,
+        r: (Id, Id),
+        e: (Id, Id),
+        cardinality: Cardinality,
+        role: Option<String>,
+        total: bool,
+    ) -> Result<()> {
+        let props = ErParticipationProps {
+            cardinality: Some(cardinality),
+            role: role.unwrap_or_default(),
+            total,
+            ..ErParticipationProps::new(r.0, e.0)
+        };
+        let line =
+            self.tx.create(r.0, ElementData::new("", ElementKind::ErParticipation(props)))?;
+        self.tx.add_edge(self.diagram, Some(line), r.1, e.1, Vec::new())?;
+        Ok(())
     }
 
     /// S6: the columns `names` in table order as attributes of `owner`.
     fn attributes(
         &mut self,
-        owner: &Id,
+        owner: (Id, Id),
         t: &Table,
         names: &[&str],
         keys: &[&str],
         partial: &[&str],
-    ) {
+    ) -> Result<()> {
         for c in &t.columns {
             if !names.contains(&c.name.as_str()) {
                 continue;
             }
             let key = if keys.contains(&c.name.as_str()) {
-                Some(Key::Primary)
+                Some(ErKey::Primary)
             } else if partial.contains(&c.name.as_str()) {
-                Some(Key::Partial)
+                Some(ErKey::Partial)
             } else {
                 None
             };
@@ -462,23 +499,31 @@ impl Mapper {
                 continue;
             }
             let (datatype, length) = split_type(&c.datatype);
-            let props = Props {
-                physical_name: Some(c.name.clone()),
-                datatype: (!datatype.is_empty()).then_some(datatype),
-                length_precision: length,
+            let props = ErAttributeProps {
+                key,
+                derived: c.generated,
+                multivalued: false,
+                physical_name: c.name.clone(),
+                datatype,
+                length_precision: length.unwrap_or_default(),
                 not_null: c.not_null,
-                default_value: c.default.clone(),
-                comment: c.comment.clone(),
+                default_value: c.default.clone().unwrap_or_default(),
             };
-            let kind = NodeKind::Attribute { key, derived: c.generated, multivalued: false };
-            let a = self.node(kind, &c.name, props);
-            self.d.links.push(Link::new(a, owner.clone()));
+            let mut data = ElementData::new(c.name.clone(), ElementKind::ErAttribute(props));
+            data.documentation = c.comment.clone().unwrap_or_default();
+            let (attribute, node) = self.node(owner.0, data)?;
+            // Drawn from the owner, as `er::connect` draws it.
+            self.tx.add_edge(self.diagram, Some(attribute), owner.1, node, Vec::new())?;
+            self.counts[2] += 1;
         }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use umlcraft_model::{Document, Model};
+
     use super::*;
     use crate::{Dialect, parse::parse};
     use pretty_assertions::assert_eq;
@@ -516,14 +561,32 @@ mod tests {
         assert_eq!(split_type("decimal(1,2,3)"), ("decimal(1,2,3)".into(), None));
     }
 
+    /// Maps `sql` into a new model: the document and what the import gave.
+    fn mapped(sql: &str, dialect: Dialect, options: &Options) -> (Document, Import) {
+        let schema = parse(sql.as_bytes(), dialect);
+        let mut doc = Document::new(Model::new("m"));
+        let root = doc.model().root();
+        let mut result = None;
+        doc.edit("import", |tx| {
+            result = Some(map(tx, root, &schema, options)?);
+            Ok(())
+        })
+        .unwrap();
+        (doc, result.unwrap())
+    }
+
+    /// The entities and relationships of the import, as `type name`.
     fn kinds(sql: &str) -> Vec<String> {
-        let s = parse(sql.as_bytes(), Dialect::MySql);
-        let imp = map(&s, &Options::default());
-        imp.diagram
-            .nodes
+        let (doc, import) = mapped(sql, Dialect::MySql, &Options::default());
+        let model = doc.model();
+        model
+            .children(import.package)
             .iter()
-            .filter(|n| !n.kind.is_attribute())
-            .map(|n| format!("{} {}", n.kind.type_name(), n.name))
+            .filter_map(|&c| model.get(c))
+            .filter(|e| {
+                matches!(e.kind(), ElementKind::ErEntity(_) | ElementKind::ErRelationship(_))
+            })
+            .map(|e| format!("{} {}", e.kind().type_name(), e.name()))
             .collect()
     }
 
@@ -531,10 +594,11 @@ mod tests {
     fn duplicate_keys_count_once_and_missing_targets_get_placeholders() {
         let sql = "CREATE TABLE a (id int PRIMARY KEY, b_id int, FOREIGN KEY (b_id) REFERENCES b (id), \
                    FOREIGN KEY (b_id) REFERENCES b (id));";
-        assert_eq!(kinds(sql), ["entity A", "entity B", "relationship hat"]);
-        let s = parse(sql.as_bytes(), Dialect::MySql);
-        let imp = map(&s, &Options::default());
-        assert!(matches!(&imp.report.hints[..], [Hint::NotInDump { table, .. }] if table == "b"));
+        assert_eq!(kinds(sql), ["erEntity A", "erEntity B", "erRelationship hat"]);
+        let (_, import) = mapped(sql, Dialect::MySql, &Options::default());
+        assert!(
+            matches!(&import.report.hints[..], [Hint::NotInDump { table, .. }] if table == "b")
+        );
     }
 
     #[test]
@@ -542,18 +606,17 @@ mod tests {
         let sql = "CREATE TABLE p (id int PRIMARY KEY);\nCREATE TABLE f (a int, b int, since date, \
                    PRIMARY KEY (a, b), FOREIGN KEY (a) REFERENCES p (id), FOREIGN KEY (b) \
                    REFERENCES p (id));";
-        let s = parse(sql.as_bytes(), Dialect::MySql);
-        let d = map(&s, &Options::default()).diagram;
-        let r = d.nodes.iter().find(|n| n.name == "f").unwrap();
-        assert!(matches!(r.kind, NodeKind::Relationship { identifying: false }));
-        let roles: Vec<_> = d
-            .links
-            .iter()
-            .filter(|l| l.source == r.id && d.node(&l.target).unwrap().name == "P")
-            .map(|l| l.role.as_ref().unwrap().text.clone())
-            .collect();
+        let (doc, import) = mapped(sql, Dialect::MySql, &Options::default());
+        let model = doc.model();
+        let f = model.children_named(import.package, "f")[0];
+        assert!(matches!(
+            model.get(f).unwrap().kind(),
+            ElementKind::ErRelationship(ErRelationshipProps { identifying: false })
+        ));
+        let roles: Vec<&str> =
+            umlcraft_notation::er::participations(model, f).map(|p| p.role.as_str()).collect();
         assert_eq!(roles, ["a", "b"]);
-        assert!(d.nodes.iter().any(|n| n.name == "since"));
+        assert!(model.children(f).iter().any(|&c| model.get(c).unwrap().name() == "since"));
     }
 
     #[test]
@@ -563,58 +626,66 @@ mod tests {
                    FOREIGN KEY (p_id) REFERENCES p (id), FOREIGN KEY (q_id) REFERENCES q (id));";
         assert_eq!(
             kinds(sql),
-            ["entity P", "entity Q", "entity Pq", "relationship hat", "relationship hat"]
+            ["erEntity P", "erEntity Q", "erEntity Pq", "erRelationship hat", "erRelationship hat"]
         );
-        let s = parse(sql.as_bytes(), Dialect::MySql);
-        let d = map(&s, &Options::default()).diagram;
-        let pq = d.nodes.iter().find(|n| n.name == "Pq").unwrap();
-        assert_eq!(pq.kind, NodeKind::Entity { weak: true });
-        let nr = d.nodes.iter().find(|n| n.name == "nr").unwrap();
-        assert!(matches!(nr.kind, NodeKind::Attribute { key: Some(Key::Partial), .. }));
-        assert!(
-            umlcraft_erm::check(&d).iter().all(|i| i.severity() == umlcraft_erm::Severity::Warning)
-        );
+        let (doc, import) = mapped(sql, Dialect::MySql, &Options::default());
+        let model = doc.model();
+        let pq = model.children_named(import.package, "Pq")[0];
+        assert!(matches!(model.get(pq).unwrap().kind(), ElementKind::ErEntity(p) if p.weak));
+        let nr = model.children_named(pq, "nr")[0];
+        assert!(matches!(
+            model.get(nr).unwrap().kind(),
+            ElementKind::ErAttribute(a) if a.key == Some(ErKey::Partial)
+        ));
+        model.check().unwrap();
     }
 
     #[test]
-    fn chained_weak_entities_make_a_valid_diagram() {
+    fn chained_weak_entities_make_a_valid_model() {
         // order → item → note: the item is weak and owns the weak note.
         let sql = "CREATE TABLE o (id int PRIMARY KEY);\n\
                    CREATE TABLE oi (o_id int, nr int, PRIMARY KEY (o_id, nr), \
                    FOREIGN KEY (o_id) REFERENCES o (id));\n\
                    CREATE TABLE oin (o_id int, nr int, k int, PRIMARY KEY (o_id, nr, k), \
                    FOREIGN KEY (o_id, nr) REFERENCES oi (o_id, nr));";
-        let s = parse(sql.as_bytes(), Dialect::MySql);
-        let d = map(&s, &Options::default()).diagram;
-        let weak = d.nodes.iter().filter(|n| n.kind == NodeKind::Entity { weak: true }).count();
+        let (doc, import) = mapped(sql, Dialect::MySql, &Options::default());
+        let model = doc.model();
+        model.check().unwrap();
+        let weak = model
+            .children(import.package)
+            .iter()
+            .filter(
+                |&&c| matches!(model.get(c).unwrap().kind(), ElementKind::ErEntity(p) if p.weak),
+            )
+            .count();
         assert_eq!(weak, 2);
-        assert_eq!(umlcraft_erm::check(&d), []);
-        let text = umlcraft_erm::write(&d);
-        assert!(umlcraft_erm::read(&text).is_ok());
+        let text = umlcraft_format::to_string(model);
+        assert_eq!(umlcraft_format::to_string(&umlcraft_format::from_str(&text).unwrap()), text);
     }
 
     #[test]
     fn options_choose_attributes_and_schemas() {
         let sql = "CREATE TABLE public.a (id int, x int);\nALTER TABLE public.a ADD PRIMARY KEY (id);\n\
                    CREATE TABLE s.b (id int);";
-        let s = parse(sql.as_bytes(), Dialect::Postgres);
-        let count = |o: &Options| map(&s, o).report.attributes;
+        let count = |o: &Options| mapped(sql, Dialect::Postgres, o).1.report.attributes;
         assert_eq!(count(&Options::default()), 3);
         assert_eq!(count(&Options { attributes: Attributes::Keys, ..Options::default() }), 1);
         assert_eq!(count(&Options { attributes: Attributes::None, ..Options::default() }), 0);
         let only_public = Options { schemas: Some(vec!["public".into()]), ..Options::default() };
-        let r = map(&s, &only_public).report;
+        let r = mapped(sql, Dialect::Postgres, &only_public).1.report;
         assert_eq!((r.tables, r.entities), (1, 1));
     }
 
     #[test]
-    fn the_diagram_is_named_after_the_database_or_the_file() {
-        let s = parse(b"-- Host: x    Database: flug\nCREATE TABLE a (id int);", Dialect::MySql);
+    fn the_package_is_named_after_the_database_or_the_file() {
         let o = Options { file_name: Some("dump.sql".into()), ..Options::default() };
-        let d = map(&s, &o).diagram;
-        assert_eq!(d.meta.name, "flug");
-        assert_eq!(d.meta.origin.as_deref(), Some("SQL: dump.sql (MySQL)"));
-        let s = parse(b"CREATE TABLE a (id int);", Dialect::Postgres);
-        assert_eq!(map(&s, &o).diagram.meta.name, "dump");
+        let sql = "-- Host: x    Database: flug\nCREATE TABLE a (id int);";
+        let (doc, import) = mapped(sql, Dialect::MySql, &o);
+        let package = doc.model().get(import.package).unwrap();
+        assert_eq!(package.name(), "flug");
+        assert_eq!(package.data().documentation, "SQL: dump.sql (MySQL)");
+        assert_eq!(doc.model().get(import.diagram).unwrap().name(), "flug");
+        let (doc, import) = mapped("CREATE TABLE a (id int);", Dialect::Postgres, &o);
+        assert_eq!(doc.model().get(import.package).unwrap().name(), "dump");
     }
 }

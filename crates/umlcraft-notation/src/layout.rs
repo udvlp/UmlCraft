@@ -532,6 +532,10 @@ pub fn arrange(
     if !can_arrange(kind) {
         return Err(ModelError::Invalid("sequence diagrams are not arranged".into()));
     }
+    // Attributes go around what they describe; always the whole diagram.
+    if kind == DiagramKind::EntityRelationship {
+        return crate::er_layout::arrange(tx, diagram, measure);
+    }
     // The pins of each action are laid out along its sides first, clear of each other's
     // texts, the action growing where it must, so that the room they take is known: a pin
     // alone on the left or right side goes to its bottom, its texts below the action.

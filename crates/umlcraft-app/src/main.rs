@@ -3,7 +3,6 @@
 mod about_dialog;
 mod canvas;
 mod demo;
-mod erm;
 mod errors;
 #[cfg(test)]
 mod fuzz;
@@ -20,6 +19,7 @@ mod ribbon;
 mod settings;
 mod settings_dialog;
 mod shell;
+mod sql;
 mod update;
 mod workspace;
 
@@ -45,6 +45,8 @@ actions!(
         OpenProject,
         ImportStructogram,
         NewStructogram,
+        // An SQL dump as an ER diagram in a package of its own.
+        ImportSql,
         ImportAstah,
         ExportAstah,
         ExportSvg,
@@ -299,7 +301,6 @@ fn main() {
             key(cx, "secondary-,", OpenSettings, None),
         ]);
         nsd::bind_keys(cx);
-        erm::bind_keys(cx);
 
         let bounds = Bounds::centered(None, size(px(1280.0), px(820.0)), cx);
         gpui_kit::open_window(

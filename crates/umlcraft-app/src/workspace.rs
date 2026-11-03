@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 
 use rust_i18n::t;
 use umlcraft_model::{
-    Aggregation, DiagramKind, Document, EdgeLabels, ElementData, ElementKind, Id, LineShape, Model,
-    ModelError, Multiplicity, Navigability, Point, Presentation, Rect, Shape, SharedStyle,
-    StructogramProps, Style, TemplateParameterProps, Tx, TypeRef, Visibility,
+    Aggregation, Cardinality, DiagramKind, Document, EdgeLabels, ElementData, ElementKind, Id,
+    LineShape, Model, ModelError, Multiplicity, Navigability, Point, Presentation, Rect, Shape,
+    SharedStyle, StructogramProps, Style, TemplateParameterProps, Tx, TypeRef, Visibility,
 };
 use umlcraft_notation::autoroute;
 use umlcraft_notation::clipboard::{self, Clip};
@@ -199,6 +199,20 @@ impl Workspace {
             self.selection = vec![node];
             self.selected_element = Some(element);
         }
+    }
+
+    /// Gives what node `owner` of the active ER diagram shows a new attribute and selects it.
+    /// Returns its node.
+    pub fn add_er_attribute(&mut self, owner: Id) -> Option<Id> {
+        let diagram = self.active_diagram?;
+        let base = name_base(&format!("kind.{}", NodeTool::ErAttribute.key()), false);
+        let label = t!("edit.create").to_string();
+        let result =
+            self.edit(label, |tx| umlcraft_notation::er::add_attribute(tx, diagram, owner, &base));
+        let (element, node) = self.report(result)?;
+        self.selection = vec![node];
+        self.selected_element = Some(element);
+        Some(node)
     }
 
     /// The box Astah gives a free text: as wide as its widest line plus 20, 8 higher than its
@@ -535,6 +549,26 @@ impl Workspace {
         result
     }
 
+    /// Imports the tables of an SQL dump as a new package with an ER diagram at the top of the
+    /// model, as one undo step, and opens the diagram.
+    pub fn import_sql(
+        &mut self,
+        schema: &umlcraft_erm_sql::Schema,
+        options: &umlcraft_erm_sql::Options,
+    ) -> Result<umlcraft_erm_sql::Import, ModelError> {
+        let label = t!("edit.import_sql").to_string();
+        let root = self.doc.model().root();
+        let measure = &*self.measure;
+        let result = edit::apply(&mut self.doc, label, measure, |tx| {
+            umlcraft_erm_sql::import(tx, root, schema, options, measure)
+        });
+        if let Ok(import) = &result {
+            self.message = None;
+            self.open_diagram(import.diagram);
+        }
+        result
+    }
+
     /// Reports a problem in the status bar.
     pub fn complain(&mut self, message: impl Into<String>) {
         self.message = Some(message.into());
@@ -668,18 +702,25 @@ impl Workspace {
         self.report(result);
     }
 
-    /// Changes end `end` of an association.
+    /// Changes end `end` of an association, or the end of an ER participation.
     pub fn set_association_end(&mut self, association: Id, end: usize, change: EndChange) {
-        self.update_element(association, |data| {
-            if let ElementKind::Association(p) = &mut data.kind
-                && let Some(end) = p.ends.get_mut(end)
-            {
-                match change {
-                    EndChange::Navigability(n) => end.navigability = n,
-                    EndChange::Aggregation(a) => end.aggregation = a,
-                    EndChange::Multiplicity(m) => end.multiplicity = m,
+        self.update_element(association, |data| match &mut data.kind {
+            ElementKind::Association(p) => {
+                if let Some(end) = p.ends.get_mut(end) {
+                    match change {
+                        EndChange::Navigability(n) => end.navigability = n,
+                        EndChange::Aggregation(a) => end.aggregation = a,
+                        EndChange::Multiplicity(m) => end.multiplicity = m,
+                        EndChange::Cardinality(_) | EndChange::Total(_) => {}
+                    }
                 }
             }
+            ElementKind::ErParticipation(p) => match change {
+                EndChange::Cardinality(c) => p.cardinality = c,
+                EndChange::Total(t) => p.total = t,
+                _ => {}
+            },
+            _ => {}
         });
     }
 
@@ -717,6 +758,30 @@ impl Workspace {
     /// Sets the role name or the multiplicity of an association end from text typed in place.
     pub fn set_end_text(&mut self, association: Id, end: usize, multiplicity: bool, text: &str) {
         let text = text.trim();
+        // An ER participation has one end with labels: its cardinality and its role.
+        let participation = self
+            .doc
+            .model()
+            .get(association)
+            .is_some_and(|e| matches!(e.kind(), ElementKind::ErParticipation(_)));
+        if participation {
+            let parsed = match multiplicity {
+                true if !text.is_empty() => text.parse::<Cardinality>().map(Some),
+                _ => Ok(None),
+            };
+            match parsed {
+                Ok(c) if multiplicity => {
+                    self.set_association_end(association, end, EndChange::Cardinality(c));
+                }
+                Ok(_) => self.update_element(association, |data| {
+                    if let ElementKind::ErParticipation(p) = &mut data.kind {
+                        p.role = text.to_owned();
+                    }
+                }),
+                Err(err) => self.complain(crate::errors::cardinality_error(&err)),
+            }
+            return;
+        }
         if multiplicity {
             let parsed =
                 if text.is_empty() { Ok(None) } else { text.parse::<Multiplicity>().map(Some) };
@@ -1085,6 +1150,9 @@ pub enum EndChange {
     Navigability(Navigability),
     Aggregation(Aggregation),
     Multiplicity(Option<Multiplicity>),
+    /// ER participations, which have only the one end at the entity.
+    Cardinality(Option<Cardinality>),
+    Total(bool),
 }
 
 /// What the model tree's "New" menu can add to an element.
@@ -1106,6 +1174,12 @@ impl NewItem {
     /// Whether the menu should offer this item for an element of `kind`.
     pub fn applies_to(self, kind: &ElementKind) -> bool {
         match self {
+            // Packages may hold ER attributes not joined yet, but they are made at what they
+            // describe.
+            Self::Element(NodeTool::ErAttribute) => {
+                umlcraft_notation::er::is_er_kind(kind)
+                    && kind.can_own(&NodeTool::ErAttribute.element_kind())
+            }
             Self::Element(tool) => kind.can_own(&tool.element_kind()),
             Self::Attribute => kind.can_own(&ElementKind::attribute(None)),
             Self::Operation => kind.can_own(&ElementKind::operation(None)),
@@ -1141,6 +1215,7 @@ impl NewItem {
             Self::Diagram(DiagramKind::Component) => "diagram.component".into(),
             Self::Diagram(DiagramKind::Deployment) => "diagram.deployment".into(),
             Self::Diagram(DiagramKind::CompositeStructure) => "diagram.compositeStructure".into(),
+            Self::Diagram(DiagramKind::EntityRelationship) => "diagram.entityRelationship".into(),
             Self::ObjectDiagram => "diagram.object".into(),
             Self::Structogram => "kind.structogram".into(),
         }

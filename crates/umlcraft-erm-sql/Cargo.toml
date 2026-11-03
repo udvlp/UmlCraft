@@ -8,13 +8,15 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-umlcraft-erm.workspace = true
+umlcraft-model.workspace = true
+umlcraft-notation.workspace = true
 indexmap.workspace = true
 # Statements that are not UTF-8 are read as Windows-1252 (dumps of latin1 databases).
 encoding_rs.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+umlcraft-format.workspace = true
 pretty_assertions.workspace = true
 
 [lints]

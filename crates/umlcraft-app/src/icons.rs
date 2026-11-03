@@ -53,7 +53,8 @@ pub fn tool_icon(tool: Tool) -> SharedString {
     }
 }
 
-/// A diagram kind shows the icon of the element it is mostly about.
+/// A diagram kind shows the icon of the element it is mostly about; an ER diagram an entity
+/// with an attribute and a relationship.
 pub fn diagram_icon(kind: DiagramKind) -> SharedString {
     tool_icon(Tool::Node(match kind {
         DiagramKind::Class => NodeTool::Class,
@@ -64,6 +65,7 @@ pub fn diagram_icon(kind: DiagramKind) -> SharedString {
         DiagramKind::Component => NodeTool::Component,
         DiagramKind::Deployment => NodeTool::DeploymentNode,
         DiagramKind::CompositeStructure => NodeTool::Part,
+        DiagramKind::EntityRelationship => return uml("erDiagram"),
     }))
 }
 
@@ -75,11 +77,6 @@ pub fn object_diagram_icon() -> SharedString {
 /// Structograms, which have no tool of their own.
 pub fn structogram_icon() -> SharedString {
     uml("structogram")
-}
-
-/// ER diagrams, which open in a window of their own.
-pub fn er_diagram_icon() -> SharedString {
-    uml("erDiagram")
 }
 
 /// A kind of structogram element, as Structorizer draws it.
@@ -157,6 +154,20 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
         ElementKind::Diagram(p) if p.objects => Some(object_diagram_icon()),
         ElementKind::Diagram(p) => Some(diagram_icon(p.diagram)),
         ElementKind::Structogram(_) => Some(structogram_icon()),
+        ElementKind::ErEntity(p) if p.associative => node(N::ErAssociativeEntity),
+        ElementKind::ErEntity(p) if p.weak => node(N::ErWeakEntity),
+        ElementKind::ErEntity(_) => node(N::ErEntity),
+        ElementKind::ErAttribute(p) => node(match p.key {
+            Some(umlcraft_model::ErKey::Primary) => N::ErKeyAttribute,
+            Some(umlcraft_model::ErKey::Partial) => N::ErPartialKeyAttribute,
+            None if p.multivalued => N::ErMultivaluedAttribute,
+            None if p.derived => N::ErDerivedAttribute,
+            None => N::ErAttribute,
+        }),
+        ElementKind::ErRelationship(p) if p.identifying => node(N::ErIdentifyingRelationship),
+        ElementKind::ErRelationship(_) => node(N::ErRelationship),
+        ElementKind::ErIsA(_) => node(N::ErIsA),
+        ElementKind::ErParticipation(_) | ElementKind::ErSubtyping(_) => edge(E::ErLine),
         // Elements no tool draws, with icons of their own.
         ElementKind::Model => Some(uml("model")),
         ElementKind::EnumerationLiteral => Some(uml("enumerationLiteral")),
@@ -178,7 +189,7 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
 mod tests {
     use super::*;
 
-    const KINDS: [DiagramKind; 8] = [
+    const KINDS: [DiagramKind; 9] = [
         DiagramKind::Class,
         DiagramKind::UseCase,
         DiagramKind::Sequence,
@@ -187,6 +198,7 @@ mod tests {
         DiagramKind::Component,
         DiagramKind::Deployment,
         DiagramKind::CompositeStructure,
+        DiagramKind::EntityRelationship,
     ];
 
     #[test]

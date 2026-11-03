@@ -101,8 +101,6 @@ menu:
   new_structogram: New structogram
   import_astah: Import .asta project …
   import_structogram: Import structogram (.nsd) …
-  open_erm: Open ER diagram (.ucerm) …
-  new_erm: New ER diagram
   import_sql: Import SQL dump as ER diagram …
   export: Export
   export_svg: Diagram as SVG …
@@ -157,6 +155,8 @@ menu:
   navigability: Navigability
   aggregation: Aggregation
   multiplicity: Multiplicity
+  cardinality: Cardinality
+  total_participation: Total participation (double line)
   clicked_end: "%{end} – the end clicked"
   unspecified: not specified
   view: View
@@ -248,6 +248,18 @@ tool:
   part: Part
   port: Port
   connector: Connector
+  erEntity: Entity
+  erWeakEntity: Weak entity
+  erAssociativeEntity: Associative entity
+  erAttribute: Attribute
+  erKeyAttribute: Key
+  erPartialKeyAttribute: Partial key
+  erMultivaluedAttribute: Multivalued
+  erDerivedAttribute: Derived
+  erRelationship: Relationship
+  erIdentifyingRelationship: Identifying
+  erIsA: IS-A
+  erLine: Line
   callBehavior: Call behavior
   sendSignal: Send signal
   acceptEvent: Accept event
@@ -282,6 +294,9 @@ tool_tip:
   lostMessage: "A message whose receiver the diagram does not show, a reply at first: click the lifeline that sends it. Drag the dot to change its length and side"
   part: "A part of a class: click inside the class. It becomes an attribute of the class; its type says what it is"
   port: "A port: click on or near the border of a class or a part. A port of a part belongs to the class that is the part's type"
+  erAssociativeEntity: "A relationship that is also an entity: entities take part in it, attributes belong to it"
+  erPartialKeyAttribute: "Partial key of a weak entity: identifies it together with the key of its owner entity"
+  erLine: "One line for everything: attribute to what it describes, relationship to an entity (with [0,n]), IS-A to a super- or subtype (the first one to the supertype)"
 diagram:
   class: Class diagram
   object: Object diagram
@@ -292,6 +307,7 @@ diagram:
   component: Component diagram
   deployment: Deployment diagram
   compositeStructure: Composite structure diagram
+  entityRelationship: ER diagram
 panel:
   model: Model
   properties: Properties
@@ -411,6 +427,28 @@ prop:
   binding: Binds
   default: Default
   variadic: Variadic (any number of arguments)
+  er_weak: Weak (identified through an owner entity)
+  er_associative: Associative (also a relationship)
+  er_physical_name: Physical name
+  er_key: Key
+  er_key_none: No key
+  er_key_primary: Key
+  er_key_partial: Partial key
+  er_derived: Derived
+  er_multivalued: Multivalued
+  er_datatype: Data type
+  er_length_precision: Length/precision
+  er_not_null: NOT NULL
+  er_default_value: Default value
+  er_identifying: Identifying
+  er_cardinality: Cardinality
+  er_total_participation: Total (double line)
+  er_total_specialization: Total (double line to the supertype)
+  er_disjoint: Subtypes
+  er_disjoint_unspecified: Not stated
+  er_disjoint_yes: Disjoint (d)
+  er_disjoint_no: Overlapping (o)
+  er_database: Database
 template_kind:
   type: type
   value: value
@@ -450,8 +488,6 @@ canvas:
 dialog:
   unsaved: The project has unsaved changes.
   unsaved_detail: Do you want to save them?
-  erm_unsaved: These ER diagrams have unsaved changes. Quit anyway?
-  quit_anyway: Quit without saving
   save: Save
   discard: Discard
   cancel: Cancel
@@ -523,6 +559,7 @@ export_dropped:
   componentDiagram: Component diagrams (exported as class diagrams)
   deploymentDiagram: Deployment diagrams (exported as class diagrams)
   compositeStructureDiagram: Composite structure diagrams (exported as class diagrams without parts and ports)
+  erDiagram: ER diagrams
   port: Ports
   connector: Connectors
   pin: Pins not shown with their action
@@ -611,6 +648,7 @@ edit:
   text: Change text
   arrange: Arrange automatically
   route_lines: Route lines
+  import_sql: Import SQL dump
 skipped:
   method_body: method bodies
   initializer: initializer blocks
@@ -664,7 +702,6 @@ kind:
   comment: Note
   diagram: Diagram
   structogram: Structogram
-  erDiagram: ER diagram
   activity: Activity
   activityNode: Activity node
   activityEdge: Flow
@@ -706,6 +743,19 @@ kind:
   part: Part
   port: Port
   connector: Connector
+  erEntity: Entity
+  erWeakEntity: Entity
+  erAssociativeEntity: Entity
+  erAttribute: Attribute
+  erKeyAttribute: Attribute
+  erPartialKeyAttribute: Attribute
+  erMultivaluedAttribute: Attribute
+  erDerivedAttribute: Attribute
+  erRelationship: Relationship
+  erIdentifyingRelationship: Relationship
+  erIsA: IS-A
+  erParticipation: Participation
+  erSubtyping: Subtyping
   callBehavior: Call behavior action
   sendSignal: Send signal action
   acceptEvent: Accept event action
@@ -760,9 +810,13 @@ error:
   type_too_deep: "A type of %{a} is nested more than %{max} levels deep."
   invalid: "The model is inconsistent: %{detail}"
   part_outside: A part goes inside a class. Draw the class first, then click inside it.
+  er_not_joined: These two cannot be joined. Attributes belong to entities, relationships or attributes; relationships join entities; an IS-A joins entities.
+  er_attribute_owned: The attribute already belongs to something. Delete its line first.
+  er_second_weak: An identifying relationship identifies exactly one weak entity.
   port_outside: A port goes on the border of a class or a part.
   port_on_untyped_part: "A port on a part belongs to the part's type: give the part a class as its type first (e.g. engine : Engine)."
   multiplicity: "\"%{text}\" is not a multiplicity. Examples: 1, 0..1, 1..*, *"
+  cardinality: "\"%{text}\" is not a cardinality. Examples: [0,1], [1,n], 0..*, [*,m]"
   malformed: "The file is damaged (line %{line}, column %{column})."
   not_a_project: The file is not an UmlCraft project.
   not_astah: The file is not an .asta project, or it is damaged.
@@ -848,164 +902,28 @@ nsd:
   note_loop_else: the else of the loop follows it; it also runs there after a break
   note_try_else: the else of try ends the try block
   note_nested_function: a function defined in the function is left out
-erm:
-  window_kind: "– ER diagram"
-  open_failed: The ER diagram could not be opened.
-  draw_failed: "The diagram cannot be drawn: %{error}"
-  not_utf8: The file is not encoded as UTF-8; ER diagrams are UTF-8.
-  error_json: "The file is not a valid ER diagram: %{detail}"
-  error_not_erm: The file is not an UmlCraft ER diagram.
-  error_too_new: "The file has format version %{found}; this UmlCraft reads up to version %{supported}. Please update UmlCraft."
-  error_migration: "The file of format version %{from} could not be converted: %{reason}"
-  error_field: "%{element}: %{reason}"
-  error_invalid: "The diagram breaks these rules:"
-  notes: "%{count} notes on the diagram"
-  issue_line: "%{code} – %{element}: %{what}"
-  unnamed: "%{kind} without a name"
-  line_between: "line between %{a} and %{b}"
-  free_text: free text
-  untitled_stem: ER diagram
-  new_title: New ER diagram
-  save_tip: "Save (Ctrl+S)"
-  save_failed: The ER diagram could not be saved.
-  unsaved: "“%{name}” has unsaved changes."
-  properties: Properties
-  palette: Shapes
-  new_entity: Entity
-  new_attribute: Attribute
-  new_relationship: Relationship
-  new_text: Text
-  edit_text: Edit text
-  duplicate: Duplicate
-  add_attribute: Add attribute
-  relationship_to: Relationship to …
-  relationship_hint: "Relationship to …: now click the second entity (Esc cancels)."
-  fit_to_text: Fit size to text
-  release_ends: Release line ends
-  no_label: none
-  cannot_join: These elements cannot be joined.
-  edit_missing: The element no longer exists.
-  edit_not_applicable: This is not possible for this element.
-  arrange: Arrange
-  arrange_tip: Lay out the whole diagram automatically (as the SQL import does); waypoints and fixed connection points are lost
-  import_title: Import SQL dump
-  import_found: "%{file}: %{count} tables found."
-  import_dialect: SQL dialect
-  import_detected: "%{dialect} (detected)"
-  import_attributes: Attributes
-  import_attributes_all: all
-  import_attributes_keys: keys only
-  import_attributes_none: none
-  import_attributes_hint: Large schemas get very wide with all attributes.
-  import_schemas: Schemas
-  import_button: Import
-  import_failed: The SQL dump could not be imported.
-  import_no_tables: The file holds no tables (CREATE TABLE), or none in the chosen schemas.
-  import_pg_custom: The file is in pg_dump's archive format. Please export it as plain SQL (pg_dump -Fp) and import that file.
-  import_compressed: The file is compressed. Please unpack it first.
-  import_summary: "Imported from %{file} (%{dialect}): %{tables} tables → %{entities} entities, %{relationships} relationships, %{attributes} attributes; %{skipped} statements skipped"
-  import_no_key: "%{table}: no primary key, the entity has no key attribute"
-  import_placeholder: "%{table}: referred to but not in the dump (placeholder entity)"
-  import_recoded: "Line %{line}: not UTF-8, read as Windows-1252"
-  import_problem: "Line %{line}: %{what} not understood: %{text}"
-  import_problem_statement: statement
-  import_problem_column: column
-  import_problem_constraint: key
-  import_unknown_table: "Line %{line}: about a table that is not in the dump: %{text}"
-  shape:
-    entity: Entity
-    weak_entity: Weak entity
-    associative_entity: Associative entity
-    attribute: Attribute
-    key_attribute: Key
-    partial_key: Partial key
-    derived_attribute: Derived
-    multivalued_attribute: Multivalued
-    relationship: Relationship
-    identifying_relationship: Identifying
-    is_a: IS-A
-    text: Text
-  prop:
-    diagram: Diagram
-    diagram_name: Name
-    author: Author
-    created: Created
-    modified: Modified
-    origin: Origin
-    element: Element
-    name: Name
-    weak: weak
-    key: Key
-    key_none: none
-    key_primary: primary
-    key_partial: partial
-    derived: derived
-    multivalued: multivalued
-    identifying: identifying
-    total: total (double line to the supertype)
-    disjoint: Disjoint
-    disjoint_open: open
-    disjoint_d: d
-    disjoint_o: o
-    style: Appearance
-    fill: Fill
-    stroke: Line
-    font_color: Font colour
-    font_size: Font size (empty = 12)
-    bold: bold
-    italic: italic
-    rounded: rounded
-    standard: Standard
-    sql: Database (not drawn)
-    physical_name: Physical name
-    datatype: Data type
-    length: Length/precision
-    default: Default value
-    comment: Comment
-    not_null: NOT NULL
-    line: Line
-    label: Label
-    label_hint: "[0,1], [1,n], [*,m] (* = any), 0..* … become a cardinality, anything else free text, empty = none"
-    role: Role
-    line_style: Line style
-    line_solid: solid
-    line_dotted: dotted (optional participation)
-    line_double: double (total participation)
-    super_type: leads to the supertype
-    text: Free text
-    text_hint: Edit the text with a double click or F2.
-    align: Alignment
-    align_left: left
-    align_center: centre
-    align_right: right
-    several: "%{count} elements selected"
-  grid: Grid
-  grid_tip: Show or hide the grid (10 px); on screen only, never in exports
-  zoom_fit_tip: "Fit (Ctrl+Shift+0)"
-  export_svg: SVG …
-  export_svg_tip: Save the diagram as an SVG image
-  export_png: PNG
-  export_png_white: PNG with white background …
-  export_png_transparent: PNG (transparent) …
-  kind:
-    entity: entity
-    associativeEntity: associative entity
-    attribute: attribute
-    relationship: relationship
-    isA: IS-A
-  issue:
-    duplicate_id: the id is used more than once
-    missing_end: "the line's end %{end} does not exist"
-    not_allowed: "%{source} and %{target} cannot be joined"
-    no_owner: the attribute belongs to nothing
-    several_owners: the attribute belongs to more than one element
-    own_part: the attribute is a part of itself
-    too_few_participants: a relationship needs at least two participants
-    identifying_without_weak: an identifying relationship needs a weak entity
-    identifying_with_several_weak: an identifying relationship identifies exactly one weak entity
-    weak_without_identifying: the weak entity has no identifying relationship
-    is_a_ends: an IS-A needs exactly one supertype and at least one subtype
-    super_type_outside_is_a: only lines of an IS-A lead to a supertype
-    cardinality_outside_participation: cardinalities belong between a relationship and an entity
-    bad_geometry: invalid position or size
-    bad_cardinality: invalid cardinality
+sql:
+  title: Import SQL dump
+  found: "%{file}: %{count} tables found."
+  dialect: SQL dialect
+  detected: "%{dialect} (detected)"
+  attributes: Attributes
+  attributes_all: all
+  attributes_keys: keys only
+  attributes_none: none
+  attributes_hint: Large schemas get very wide with all attributes.
+  schemas: Schemas
+  button: Import
+  failed: The SQL dump could not be imported.
+  no_tables: The file holds no tables (CREATE TABLE), or none in the chosen schemas.
+  pg_custom: The file is in pg_dump's archive format. Please export it as plain SQL (pg_dump -Fp) and import that file.
+  compressed: The file is compressed. Please unpack it first.
+  summary: "Imported from %{file} (%{dialect}): %{tables} tables → %{entities} entities, %{relationships} relationships, %{attributes} attributes; %{skipped} statements skipped"
+  no_key: "%{table}: no primary key, the entity has no key attribute"
+  placeholder: "%{table}: referred to but not in the dump (placeholder entity)"
+  recoded: "Line %{line}: not UTF-8, read as Windows-1252"
+  problem: "Line %{line}: %{what} not understood: %{text}"
+  problem_statement: statement
+  problem_column: column
+  problem_constraint: key
+  unknown_table: "Line %{line}: about a table that is not in the dump: %{text}"

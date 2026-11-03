@@ -50,8 +50,8 @@ def circle(cx, cy, r, extra=''):
     return f'<circle cx="{pos(cx)}" cy="{pos(cy)}" r="{size(r)}"{extra}/>'
 
 
-def ellipse(cx, cy, rx, ry):
-    return f'<ellipse cx="{pos(cx)}" cy="{pos(cy)}" rx="{size(rx)}" ry="{size(ry)}"/>'
+def ellipse(cx, cy, rx, ry, extra=''):
+    return f'<ellipse cx="{pos(cx)}" cy="{pos(cy)}" rx="{size(rx)}" ry="{size(ry)}"{extra}/>'
 
 
 def dot(cx, cy, r):
@@ -205,6 +205,20 @@ ICONS = {
     # An ER diagram (Chen): an entity with an attribute, joined to a relationship.
     'erDiagram': [rect(2.5, 11.5, 8, 5), ellipse(5.5, 4.5, 3, 2), path('M5.5 6.5V11.5'),
                   path('M14 3.5L17.5 7L14 10.5L10.5 7Z'), path('M8.5 11.5L12 8.5')],
+    # ER diagram elements in Chen notation; keys are underlined.
+    'erEntity': [rect(2.5, 5.5, 15, 9)],
+    'erWeakEntity': [rect(2.5, 5.5, 15, 9), rect(4.5, 7.5, 11, 5)],
+    'erAssociativeEntity': [rect(2.5, 4.5, 15, 11), path('M10 5.5L16 10L10 14.5L4 10Z')],
+    'erAttribute': [ellipse(10, 10, 7.5, 4.5)],
+    'erKeyAttribute': [ellipse(10, 10, 7.5, 4.5), path('M6.5 11H13.5')],
+    'erPartialKeyAttribute': [ellipse(10, 10, 7.5, 4.5), path('M6.5 11H13.5', dash(1, 1.5))],
+    'erMultivaluedAttribute': [ellipse(10, 10, 7.5, 4.5), ellipse(10, 10, 5, 2.25)],
+    'erDerivedAttribute': [ellipse(10, 10, 7.5, 4.5, dash())],
+    'erRelationship': [path('M10 4L17.5 10L10 16L2.5 10Z')],
+    'erIdentifyingRelationship': [path('M10 4L17.5 10L10 16L2.5 10Z'),
+                                  path('M10 7.25L13.5 10L10 12.75L6.5 10Z')],
+    'erIsA': [path('M10 4L17.5 16H2.5Z')],
+    'erLine': [path('M2.5 15.5L17.5 4.5')],
     # Structogram elements, drawn as Structorizer draws them
     'nsdInstruction': [rect(2.5, 5.5, 15, 9), path('M5.5 10H14.5')],
     'nsdCall': [rect(2.5, 5.5, 15, 9), path('M5 5.5V14.5M15 5.5V14.5')],

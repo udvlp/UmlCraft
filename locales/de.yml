@@ -101,8 +101,6 @@ menu:
   new_structogram: Neues Struktogramm
   import_astah: .asta-Projekt importieren …
   import_structogram: Struktogramm (.nsd) importieren …
-  open_erm: ER-Diagramm (.ucerm) öffnen …
-  new_erm: Neues ER-Diagramm
   import_sql: SQL-Dump als ER-Diagramm importieren …
   export: Exportieren
   export_svg: Diagramm als SVG …
@@ -157,6 +155,8 @@ menu:
   navigability: Navigierbarkeit
   aggregation: Aggregation
   multiplicity: Multiplizität
+  cardinality: Kardinalität
+  total_participation: Totale Teilnahme (Doppellinie)
   clicked_end: "%{end} – angeklicktes Ende"
   unspecified: nicht festgelegt
   view: Ansicht
@@ -248,6 +248,18 @@ tool:
   part: Part
   port: Port
   connector: Konnektor
+  erEntity: Entity
+  erWeakEntity: Schwache Entity
+  erAssociativeEntity: Assoziative Entity
+  erAttribute: Attribut
+  erKeyAttribute: Schlüssel
+  erPartialKeyAttribute: Teilschlüssel
+  erMultivaluedAttribute: Mehrwertig
+  erDerivedAttribute: Abgeleitet
+  erRelationship: Beziehung
+  erIdentifyingRelationship: Identifizierend
+  erIsA: IS-A
+  erLine: Linie
   callBehavior: Verhaltensaufruf
   sendSignal: Signal senden
   acceptEvent: Ereignis annehmen
@@ -282,6 +294,9 @@ tool_tip:
   lostMessage: "Eine Nachricht, deren Empfänger das Diagramm nicht zeigt, zunächst eine Antwort: auf die Lebenslinie klicken, die sie sendet. Den Punkt ziehen ändert Länge und Seite"
   part: "Ein Part einer Klasse: in die Klasse klicken. Er wird ein Attribut der Klasse; sein Typ sagt, was er ist"
   port: "Ein Port: auf oder nahe den Rand einer Klasse oder eines Parts klicken. Ein Port eines Parts gehört zu der Klasse, die der Typ des Parts ist"
+  erAssociativeEntity: "Eine Beziehung, die zugleich Entity ist: Entities nehmen an ihr teil, Attribute gehören ihr"
+  erPartialKeyAttribute: "Teilschlüssel einer schwachen Entity: identifiziert sie zusammen mit dem Schlüssel ihrer Eigentümer-Entity"
+  erLine: "Eine Linie für alles: Attribut zu dem, was es beschreibt, Beziehung zu einer Entity (mit [0,n]), IS-A zu Ober- oder Untertyp (die erste zum Obertyp)"
 diagram:
   class: Klassendiagramm
   object: Objektdiagramm
@@ -292,6 +307,7 @@ diagram:
   component: Komponentendiagramm
   deployment: Verteilungsdiagramm
   compositeStructure: Kompositionsstrukturdiagramm
+  entityRelationship: ER-Diagramm
 panel:
   model: Modell
   properties: Eigenschaften
@@ -411,6 +427,28 @@ prop:
   binding: Bindet
   default: Vorgabe
   variadic: Variadisch (beliebig viele Argumente)
+  er_weak: Schwach (identifiziert über eine Eigentümer-Entity)
+  er_associative: Assoziativ (zugleich Beziehung)
+  er_physical_name: Physischer Name
+  er_key: Schlüssel
+  er_key_none: Kein Schlüssel
+  er_key_primary: Schlüssel
+  er_key_partial: Teilschlüssel
+  er_derived: Abgeleitet
+  er_multivalued: Mehrwertig
+  er_datatype: Datentyp
+  er_length_precision: Länge/Genauigkeit
+  er_not_null: NOT NULL
+  er_default_value: Standardwert
+  er_identifying: Identifizierend
+  er_cardinality: Kardinalität
+  er_total_participation: Total (Doppellinie)
+  er_total_specialization: Total (Doppellinie zum Obertyp)
+  er_disjoint: Untertypen
+  er_disjoint_unspecified: Nicht angegeben
+  er_disjoint_yes: Disjunkt (d)
+  er_disjoint_no: Überlappend (o)
+  er_database: Datenbank
 template_kind:
   type: Typ
   value: Wert
@@ -450,8 +488,6 @@ canvas:
 dialog:
   unsaved: Das Projekt enthält ungespeicherte Änderungen.
   unsaved_detail: Sollen die Änderungen gespeichert werden?
-  erm_unsaved: Diese ER-Diagramme haben ungespeicherte Änderungen. Trotzdem beenden?
-  quit_anyway: Ohne Speichern beenden
   save: Speichern
   discard: Verwerfen
   cancel: Abbrechen
@@ -523,6 +559,7 @@ export_dropped:
   componentDiagram: Komponentendiagramme (als Klassendiagramme exportiert)
   deploymentDiagram: Verteilungsdiagramme (als Klassendiagramme exportiert)
   compositeStructureDiagram: Kompositionsstrukturdiagramme (als Klassendiagramme ohne Parts und Ports exportiert)
+  erDiagram: ER-Diagramme
   port: Ports
   connector: Konnektoren
   pin: Pins, die nicht mit ihrer Aktion gezeigt werden
@@ -611,6 +648,7 @@ edit:
   text: Text ändern
   arrange: Automatisch anordnen
   route_lines: Linien führen
+  import_sql: SQL-Dump importieren
 skipped:
   method_body: Methodenrümpfe
   initializer: Initialisierungsblöcke
@@ -664,7 +702,6 @@ kind:
   comment: Notiz
   diagram: Diagramm
   structogram: Struktogramm
-  erDiagram: ER-Diagramm
   activity: Aktivität
   activityNode: Aktivitätsknoten
   activityEdge: Fluss
@@ -706,6 +743,19 @@ kind:
   part: Part
   port: Port
   connector: Konnektor
+  erEntity: Entity
+  erWeakEntity: Entity
+  erAssociativeEntity: Entity
+  erAttribute: Attribut
+  erKeyAttribute: Attribut
+  erPartialKeyAttribute: Attribut
+  erMultivaluedAttribute: Attribut
+  erDerivedAttribute: Attribut
+  erRelationship: Beziehung
+  erIdentifyingRelationship: Beziehung
+  erIsA: IS-A
+  erParticipation: Teilnahme
+  erSubtyping: Spezialisierung
   callBehavior: Verhaltensaufruf
   sendSignal: Signalsendeaktion
   acceptEvent: Ereignisannahmeaktion
@@ -760,9 +810,13 @@ error:
   type_too_deep: "Ein Typ von %{a} ist tiefer als %{max} Ebenen verschachtelt."
   invalid: "Das Modell ist widersprüchlich: %{detail}"
   part_outside: Ein Part gehört in eine Klasse. Erst die Klasse zeichnen, dann in sie hineinklicken.
+  er_not_joined: Diese beiden lassen sich nicht verbinden. Attribute gehören zu Entities, Beziehungen oder Attributen, Beziehungen verbinden Entities, ein IS-A verbindet Entities.
+  er_attribute_owned: Das Attribut gehört schon zu etwas. Erst seine Linie löschen.
+  er_second_weak: Eine identifizierende Beziehung identifiziert genau eine schwache Entity.
   port_outside: Ein Port gehört auf den Rand einer Klasse oder eines Parts.
   port_on_untyped_part: "Ein Port auf einem Part gehört zum Typ des Parts: dem Part erst eine Klasse als Typ geben (etwa motor : Motor)."
   multiplicity: "„%{text}“ ist keine Multiplizität. Beispiele: 1, 0..1, 1..*, *"
+  cardinality: "„%{text}“ ist keine Kardinalität. Beispiele: [0,1], [1,n], 0..*, [*,m]"
   malformed: "Die Datei ist beschädigt (Zeile %{line}, Spalte %{column})."
   not_astah: Die Datei ist kein .asta-Projekt oder beschädigt.
   astah_no_model: Das .asta-Projekt enthält kein Modell.
@@ -848,164 +902,28 @@ nsd:
   note_loop_else: das else der Schleife folgt ihr; dort läuft es auch nach einem break
   note_try_else: das else von try steht am Ende des try-Blocks
   note_nested_function: eine in der Funktion definierte Funktion ist weggelassen
-erm:
-  window_kind: "– ER-Diagramm"
-  open_failed: Das ER-Diagramm konnte nicht geöffnet werden.
-  draw_failed: "Das Diagramm lässt sich nicht zeichnen: %{error}"
-  not_utf8: Die Datei ist nicht in UTF-8 kodiert; ER-Diagramme sind UTF-8.
-  error_json: "Die Datei ist kein gültiges ER-Diagramm: %{detail}"
-  error_not_erm: Die Datei ist kein ER-Diagramm von UmlCraft.
-  error_too_new: "Die Datei hat die Formatversion %{found}; dieses UmlCraft liest bis Version %{supported}. Bitte UmlCraft aktualisieren."
-  error_migration: "Die Datei der Formatversion %{from} ließ sich nicht umwandeln: %{reason}"
-  error_field: "%{element}: %{reason}"
-  error_invalid: "Das Diagramm verletzt diese Regeln:"
-  notes: "%{count} Hinweise zum Diagramm"
-  issue_line: "%{code} – %{element}: %{what}"
-  unnamed: "%{kind} ohne Namen"
-  line_between: "Linie zwischen %{a} und %{b}"
-  free_text: freier Text
-  untitled_stem: ER-Diagramm
-  new_title: Neues ER-Diagramm
-  save_tip: "Speichern (Strg+S)"
-  save_failed: Das ER-Diagramm konnte nicht gespeichert werden.
-  unsaved: "„%{name}“ hat ungespeicherte Änderungen."
-  properties: Eigenschaften
-  palette: Formen
-  new_entity: Entity
-  new_attribute: Attribut
-  new_relationship: Beziehung
-  new_text: Text
-  edit_text: Text bearbeiten
-  duplicate: Duplizieren
-  add_attribute: Attribut hinzufügen
-  relationship_to: Beziehung zu …
-  relationship_hint: "Beziehung zu …: jetzt auf die zweite Entity klicken (Esc bricht ab)."
-  fit_to_text: Größe an Text anpassen
-  release_ends: Linienenden lösen
-  no_label: keine
-  cannot_join: Diese Elemente lassen sich nicht verbinden.
-  edit_missing: Das Element gibt es nicht mehr.
-  edit_not_applicable: Das geht bei diesem Element nicht.
-  arrange: Anordnen
-  arrange_tip: Ganzes Diagramm automatisch anordnen (wie beim SQL-Import); Knickpunkte und feste Anschlusspunkte gehen dabei verloren
-  import_title: SQL-Dump importieren
-  import_found: "%{file}: %{count} Tabellen gefunden."
-  import_dialect: SQL-Dialekt
-  import_detected: "%{dialect} (erkannt)"
-  import_attributes: Attribute
-  import_attributes_all: alle
-  import_attributes_keys: nur Schlüssel
-  import_attributes_none: keine
-  import_attributes_hint: Große Schemas werden mit allen Attributen sehr breit.
-  import_schemas: Schemas
-  import_button: Importieren
-  import_failed: Der SQL-Dump konnte nicht importiert werden.
-  import_no_tables: Die Datei enthält keine Tabellen (CREATE TABLE), oder keine in den gewählten Schemas.
-  import_pg_custom: Die Datei ist im Archivformat von pg_dump. Bitte als Klartext exportieren (pg_dump -Fp) und diese Datei importieren.
-  import_compressed: Die Datei ist komprimiert. Bitte zuerst entpacken.
-  import_summary: "Importiert aus %{file} (%{dialect}): %{tables} Tabellen → %{entities} Entities, %{relationships} Beziehungen, %{attributes} Attribute; %{skipped} Anweisungen übersprungen"
-  import_no_key: "%{table}: kein Primärschlüssel, die Entity hat kein Schlüsselattribut"
-  import_placeholder: "%{table}: wird referenziert, steht aber nicht im Dump (Platzhalter-Entity)"
-  import_recoded: "Zeile %{line}: kein UTF-8, als Windows-1252 gelesen"
-  import_problem: "Zeile %{line}: %{what} nicht verstanden: %{text}"
-  import_problem_statement: Anweisung
-  import_problem_column: Spalte
-  import_problem_constraint: Schlüssel
-  import_unknown_table: "Zeile %{line}: betrifft eine Tabelle, die nicht im Dump steht: %{text}"
-  shape:
-    entity: Entity
-    weak_entity: Schwache Entity
-    associative_entity: Assoziative Entity
-    attribute: Attribut
-    key_attribute: Schlüssel
-    partial_key: Teilschlüssel
-    derived_attribute: Abgeleitet
-    multivalued_attribute: Mehrwertig
-    relationship: Beziehung
-    identifying_relationship: Identifizierend
-    is_a: IS-A
-    text: Text
-  prop:
-    diagram: Diagramm
-    diagram_name: Name
-    author: Autor
-    created: Erstellt
-    modified: Geändert
-    origin: Herkunft
-    element: Element
-    name: Name
-    weak: schwach
-    key: Schlüssel
-    key_none: keiner
-    key_primary: Primär
-    key_partial: Teil
-    derived: abgeleitet
-    multivalued: mehrwertig
-    identifying: identifizierend
-    total: total (Doppellinie zum Obertyp)
-    disjoint: Disjunkt
-    disjoint_open: offen
-    disjoint_d: d
-    disjoint_o: o
-    style: Darstellung
-    fill: Füllung
-    stroke: Linie
-    font_color: Schriftfarbe
-    font_size: Schriftgröße (leer = 12)
-    bold: fett
-    italic: kursiv
-    rounded: abgerundet
-    standard: Standard
-    sql: Datenbank (wird nicht gezeichnet)
-    physical_name: Physischer Name
-    datatype: Datentyp
-    length: Länge/Genauigkeit
-    default: Standardwert
-    comment: Kommentar
-    not_null: NOT NULL
-    line: Linie
-    label: Beschriftung
-    label_hint: "[0,1], [1,n], [*,m] (* = beliebig), 0..* … wird Kardinalität, anderes freier Text, leer = keine"
-    role: Rolle
-    line_style: Linienart
-    line_solid: durchgezogen
-    line_dotted: gepunktet (optionale Teilnahme)
-    line_double: doppelt (totale Teilnahme)
-    super_type: führt zum Obertyp
-    text: Freier Text
-    text_hint: Text bearbeiten mit Doppelklick oder F2.
-    align: Ausrichtung
-    align_left: links
-    align_center: Mitte
-    align_right: rechts
-    several: "%{count} Elemente ausgewählt"
-  grid: Raster
-  grid_tip: Raster (10 px) zeigen oder ausblenden; nur in der Ansicht, nie im Export
-  zoom_fit_tip: "Einpassen (Strg+Umschalt+0)"
-  export_svg: SVG …
-  export_svg_tip: Diagramm als SVG-Bild speichern
-  export_png: PNG
-  export_png_white: PNG mit weißem Hintergrund …
-  export_png_transparent: PNG (transparent) …
-  kind:
-    entity: Entity
-    associativeEntity: assoziative Entity
-    attribute: Attribut
-    relationship: Beziehung
-    isA: IS-A
-  issue:
-    duplicate_id: die ID kommt mehrmals vor
-    missing_end: "das Linienende %{end} gibt es nicht"
-    not_allowed: "%{source} und %{target} lassen sich nicht verbinden"
-    no_owner: das Attribut gehört zu nichts
-    several_owners: das Attribut gehört zu mehr als einem Element
-    own_part: das Attribut ist Teil von sich selbst
-    too_few_participants: eine Beziehung braucht mindestens zwei Teilnehmer
-    identifying_without_weak: eine identifizierende Beziehung braucht eine schwache Entity
-    identifying_with_several_weak: eine identifizierende Beziehung identifiziert genau eine schwache Entity
-    weak_without_identifying: die schwache Entity hat keine identifizierende Beziehung
-    is_a_ends: ein IS-A braucht genau einen Obertyp und mindestens einen Untertyp
-    super_type_outside_is_a: nur Linien eines IS-A führen zu einem Obertyp
-    cardinality_outside_participation: Kardinalitäten gehören zwischen eine Beziehung und eine Entity
-    bad_geometry: ungültige Position oder Größe
-    bad_cardinality: ungültige Kardinalität
+sql:
+  title: SQL-Dump importieren
+  found: "%{file}: %{count} Tabellen gefunden."
+  dialect: SQL-Dialekt
+  detected: "%{dialect} (erkannt)"
+  attributes: Attribute
+  attributes_all: alle
+  attributes_keys: nur Schlüssel
+  attributes_none: keine
+  attributes_hint: Große Schemas werden mit allen Attributen sehr breit.
+  schemas: Schemas
+  button: Importieren
+  failed: Der SQL-Dump konnte nicht importiert werden.
+  no_tables: Die Datei enthält keine Tabellen (CREATE TABLE), oder keine in den gewählten Schemas.
+  pg_custom: Die Datei ist im Archivformat von pg_dump. Bitte als Klartext exportieren (pg_dump -Fp) und diese Datei importieren.
+  compressed: Die Datei ist komprimiert. Bitte zuerst entpacken.
+  summary: "Importiert aus %{file} (%{dialect}): %{tables} Tabellen → %{entities} Entities, %{relationships} Beziehungen, %{attributes} Attribute; %{skipped} Anweisungen übersprungen"
+  no_key: "%{table}: kein Primärschlüssel, die Entity hat kein Schlüsselattribut"
+  placeholder: "%{table}: wird referenziert, steht aber nicht im Dump (Platzhalter-Entity)"
+  recoded: "Zeile %{line}: kein UTF-8, als Windows-1252 gelesen"
+  problem: "Zeile %{line}: %{what} nicht verstanden: %{text}"
+  problem_statement: Anweisung
+  problem_column: Spalte
+  problem_constraint: Schlüssel
+  unknown_table: "Zeile %{line}: betrifft eine Tabelle, die nicht im Dump steht: %{text}"

@@ -318,7 +318,7 @@ impl Obstacles {
 }
 
 /// Where a label is drawn.
-fn label_rect(label: &EdgeLabel, measure: &dyn TextMeasure) -> Rect {
+pub(crate) fn label_rect(label: &EdgeLabel, measure: &dyn TextMeasure) -> Rect {
     let width = measure.width(&label.text, FONT_SIZE, false);
     let left = text_left(label_area(label), width, label.align);
     Rect::new(left, label.anchor.y, width, LABEL_HEIGHT)

@@ -2,7 +2,7 @@
 
 use rust_i18n::t;
 use umlcraft_format::FormatError;
-use umlcraft_model::{Id, Model, ModelError, ParseMultiplicityError};
+use umlcraft_model::{Id, Model, ModelError, ParseCardinalityError, ParseMultiplicityError};
 use umlcraft_notation::composite;
 
 use crate::labels::display_name;
@@ -64,6 +64,9 @@ pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
             umlcraft_notation::sequence_edit::NOT_ON_LIFELINE => t!("error.not_on_lifeline"),
             umlcraft_notation::sequence_edit::LIFELINE_ENDED => t!("error.lifeline_ended"),
             umlcraft_notation::sequence_edit::NOT_ON_MESSAGE => t!("error.not_on_message"),
+            umlcraft_notation::er::NOT_JOINED => t!("error.er_not_joined"),
+            umlcraft_notation::er::ATTRIBUTE_OWNED => t!("error.er_attribute_owned"),
+            umlcraft_notation::er::SECOND_WEAK => t!("error.er_second_weak"),
             _ => t!("error.invalid", detail = detail),
         },
     }
@@ -125,6 +128,10 @@ pub fn export_error(err: &umlcraft_asta_export::ExportError) -> String {
 
 pub fn multiplicity_error(err: &ParseMultiplicityError) -> String {
     t!("error.multiplicity", text = err.0).to_string()
+}
+
+pub fn cardinality_error(err: &ParseCardinalityError) -> String {
+    t!("error.cardinality", text = err.0).to_string()
 }
 
 /// Why an `.nsd` file could not be read as a structogram.

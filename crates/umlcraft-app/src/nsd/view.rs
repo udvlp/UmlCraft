@@ -47,7 +47,7 @@ const DRAG_START: f32 = 4.0;
 
 thread_local! {
     /// The system's fonts, loaded once for all rasterizing.
-    pub(crate) static OPTIONS: Rc<usvg::Options<'static>> = {
+    static OPTIONS: Rc<usvg::Options<'static>> = {
         let mut options = usvg::Options::default();
         options.fontdb_mut().load_system_fonts();
         Rc::new(options)
@@ -1249,7 +1249,7 @@ fn rect(r: umlcraft_nsd::layout::Rect) -> [i32; 4] {
 }
 
 /// Writes `bytes` through a temporary file, so that a failed write leaves the old file whole.
-pub(crate) fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(".tmp");
     let temporary = std::path::PathBuf::from(temporary);
@@ -1286,7 +1286,7 @@ fn palette(theme: &Theme) -> Palette {
 }
 
 /// The parsed SVG rasterized at `scale`, as GPUI takes images (BGRA, not premultiplied).
-pub(crate) fn rasterize(tree: &usvg::Tree, scale: f32) -> Option<(Arc<RenderImage>, (u32, u32))> {
+fn rasterize(tree: &usvg::Tree, scale: f32) -> Option<(Arc<RenderImage>, (u32, u32))> {
     let size = tree.size().to_int_size().scale_by(scale)?;
     let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())?;
     resvg::render(tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());

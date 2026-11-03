@@ -22,6 +22,8 @@ pub enum DiagramKind {
     Deployment,
     /// The inside of a structured class: its parts, ports and the connectors between them.
     CompositeStructure,
+    /// Entities, attributes, relationships and IS-As in Chen notation.
+    EntityRelationship,
 }
 
 /// One visible item on a diagram. Presentations of a diagram are kept in z-order (back to front).

@@ -1184,6 +1184,7 @@ fn message_edge(
         end_labels: Vec::new(),
         constraint_labels: Vec::new(),
         stroke: None,
+        double: false,
     }
 }
 

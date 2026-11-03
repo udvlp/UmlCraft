@@ -18,6 +18,107 @@ fn sample_roundtrips_byte_for_byte() {
 }
 
 #[test]
+fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
+    use umlcraft_model::{DiagramKind, er::*};
+    let (mut doc, _) = order_system();
+    let root = doc.model().root();
+    let mut ids = (root, root, root, root);
+    doc.edit("er", |tx| {
+        let package = tx.create(root, ElementData::new("Flights", ElementKind::Package))?;
+        let diagram = tx.create(
+            package,
+            ElementData::new("Booking", ElementKind::diagram(DiagramKind::EntityRelationship)),
+        )?;
+        let weak =
+            ErEntityProps { weak: true, physical_name: "TICKET".into(), ..Default::default() };
+        let customer = tx.create(
+            package,
+            ElementData::new("Kunde", ElementKind::ErEntity(Default::default())),
+        )?;
+        let ticket = tx.create(package, ElementData::new("Ticket", ElementKind::ErEntity(weak)))?;
+        let key = ErAttributeProps {
+            key: Some(ErKey::Partial),
+            datatype: "INT".into(),
+            not_null: true,
+            ..Default::default()
+        };
+        let id = tx.create(ticket, ElementData::new("ID", ElementKind::ErAttribute(key)))?;
+        let books = tx.create(
+            package,
+            ElementData::new(
+                "bucht",
+                ElementKind::ErRelationship(ErRelationshipProps { identifying: true }),
+            ),
+        )?;
+        let mut part = ErParticipationProps::new(books, customer);
+        part.cardinality = Some(Cardinality::ONE_ONE);
+        part.total = true;
+        let part = tx.create(books, ElementData::new("", ElementKind::ErParticipation(part)))?;
+        tx.create(
+            books,
+            ElementData::new(
+                "",
+                ElementKind::ErParticipation(ErParticipationProps::new(books, ticket)),
+            ),
+        )?;
+        let is_a = tx.create(
+            package,
+            ElementData::new(
+                "",
+                ElementKind::ErIsA(ErIsAProps { total: true, disjoint: Some(true) }),
+            ),
+        )?;
+        tx.create(
+            is_a,
+            ElementData::new(
+                "",
+                ElementKind::ErSubtyping(ErSubtypingProps {
+                    is_a,
+                    entity: customer,
+                    supertype: true,
+                }),
+            ),
+        )?;
+        let node = |tx: &mut umlcraft_model::Tx<'_>, e, x| {
+            tx.add_node(diagram, Some(e), Rect::new(x, 0.0, 100.0, 40.0))
+        };
+        let (c, t, i, b) = (
+            node(tx, customer, 0.0)?,
+            node(tx, ticket, 300.0)?,
+            node(tx, id, 300.0)?,
+            node(tx, books, 150.0)?,
+        );
+        tx.add_edge(diagram, Some(part), b, c, Vec::new())?;
+        tx.add_edge(diagram, Some(id), t, i, Vec::new())?;
+        ids = (customer, part, is_a, ticket);
+        Ok(())
+    })
+    .unwrap();
+    let json = to_string(doc.model());
+    assert_eq!(from_str(&json).unwrap(), *doc.model());
+    for written in [
+        "\"type\": \"erEntity\"",
+        "\"weak\": true",
+        "\"physicalName\": \"TICKET\"",
+        "\"key\": \"partial\"",
+        "\"notNull\": true",
+        "\"identifying\": true",
+        "\"cardinality\": \"[1,1]\"",
+        "\"type\": \"erIsA\"",
+        "\"supertype\": true",
+        "\"diagram\": \"entityRelationship\"",
+    ] {
+        assert!(json.contains(written), "{written} missing in {json}");
+    }
+    let (customer, part, is_a, ticket) = ids;
+    doc.edit("delete", |tx| tx.delete(customer)).unwrap();
+    let model = doc.model();
+    assert!(model.get(part).is_none(), "the participation goes with its entity");
+    assert!(model.children(is_a).is_empty(), "so does the subtyping");
+    assert!(model.get(ticket).is_some());
+}
+
+#[test]
 fn every_property_survives() {
     let (mut doc, ids) = order_system();
     doc.edit("decorate", |tx| {

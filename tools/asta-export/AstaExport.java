@@ -376,7 +376,14 @@ public final class AstaExport {
                 case "attribute", "operation", "port" -> features.add(child);
                 case "association", "generalization", "realization", "dependency", "include", "extend" ->
                     relationships.add(child);
-                case "diagram" -> diagrams.add(child);
+                // Astah's ER diagrams are of another notation; Chen's has no place there.
+                case "diagram" -> {
+                    if ("entityRelationship".equals(text(e, "diagram"))) {
+                        drop("erDiagram");
+                    } else {
+                        diagrams.add(child);
+                    }
+                }
                 case "interaction" -> {
                     List<String> own = new ArrayList<>();
                     for (String d : children(child)) {

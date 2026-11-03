@@ -73,7 +73,13 @@ pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> St
     }
     for edge in &scene.edges {
         svg.line = edge.stroke;
-        svg.primitive(&draw::edge_line(edge, 1.0));
+        if edge.double {
+            for points in draw::double_line(&edge.path()) {
+                svg.primitive(&Primitive::Polyline { points, width: 1.0, style: edge.line });
+            }
+        } else {
+            svg.primitive(&draw::edge_line(edge, 1.0));
+        }
         for p in draw::end_markers(edge) {
             svg.primitive(&p);
         }

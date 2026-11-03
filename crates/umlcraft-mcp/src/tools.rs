@@ -8,9 +8,9 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
 use umlcraft_model::{
-    ActivityNodeKind, DiagramKind, ElementData, ElementKind, Id, InteractionOperator, MessageSort,
-    Model, ModelError, Point, Rect, Shape, SharedStyle, StateInvariantProps, TerminationProps, Tx,
-    Visibility,
+    ActivityNodeKind, DiagramKind, ElementData, ElementKind, ErKey, Id, InteractionOperator,
+    MessageSort, Model, ModelError, Point, Rect, Shape, SharedStyle, StateInvariantProps,
+    TerminationProps, Tx, Visibility,
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview, TextMeasure};
@@ -113,7 +113,7 @@ default (label `%` for none). Elements may have `comment`, `disabled` and `color
 digits). `kind` of the root: program (default), sub for a method, includable; `keywords`: \
 english (default) or german (`für`, `solange`, `bis`, `gib`).";
 
-const DIAGRAM_KINDS: [(&str, DiagramKind); 8] = [
+const DIAGRAM_KINDS: [(&str, DiagramKind); 9] = [
     ("class", DiagramKind::Class),
     ("use_case", DiagramKind::UseCase),
     ("sequence", DiagramKind::Sequence),
@@ -122,6 +122,7 @@ const DIAGRAM_KINDS: [(&str, DiagramKind); 8] = [
     ("component", DiagramKind::Component),
     ("deployment", DiagramKind::Deployment),
     ("composite_structure", DiagramKind::CompositeStructure),
+    ("entity_relationship", DiagramKind::EntityRelationship),
 ];
 
 fn diagram_key(kind: DiagramKind) -> &'static str {
@@ -181,6 +182,30 @@ pub fn list() -> Vec<Value> {
         }
         properties
     };
+    let flag = |description: &str| json!({ "type": "boolean", "description": description });
+    // The settings of ER elements, which `update_element` takes.
+    let er = json!({
+        "weak": flag("ER entities: weak, identified through an owner entity (double frame)."),
+        "associative": flag("ER entities: associative, a relationship that is also an entity."),
+        "key": { "type": "string", "enum": ["", "primary", "partial"],
+                 "description": "ER attributes: key (underlined) or partial key of a weak \
+                                 entity (dotted)." },
+        "derived": flag("ER attributes: derived (dashed ellipse)."),
+        "multivalued": flag("ER attributes: multivalued (double ellipse)."),
+        "identifying": flag("ER relationships: identifying a weak entity (double rhombus)."),
+        "total": flag("ER participations: every entity takes part (double line). IS-A: every \
+                       instance of the supertype is one of the subtypes."),
+        "disjoint": { "type": "string", "enum": ["", "disjoint", "overlapping"],
+                      "description": "IS-A: whether the subtypes exclude each other (d, o)." },
+        "cardinality": text("ER participations: how often the entity takes part, read \
+                             look-across, e.g. [0,1], [1,n], [0,m]; \"\" for none."),
+        "role": text("ER participations: the entity's role, when it takes part twice."),
+        "physical_name": text("ER entities and attributes: the name in the database."),
+        "datatype": text("ER attributes: the column's type, e.g. VARCHAR."),
+        "length_precision": text("ER attributes: length or precision, e.g. 10,2."),
+        "not_null": flag("ER attributes: the column is NOT NULL."),
+        "default_value": text("ER attributes: the column's default."),
+    });
     let structogram_schema = json!({
         "type": "object",
         "description": format!(
@@ -489,7 +514,9 @@ pub fn list() -> Vec<Value> {
              stands for; the constraints of an element (members show them after their text, \
              lines below their name); on every diagram showing it, the shared style of a \
              generalization (one triangle for all generalizations to its general element) \
-             and whether a class «boundary», «control» or «entity» is drawn as its icon.",
+             and whether a class «boundary», «control» or «entity» is drawn as its icon; the \
+             settings of ER entities, attributes, relationships, IS-As and participations \
+             (weak, key, cardinality, …).",
             with(
                 json!({
                     "id": id("The element."),
@@ -524,7 +551,7 @@ pub fn list() -> Vec<Value> {
                               "description": "Classes whose first stereotype is boundary, control \
                                               or entity: drawn as the robustness icon." },
                 }),
-                &activity_node,
+                &with(activity_node.clone(), &er),
             ),
             &["id"],
         ),
@@ -1382,6 +1409,7 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     set_properties(model, &mut settings, args)?;
     set_activity_node(model, id, &mut settings, args)?;
     set_submachine(model, id, &mut settings, args)?;
+    set_er(&mut settings, args)?;
     let is_alt = |kind: &ElementKind| matches!(kind, ElementKind::CombinedFragment(p) if p.operator == InteractionOperator::Alt);
     let becomes_alt = is_alt(&settings) && !is_alt(&kind);
     let recovered = args.get("covered").is_some();
@@ -1470,6 +1498,90 @@ fn pick<T: Copy>(args: &Value, key: &str, names: &[(&str, T)]) -> Result<Option<
             Err(format!("`{key}` is one of {}, not `{name}`", names.join(", ")))
         }
     }
+}
+
+/// The settings of the elements of ER diagrams `update_element` takes.
+const ER_KEYS: [&str; 15] = [
+    "weak",
+    "associative",
+    "key",
+    "derived",
+    "multivalued",
+    "identifying",
+    "total",
+    "disjoint",
+    "cardinality",
+    "role",
+    "physical_name",
+    "datatype",
+    "length_precision",
+    "not_null",
+    "default_value",
+];
+
+/// Writes the ER settings of `args` into `kind`, an entity, attribute, relationship, IS-A or
+/// participation.
+fn set_er(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
+    let type_name = kind.type_name();
+    for key in ER_KEYS.into_iter().filter(|k| args.get(k).is_some()) {
+        let value = &args[key];
+        let flag = || value.as_bool().ok_or_else(|| format!("`{key}` is true or false"));
+        let text = || {
+            value.as_str().map(|s| s.trim().to_owned()).ok_or_else(|| format!("`{key}` is text"))
+        };
+        match (key, &mut *kind) {
+            ("weak", ElementKind::ErEntity(p)) => p.weak = flag()?,
+            ("associative", ElementKind::ErEntity(p)) => p.associative = flag()?,
+            ("physical_name", ElementKind::ErEntity(p)) => p.physical_name = text()?,
+            ("key", ElementKind::ErAttribute(p)) => {
+                p.key = match text()?.as_str() {
+                    "" => None,
+                    "primary" => Some(ErKey::Primary),
+                    "partial" => Some(ErKey::Partial),
+                    other => {
+                        return Err(format!(
+                            "`key` is one of primary, partial, \"\", not `{other}`"
+                        ));
+                    }
+                }
+            }
+            ("derived", ElementKind::ErAttribute(p)) => p.derived = flag()?,
+            ("multivalued", ElementKind::ErAttribute(p)) => p.multivalued = flag()?,
+            ("physical_name", ElementKind::ErAttribute(p)) => p.physical_name = text()?,
+            ("datatype", ElementKind::ErAttribute(p)) => p.datatype = text()?,
+            ("length_precision", ElementKind::ErAttribute(p)) => p.length_precision = text()?,
+            ("not_null", ElementKind::ErAttribute(p)) => p.not_null = flag()?,
+            ("default_value", ElementKind::ErAttribute(p)) => p.default_value = text()?,
+            ("identifying", ElementKind::ErRelationship(p)) => p.identifying = flag()?,
+            ("total", ElementKind::ErIsA(p)) => p.total = flag()?,
+            ("disjoint", ElementKind::ErIsA(p)) => {
+                p.disjoint = match text()?.as_str() {
+                    "" => None,
+                    "disjoint" => Some(true),
+                    "overlapping" => Some(false),
+                    other => {
+                        return Err(format!(
+                            "`disjoint` is one of disjoint, overlapping, \"\", not `{other}`"
+                        ));
+                    }
+                }
+            }
+            ("total", ElementKind::ErParticipation(p)) => p.total = flag()?,
+            ("role", ElementKind::ErParticipation(p)) => p.role = text()?,
+            ("cardinality", ElementKind::ErParticipation(p)) => {
+                let text = text()?;
+                p.cardinality = if text.is_empty() {
+                    None
+                } else {
+                    Some(text.parse().map_err(|e: umlcraft_model::ParseCardinalityError| {
+                        format!("`{}` is no cardinality, e.g. [0,1], [1,n], 0..*", e.0)
+                    })?)
+                };
+            }
+            _ => return Err(format!("a {type_name} has no `{key}`")),
+        }
+    }
+    Ok(())
 }
 
 /// The settings of activity nodes `update_element` and `create_element` take.

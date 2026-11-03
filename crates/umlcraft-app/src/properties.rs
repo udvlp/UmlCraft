@@ -15,11 +15,11 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Color, DiagramKind,
-    ElementData, ElementKind, Id, InstanceKind, InstanceProps, InteractionOperator, LifelineProps,
-    LinkEnd, LinkProps, MessageSort, Model, Multiplicity, Navigability, ObjectEffect,
-    ObjectOrdering, ParameterDirections, Presentation, Shape, Style, TemplateParameterKind,
-    TypeRef, Visibility,
+    ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Cardinality, Color,
+    DiagramKind, ElementData, ElementKind, ErKey, Id, InstanceKind, InstanceProps,
+    InteractionOperator, LifelineProps, LinkEnd, LinkProps, MessageSort, Model, Multiplicity,
+    Navigability, ObjectEffect, ObjectOrdering, ParameterDirections, Presentation, Shape, Style,
+    TemplateParameterKind, TypeRef, Visibility,
 };
 use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
@@ -103,6 +103,10 @@ enum Field {
     InState,
     UpperBound,
     Binding,
+    PhysicalName,
+    Datatype,
+    LengthPrecision,
+    Cardinality,
 }
 
 /// Inputs for one association end.
@@ -153,6 +157,16 @@ pub struct PropertiesPanel {
     default: Entity<InputState>,
     /// Classes: the template they bind, with its arguments (`Pair<int,Holder>`).
     binding: Entity<InputState>,
+    /// ER entities and attributes: their names in the database, and an attribute's column.
+    physical_name: Entity<InputState>,
+    datatype: Entity<InputState>,
+    length_precision: Entity<InputState>,
+    /// ER participations: how often the entity takes part, `[0,n]`.
+    cardinality: Entity<InputState>,
+    /// ER attributes: no key, key or partial key.
+    er_key: Entity<Choice>,
+    /// IS-A: subtypes not stated, disjoint or overlapping.
+    disjoint: Entity<Choice>,
     parameter_kind: Entity<Choice>,
     sort: Entity<Choice>,
     operator: Entity<Choice>,
@@ -211,6 +225,22 @@ fn parameter_kind_items() -> Vec<SharedString> {
 fn direction_items() -> Vec<SharedString> {
     ["explicit", "hidden", "all"]
         .map(|k| t!(format!("prop.parameter_directions_{k}")).to_string().into())
+        .to_vec()
+}
+
+const ER_KEYS: [Option<ErKey>; 3] = [None, Some(ErKey::Primary), Some(ErKey::Partial)];
+/// An IS-A's subtypes: not stated, disjoint, overlapping.
+const DISJOINT: [Option<bool>; 3] = [None, Some(true), Some(false)];
+
+fn er_key_items() -> Vec<SharedString> {
+    ["prop.er_key_none", "prop.er_key_primary", "prop.er_key_partial"]
+        .map(|k| t!(k).to_string().into())
+        .to_vec()
+}
+
+fn disjoint_items() -> Vec<SharedString> {
+    ["prop.er_disjoint_unspecified", "prop.er_disjoint_yes", "prop.er_disjoint_no"]
+        .map(|k| t!(k).to_string().into())
         .to_vec()
 }
 
@@ -419,6 +449,12 @@ impl PropertiesPanel {
         let default = input(window, cx);
         let member_multiplicity = cx.new(|cx| InputState::new(window, cx).placeholder("0..*"));
         let binding = cx.new(|cx| InputState::new(window, cx).placeholder("List<String>"));
+        let physical_name = input(window, cx);
+        let datatype = cx.new(|cx| InputState::new(window, cx).placeholder("VARCHAR"));
+        let length_precision = cx.new(|cx| InputState::new(window, cx).placeholder("10,2"));
+        let cardinality = cx.new(|cx| InputState::new(window, cx).placeholder("[0,n]"));
+        let er_key = cx.new(|cx| SelectState::new(er_key_items(), None, window, cx));
+        let disjoint = cx.new(|cx| SelectState::new(disjoint_items(), None, window, cx));
         let parameter_kind =
             cx.new(|cx| SelectState::new(parameter_kind_items(), None, window, cx));
         let sort = cx.new(|cx| SelectState::new(sort_items(), None, window, cx));
@@ -460,6 +496,10 @@ impl PropertiesPanel {
         watch(&default, Field::Default, cx);
         watch(&member_multiplicity, Field::MemberMultiplicity, cx);
         watch(&binding, Field::Binding, cx);
+        watch(&physical_name, Field::PhysicalName, cx);
+        watch(&datatype, Field::Datatype, cx);
+        watch(&length_precision, Field::LengthPrecision, cx);
+        watch(&cardinality, Field::Cardinality, cx);
         for (i, end) in ends.iter().enumerate() {
             watch(&end.role, Field::Role(i), cx);
             watch(&end.multiplicity, Field::Multiplicity(i), cx);
@@ -615,6 +655,34 @@ impl PropertiesPanel {
             },
         ));
         subscriptions.push(cx.subscribe_in(
+            &er_key,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(key) = selected(state, cx).and_then(|ix| ER_KEYS.get(ix).copied()) else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::ErAttribute(p) = &mut data.kind {
+                        p.key = key;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &disjoint,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(d) = selected(state, cx).and_then(|ix| DISJOINT.get(ix).copied()) else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::ErIsA(p) = &mut data.kind {
+                        p.disjoint = d;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
             &directions,
             window,
             |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
@@ -701,6 +769,12 @@ impl PropertiesPanel {
             bounds,
             default,
             binding,
+            physical_name,
+            datatype,
+            length_precision,
+            cardinality,
+            er_key,
+            disjoint,
             parameter_kind,
             sort,
             operator,
@@ -918,8 +992,46 @@ impl PropertiesPanel {
                     ElementKind::Operation(p) if field == Field::ValueType => {
                         p.return_type = single;
                     }
+                    ElementKind::ErAttribute(p) if field == Field::Default => {
+                        p.default_value = text;
+                    }
                     _ => {}
                 });
+            }
+            Field::PhysicalName | Field::Datatype | Field::LengthPrecision => {
+                let state = match field {
+                    Field::PhysicalName => &self.physical_name,
+                    Field::Datatype => &self.datatype,
+                    _ => &self.length_precision,
+                };
+                let value = Self::value(state, cx);
+                self.apply(id, cx, move |data| match &mut data.kind {
+                    ElementKind::ErEntity(p) if field == Field::PhysicalName => {
+                        p.physical_name = value;
+                    }
+                    ElementKind::ErAttribute(p) => match field {
+                        Field::PhysicalName => p.physical_name = value,
+                        Field::Datatype => p.datatype = value,
+                        _ => p.length_precision = value,
+                    },
+                    _ => {}
+                });
+            }
+            Field::Cardinality => {
+                let text = Self::value(&self.cardinality, cx);
+                let parsed =
+                    if text.is_empty() { Ok(None) } else { text.parse::<Cardinality>().map(Some) };
+                match parsed {
+                    Ok(c) => self.apply(id, cx, move |data| {
+                        if let ElementKind::ErParticipation(p) = &mut data.kind {
+                            p.cardinality = c;
+                        }
+                    }),
+                    Err(err) => self.workspace.update(cx, |ws, cx| {
+                        ws.complain(crate::errors::cardinality_error(&err));
+                        cx.notify();
+                    }),
+                }
             }
             Field::MemberMultiplicity => {
                 let text = Self::value(&self.member_multiplicity, cx);
@@ -978,6 +1090,7 @@ impl PropertiesPanel {
                 self.apply(id, cx, move |data| match &mut data.kind {
                     ElementKind::Association(p) => p.ends[i].role = value,
                     ElementKind::Link(p) => p.ends[i].role = value,
+                    ElementKind::ErParticipation(p) => p.role = value,
                     _ => {}
                 });
             }
@@ -1322,6 +1435,26 @@ impl PropertiesPanel {
                     window,
                     cx,
                 );
+            }
+            ElementKind::ErEntity(p) => {
+                set(&self.physical_name, p.physical_name.clone(), window, cx)
+            }
+            ElementKind::ErAttribute(p) => {
+                set(&self.physical_name, p.physical_name.clone(), window, cx);
+                set(&self.datatype, p.datatype.clone(), window, cx);
+                set(&self.length_precision, p.length_precision.clone(), window, cx);
+                set(&self.default, p.default_value.clone(), window, cx);
+                let k = ER_KEYS.iter().position(|&k| k == p.key);
+                choose(&self.er_key, k, locale_changed.then(er_key_items), window, cx);
+            }
+            ElementKind::ErIsA(p) => {
+                let d = DISJOINT.iter().position(|&d| d == p.disjoint);
+                choose(&self.disjoint, d, locale_changed.then(disjoint_items), window, cx);
+            }
+            ElementKind::ErParticipation(p) => {
+                let c = p.cardinality.map(|c| c.to_string()).unwrap_or_default();
+                set(&self.cardinality, c, window, cx);
+                set(&self.ends[0].role, p.role.clone(), window, cx);
             }
             _ => {}
         }
@@ -1683,6 +1816,11 @@ impl PropertiesPanel {
             | ElementKind::Operation(_)
             | ElementKind::Extend(_)
             | ElementKind::Association(_) => self.structure_options(body, kind, id, model, cx),
+            ElementKind::ErEntity(_)
+            | ElementKind::ErAttribute(_)
+            | ElementKind::ErRelationship(_)
+            | ElementKind::ErIsA(_)
+            | ElementKind::ErParticipation(_) => self.er_options(body, kind, id, cx),
             _ => self.behavior_options(body, kind, id, model, cx),
         }
     }
@@ -1981,6 +2119,151 @@ impl PropertiesPanel {
                             Select::new(&fields.aggregation).small().into_any_element(),
                         ));
                 }
+            }
+            _ => {}
+        }
+        body
+    }
+
+    /// Fields of the elements of ER diagrams.
+    fn er_options(&self, mut body: Div, kind: &ElementKind, id: Id, cx: &Context<Self>) -> Div {
+        let muted = cx.theme().muted_foreground;
+        let field = |label: SharedString, content: AnyElement| {
+            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
+        };
+        let heading =
+            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
+        let input = |label: &str, state: &Entity<InputState>| {
+            field(t!(label).into(), Input::new(state).small().into_any_element())
+        };
+        let workspace = self.workspace.clone();
+        match kind {
+            ElementKind::ErEntity(p) => {
+                body = body
+                    .child(flag(
+                        "er-weak",
+                        t!("prop.er_weak").into(),
+                        p.weak,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErEntity(p) = &mut d.kind {
+                                p.weak = v;
+                            }
+                        },
+                    ))
+                    .child(flag(
+                        "er-associative",
+                        t!("prop.er_associative").into(),
+                        p.associative,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErEntity(p) = &mut d.kind {
+                                p.associative = v;
+                            }
+                        },
+                    ))
+                    .child(heading(t!("prop.er_database").to_string()))
+                    .child(input("prop.er_physical_name", &self.physical_name));
+            }
+            ElementKind::ErAttribute(p) => {
+                body = body
+                    .child(field(
+                        t!("prop.er_key").into(),
+                        Select::new(&self.er_key).small().into_any_element(),
+                    ))
+                    .child(flag(
+                        "er-derived",
+                        t!("prop.er_derived").into(),
+                        p.derived,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErAttribute(p) = &mut d.kind {
+                                p.derived = v;
+                            }
+                        },
+                    ))
+                    .child(flag(
+                        "er-multivalued",
+                        t!("prop.er_multivalued").into(),
+                        p.multivalued,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErAttribute(p) = &mut d.kind {
+                                p.multivalued = v;
+                            }
+                        },
+                    ))
+                    .child(heading(t!("prop.er_database").to_string()))
+                    .child(input("prop.er_physical_name", &self.physical_name))
+                    .child(input("prop.er_datatype", &self.datatype))
+                    .child(input("prop.er_length_precision", &self.length_precision))
+                    .child(input("prop.er_default_value", &self.default))
+                    .child(flag(
+                        "er-not-null",
+                        t!("prop.er_not_null").into(),
+                        p.not_null,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErAttribute(p) = &mut d.kind {
+                                p.not_null = v;
+                            }
+                        },
+                    ));
+            }
+            ElementKind::ErRelationship(p) => {
+                body = body.child(flag(
+                    "er-identifying",
+                    t!("prop.er_identifying").into(),
+                    p.identifying,
+                    workspace.clone(),
+                    id,
+                    |d, v| {
+                        if let ElementKind::ErRelationship(p) = &mut d.kind {
+                            p.identifying = v;
+                        }
+                    },
+                ));
+            }
+            ElementKind::ErIsA(p) => {
+                body = body
+                    .child(field(
+                        t!("prop.er_disjoint").into(),
+                        Select::new(&self.disjoint).small().into_any_element(),
+                    ))
+                    .child(flag(
+                        "er-total-specialization",
+                        t!("prop.er_total_specialization").into(),
+                        p.total,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErIsA(p) = &mut d.kind {
+                                p.total = v;
+                            }
+                        },
+                    ));
+            }
+            ElementKind::ErParticipation(p) => {
+                body = body
+                    .child(input("prop.er_cardinality", &self.cardinality))
+                    .child(input("prop.role", &self.ends[0].role))
+                    .child(flag(
+                        "er-total-participation",
+                        t!("prop.er_total_participation").into(),
+                        p.total,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErParticipation(p) = &mut d.kind {
+                                p.total = v;
+                            }
+                        },
+                    ));
             }
             _ => {}
         }

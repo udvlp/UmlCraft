@@ -401,6 +401,26 @@ pub enum Figure {
     },
     /// A free text: only its rows are drawn.
     Text,
+    /// ER diagrams: an entity, a rectangle; a weak one has a second frame inside, an
+    /// associative one a rhombus.
+    ErEntity {
+        weak: bool,
+        associative: bool,
+    },
+    /// ER diagrams: an attribute, an ellipse; dashed if derived, double if multivalued. A key
+    /// has its name underlined (`underlines`, one per line of the name), a partial key dotted.
+    ErAttribute {
+        derived: bool,
+        multivalued: bool,
+        underlines: Vec<[Point; 2]>,
+        dotted: bool,
+    },
+    /// ER diagrams: a relationship, a rhombus; an identifying one has a second one inside.
+    ErRelationship {
+        identifying: bool,
+    },
+    /// ER diagrams: an IS-A, a triangle pointing up to the supertype.
+    ErIsA,
     Other,
 }
 
@@ -435,8 +455,10 @@ impl Figure {
             | Self::ExitPoint
             | Self::Lollipop
             | Self::Socket { .. }
-            | Self::UseCase { .. } => Outline::Ellipse,
-            Self::Diamond => Outline::Diamond,
+            | Self::UseCase { .. }
+            | Self::ErAttribute { .. } => Outline::Ellipse,
+            Self::Diamond | Self::ErRelationship { .. } => Outline::Diamond,
+            Self::ErIsA => Outline::Triangle,
             _ => Outline::Rect,
         }
     }
@@ -448,6 +470,8 @@ pub enum Outline {
     Rect,
     Ellipse,
     Diamond,
+    /// Pointing up: its tip in the middle of the top, its base along the bottom.
+    Triangle,
 }
 
 impl Outline {
@@ -458,6 +482,8 @@ impl Outline {
             Self::Rect => dx.abs() <= 1.0 && dy.abs() <= 1.0,
             Self::Ellipse => dx * dx + dy * dy <= 1.0,
             Self::Diamond => dx.abs() + dy.abs() <= 1.0,
+            // Half as wide as the box at the middle, as wide at the bottom.
+            Self::Triangle => dy <= 1.0 && dx.abs() <= (dy + 1.0) / 2.0,
         }
     }
 
@@ -469,7 +495,7 @@ impl Outline {
         if self.contains(rect, toward) || !self.contains(rect, inside) {
             return inside;
         }
-        // Both outlines are convex, so the line crosses them once: bisect.
+        // The outlines are convex, so the line crosses them once: bisect.
         let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
         let at = |t: f32| {
             Point::new(inside.x + (toward.x - inside.x) * t, inside.y + (toward.y - inside.y) * t)
@@ -601,6 +627,9 @@ pub struct EdgeShape {
     pub constraint_labels: Vec<ConstraintLabel>,
     /// A color of its own for the line and its arrow heads; unset, the theme's.
     pub stroke: Option<Color>,
+    /// ER diagrams: drawn as two lines beside the route (total participation), see
+    /// [`draw::double_line`](crate::draw::double_line).
+    pub double: bool,
 }
 
 /// A constraint shown on a line, among its labels.
@@ -1165,7 +1194,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                     .map(|end| end.qualifiers.iter().map(|q| qualifier_text(model, q)).collect()),
                 _ => Default::default(),
             };
-            Some(edge_for(
+            let mut edge = edge_for(
                 p.id,
                 element.map(|e| e.kind()),
                 &qualifiers,
@@ -1182,7 +1211,16 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 labels,
                 &p.style,
                 measure,
-            ))
+            );
+            // A total IS-A has a double line to its supertype.
+            if let Some(ElementKind::ErSubtyping(s)) = element.map(|e| e.kind()) {
+                let total = matches!(
+                    model.get(s.is_a).map(|e| e.kind()),
+                    Some(ElementKind::ErIsA(i)) if i.total
+                );
+                edge.double = s.supertype && total;
+            }
+            Some(edge)
         };
     let mut edges: Vec<EdgeShape> =
         candidates.iter().filter_map(|p| edge_shape(p, &rects, &outlines)).collect();
@@ -1260,6 +1298,7 @@ fn association_class_anchors(
                 end_labels: Vec::new(),
                 constraint_labels: Vec::new(),
                 stroke: edge.stroke,
+                double: false,
             });
         }
     }
@@ -1297,6 +1336,7 @@ fn free_line(p: &Presentation, preview: &Preview) -> Option<EdgeShape> {
         end_labels: Vec::new(),
         constraint_labels: Vec::new(),
         stroke: None,
+        double: false,
     })
 }
 
@@ -1560,6 +1600,10 @@ fn layout_element(
             (r, Figure::Actor, vec![row])
         }
         ElementKind::UseCase(_) => layout_use_case(model, e, style, bounds, measure),
+        ElementKind::ErEntity(_)
+        | ElementKind::ErAttribute(_)
+        | ElementKind::ErRelationship(_)
+        | ElementKind::ErIsA(_) => layout_er(e, style, bounds, measure),
         // Astah has no system boundary of its own; it is drawn as a rectangle with a text: the
         // name in regular type, centered, its baseline 24 below the top.
         ElementKind::SystemBoundary => {
@@ -2557,6 +2601,108 @@ fn wrap(text: &str, max: f32, size: f32, measure: &dyn TextMeasure) -> Vec<Strin
     lines
 }
 
+/// How far the second frame of a weak entity, multivalued attribute or identifying relationship
+/// lies inside the first.
+pub const ER_INSET: f32 = 4.0;
+
+/// What an IS-A reads until it is given a name.
+pub const IS_A: &str = "IS-A";
+
+/// An ER node in Chen notation: the name centered in the shape, broken at spaces to fit the part
+/// of the shape a text fits in (all of a rectangle, the rectangle inscribed in an ellipse, the
+/// middle of a rhombus, the lower middle of a triangle). The box grows until the name fits and
+/// never shrinks below the stored size.
+fn layout_er(
+    e: &Element,
+    style: &Style,
+    bounds: Rect,
+    measure: &dyn TextMeasure,
+) -> (Rect, Figure, Vec<Row>) {
+    let size = style.font_size.unwrap_or(FONT_SIZE);
+    let h = line_height(size);
+    let second = |double: bool| if double { 2.0 * ER_INSET } else { 0.0 };
+    // The share of the box's width and height the name may take, the padding around it, and
+    // where the middle of the name block lies (as a share of the height).
+    let (share, pad, middle, figure) = match e.kind() {
+        ElementKind::ErEntity(p) if p.associative => {
+            (0.5, 4.0, 0.5, Figure::ErEntity { weak: p.weak, associative: true })
+        }
+        ElementKind::ErEntity(p) => {
+            (1.0, 10.0 + second(p.weak), 0.5, Figure::ErEntity { weak: p.weak, associative: false })
+        }
+        ElementKind::ErAttribute(p) => (
+            std::f32::consts::FRAC_1_SQRT_2,
+            4.0 + second(p.multivalued),
+            0.5,
+            Figure::ErAttribute {
+                derived: p.derived,
+                multivalued: p.multivalued,
+                underlines: Vec::new(),
+                dotted: p.key == Some(umlcraft_model::ErKey::Partial),
+            },
+        ),
+        ElementKind::ErRelationship(p) => (
+            0.5,
+            4.0 + second(p.identifying),
+            0.5,
+            Figure::ErRelationship { identifying: p.identifying },
+        ),
+        _ => (0.5, 2.0, 0.65, Figure::ErIsA),
+    };
+    let name = match e.kind() {
+        ElementKind::ErIsA(_) if e.name().trim().is_empty() => IS_A,
+        _ => e.name(),
+    };
+    let paragraphs: Vec<Line> =
+        name.split('\n').map(|n| Line::new(n, size, RowRole::Name, Some(e.id()))).collect();
+    let widest_word = paragraphs.iter().map(|l| l.widest_word(measure)).fold(0.0, f32::max);
+    let room = (bounds.width * share - pad).max(widest_word);
+    let names: Vec<Line> = paragraphs.into_iter().flat_map(|l| l.wrapped(room, measure)).collect();
+    let widest = names.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+    let block = h * names.len() as f32;
+    let r = Rect::new(
+        bounds.x,
+        bounds.y,
+        bounds.width.max((widest + pad) / share),
+        bounds.height.max((block + pad) / share),
+    );
+    let top = r.y + r.height * middle - block / 2.0;
+    let rows: Vec<Row> = names
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            line.place(Rect::new(r.x, top + i as f32 * h, r.width, h), LabelAlign::Center)
+        })
+        .collect();
+    let mut figure = figure;
+    if let (Figure::ErAttribute { underlines, .. }, ElementKind::ErAttribute(p)) =
+        (&mut figure, e.kind())
+        && p.key.is_some()
+    {
+        *underlines = rows
+            .iter()
+            .filter(|row| !row.text.is_empty())
+            .map(|row| {
+                let w = measure.width(&row.text, row.size, row.bold);
+                let x = crate::draw::text_left(row.rect, w, row.align);
+                let y = row.rect.y + row.size * crate::draw::UNDERLINE;
+                [Point::new(x, y), Point::new(x + w, y)]
+            })
+            .collect();
+    }
+    let mut rows = rows;
+    // "d" (disjoint) or "o" (overlapping) beside the tip.
+    if let ElementKind::ErIsA(p) = e.kind()
+        && let Some(disjoint) = p.disjoint
+    {
+        let line = Line::new(if disjoint { "d" } else { "o" }, size, RowRole::Stereotype, None);
+        let w = line.width(measure);
+        let at = Rect::new(r.center().x + 8.0, r.y - h / 2.0, w, h);
+        rows.push(line.place(at, LabelAlign::Left));
+    }
+    (r, figure, rows)
+}
+
 /// Use case ellipse as Astah draws it: the bold name centered, and with extension points a line
 /// below it, then "extension points" and the points, left-aligned on the rectangle inscribed in
 /// the ellipse. The ellipse is at least as large as Astah makes it for its content.
@@ -3223,6 +3369,7 @@ fn edge_for(
         end_labels: Vec::new(),
         constraint_labels: Vec::new(),
         stroke: style.stroke,
+        double: false,
     };
     // Role, multiplicity and whether the role is underlined (static), per end.
     let mut ends: [(Option<String>, Option<String>, bool); 2] = Default::default();
@@ -3356,6 +3503,17 @@ fn edge_for(
             edge.source_marker = EndMarker::Containment;
             label = None;
         }
+        // ER diagrams: plain lines. A participation has its cardinality and role at the
+        // entity, like an association's multiplicity at its end; an attribute's line shows
+        // the attribute, whose name is in the ellipse.
+        Some(ElementKind::ErParticipation(p)) => {
+            edge.association = true;
+            edge.double = p.total;
+            let role = (!p.role.is_empty()).then(|| p.role.clone());
+            ends = [(None, None, false), (role, p.cardinality.map(|c| c.to_string()), false)];
+        }
+        Some(ElementKind::ErSubtyping(_)) => {}
+        Some(ElementKind::ErAttribute(_)) => label = None,
         _ => edge.line = LineStyle::ShortDashed,
     }
 

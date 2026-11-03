@@ -8,8 +8,8 @@ use umlcraft_model::{Point, Rect};
 
 use crate::route;
 use crate::scene::{
-    EdgeLabel, EdgeShape, EndMarker, Figure, HeadIcon, LABEL_HEIGHT, LabelAlign, LineStyle,
-    NodeShape,
+    ER_INSET, EdgeLabel, EdgeShape, EndMarker, Figure, HeadIcon, LABEL_HEIGHT, LabelAlign,
+    LineStyle, NodeShape,
 };
 use crate::sequence::SequenceLayout;
 
@@ -761,6 +761,59 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             line(vec![Point::new(r.x, *header), Point::new(r.right(), *header)], solid),
         ],
         Figure::Text => Vec::new(),
+        Figure::ErEntity { weak, associative } => {
+            let mut result = vec![frame(r, Paint::Fill)];
+            if *weak {
+                result.push(frame(inset(r, ER_INSET), Paint::None));
+            }
+            if *associative {
+                result.push(Primitive::Polygon { points: rhombus(r), fill: Paint::None });
+            }
+            result
+        }
+        Figure::ErAttribute { derived, multivalued, underlines, dotted } => {
+            let (c, rx, ry) = (r.center(), r.width / 2.0, r.height / 2.0);
+            let mut result = if *derived {
+                // A dashed outline over a borderless fill.
+                vec![
+                    Primitive::Ellipse { center: c, rx, ry, fill: Paint::Fill, width: 0.0 },
+                    line(ellipse_points(c, rx, ry), LineStyle::ShortDashed),
+                ]
+            } else {
+                vec![ellipse(c, rx, ry)]
+            };
+            if *multivalued {
+                let (ix, iy) = ((rx - ER_INSET).max(0.0), (ry - ER_INSET).max(0.0));
+                result.push(Primitive::Ellipse {
+                    center: c,
+                    rx: ix,
+                    ry: iy,
+                    fill: Paint::None,
+                    width: 1.0,
+                });
+            }
+            let style = if *dotted { LineStyle::Dotted } else { solid };
+            result.extend(underlines.iter().map(|u| line(u.to_vec(), style)));
+            result
+        }
+        Figure::ErRelationship { identifying } => {
+            let mut result = vec![Primitive::Polygon { points: rhombus(r), fill: Paint::Fill }];
+            if *identifying {
+                // The inner rhombus keeps the outer one's proportions.
+                let (dx, dy) = (ER_INSET * 2.0, ER_INSET * 2.0 * r.height / r.width.max(1.0));
+                let inner = Rect::new(r.x + dx, r.y + dy, r.width - 2.0 * dx, r.height - 2.0 * dy);
+                result.push(Primitive::Polygon { points: rhombus(inner), fill: Paint::None });
+            }
+            result
+        }
+        Figure::ErIsA => vec![Primitive::Polygon {
+            points: vec![
+                Point::new(r.center().x, r.y),
+                Point::new(r.right(), r.bottom()),
+                Point::new(r.x, r.bottom()),
+            ],
+            fill: Paint::Fill,
+        }],
         Figure::Other => vec![Primitive::Frame {
             rect: r,
             width: 1.0,
@@ -770,6 +823,72 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             style: LineStyle::Dashed,
         }],
     }
+}
+
+/// The rhombus through the middles of a box's sides: top, right, bottom, left.
+fn rhombus(r: Rect) -> Vec<Point> {
+    let c = r.center();
+    vec![
+        Point::new(c.x, r.y),
+        Point::new(r.right(), c.y),
+        Point::new(c.x, r.bottom()),
+        Point::new(r.x, c.y),
+    ]
+}
+
+/// An ellipse as a closed polyline, for a dashed outline.
+fn ellipse_points(c: Point, rx: f32, ry: f32) -> Vec<Point> {
+    const STEPS: usize = 72;
+    (0..=STEPS)
+        .map(|i| {
+            let a = i as f32 / STEPS as f32 * std::f32::consts::TAU;
+            Point::new(c.x + rx * a.cos(), c.y + ry * a.sin())
+        })
+        .collect()
+}
+
+/// Half the distance between the two lines of a double line.
+pub const DOUBLE_GAP: f32 = 2.0;
+
+/// The two lines of an edge drawn double: its path moved [`DOUBLE_GAP`] to each side; at
+/// corners the moved segments meet where they cross.
+pub fn double_line(points: &[Point]) -> [Vec<Point>; 2] {
+    [beside(points, DOUBLE_GAP), beside(points, -DOUBLE_GAP)]
+}
+
+/// `points` moved `by` to the left of their direction.
+fn beside(points: &[Point], by: f32) -> Vec<Point> {
+    let shift = |a: Point, b: Point| {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let len = dx.hypot(dy);
+        if len == 0.0 { (0.0, 0.0) } else { (dy / len * by, -dx / len * by) }
+    };
+    let moved = |p: Point, (x, y): (f32, f32)| Point::new(p.x + x, p.y + y);
+    let n = points.len();
+    (0..n)
+        .map(|i| {
+            let p = points[i];
+            let before = (i > 0).then(|| shift(points[i - 1], p));
+            let after = (i + 1 < n).then(|| shift(p, points[i + 1]));
+            match (before, after) {
+                // Where the two moved segments, taken as lines, cross; parallel ones just move.
+                (Some(a), Some(b)) => {
+                    let (p0, d0) =
+                        (moved(points[i - 1], a), (p.x - points[i - 1].x, p.y - points[i - 1].y));
+                    let (p1, d1) = (moved(p, b), (points[i + 1].x - p.x, points[i + 1].y - p.y));
+                    let cross = d0.0 * d1.1 - d0.1 * d1.0;
+                    if cross.abs() < 1e-6 {
+                        moved(p, a)
+                    } else {
+                        let t = ((p1.x - p0.x) * d1.1 - (p1.y - p0.y) * d1.0) / cross;
+                        Point::new(p0.x + t * d0.0, p0.y + t * d0.1)
+                    }
+                }
+                (Some(v), None) | (None, Some(v)) => moved(p, v),
+                (None, None) => p,
+            }
+        })
+        .collect()
 }
 
 /// Corner radius of actions, as far as their size allows.
@@ -972,4 +1091,9 @@ pub fn text_left(area: Rect, width: f32, align: LabelAlign) -> f32 {
         LabelAlign::Center => area.x + (area.width - width) / 2.0,
         LabelAlign::Right => area.right() - width,
     }
+}
+
+/// `r` made smaller by `by` on each side.
+fn inset(r: Rect, by: f32) -> Rect {
+    Rect::new(r.x + by, r.y + by, (r.width - 2.0 * by).max(0.0), (r.height - 2.0 * by).max(0.0))
 }

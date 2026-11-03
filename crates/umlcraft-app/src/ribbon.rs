@@ -220,7 +220,7 @@ pub fn diagram_key(kind: DiagramKind) -> String {
     crate::workspace::NewItem::Diagram(kind).key()
 }
 
-pub const DIAGRAM_KINDS: [DiagramKind; 8] = [
+pub const DIAGRAM_KINDS: [DiagramKind; 9] = [
     DiagramKind::Class,
     DiagramKind::UseCase,
     DiagramKind::Sequence,
@@ -229,6 +229,7 @@ pub const DIAGRAM_KINDS: [DiagramKind; 8] = [
     DiagramKind::Component,
     DiagramKind::Deployment,
     DiagramKind::CompositeStructure,
+    DiagramKind::EntityRelationship,
 ];
 
 pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
@@ -335,7 +336,7 @@ fn home(state: &State) -> Vec<Group> {
     ]
 }
 
-/// A button whose menu creates a diagram of the chosen kind, a structogram or an ER diagram.
+/// A button whose menu creates a diagram of the chosen kind or a structogram.
 fn new_diagram() -> Item {
     let mut item = Item::new("new-diagram", fluent("document_add"), t!("ribbon.new_diagram"));
     for kind in DIAGRAM_KINDS {
@@ -352,9 +353,11 @@ fn new_diagram() -> Item {
             );
         }
     }
-    item.menu_separator()
-        .menu_icon_entry(t!("kind.structogram"), icons::structogram_icon(), NewStructogram)
-        .menu_icon_entry(t!("kind.erDiagram"), icons::er_diagram_icon(), crate::erm::NewErm)
+    item.menu_separator().menu_icon_entry(
+        t!("kind.structogram"),
+        icons::structogram_icon(),
+        NewStructogram,
+    )
 }
 
 /// Which group of the diagram tab a tool belongs to.
@@ -414,7 +417,8 @@ fn diagram(
                         | EdgeTool::FoundMessage
                         | EdgeTool::LostMessage
                         | EdgeTool::DurationConstraint
-                        | EdgeTool::TimeConstraint,
+                        | EdgeTool::TimeConstraint
+                        | EdgeTool::ErLine,
                     )
                     | Tool::Node(
                         NodeTool::StateInvariant
@@ -428,7 +432,9 @@ fn diagram(
                         | NodeTool::SubmachineState
                         | NodeTool::EntryPoint
                         | NodeTool::ExitPoint
-                        | NodeTool::StubState,
+                        | NodeTool::StubState
+                        | NodeTool::ErAssociativeEntity
+                        | NodeTool::ErPartialKeyAttribute,
                     ) => item.tooltip(t!(format!("tool_tip.{}", tool.key()))),
                     _ => item,
                 }

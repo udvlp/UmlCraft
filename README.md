@@ -30,6 +30,7 @@ between releases is in the [changelog](CHANGELOG.md).
 | State machine | States with entry, do, exit and internal transitions, composite states, orthogonal states with regions one below the other or side by side, final states, initial, choice, junction, fork, join and history pseudostates, submachine states standing for another state machine (`include / Machine`), entry and exit points on the border of a state or the frame, stub states in submachine states, transitions labeled `trigger [guard] / effect`. A state dragged into another state or region becomes part of it |
 | Component and deployment | Components, artifacts and nodes with their icons, objects and instances, deployments |
 | Composite structure | The inside of a class or component: parts `name : Type [m]` drawn in it, ports on the border of the class and of typed parts, connectors between parts and ports, realizations and dependencies from ports to interfaces, which can be drawn as a circle or, when required, as a socket. A part dragged over its class's border takes the border along, and ports stay on their border when it moves or changes size |
+| Entity-relationship | Chen notation: entities (also weak and associative), attributes with keys and partial keys, derived, multivalued and composite attributes, relationships (binary, n-ary, identifying, with attributes) and IS-A (total, disjoint or overlapping); one line tool that makes what its ends call for; `[min,max]` cardinalities on the lines, read look-across, set from the context menu or edited in place, total participation as a double line; database properties of entities and attributes (physical name, type, length, not null, default). Arranged automatically like the UML diagrams; not exported to `.asta` |
 
 Diagrams imported from `.asta` files keep their layout, sizes and colors. The properties panel
 sets per class box what it shows of its members (stereotypes, visibility, types, initial
@@ -39,7 +40,7 @@ line the color of its name and of the line.
 ## Files
 
 - **Open `.asta` files** (File › Import .asta project, or simply open the file): Astah project
-  files with the model, all diagram kinds above, positions, sizes, waypoints, line styles, notes,
+  files with the model, all UML diagram kinds above, positions, sizes, waypoints, line styles, notes,
   free texts and lines, and colors. Anything UmlCraft cannot represent yet is skipped and reported.
 - **Export to `.asta`** (File › Export › .asta project …): writes `.asta` files through the
   official API of an installed Astah; without one the menu item explains what is missing. What
@@ -64,17 +65,12 @@ line the color of its name and of the line.
   (`continue`, labels …) is listed. New structograms and imported methods use German keywords
   (`solange ?`, `für i := 1 bis n`, `gib x`) or Structorizer's English ones, as chosen in the
   settings; by default as the user interface.
-- **ER diagrams** (File › New ER diagram, Open ER diagram (.ucerm) …, Import SQL dump as ER
-  diagram …): entity-relationship diagrams in Chen notation as draw.io's ER shapes draw them –
-  entities as rectangles, attributes as ellipses, relationships as rhombi and `[min,max]` on
-  the lines (read look-across), with weak and associative entities, keys and partial keys,
-  derived, multivalued and composite attributes, n-ary relationships with attributes and IS-A.
-  Each diagram opens in a window of its own and is saved as a `.ucerm` file; the editor works
-  as draw.io does (palette, connection points, grid, in-place text, properties, undo, copy and
-  paste between windows), arranges a diagram automatically and exports SVG and PNG. Dumps of
-  MySQL, MariaDB and PostgreSQL (`mysqldump`, `mariadb-dump`, `pg_dump` in plain format)
-  become finished diagrams: tables become entities, junction tables relationships, foreign
-  keys relationships with their cardinalities, with all attributes, keys only or none.
+- **SQL dumps as ER diagrams** (File › Import SQL dump as ER diagram …): dumps of MySQL,
+  MariaDB and PostgreSQL (`mysqldump`, `mariadb-dump`, `pg_dump` in plain format) become laid
+  out ER diagrams in the open project, each in a package named after the database: tables
+  become entities, junction tables relationships, foreign keys relationships with their
+  cardinalities, with all attributes, keys only or none. Tables without a primary key and
+  statements that could not be read are listed.
 
 ## Importing source code
 
@@ -317,9 +313,7 @@ one.
 | `crates/umlcraft-nsd` | Structorizer's `.nsd` structograms: model, reading and writing, layout, drawing, SVG, editing |
 | `crates/umlcraft-nsd-code` | Methods of source files as structograms (Java, C#, Python, C++; tree-sitter) |
 | `tools/nsd-metrics` | The Java tool that writes the text metrics `umlcraft-nsd` lays structograms out with |
-| `crates/umlcraft-erm` | ER diagrams in Chen notation: model, `.ucerm` files, rules, editing, layout, drawing, SVG |
 | `crates/umlcraft-erm-sql` | ER diagrams from SQL dumps of MySQL, MariaDB and PostgreSQL |
-| `tools/erm-metrics` | The script that writes the Liberation Sans metrics `umlcraft-erm` measures texts with |
 | `crates/umlcraft-mcp` | MCP server: tools on a project, the protocol, the bridge to the running app |
 | `crates/umlcraft-cli` | `umlcraft-cli`: the MCP server for AI clients and its setup |
 | `crates/umlcraft-screenshot` | The app window as an image, for the MCP server's `screenshot` (Windows) |

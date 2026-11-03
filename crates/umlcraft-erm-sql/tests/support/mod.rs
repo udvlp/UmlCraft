@@ -1,12 +1,14 @@
 //! The imported model as a table, one row per entity and relationship with its attributes
 //! and ends (the form of `tests/expected/*.md`, which the Python prototype the rules were
-//! worked out with writes as well).
+//! worked out with writes as well), and imports into a new model.
 
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
-use umlcraft_erm::{Diagram, Key, Line, NodeKind};
+use umlcraft_erm_sql::{Import, Options, Schema};
+use umlcraft_model::{Document, ElementKind, ErKey, Id, Model};
+use umlcraft_notation::scene::ApproxMeasure;
 
 pub fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -17,58 +19,73 @@ pub fn expected(name: &str) -> String {
     std::fs::read_to_string(path).unwrap()
 }
 
-pub fn describe(d: &Diagram) -> String {
+/// Imports `schema` into a new model; with `arrange`, laid out as the app does it.
+pub fn imported(schema: &Schema, options: &Options, arrange: bool) -> (Document, Import) {
+    let mut doc = Document::new(Model::new("m"));
+    let root = doc.model().root();
+    let mut result = None;
+    doc.edit("import", |tx| {
+        result = Some(if arrange {
+            umlcraft_erm_sql::import(tx, root, schema, options, &ApproxMeasure)?
+        } else {
+            umlcraft_erm_sql::map::map(tx, root, schema, options)?
+        });
+        Ok(())
+    })
+    .unwrap();
+    (doc, result.unwrap())
+}
+
+/// The entities and relationships of `package` in their order.
+pub fn describe(model: &Model, package: Id) -> String {
     let mut lines = vec![
         "| Art | Name | Attribute | Enden (look-across) |".to_owned(),
         "|-----|------|-----------|---------------------|".to_owned(),
     ];
-    for n in d.nodes.iter().filter(|n| !n.kind.is_attribute()) {
-        let own: Vec<String> = d
-            .links
+    for e in model.children(package).iter().filter_map(|&c| model.get(c)) {
+        let own: Vec<String> = model
+            .children(e.id())
             .iter()
-            .filter(|l| l.target == n.id)
-            .filter_map(|l| d.node(&l.source))
-            .filter(|a| a.kind.is_attribute())
-            .map(|a| {
-                let NodeKind::Attribute { key, derived, .. } = a.kind else { unreachable!() };
-                let mut s = match key {
-                    Some(Key::Primary) => format!("<u>{}</u>", a.name),
-                    Some(Key::Partial) => format!("<u>{}</u>˙", a.name),
-                    None => a.name.clone(),
+            .filter_map(|&c| model.get(c))
+            .filter_map(|a| match a.kind() {
+                ElementKind::ErAttribute(p) => Some((a.name(), p)),
+                _ => None,
+            })
+            .map(|(name, p)| {
+                let mut s = match p.key {
+                    Some(ErKey::Primary) => format!("<u>{name}</u>"),
+                    Some(ErKey::Partial) => format!("<u>{name}</u>˙"),
+                    None => name.to_owned(),
                 };
-                if derived {
+                if p.derived {
                     s.push_str(" (abgeleitet)");
                 }
                 s
             })
             .collect();
         let at = if own.is_empty() { "–".to_owned() } else { own.join(", ") };
-        match n.kind {
-            NodeKind::Entity { weak } => {
-                let k = if weak { "schwache Entity" } else { "Entity" };
-                lines.push(format!("| {k} | {} | {at} | |", n.name));
+        match e.kind() {
+            ElementKind::ErEntity(p) => {
+                let k = if p.weak { "schwache Entity" } else { "Entity" };
+                lines.push(format!("| {k} | {} | {at} | |", e.name()));
             }
-            NodeKind::Relationship { identifying } => {
-                let ends: Vec<String> = d
-                    .links
-                    .iter()
-                    .filter(|l| l.source == n.id)
-                    .filter_map(|l| Some((l, d.node(&l.target)?)))
-                    .filter(|(_, t)| !t.kind.is_attribute())
-                    .map(|(l, t)| {
-                        let label = l.label.as_ref().map(|x| x.display()).unwrap_or_default();
-                        let mut e = format!("{} {label}", t.name);
-                        if let Some(r) = &l.role {
-                            e.push_str(&format!(" (Rolle {})", r.text));
+            ElementKind::ErRelationship(p) => {
+                let ends: Vec<String> = umlcraft_notation::er::participations(model, e.id())
+                    .map(|l| {
+                        let entity = model.get(l.entity).map_or("", |t| t.name());
+                        let label = l.cardinality.map(|c| c.to_string()).unwrap_or_default();
+                        let mut end = format!("{entity} {label}");
+                        if !l.role.is_empty() {
+                            end.push_str(&format!(" (Rolle {})", l.role));
                         }
-                        if l.line == Line::Double {
-                            e.push_str(" ═");
+                        if l.total {
+                            end.push_str(" ═");
                         }
-                        e
+                        end
                     })
                     .collect();
-                let k = if identifying { "ident. Beziehung" } else { "Beziehung" };
-                lines.push(format!("| {k} | {} | {at} | {} |", n.name, ends.join("; ")));
+                let k = if p.identifying { "ident. Beziehung" } else { "Beziehung" };
+                lines.push(format!("| {k} | {} | {at} | {} |", e.name(), ends.join("; ")));
             }
             _ => {}
         }

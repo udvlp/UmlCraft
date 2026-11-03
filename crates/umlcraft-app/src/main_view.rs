@@ -676,11 +676,6 @@ impl MainView {
     /// Opens `path` once unsaved changes are saved or discarded, e.g. for a file the system
     /// hands over.
     pub fn ask_to_open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // An ER diagram does not replace the project.
-        if crate::erm::is_erm(&path) {
-            crate::erm::open(path, window, cx);
-            return;
-        }
         self.confirm_discard(
             window,
             cx,
@@ -693,15 +688,10 @@ impl MainView {
         self.ask_to_open(path, window, cx);
     }
 
-    /// Opens a project, or imports an `.asta` or `.nsd` file as a new project. An ER diagram
-    /// opens in a window of its own and leaves the project as it is.
+    /// Opens a project, or imports an `.asta` or `.nsd` file as a new project.
     pub fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         // Relative paths (from the command line) would not open from elsewhere later.
         let path = std::path::absolute(&path).unwrap_or(path);
-        if crate::erm::is_erm(&path) {
-            crate::erm::open(path, window, cx);
-            return;
-        }
         if crate::nsd::is_structogram(&path) {
             self.open_structogram(path, window, cx);
             return;
@@ -949,6 +939,43 @@ impl MainView {
             .ok();
         })
         .detach();
+    }
+
+    /// Imports the tables of an SQL dump into the project and opens their ER diagram. What
+    /// was found goes to the status bar; hints and problems also to a message.
+    pub fn import_sql(
+        &mut self,
+        schema: &umlcraft_erm_sql::Schema,
+        options: &umlcraft_erm_sql::Options,
+        file: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self.workspace.update(cx, |ws, cx| {
+            let result = ws.import_sql(schema, options);
+            cx.notify();
+            result
+        });
+        match result {
+            Ok(import) => {
+                let (summary, mut lines) = crate::sql::report_text(&import.report, file);
+                if lines.is_empty() {
+                    toast(Notification::success(summary), window, cx);
+                    return;
+                }
+                if lines.len() > LISTED_PROBLEMS {
+                    let more = lines.len() - LISTED_PROBLEMS;
+                    lines.truncate(LISTED_PROBLEMS);
+                    lines.push(t!("dialog.more_files", count = more).to_string());
+                }
+                self.inform(PromptLevel::Info, &summary, &lines.join("\n"), window, cx);
+            }
+            Err(err) => {
+                let detail =
+                    crate::errors::model_error(Some(self.workspace.read(cx).doc.model()), &err);
+                self.show_error(&t!("sql.failed"), &detail, window, cx);
+            }
+        }
     }
 
     /// The project the import was meant for has been replaced in the meantime.
@@ -1375,27 +1402,7 @@ impl MainView {
     }
 
     fn quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
-        // ER diagrams live in windows of their own; quitting would close them unasked.
-        let unsaved = crate::erm::unsaved(cx);
-        if unsaved.is_empty() {
-            self.confirm_discard(window, cx, Box::new(|_, _, cx| cx.quit()));
-            return;
-        }
-        let message = t!("dialog.erm_unsaved").to_string();
-        let answers = [t!("dialog.quit_anyway").to_string(), t!("dialog.cancel").to_string()];
-        let answers: Vec<&str> = answers.iter().map(String::as_str).collect();
-        let rx =
-            window.prompt(PromptLevel::Warning, &message, Some(&unsaved.join("\n")), &answers, cx);
-        cx.spawn_in(window, async move |this, cx| {
-            if rx.await != Ok(0) {
-                return;
-            }
-            this.update_in(cx, |this, window, cx| {
-                this.confirm_discard(window, cx, Box::new(|_, _, cx| cx.quit()))
-            })
-            .ok();
-        })
-        .detach();
+        self.confirm_discard(window, cx, Box::new(|_, _, cx| cx.quit()));
     }
 
     fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -2253,6 +2260,9 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::Element(NodeTool::Artifact),
         NewItem::Element(NodeTool::DeploymentNode),
         NewItem::Element(NodeTool::Port),
+        NewItem::Element(NodeTool::ErEntity),
+        NewItem::Element(NodeTool::ErRelationship),
+        NewItem::Element(NodeTool::ErAttribute),
         NewItem::Attribute,
         NewItem::Operation,
         NewItem::Literal,
@@ -2370,9 +2380,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
         MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
         menu_item("menu.import_astah", ImportAstah),
         menu_item("menu.import_structogram", ImportStructogram),
-        menu_item("menu.new_erm", crate::erm::NewErm),
-        menu_item("menu.open_erm", crate::erm::OpenErm),
-        menu_item("menu.import_sql", crate::erm::ImportSql),
+        menu_item("menu.import_sql", ImportSql),
     ];
     file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items([
         menu_item("menu.export_svg", ExportSvg),
@@ -2481,22 +2489,6 @@ fn install_menus(settings: &Settings, cx: &mut App) {
     cx.set_menus(menus(settings));
 }
 
-/// Quit from a window without a project (an ER diagram's, through the platform's menu): a main
-/// window asks about unsaved changes as its own Quit does; without one the app just ends.
-pub fn quit_from_other_window(cx: &mut App) {
-    let main = cx.windows().into_iter().find_map(|handle| {
-        let root = handle.downcast::<gpui_kit::base::Root>()?;
-        let view = root.read(cx).ok()?.view().clone().downcast::<MainView>().ok()?;
-        Some((root, view))
-    });
-    let Some((root, view)) = main else { return cx.quit() };
-    root.update(cx, |_, window, cx| {
-        window.activate_window();
-        view.update(cx, |this, cx| this.quit(&Quit, window, cx));
-    })
-    .ok();
-}
-
 /// The title bar's File menu: the same entries as the platform's File menu. Exporting a
 /// structogram needs one to be shown.
 fn file_menu(
@@ -2523,9 +2515,7 @@ fn file_menu(
     menu = item(menu, "menu.open_sample", Box::new(OpenSample));
     menu = item(menu, "menu.import_astah", Box::new(ImportAstah));
     menu = item(menu, "menu.import_structogram", Box::new(ImportStructogram));
-    menu = item(menu, "menu.new_erm", Box::new(crate::erm::NewErm));
-    menu = item(menu, "menu.open_erm", Box::new(crate::erm::OpenErm));
-    menu = item(menu, "menu.import_sql", Box::new(crate::erm::ImportSql));
+    menu = item(menu, "menu.import_sql", Box::new(ImportSql));
     menu = menu.submenu(t!("menu.export"), window, cx, move |menu, _, _| {
         menu.menu(t!("menu.export_svg"), Box::new(ExportSvg))
             .menu(t!("menu.export_png"), Box::new(ExportPng))
@@ -2716,11 +2706,9 @@ impl Render for MainView {
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::new_structogram))
             .on_action(cx.listener(Self::import_structogram))
-            .on_action(|_: &crate::erm::OpenErm, window, cx| crate::erm::prompt_open(window, cx))
-            .on_action(|_: &crate::erm::NewErm, _, cx| crate::erm::new_diagram(cx))
-            .on_action(|_: &crate::erm::ImportSql, window, cx| {
-                crate::erm::prompt_import_sql(window, cx)
-            })
+            .on_action(cx.listener(|_, _: &ImportSql, window, cx| {
+                crate::sql::prompt(cx.entity().downgrade(), window, cx)
+            }))
             .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::export_astah))
             .on_action(cx.listener(Self::import_source))

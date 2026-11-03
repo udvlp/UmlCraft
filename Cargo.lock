@@ -6831,7 +6831,6 @@ dependencies = [
  "sys-locale",
  "umlcraft-asta",
  "umlcraft-asta-export",
- "umlcraft-erm",
  "umlcraft-erm-sql",
  "umlcraft-format",
  "umlcraft-mcp",
@@ -6880,21 +6879,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "umlcraft-erm"
-version = "0.17.0"
-dependencies = [
- "pretty_assertions",
- "quick-xml 0.42.0",
- "resvg 0.49.0",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "umlcraft-model",
- "umlcraft-notation",
- "uuid",
-]
-
-[[package]]
 name = "umlcraft-erm-sql"
 version = "0.17.0"
 dependencies = [
@@ -6902,7 +6886,9 @@ dependencies = [
  "indexmap",
  "pretty_assertions",
  "thiserror 2.0.21",
- "umlcraft-erm",
+ "umlcraft-format",
+ "umlcraft-model",
+ "umlcraft-notation",
 ]
 
 [[package]]

@@ -669,13 +669,17 @@ fn nudge(
     }
 }
 
-/// Routes lines just drawn or brought along, like [`route_lines`], except on use case diagrams,
+/// Routes lines just drawn or brought along, like [`route_lines`], except on use case and ER diagrams,
 /// whose lines are drawn straight, and on composite structure diagrams, whose connectors start
 /// at ports half inside a class; Route lines still routes them on request.
 pub fn route_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> {
     if matches!(
         tx.model().element(diagram)?.kind().as_diagram(),
-        Some(DiagramKind::UseCase | DiagramKind::CompositeStructure)
+        Some(
+            DiagramKind::UseCase
+                | DiagramKind::CompositeStructure
+                | DiagramKind::EntityRelationship
+        )
     ) {
         return Ok(0);
     }

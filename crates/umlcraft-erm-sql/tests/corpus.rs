@@ -12,9 +12,10 @@ mod support;
 use std::path::PathBuf;
 
 use pretty_assertions::assert_eq;
-use support::describe;
-use umlcraft_erm::layout;
-use umlcraft_erm_sql::{Options, import, read};
+use support::{describe, imported};
+use umlcraft_erm_sql::{Options, read};
+use umlcraft_notation::er_layout;
+use umlcraft_notation::scene::ApproxMeasure;
 
 fn refs() -> Option<PathBuf> {
     std::env::var_os("UMLCRAFT_ERM_REFS").map(PathBuf::from)
@@ -44,9 +45,11 @@ fn every_corpus_dump_imports_like_the_prototype() {
                 let schema = read(&std::fs::read(&dump).unwrap(), None).unwrap();
                 let what = dump.display().to_string();
                 assert_eq!(schema.problems, [], "{what}");
-                let result = import(&schema, &Options::default());
-                assert_eq!(describe(&result.diagram), expected.trim_end(), "{what}");
-                assert_eq!(layout::overlaps(&result.diagram), [], "{what}");
+                let (doc, result) = imported(&schema, &Options::default(), true);
+                let model = doc.model();
+                assert_eq!(describe(model, result.package), expected.trim_end(), "{what}");
+                let overlaps = er_layout::overlaps(model, result.diagram, &ApproxMeasure);
+                assert_eq!(overlaps, [], "{what}");
                 seen += 1;
             }
         }

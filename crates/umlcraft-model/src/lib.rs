@@ -7,6 +7,7 @@
 mod diagram;
 mod document;
 mod element;
+pub mod er;
 mod error;
 mod geometry;
 mod id;
@@ -31,6 +32,10 @@ pub use element::{
     PseudostateProps, Qualifier, RefRole, SlotProps, StateInvariantProps, StateProps,
     StructogramProps, TaggedValue, TemplateParameterKind, TemplateParameterProps, TerminationProps,
     TimeConstraintProps, TransitionProps, TypeExpr, TypeRef, Visibility,
+};
+pub use er::{
+    Cardinality, CardinalityMax, CardinalityMin, ErAttributeProps, ErEntityProps, ErIsAProps,
+    ErKey, ErParticipationProps, ErRelationshipProps, ErSubtypingProps, ParseCardinalityError,
 };
 pub use error::{ModelError, Result};
 pub use geometry::{Point, Rect, Size};

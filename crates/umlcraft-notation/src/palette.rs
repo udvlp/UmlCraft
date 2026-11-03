@@ -4,10 +4,11 @@
 use umlcraft_model::{
     ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd,
     DiagramKind, DiagramProps, DirectedProps, DurationConstraintProps, ElementData, ElementKind,
-    ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps,
-    InteractionOperator, InteractionUseProps, LifelineProps, MessageGate, MessageSort, Model,
-    ModelError, Point, PseudostateKind, Rect, Result, Shape, Size, StateInvariantProps, StateProps,
-    TerminationProps, TimeConstraintProps, Tx, TypeRef, View, Visibility,
+    ErAttributeProps, ErEntityProps, ErIsAProps, ErKey, ErRelationshipProps, ExtendProps, Id,
+    IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
+    InteractionUseProps, LifelineProps, MessageGate, MessageSort, Model, ModelError, Point,
+    PseudostateKind, Rect, Result, Shape, Size, StateInvariantProps, StateProps, TerminationProps,
+    TimeConstraintProps, Tx, TypeRef, View, Visibility,
 };
 
 use crate::sequence::{self, Slot};
@@ -96,6 +97,18 @@ pub enum NodeTool {
     Part,
     /// Composite structure diagrams: a port on the border of a class or a part.
     Port,
+    /// ER diagrams (Chen notation).
+    ErEntity,
+    ErWeakEntity,
+    ErAssociativeEntity,
+    ErAttribute,
+    ErKeyAttribute,
+    ErPartialKeyAttribute,
+    ErMultivaluedAttribute,
+    ErDerivedAttribute,
+    ErRelationship,
+    ErIdentifyingRelationship,
+    ErIsA,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -125,6 +138,9 @@ pub enum EdgeTool {
     DurationConstraint,
     /// Sequence diagrams: when the message clicked arrives.
     TimeConstraint,
+    /// ER diagrams: one line for everything; what it becomes follows from its ends (see
+    /// [`crate::er::connect`]).
+    ErLine,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -277,6 +293,23 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
             &[N::Class, N::Part, N::Port, N::Interface, N::Note],
             &[E::Connector, E::Realization, E::Dependency, E::NoteAnchor],
         ),
+        DiagramKind::EntityRelationship => (
+            &[
+                N::ErEntity,
+                N::ErWeakEntity,
+                N::ErAssociativeEntity,
+                N::ErAttribute,
+                N::ErKeyAttribute,
+                N::ErPartialKeyAttribute,
+                N::ErMultivaluedAttribute,
+                N::ErDerivedAttribute,
+                N::ErRelationship,
+                N::ErIdentifyingRelationship,
+                N::ErIsA,
+                N::Note,
+            ],
+            &[E::ErLine, E::NoteAnchor],
+        ),
     };
     std::iter::once(Tool::Select)
         .chain(nodes.iter().map(|&n| Tool::Node(n)))
@@ -382,6 +415,17 @@ impl NodeTool {
             Self::Object => "object",
             Self::Part => "part",
             Self::Port => "port",
+            Self::ErEntity => "erEntity",
+            Self::ErWeakEntity => "erWeakEntity",
+            Self::ErAssociativeEntity => "erAssociativeEntity",
+            Self::ErAttribute => "erAttribute",
+            Self::ErKeyAttribute => "erKeyAttribute",
+            Self::ErPartialKeyAttribute => "erPartialKeyAttribute",
+            Self::ErMultivaluedAttribute => "erMultivaluedAttribute",
+            Self::ErDerivedAttribute => "erDerivedAttribute",
+            Self::ErRelationship => "erRelationship",
+            Self::ErIdentifyingRelationship => "erIdentifyingRelationship",
+            Self::ErIsA => "erIsA",
         }
     }
 
@@ -447,9 +491,11 @@ impl NodeTool {
         match self.element_kind() {
             ElementKind::ActivityNode(p) => p.node.is_named(),
             ElementKind::Pseudostate(p) => p.pseudostate.is_named(),
-            ElementKind::Comment(_) | ElementKind::FinalState | ElementKind::Termination(_) => {
-                false
-            }
+            // An IS-A reads "IS-A" until it is given a name.
+            ElementKind::Comment(_)
+            | ElementKind::FinalState
+            | ElementKind::Termination(_)
+            | ElementKind::ErIsA(_) => false,
             _ => true,
         }
     }
@@ -523,6 +569,31 @@ impl NodeTool {
             Self::Object => instance(InstanceKind::Object),
             Self::Part => ElementKind::attribute(None),
             Self::Port => ElementKind::port(None),
+            Self::ErEntity => ElementKind::ErEntity(ErEntityProps::default()),
+            Self::ErWeakEntity => {
+                ElementKind::ErEntity(ErEntityProps { weak: true, ..Default::default() })
+            }
+            Self::ErAssociativeEntity => {
+                ElementKind::ErEntity(ErEntityProps { associative: true, ..Default::default() })
+            }
+            Self::ErAttribute => ElementKind::ErAttribute(ErAttributeProps::default()),
+            Self::ErKeyAttribute | Self::ErPartialKeyAttribute => {
+                let key =
+                    if self == Self::ErKeyAttribute { ErKey::Primary } else { ErKey::Partial };
+                ElementKind::ErAttribute(ErAttributeProps { key: Some(key), ..Default::default() })
+            }
+            Self::ErMultivaluedAttribute => ElementKind::ErAttribute(ErAttributeProps {
+                multivalued: true,
+                ..Default::default()
+            }),
+            Self::ErDerivedAttribute => {
+                ElementKind::ErAttribute(ErAttributeProps { derived: true, ..Default::default() })
+            }
+            Self::ErRelationship => ElementKind::ErRelationship(ErRelationshipProps::default()),
+            Self::ErIdentifyingRelationship => {
+                ElementKind::ErRelationship(ErRelationshipProps { identifying: true })
+            }
+            Self::ErIsA => ElementKind::ErIsA(ErIsAProps::default()),
         }
     }
 
@@ -605,6 +676,16 @@ impl NodeTool {
             Self::Object => Size::new(120.0, 40.0),
             Self::Part => Size::new(120.0, 50.0),
             Self::Port => Size::new(crate::composite::PORT_SIZE, crate::composite::PORT_SIZE),
+            // Steven's sizes of the flight example; names that need more grow the box.
+            Self::ErEntity | Self::ErWeakEntity => Size::new(100.0, 40.0),
+            Self::ErAssociativeEntity => Size::new(140.0, 60.0),
+            Self::ErAttribute
+            | Self::ErKeyAttribute
+            | Self::ErPartialKeyAttribute
+            | Self::ErMultivaluedAttribute
+            | Self::ErDerivedAttribute => Size::new(80.0, 30.0),
+            Self::ErRelationship | Self::ErIdentifyingRelationship => Size::new(80.0, 50.0),
+            Self::ErIsA => Size::new(80.0, 50.0),
         }
     }
 }
@@ -650,6 +731,7 @@ impl EdgeTool {
             Self::Connector => "connector",
             Self::DurationConstraint => "durationConstraint",
             Self::TimeConstraint => "timeConstraint",
+            Self::ErLine => "erLine",
         }
     }
 
@@ -750,6 +832,7 @@ impl EdgeTool {
                     && !matches!(source, K::Diagram(_) | K::Model)
                     && !matches!(target, K::Diagram(_) | K::Model)
             }
+            Self::ErLine => !same && crate::er::joins(source, target).is_some(),
         }
     }
 
@@ -786,7 +869,8 @@ impl EdgeTool {
                 ConnectorEnd::new(source, None),
                 ConnectorEnd::new(target, None),
             )),
-            Self::NoteAnchor => None,
+            // What it becomes depends on the kinds of its ends; `er::connect` makes it.
+            Self::NoteAnchor | Self::ErLine => None,
             Self::DurationConstraint => {
                 Some(ElementKind::DurationConstraint(DurationConstraintProps {
                     from: source,
@@ -887,6 +971,14 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
                 | ElementKind::Port(_)
                 | ElementKind::Comment(_)
         ),
+        DiagramKind::EntityRelationship => matches!(
+            kind,
+            ElementKind::ErEntity(_)
+                | ElementKind::ErAttribute(_)
+                | ElementKind::ErRelationship(_)
+                | ElementKind::ErIsA(_)
+                | ElementKind::Comment(_)
+        ),
     }
 }
 
@@ -917,6 +1009,11 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::Partition => NodeTool::Partition,
         ElementKind::Attribute(_) => NodeTool::Part,
         ElementKind::Port(_) => NodeTool::Port,
+        ElementKind::ErEntity(p) if p.associative => NodeTool::ErAssociativeEntity,
+        ElementKind::ErEntity(_) => NodeTool::ErEntity,
+        ElementKind::ErAttribute(_) => NodeTool::ErAttribute,
+        ElementKind::ErRelationship(_) => NodeTool::ErRelationship,
+        ElementKind::ErIsA(_) => NodeTool::ErIsA,
         _ => NodeTool::Class,
     };
     tool.default_size()
@@ -973,6 +1070,20 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
         };
         if let (Some(source), Some(target)) = (end(a), end(b)) {
             edges.push((e.id(), source, target));
+        }
+    }
+    // An ER attribute's line runs from its owner and shows the attribute.
+    let shown = |id: Id| view.presentations_of(id).next().map(|p| p.id);
+    let er_attribute =
+        |id: Id| model.get(id).is_some_and(|e| matches!(e.kind(), ElementKind::ErAttribute(_)));
+    if er_attribute(element)
+        && let Some(owner) = model.element(element)?.owner().and_then(shown)
+    {
+        edges.push((element, Some(owner), None));
+    }
+    for &child in model.children(element).iter().filter(|&&c| er_attribute(c)) {
+        if let Some(node) = shown(child) {
+            edges.push((child, None, Some(node)));
         }
     }
     let node = add_node_for(
@@ -1146,6 +1257,9 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
     }
     if tool == EdgeTool::Connector {
         return crate::composite::connect(tx, diagram, source, target);
+    }
+    if tool == EdgeTool::ErLine {
+        return crate::er::connect(tx, diagram, source, target);
     }
     if matches!(tool, EdgeTool::DurationConstraint | EdgeTool::TimeConstraint) {
         if (source == target) != (tool == EdgeTool::TimeConstraint) {

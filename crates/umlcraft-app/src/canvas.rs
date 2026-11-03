@@ -14,8 +14,8 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    Aggregation, AssociationEnd, Color, ElementKind, Id, LineShape, Model, Multiplicity,
-    Navigability, Point as MPoint, Rect, Shape, SharedStyle, TypeRef,
+    Aggregation, AssociationEnd, Cardinality, Color, ElementKind, Id, LineShape, Model,
+    Multiplicity, Navigability, Point as MPoint, Rect, Shape, SharedStyle, TypeRef,
 };
 use umlcraft_notation::draw::{self, Paint, Primitive};
 use umlcraft_notation::member::{self, member_text};
@@ -184,6 +184,15 @@ fn multiplicity_choices(end: &AssociationEnd) -> Vec<(String, bool, EndChange)> 
     })
     .collect()
 }
+
+/// The cardinalities the context menu offers for an ER participation.
+const CARDINALITIES: [Option<Cardinality>; 5] = [
+    None,
+    Some(Cardinality::ZERO_ONE),
+    Some(Cardinality::ONE_ONE),
+    Some(Cardinality::ZERO_MANY),
+    Some(Cardinality::ONE_MANY),
+];
 
 /// Astah's submenus for an association: navigability, aggregation and multiplicity, each with
 /// a section per end.
@@ -834,10 +843,33 @@ impl DiagramCanvas {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if compartment == Compartment::Attributes
+            && let Some(owner) = self.selected_er_owner(cx)
+        {
+            // An ER attribute is a node of its own: made, then named in place.
+            self.edit_when_drawn = self.workspace.update(cx, |ws, cx| {
+                cx.notify();
+                ws.add_er_attribute(owner)
+            });
+            return;
+        }
         let Some((node, _)) = self.selected_compartments(cx) else { return };
         if let Some(hit) = scene::compartment_of(&self.scene, node, compartment) {
             self.open_new_member(hit, window, cx);
         }
+    }
+
+    /// The one selected node, if it shows what an ER attribute can belong to.
+    fn selected_er_owner(&self, cx: &App) -> Option<Id> {
+        let ws = self.workspace.read(cx);
+        let [single] = ws.selection[..] else { return None };
+        let model = ws.doc.model();
+        let element = model.view(ws.active_diagram?)?.get(single)?.element?;
+        matches!(
+            model.get(element)?.kind(),
+            ElementKind::ErEntity(_) | ElementKind::ErRelationship(_) | ElementKind::ErAttribute(_)
+        )
+        .then_some(single)
     }
 
     /// The extend the one selected line stands for.
@@ -1631,7 +1663,47 @@ impl DiagramCanvas {
                 (member, kinds, nothing, focus, class_line),
             )
         };
+        let er_owner = canvas.read(cx).selected_er_owner(cx).is_some();
+        // An ER participation: its cardinality and whether it is total.
+        let participation = {
+            let ws = canvas.read(cx).workspace.read(cx);
+            let model = ws.doc.model();
+            let element = match (&ws.selection[..], ws.active_diagram) {
+                (&[single], Some(d)) => model.view(d).and_then(|v| v.get(single)?.element),
+                _ => None,
+            };
+            element.and_then(|e| match model.get(e)?.kind() {
+                ElementKind::ErParticipation(p) => Some((e, p.cardinality, p.total)),
+                _ => None,
+            })
+        };
         let mut menu = menu.action_context(focus);
+        if er_owner {
+            menu = menu.menu(t!("menu.add_attribute"), Box::new(AddAttribute)).separator();
+        }
+        if let Some((participation, cardinality, total)) = participation {
+            let set = move |change| {
+                Box::new(SetAssociationEnd { association: participation, end: 0, change })
+            };
+            menu = menu
+                .submenu(t!("menu.cardinality"), window, cx, move |menu, _, _| {
+                    CARDINALITIES.into_iter().fold(menu, |menu, c| {
+                        let label =
+                            c.map_or_else(|| t!("menu.unspecified").to_string(), |c| c.to_string());
+                        menu.menu_with_check(
+                            label,
+                            cardinality == c,
+                            set(EndChange::Cardinality(c)),
+                        )
+                    })
+                })
+                .menu_with_check(
+                    t!("menu.total_participation"),
+                    total,
+                    set(EndChange::Total(!total)),
+                )
+                .separator();
+        }
         if let Some((member, types, delete)) = member {
             if let Some(types) = types {
                 menu = menu.submenu(t!("menu.type"), window, cx, move |menu, _, _| {
@@ -2118,14 +2190,20 @@ impl DiagramCanvas {
         let model = ws.doc.model();
         let Some(view) = ws.active_diagram.and_then(|d| model.view(d)) else { return };
         let Some(association) = view.get(hit.edge).and_then(|p| p.element) else { return };
-        let Some(ElementKind::Association(p)) = model.get(association).map(|e| e.kind()) else {
-            return;
-        };
-        let Some(end) = p.ends.get(hit.end) else { return };
-        let text = if hit.multiplicity {
-            end.multiplicity.map(|m| m.to_string()).unwrap_or_default()
-        } else {
-            member::role_text(end)
+        let text = match model.get(association).map(|e| e.kind()) {
+            Some(ElementKind::Association(p)) => {
+                let Some(end) = p.ends.get(hit.end) else { return };
+                if hit.multiplicity {
+                    end.multiplicity.map(|m| m.to_string()).unwrap_or_default()
+                } else {
+                    member::role_text(end)
+                }
+            }
+            Some(ElementKind::ErParticipation(p)) if hit.multiplicity => {
+                p.cardinality.map(|c| c.to_string()).unwrap_or_default()
+            }
+            Some(ElementKind::ErParticipation(p)) => p.role.clone(),
+            _ => return,
         };
         self.workspace.update(cx, |ws, cx| {
             ws.select(vec![hit.edge]);
@@ -2511,7 +2589,14 @@ impl Painter<'_> {
         let light = self.c.background.l > 0.5;
         self.edge_line = edge.stroke.filter(|_| light).map(hsla);
         let color = if selected { self.c.selection } else { self.paint(Paint::Line) };
-        self.line(&edge.path(), if selected { 2.0 } else { 1.0 }, color, edge.line);
+        let width = if selected { 2.0 } else { 1.0 };
+        if edge.double {
+            for side in draw::double_line(&edge.path()) {
+                self.line(&side, width, color, edge.line);
+            }
+        } else {
+            self.line(&edge.path(), width, color, edge.line);
+        }
         for primitive in draw::end_markers(edge) {
             self.primitive(&primitive);
         }
@@ -2671,7 +2756,9 @@ impl Render for DiagramCanvas {
         // A row just added from the context menu is edited as soon as it is drawn.
         if let Some(element) = self.edit_when_drawn.take() {
             let row = scene.nodes.iter().flat_map(|n| &n.rows).find(|r| r.element == Some(element));
-            let text = scene.node(element).filter(|n| matches!(n.figure, Figure::Text));
+            let text = scene
+                .node(element)
+                .filter(|n| matches!(n.figure, Figure::Text | Figure::ErAttribute { .. }));
             if let Some(at) = row.map(|r| r.rect.center()).or(text.map(|n| n.rect.center())) {
                 cx.defer_in(window, move |this, window, cx| {
                     this.select_when_drawn = true;

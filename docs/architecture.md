@@ -830,158 +830,80 @@ FILE.nsd` draws a file.
 
 ## Entity-relationship diagrams
 
-`umlcraft-erm` holds ER diagrams in Chen notation: entities (also weak and associative ones),
-attributes (keys, partial keys, derived, multivalued, composite), relationships (binary,
-n-ary, identifying, with attributes) and generalization (IS-A), with `[min,max]` on the lines
-read look-across (`[1,1]` at `Kunde` on `Kunde – bucht – Ticket`: every ticket has one
-customer). They are drawn like the ER shapes of draw.io; draw.io is Apache-2.0 licensed, its
-drawing rules were worked out from its source and exports, none of its code is used.
-`umlcraft-erm-sql` makes such diagrams from SQL dumps.
+ER diagrams in Chen notation are a diagram kind of the project like the UML ones
+(`DiagramKind::EntityRelationship`): their elements live in the model tree, they open as tabs
+of the main window and are edited on the same canvas, with the same undo, clipboard, export
+and file. Entities (also weak and associative ones), attributes (keys, partial keys, derived,
+multivalued, composite), relationships (binary, n-ary, identifying, with attributes) and
+generalization (IS-A), with `[min,max]` on the lines read look-across (`[1,1]` at `Kunde` on
+`Kunde – bucht – Ticket`: every ticket has one customer). The shapes are Chen's as draw.io
+draws them; the text and lines follow UmlCraft's canvas. `umlcraft-erm-sql` makes such
+diagrams from SQL dumps.
 
-- **Model** (`model`). A `Diagram` is a graph like draw.io's: `Node`s with a typed `NodeKind`
-  (`Entity { weak }`, `AssociativeEntity`, `Attribute { key, derived, multivalued }`,
-  `Relationship { identifying }`, `IsA { total, disjoint }`), a box, deviations from the
-  standard `Style` and database `Props` named as in Astah's ER model (`physicalName`,
-  `datatype`, `lengthPrecision`, `notNull`, `defaultValue`, `comment`; kept, not drawn);
-  `Link`s with optional fixed ports (draw.io's `exitX/Y`, `entryX/Y`), a `Label` (free text or
-  a `Cardinality`: minimum a number or `*` for any, maximum a number, `n` or `m`, the second
-  "many" side of a relationship) and a role placed as draw.io places edge labels (`x` along
-  the line from -1 to 1, `y` px to its left, then an offset), a line style and waypoints;
-  free `Text`s. Links point from an attribute to its owner, from a relationship to its
-  participants, from an IS-A to its super- and subtypes (`superType` marks the supertype).
-- **New elements** (`create`) get the sizes of the flight example the feature started from
-  (entity 100 × 40, attribute 70 × 28, relationship 60 × 40) or those of draw.io's library
-  (`SizeSet::Palette`); `connect` only joins allowed kinds.
-- **Rules** (`check`). Twelve rules: unique ids, existing ends, the allowed pairs of kinds
-  (`check::allowed`), one owner per attribute and no composite cycles, at least two
-  participants per relationship, one weak entity per identifying relationship, one supertype
-  per IS-A, valid geometry and cardinalities. What breaks a file is an error (duplicate ids,
-  missing ends, pairs that may not be joined, several owners, composite cycles, several weak
-  entities at an identifying relationship, `superType` outside an IS-A, geometry,
-  cardinalities); what a diagram has on its way or what is only odd is a warning (an
-  attribute without owner, a relationship with fewer than two participants, an identifying
-  relationship without its weak entity, a weak entity without one, an IS-A without its ends,
-  a cardinality outside a participation), so that files of unfinished diagrams open.
-- **Editing** (`edit`, `history`, `hit`, `clip`). Each operation of the editor (add, connect
-  in the files' direction with `[0,n]` on a new participation and `[0,m]` on the second,
-  delete with own attributes and attached lines, move, resize, rename, labels typed as
-  `[0,n]`, `[*,m]` or `1..*` become cardinalities, kinds, line styles, supertype, ports,
-  styles, database properties) works on a copy and is refused, leaving the diagram as it
-  was, if it would make a new error.
-  `history::Editor` keeps the selection (`Item`: node, link, text, label), undo and redo as
-  snapshots (200 steps), whether the diagram differs from the file, and stamps `modified`
-  (and `created`, `author` for new diagrams) when it is saved. `hit` finds what is under the
-  mouse on the exact outlines, what a rubber band holds, the grips of a box and the
-  connection points (around the box clockwise: a rectangle every quarter of a side, an ellipse
-  and a rhombus the corners and side middles; the IS-A triangle its tip, the middles of its
-  slanted sides and three points on its base). `clip` copies the
-  selected nodes and texts with the lines between them as the text of a `.ucerm` file and
-  pastes it with new ids. `tests/editing.rs` runs 50 × 200 random operations: no error rule
-  breaks, a refused operation changes nothing, and the result survives writing and reading.
-- **File** (`read`, `write`): `.ucerm`, pretty-printed JSON like `.ucraft` (`format`
-  `umlcraft-erm`, `formatVersion` 1, `meta`, `nodes`, `links`, `texts` sorted by id, new ids
-  UUIDv7), default values left out, whole numbers without `.0`, LF and a final newline. The
-  file goes through flat records (`record`), so that unknown fields and fields of another kind
-  (`weak` on an attribute) are errors with line and column; then `check` runs, its errors
-  reject the file and its warnings come back with the diagram. Newer versions are refused,
-  older ones migrated step by step (none yet). `to_value` and `read_value` give the same
-  document as a JSON value, for embedding it elsewhere. serde_json reads floats with
-  `float_roundtrip`, otherwise a number like `15.6254` could change when written again.
-- **Text** (`metrics`). Widths of Liberation Sans Regular and Bold, metric-compatible with
-  the Helvetica and Arial draw.io names: advances plus the pairs of the font's `kern` table
-  (the browser draw.io runs in kerns), embedded as `metrics/liberation-sans.txt` and written
-  by `tools/erm-metrics/liberation.py`. Lines are 1.2 × the size apart and break at spaces,
-  never inside a word; a word too wide for its shape sticks out. Baseline and underline
-  positions were measured in draw.io's PNG exports.
-- **Geometry** (`geometry`, `size`). Outlines of rectangle, ellipse (with draw.io's direction
-  cut to whole numbers), rhombus and the IS-A triangle; fixed ports projected onto the
-  outline and not rounded; floating ends aiming at the next point, the target end first;
-  labels `x` along the line in whole pixels, `y` to its left; double lines 2 px to each side;
-  second frames 5 (weak entity), 3 (multivalued) and 4 px (identifying) inside. `size::fit`
-  gives nodes a size that fits their name, for the import and the editor.
-- **Drawing** (`draw`, `svg`). `draw` turns a diagram into primitives (rectangles, ellipses,
-  polygons, polylines with dash patterns, label backgrounds, text lines with their baseline
-  and width) in drawing order: lines, nodes, line labels, free texts. Underlines are lines of
-  their own, dotted for partial keys. `svg::render` writes a standalone SVG: the drawing plus
-  10 px, white or transparent background, shapes moved by half a pixel like draw.io's, texts
-  as `<text>` with our line breaks and the fonts `Helvetica, Arial, "Liberation Sans"`.
-  Labels sit on whole pixels as draw.io puts its HTML labels. PNG images are the SVG
-  rasterized by the app (`png.rs`). `cargo run -p umlcraft-erm --example erm-svg --
-  FILE.ucerm [OUT.svg]` draws a file.
-- **Layout** (`layout`). `arrange` lays out any diagram, for the SQL import and the editor's
-  "Arrange". Entities, relationships and IS-As form the core graph; a relationship goes
-  below the entity on its "one" side (the line whose cardinality has the maximum 1, which is
-  the referenced table after an import) and above the others, an IS-A below its supertype.
-  Each core node reserves room for its attributes, the boxes go to
-  `umlcraft_notation::layout::layered` (unchanged, a dependency of this crate), and a second
-  round reserves the room on the sides that turned out to be free of lines. Attributes then
-  go around their owner, keys first: rows of four above and below, columns of three at the
-  sides, 30 px away, the free sides first and further out ring by ring; one that would cover a
-  node, a line or a label slides along its side, moves out or takes the nearest free place
-  around its owner. Lines float; several lines between the same two nodes get a waypoint
-  each; labels sit in the middle of their line and change side or move along it when they
-  would cover something. Everything ends on the 10 px grid from (20, 20). `overlaps` lists
-  what still covers what (the tests require none), `crossings` the lines that run through a
-  node (straight long edges of the layered layout).
-- **Tests.** `tests/roundtrip.rs` reads and writes back byte for byte the flight example
-  (drawn in draw.io, translated by the reference tools), a file with every Chen shape and one
-  with labels moved by offsets as today's draw.io GUI writes them; `tests/invalid.rs` has one
-  rejected file per rule and format error; `tests/random.rs` writes and reads 300 random
-  valid diagrams from fixed seeds; `tests/drawing.rs` keeps the SVG images of two fixtures
-  (`UMLCRAFT_ERM_BLESS=1` writes them anew). With `UMLCRAFT_ERM_REFS` pointing at the
-  references (draw.io files and their exports, outside the repository), `tests/drawio.rs`
-  reads draw.io's files with a small test helper and compares: every straight line ends
-  within 0.05 px of draw.io's, every label on draw.io's pixel, and our images rasterized with
-  resvg differ from draw.io's PNGs in at most the share of pixels `tests/drawio_deviations.txt`
-  allows each file, with the reason (text smoothing, right-angle routing, stroke widths).
-- **App** (`umlcraft-app/src/erm`). An ER diagram opens in a window of its own, outside the
-  project: File › "New ER diagram" or "Open ER diagram (.ucerm)", the ribbon's New diagram
-  button, the command line or "Open
-  with" (`MainView::open` hands `.ucerm` over and keeps the project; a file already open
-  brings its window to the front). The window (`window.rs`) is a frame with a title bar like
-  the main window's, a toolbar (save, undo, zoom, grid, SVG and PNG export, properties), the
-  palette (`palette.rs`, our own drawings of the shapes; click places in the middle of the
-  view, drag drops at the mouse), the canvas and the properties (`props.rs`: name, the kind's
-  switches, line style, label and role, colours and font, database properties; the diagram's
-  name and origin when nothing is selected). The canvas (`canvas.rs`) is an entity of its own,
-  so that it can later become a tab of the main window. It shows the SVG export (transparent)
-  rasterized with resvg like the structogram view (it uses `nsd::rasterize`, its fonts and
-  `write_file`) on white paper with a 10 px grid in the colour of the main canvas's, never
-  in an export; a new image right after each edit, in the background while dragging, at most
-  8192 px. Selection, grips, connection points, rubber band and the outlines of what is
-  dragged are painted over it in the theme's blue, as on the main canvas; the colours offered
-  for fills, lines and texts are the main window's (`properties::FEATURED_COLORS`), fills
-  lightened. Mouse and keys (`input.rs`) follow draw.io: click,
-  Shift/Ctrl+click and rubber band select; dragging moves with the top left corner on the grid
-  (Alt: free), grips resize (Shift keeps the proportions), labels are dragged, a line is drawn
-  from a connection point to another node (on a point: fixed port, on the shape: floating; not
-  allowed targets are marked red), a selected line's ends are hung elsewhere; arrows move by
-  1 px, Shift+arrows by 10, Ctrl+arrows resize; Delete, Ctrl+A/C/X/V/D, F2 or Enter and a
-  double click edit the text in place (`text.rs`, with the usual cardinalities for a label),
-  Escape cancels. The context menu adds an attribute, a relationship to a second entity, fits
-  nodes and free texts to their texts and releases line ends. A new attribute from the
-  palette goes to the selected entity or relationship (not to a selected attribute). Each
-  mouse action is one undo step. Zoom 25–400 % (Ctrl+wheel about the mouse, Ctrl+0/=/−,
-  Ctrl+Shift+0 fits), panning with the wheel (Shift: sideways), the middle button or Space
-  and the left button; until the user zooms or pans, the drawing is fitted into the window,
-  at most at 100 %. Saving writes through a
-  temporary file; closing with unsaved changes asks (save, discard, cancel), and quitting from
-  the main window lists the ER diagrams with unsaved changes first. Read errors, refused edits
-  and the warnings of `check` (live) are told in the UI's language (`erm.*`, an element by its
-  name, a line by its ends); a click on a warning selects the element. ER diagrams do not go
-  into the recent files (the list opens projects). "Arrange" in the toolbar and the context
-  menu runs `layout::arrange` as one undo step. File › "Import SQL dump as ER diagram …"
-  (`import.rs`) reads the dump in the background, asks in a small dialog for the dialect
-  (detected one preselected), the attributes (all, keys only, none) and, if there are several,
-  the schemas, imports in the background and opens a window with the unsaved result; above
-  its warnings a line sums up what was found, and opens into the hints (clickable: tables
-  without a primary key, placeholder entities) and the statements that could not be read.
-  Saving starts next to the dump.
+- **Model** (`umlcraft-model/src/er.rs`, element kinds `erEntity`, `erAttribute`,
+  `erRelationship`, `erIsA`, `erParticipation`, `erSubtyping`). An entity has `weak`,
+  `associative` and its `physicalName`; an attribute its `key` (primary or partial),
+  `derived`, `multivalued` and the database properties named as in Astah's ER model
+  (`physicalName`, `datatype`, `lengthPrecision`, `notNull`, `defaultValue`; kept, not drawn);
+  a relationship `identifying`; an IS-A `total` and `disjoint` (none, d, o). An attribute is
+  owned by what it describes (an entity, a relationship or, composite, another attribute), so
+  deleting the owner takes it along; its line is an edge showing the attribute, drawn from
+  the owner, like a containment line. A participation is owned by its relationship (or
+  associative entity) and refers to it and the entity (`cardinality`, `role`, `total` for the
+  double line); a subtyping is owned by its IS-A and refers to it and the entity, the first
+  one is the `supertype`. Both ends are strong references: deleting either deletes the line.
+  `Cardinality` has a minimum (a number or `*`) and a maximum (a number, `n`, or `m` for the
+  second "many" side of a relationship), written `[0,n]` and read also as `0..*`, `1`, `*`.
+  The file format went to version 5 for these kinds (no migration needed).
+- **Connecting** (`notation/src/er.rs`). The palette has one line tool, `erLine`; what it makes
+  follows from its ends (`joins`): an attribute and what it describes (the attribute moves
+  under its owner), a relationship or associative entity and an entity (a participation with
+  `[0,n]`), an IS-A and a plain entity (a subtyping). Unfinished diagrams are fine (a
+  relationship with one entity, an IS-A without subtypes); what contradicts itself is refused
+  with a message in the UI's language: an attribute that already has an owner, a second weak
+  entity at an identifying relationship, pairs that cannot be joined. `add_attribute` gives an
+  owner a new attribute above it, joined by its line (the canvas's "Add attribute").
+- **Drawing** (`scene::layout_er`, `draw`). Rectangle (a second frame inside for weak
+  entities), rectangle with a rhombus (associative), ellipse (dashed when derived, a second
+  one inside when multivalued, the name underlined for a key and dotted for a partial key),
+  rhombus (a second one inside when identifying), triangle (`Outline::Triangle`) with "IS-A"
+  and `d` or `o`. Names wrap and the box grows to fit them. A total participation and the
+  supertype line of a total IS-A are double lines (`EdgeShape::double`,
+  `draw::double_line`); a participation shows its cardinality and role at the entity, placed
+  and dragged like an association's multiplicity and role.
+- **Layout** (`er_layout`), for "Arrange" and the SQL import. Entities, relationships and
+  IS-As form the core graph; a relationship goes below the entity on its "one" side (the line
+  whose cardinality has the maximum 1, which is the referenced table after an import) and
+  above the others, an IS-A below its supertype. Each core node reserves room for its
+  attributes, the boxes go to `layout::layered`, and a second round reserves the room on the
+  sides that turned out to be free of lines. Attributes then go around their owner, keys
+  first: rows of four above and below, columns of three at the sides, 30 px away, the free
+  sides first and further out ring by ring; one that would cover a node, a line or a label
+  slides along its side, moves out or takes the nearest free place around its owner, and
+  when a label moved onto an attribute, the attributes are placed again. Lines are straight;
+  several lines between the same two nodes get a waypoint each. Everything ends on the 10 px
+  grid from (20, 20). `overlaps` lists what still covers what (the tests require none).
+- **App.** The ribbon's diagram tab offers the palette (entity, weak and associative entity,
+  the attribute kinds, relationship, identifying relationship, IS-A, the line, notes). The
+  properties panel has the switches of each kind, the key, the database properties, and for
+  a participation its cardinality, role and total participation; the canvas's context menu
+  sets a participation's cardinality (`[0,1]`, `[1,1]`, `[0,n]`, `[1,n]`) and total
+  participation and adds an attribute to an entity, relationship or attribute; a double
+  click on a cardinality or role edits it in place. The sample project has a "Database"
+  diagram. File › "Import SQL dump as ER diagram …" (`sql.rs`) reads the dump in the
+  background, asks in a small dialog for the dialect (the detected one preselected), the
+  attributes (all, keys only, none) and, if there are several, the schemas, and imports into
+  the project as one undo step: a package named after the database with an ER diagram, which
+  opens. The counts go to a notice; tables without a primary key, placeholder entities and
+  statements that could not be read are listed in a message.
+- **Elsewhere.** The MCP tools know the kind (`entity_relationship`) and set the ER properties
+  with `update_element`; the `.asta` export leaves ER diagrams and their elements out and
+  says so.
 
 ### SQL import
 
 `umlcraft-erm-sql` turns a dump of `mysqldump`, `mariadb-dump` or `pg_dump` (plain format)
-into a diagram. Its rules are written down in the comments of `map.rs`.
+into ER elements of the model. Its rules are written down in the comments of `map.rs`.
 
 - **Dialect** (`dialect`): the dump tools' header in the first 2 KB, else backticks or
   `ENGINE=` outside comments mean MySQL, else PostgreSQL; the database's name from
@@ -1012,18 +934,21 @@ into a diagram. Its rules are written down in the comments of `map.rs`.
   table; a self reference carries a role. A missing target becomes a placeholder entity.
   Options: all attributes, keys only or none, and the schemas to take. The `Report` counts
   tables, entities, relationships, attributes and skipped statements and lists hints and
-  problems. `import` maps and lays out.
+  problems. `map` creates a package named after the database (or the file) with an ER
+  diagram of the same name, in a `Tx`, so the app's import is one undo step; `import` also
+  lays it out with `er_layout`.
 - **Tests.** The test schema (every import case, `tests/fixtures/schema`) as dumped by MySQL
   8.4 and 9.7, MariaDB 11.8 and PostgreSQL 16 and 17.6, three dumps each (without data, with
   data, with routines): the splitter finds as many statements as the prototype the rules
   were checked with, every dump gives the expected table (`tests/expected/*.md`, the form of
-  the specification), the sources give the same, the laid-out result has no warnings and no
-  overlaps, and its picture stays as it is (`tests/snapshots`, `UMLCRAFT_ERM_BLESS=1`). With
+  the specification), the sources give the same, the laid-out result passes the model's
+  check, has no overlaps and survives the file format, and its picture stays as it is
+  (`tests/snapshots`, `UMLCRAFT_ERM_BLESS=1`). With
   `UMLCRAFT_ERM_REFS`, `tests/corpus.rs` imports Sakila, Pagila, Employees, Chinook and
   Northwind (27 dumps, outside the repository for their licences) and compares them with the
   prototype's results. `cargo run --release -p umlcraft-erm-sql --example sql-import --
   DUMP… [--attributes keys] [--out DIR]` prints counts, size, overlaps and times (a 40 MB
-  dump of INSERTs reads in well under a second) and writes `.ucerm` and SVG.
+  dump of INSERTs reads in well under a second) and writes `.ucraft` and SVG.
 
 ## MCP server
 

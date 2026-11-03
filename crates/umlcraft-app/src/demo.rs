@@ -6,13 +6,15 @@
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationProps, AttributeProps,
-    ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd, DiagramKind, DirectedProps,
-    Document, ElementData, ElementKind, ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps,
+    Cardinality, ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd, DiagramKind,
+    DirectedProps, Document, ElementData, ElementKind, ErAttributeProps, ErEntityProps, ErIsAProps,
+    ErKey, ErRelationshipProps, ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps,
     InteractionOperandProps, InteractionOperator, InternalTransitionProps, LifelineProps,
     LinkProps, MessageSort, Model, ModelError, Multiplicity, Navigability, OperationProps,
     ParameterProps, Point, Presentation, PseudostateKind, Rect, Regions, Result, Shape, SlotProps,
     StateProps, StructogramProps, TransitionProps, Tx, TypeRef, Visibility,
 };
+use umlcraft_notation::er;
 use umlcraft_notation::scene::{self, TextMeasure};
 use umlcraft_notation::sequence_edit;
 use umlcraft_nsd::{Color, Element as Block, ForLoop, Provenance, RootKind, Sequence, lines};
@@ -104,6 +106,8 @@ impl Builder<'_, '_> {
         self.renting(&domain, &cases, &parts)?;
         self.returning(&cases)?;
         self.lifecycle(&domain)?;
+        let database = self.create(root, "database", ElementKind::Package)?;
+        self.database(database)?;
         Ok(())
     }
 
@@ -1210,6 +1214,100 @@ impl Builder<'_, '_> {
     }
 }
 
+impl Builder<'_, '_> {
+    /// The database's tables as an ER diagram in Chen's notation: riders rent bikes, which
+    /// park at docks, which belong to stations.
+    fn database(&mut self, owner: Id) -> Result<()> {
+        let d = self.diagram(owner, "Database", DiagramKind::EntityRelationship)?;
+        let entity = |weak| ElementKind::ErEntity(ErEntityProps { weak, ..Default::default() });
+        let relationship =
+            |identifying| ElementKind::ErRelationship(ErRelationshipProps { identifying });
+        let attribute = |key, derived, multivalued| {
+            ElementKind::ErAttribute(ErAttributeProps {
+                key,
+                derived,
+                multivalued,
+                ..Default::default()
+            })
+        };
+        let mut nodes = Vec::new();
+        for (name, kind, (x, y, w, h)) in [
+            ("Rider", entity(false), (100.0, 220.0, 100.0, 40.0)),
+            ("rents", relationship(false), (290.0, 215.0, 80.0, 50.0)),
+            ("Bike", entity(false), (460.0, 220.0, 100.0, 40.0)),
+            ("parked at", relationship(false), (650.0, 215.0, 80.0, 50.0)),
+            ("Dock", entity(true), (820.0, 220.0, 100.0, 40.0)),
+            ("belongs to", relationship(true), (830.0, 340.0, 80.0, 50.0)),
+            ("Station", entity(false), (820.0, 470.0, 100.0, 40.0)),
+            ("", ElementKind::ErIsA(ErIsAProps { total: true, disjoint: Some(true) }), {
+                (470.0, 330.0, 80.0, 50.0)
+            }),
+            ("E-bike", entity(false), (370.0, 450.0, 100.0, 40.0)),
+            ("Classic bike", entity(false), (550.0, 450.0, 100.0, 40.0)),
+        ] {
+            let element = self.create(owner, name, kind)?;
+            nodes.push((element, self.node(d, element, (x, y, w, h))?));
+        }
+        let [rider, rents, bike, parked, dock, belongs, station, is_a, ebike, classic] = nodes[..]
+        else {
+            unreachable!()
+        };
+        // Attributes, each with what it describes; a composite one's parts follow it.
+        let primary = Some(ErKey::Primary);
+        let mut attributes = Vec::new();
+        for (name, kind, of, (x, y)) in [
+            ("riderId", attribute(primary, false, false), rider, (40.0, 130.0)),
+            ("name", attribute(None, false, false), rider, (140.0, 130.0)),
+            ("phone", attribute(None, false, true), rider, (40.0, 310.0)),
+            ("since", attribute(None, false, false), rents, (290.0, 130.0)),
+            ("serialNo", attribute(primary, false, false), bike, (460.0, 130.0)),
+            ("age", attribute(None, true, false), bike, (560.0, 130.0)),
+            ("charge", attribute(None, false, false), ebike, (290.0, 540.0)),
+            ("number", attribute(Some(ErKey::Partial), false, false), dock, (930.0, 150.0)),
+            ("stationId", attribute(primary, false, false), station, (960.0, 420.0)),
+            ("name", attribute(None, false, false), station, (960.0, 480.0)),
+            ("free docks", attribute(None, true, false), station, (830.0, 570.0)),
+            ("location", attribute(None, false, false), station, (960.0, 540.0)),
+        ] {
+            let element = self.create(owner, name, kind)?;
+            let node = self.node(d, element, (x, y, 80.0, 30.0))?;
+            er::connect(self.tx, d, node, of.1)?;
+            attributes.push((element, node));
+        }
+        let location = attributes[attributes.len() - 1];
+        for (name, (x, y)) in [("latitude", (1080.0, 510.0)), ("longitude", (1080.0, 570.0))] {
+            let element = self.create(owner, name, attribute(None, false, false))?;
+            let node = self.node(d, element, (x, y, 80.0, 30.0))?;
+            er::connect(self.tx, d, node, location.1)?;
+        }
+        // Participations, read look-across: at Station, `[1,1]` says that every dock belongs
+        // to one station.
+        for (relationship, entity, cardinality, total) in [
+            (rents, rider, Cardinality::ZERO_MANY, false),
+            (rents, bike, Cardinality::ZERO_MANY, false),
+            (parked, bike, Cardinality::ZERO_ONE, false),
+            (parked, dock, Cardinality::ZERO_ONE, false),
+            (belongs, dock, Cardinality::ZERO_MANY, true),
+            (belongs, station, Cardinality::ONE_ONE, false),
+        ] {
+            let edge = er::connect(self.tx, d, relationship.1, entity.1)?;
+            let line = self.tx.model().view(d).and_then(|v| v.get(edge)?.element);
+            let line = line.ok_or(ModelError::NotFound(edge))?;
+            self.tx.update(line, |data| {
+                if let ElementKind::ErParticipation(p) = &mut data.kind {
+                    p.cardinality = Some(cardinality);
+                    p.total = total;
+                }
+            })?;
+        }
+        // The first line goes to the supertype.
+        for subtype in [bike, ebike, classic] {
+            er::connect(self.tx, d, is_a.1, subtype.1)?;
+        }
+        Ok(())
+    }
+}
+
 /// `MinuteRate.price`: free minutes, the membership's discount, the daily cap.
 fn price_body() -> Vec<Block> {
     let mut free = Block::alternative(&line("minutes <= freeMinutes"));
@@ -1304,6 +1402,7 @@ mod tests {
             DiagramKind::Component,
             DiagramKind::Deployment,
             DiagramKind::CompositeStructure,
+            DiagramKind::EntityRelationship,
         ] {
             assert!(kinds.contains(&kind), "no {kind:?} diagram");
         }

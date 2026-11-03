@@ -6,6 +6,10 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::diagram::DiagramKind;
+use crate::er::{
+    ErAttributeProps, ErEntityProps, ErIsAProps, ErParticipationProps, ErRelationshipProps,
+    ErSubtypingProps,
+};
 use crate::id::Id;
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -1219,6 +1223,13 @@ pub enum ElementKind {
     Diagram(DiagramProps),
     /// A Nassi-Shneiderman diagram. It has no view: the structogram is its content.
     Structogram(StructogramProps),
+    /// Entity-relationship diagrams (see [`crate::er`]).
+    ErEntity(ErEntityProps),
+    ErAttribute(ErAttributeProps),
+    ErRelationship(ErRelationshipProps),
+    ErIsA(ErIsAProps),
+    ErParticipation(ErParticipationProps),
+    ErSubtyping(ErSubtypingProps),
 }
 
 /// How an element refers to another element, and what the target must be.
@@ -1264,6 +1275,14 @@ pub enum RefRole {
     Constrained,
     /// The class of an association class.
     AssociationClass,
+    /// The relationship (or associative entity) of an ER participation.
+    ErRelationship,
+    /// The entity of an ER participation.
+    ErParticipant,
+    /// The IS-A of an ER subtyping.
+    ErIsA,
+    /// The super- or subtype of an ER subtyping.
+    ErSubtype,
 }
 
 impl RefRole {
@@ -1289,6 +1308,10 @@ impl RefRole {
                 | Self::ConnectorEnd
                 | Self::OnLifeline
                 | Self::Constrained
+                | Self::ErRelationship
+                | Self::ErParticipant
+                | Self::ErIsA
+                | Self::ErSubtype
         )
     }
 
@@ -1325,6 +1348,13 @@ impl RefRole {
             Self::Calls => matches!(target, ElementKind::Activity),
             Self::AssociationClass => matches!(target, ElementKind::Class(_)),
             Self::Submachine => matches!(target, ElementKind::StateMachine),
+            Self::ErRelationship => matches!(
+                target,
+                ElementKind::ErRelationship(_)
+                    | ElementKind::ErEntity(ErEntityProps { associative: true, .. })
+            ),
+            Self::ErParticipant | Self::ErSubtype => matches!(target, ElementKind::ErEntity(_)),
+            Self::ErIsA => matches!(target, ElementKind::ErIsA(_)),
             Self::Client | Self::Supplier | Self::Annotated => !matches!(
                 target,
                 ElementKind::Model | ElementKind::Diagram(_) | ElementKind::Structogram(_)
@@ -1491,6 +1521,12 @@ impl ElementKind {
             Self::Comment(_) => "comment",
             Self::Diagram(_) => "diagram",
             Self::Structogram(_) => "structogram",
+            Self::ErEntity(_) => "erEntity",
+            Self::ErAttribute(_) => "erAttribute",
+            Self::ErRelationship(_) => "erRelationship",
+            Self::ErIsA(_) => "erIsA",
+            Self::ErParticipation(_) => "erParticipation",
+            Self::ErSubtyping(_) => "erSubtyping",
         }
     }
 
@@ -1524,6 +1560,8 @@ impl ElementKind {
                 | Self::Extend(_)
                 | Self::ActivityEdge(_)
                 | Self::Transition(_)
+                | Self::ErParticipation(_)
+                | Self::ErSubtyping(_)
         )
     }
 
@@ -1606,6 +1644,14 @@ impl ElementKind {
                     || self.is_classifier()
                     || matches!(self, K::Interaction | K::Activity | K::StateMachine)
             }
+            K::ErEntity(_) | K::ErRelationship(_) | K::ErIsA(_) => self.is_namespace(),
+            // An attribute not yet joined to anything waits in the package.
+            K::ErAttribute(_) => {
+                self.is_namespace()
+                    || matches!(self, K::ErEntity(_) | K::ErRelationship(_) | K::ErAttribute(_))
+            }
+            K::ErParticipation(_) => matches!(self, K::ErRelationship(_) | K::ErEntity(_)),
+            K::ErSubtyping(_) => matches!(self, K::ErIsA(_)),
         }
     }
 
@@ -1736,6 +1782,14 @@ impl ElementKind {
             }
             Self::Comment(p) => p.annotated.iter().for_each(|&id| f(id, RefRole::Annotated)),
             Self::Structogram(p) => p.operation.iter().for_each(|&id| f(id, RefRole::Operation)),
+            Self::ErParticipation(p) => {
+                f(p.relationship, RefRole::ErRelationship);
+                f(p.entity, RefRole::ErParticipant);
+            }
+            Self::ErSubtyping(p) => {
+                f(p.is_a, RefRole::ErIsA);
+                f(p.entity, RefRole::ErSubtype);
+            }
             _ => {}
         }
     }
@@ -1832,6 +1886,14 @@ impl ElementKind {
             }
             Self::Comment(p) => p.annotated.iter_mut().for_each(f),
             Self::Structogram(p) => p.operation.iter_mut().for_each(f),
+            Self::ErParticipation(p) => {
+                f(&mut p.relationship);
+                f(&mut p.entity);
+            }
+            Self::ErSubtyping(p) => {
+                f(&mut p.is_a);
+                f(&mut p.entity);
+            }
             _ => {}
         }
     }
@@ -2037,6 +2099,12 @@ mod tests {
             ElementKind::attribute(Some(list_of(b, a))),
             ElementKind::port(Some(list_of(b, a))),
             ElementKind::connector(ConnectorEnd::new(a, Some(b)), ConnectorEnd::new(b, None)),
+            ElementKind::ErParticipation(crate::ErParticipationProps::new(b, a)),
+            ElementKind::ErSubtyping(crate::ErSubtypingProps {
+                is_a: b,
+                entity: a,
+                supertype: true,
+            }),
             ElementKind::TemplateParameter(TemplateParameterProps {
                 bounds: vec![TypeRef::Element(b), list_of(a, a)],
                 default: Some(TypeRef::Element(a)),
@@ -2162,6 +2230,44 @@ mod tests {
         assert!(!parameter.is_classifier() && !parameter.can_own(&ElementKind::attribute(None)));
         assert!(RefRole::Type.accepts(&parameter), "attributes typed `T`");
         assert!(!RefRole::General.accepts(&parameter));
+    }
+
+    #[test]
+    fn er_ownership_and_references() {
+        use crate::er::*;
+        let entity = ElementKind::ErEntity(ErEntityProps::default());
+        let associative =
+            ElementKind::ErEntity(ErEntityProps { associative: true, ..Default::default() });
+        let relationship = ElementKind::ErRelationship(ErRelationshipProps::default());
+        let attribute = ElementKind::ErAttribute(ErAttributeProps::default());
+        let is_a = ElementKind::ErIsA(ErIsAProps::default());
+        let (a, b) = (Id::from_u128(1), Id::from_u128(2));
+        let participation = ElementKind::ErParticipation(ErParticipationProps::new(a, b));
+        let subtyping =
+            ElementKind::ErSubtyping(ErSubtypingProps { is_a: a, entity: b, supertype: false });
+        for node in [&entity, &relationship, &is_a, &attribute] {
+            assert!(ElementKind::Package.can_own(node), "{node:?}");
+        }
+        // Attributes belong to what they describe; composite ones own their parts.
+        for owner in [&entity, &relationship, &attribute] {
+            assert!(owner.can_own(&attribute), "{owner:?}");
+        }
+        assert!(!is_a.can_own(&attribute) && !ElementKind::class().can_own(&attribute));
+        assert!(relationship.can_own(&participation) && associative.can_own(&participation));
+        assert!(is_a.can_own(&subtyping) && !ElementKind::Package.can_own(&subtyping));
+        assert!(participation.is_relationship() && subtyping.is_relationship());
+        // Both ends are strong: deleting an entity deletes its lines.
+        for kind in [&participation, &subtyping] {
+            let refs = kind.references();
+            assert_eq!(refs.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [a, b]);
+            assert!(refs.iter().all(|(_, role)| role.is_strong()), "{kind:?}");
+        }
+        assert!(RefRole::ErRelationship.accepts(&relationship));
+        assert!(RefRole::ErRelationship.accepts(&associative));
+        assert!(!RefRole::ErRelationship.accepts(&entity));
+        assert!(RefRole::ErParticipant.accepts(&entity) && !RefRole::ErParticipant.accepts(&is_a));
+        assert!(RefRole::ErIsA.accepts(&is_a) && RefRole::ErSubtype.accepts(&associative));
+        assert!(!entity.is_classifier() && !attribute.is_classifier());
     }
 
     #[test]

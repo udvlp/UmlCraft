@@ -134,7 +134,8 @@ pub fn behavior_of(kind: DiagramKind) -> Option<ElementKind> {
         | DiagramKind::UseCase
         | DiagramKind::Component
         | DiagramKind::Deployment
-        | DiagramKind::CompositeStructure => None,
+        | DiagramKind::CompositeStructure
+        | DiagramKind::EntityRelationship => None,
     }
 }
 

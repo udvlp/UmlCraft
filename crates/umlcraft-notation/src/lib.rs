@@ -15,6 +15,8 @@ pub mod clipboard;
 pub mod composite;
 pub mod draw;
 pub mod edit;
+pub mod er;
+pub mod er_layout;
 pub mod invariants;
 pub mod labels;
 pub mod layout;
