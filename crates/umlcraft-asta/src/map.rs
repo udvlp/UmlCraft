@@ -4,23 +4,26 @@
 //! classes (`JP.co.esm.caddies.jomt.jmodel.*`). Only what UmlCraft can represent is imported:
 //! packages, classifiers with their features, use cases, components, nodes, artifacts,
 //! instances and links, the relationships between them, activities, interactions with their
-//! interaction uses, and state machines; class, use case, sequence, activity, state machine,
-//! component and deployment diagrams. Everything else is counted in [`Imported::skipped`].
+//! interaction uses, state machines, and the parts, ports and connectors of structured
+//! classes; class, use case, sequence, activity, state machine, component, deployment and
+//! composite structure diagrams. Everything else is counted in [`Imported::skipped`].
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, AssociationProps,
-    AttributeProps, ClassifierProps, Color, CombinedFragmentProps, CommentProps, DiagramKind,
-    DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps, GeneralizationProps, Id,
-    IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
-    InteractionUseProps, InternalTransitionProps, LifelineProps, LineShape, LinkEnd, LinkProps,
-    MessageGate, MessageProps, MessageSort, Model, Multiplicity, Navigability, Op, OperationProps,
-    ParameterDirection, ParameterDirections, ParameterProps, Point, Presentation, PseudostateKind,
-    Qualifier, Rect, Regions, Shape, SlotProps, StateProps, Style, TaggedValue,
-    TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef, Visibility,
+    AttributeProps, ClassifierProps, Color, CombinedFragmentProps, CommentProps, ConnectorEnd,
+    DiagramKind, DirectedProps, EdgeLabels, ElementData, ElementKind, ExtendProps,
+    GeneralizationProps, Id, IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps,
+    InteractionOperator, InteractionUseProps, InternalTransitionProps, LifelineProps, LineShape,
+    LinkEnd, LinkProps, MessageGate, MessageProps, MessageSort, Model, Multiplicity, Navigability,
+    Op, OperationProps, ParameterDirection, ParameterDirections, ParameterProps, Point, PortProps,
+    Presentation, PseudostateKind, Qualifier, Rect, Regions, Shape, SlotProps, StateProps, Style,
+    TaggedValue, TemplateParameterKind, TemplateParameterProps, TransitionProps, TypeExpr, TypeRef,
+    Visibility,
 };
+use umlcraft_notation::composite;
 use umlcraft_notation::palette;
 use umlcraft_notation::route;
 use umlcraft_notation::scene::{self, Outline};
@@ -323,6 +326,8 @@ struct Importer<'g> {
     /// Calls that have a reply message.
     replied: HashSet<ObjId>,
     relationships: Vec<(Id, ObjId)>,
+    /// Connectors of structured classes, created once their parts and ports exist.
+    connectors: Vec<(Id, ObjId)>,
     /// Instance specifications, created once their classifiers exist.
     instances: Vec<(Id, ObjId)>,
     /// Interaction uses and the Astah interaction they refer to.
@@ -359,6 +364,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         queued: HashSet::new(),
         replied: HashSet::new(),
         relationships: Vec::new(),
+        connectors: Vec::new(),
         instances: Vec::new(),
         references: Vec::new(),
         behaviors: Vec::new(),
@@ -382,6 +388,10 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     im.links();
     for (owner, relationship) in std::mem::take(&mut im.relationships) {
         im.relationship(owner, relationship);
+    }
+    // Parts may be association ends, created with their association.
+    for (owner, connector) in std::mem::take(&mut im.connectors) {
+        im.connector(owner, connector);
     }
     for (owner, behavior) in std::mem::take(&mut im.behaviors) {
         if im.r.class(behavior) == "UStateMachineImp" {
@@ -575,14 +585,17 @@ impl Importer<'_> {
                     let data = self.data(child, ElementKind::ExtensionPoint, &[]);
                     self.create(id, data, Some(child));
                 }
-                // Features listed by their classifier are queued above already.
-                "UAttributeImp" | "UOperationImp" => {
+                // Features listed by their classifier are queued above already. Ports are owned
+                // without being listed.
+                "UAttributeImp" | "UOperationImp" | "UPortImp" => {
                     if self.queued.insert(child) {
                         self.features.push((id, child));
                     }
                 }
-                // Parameters come with their operation, association ends with their association.
-                "JUParameterImp" | "UParameterImp" | "UAssociationEndImp" => {}
+                // Parameters come with their operation, association ends with their association,
+                // connector ends with their connector.
+                "JUParameterImp" | "UParameterImp" | "UAssociationEndImp" | "UConnectorEndImp" => {}
+                "UConnectorImp" => self.connectors.push((id, child)),
                 "UAssociationImp"
                 | "UGeneralizationImp"
                 | "UDependencyImp"
@@ -755,7 +768,9 @@ impl Importer<'_> {
     fn type_ref(&self, typed: ObjId) -> Option<TypeRef> {
         let ty = self.type_of(self.r.obj(typed, "type")?, 0)?;
         let mut modifier = self.tag(typed, "jude.type_modifier");
-        if modifier.is_empty() {
+        // An unset range makes an attribute an array. Association ends made through Astah's API
+        // carry one too, there meaning no multiplicity.
+        if modifier.is_empty() && self.r.class(typed) != "UAssociationEndImp" {
             let unset = |range: &ObjId| {
                 let bound = |field| self.r.g.field(*range, field).and_then(Value::as_i64);
                 bound("lower") == Some(-100) && bound("upper") == Some(-100)
@@ -912,6 +927,16 @@ impl Importer<'_> {
 
     fn feature(&mut self, owner: Id, object: ObjId) {
         let is_static = self.r.text(object, "ownerScope") == "classifier";
+        if self.r.class(object) == "UPortImp" {
+            let kind = ElementKind::Port(PortProps {
+                type_ref: self.type_ref(object),
+                multiplicity: self.r.multiplicity(object),
+                is_behavior: self.r.flag(object, "isBehavior"),
+            });
+            let data = self.data(object, kind, &[]);
+            self.create(owner, data, Some(object));
+            return;
+        }
         if self.r.class(object) == "UAttributeImp" {
             let owner_is_enum = matches!(
                 self.model.get(owner).map(|e| e.kind()),
@@ -976,6 +1001,9 @@ impl Importer<'_> {
     }
 
     fn relationship(&mut self, owner: Id, object: ObjId) {
+        if self.r.class(object) == "UAssociationImp" && self.parts(object) {
+            return;
+        }
         let r = self.r;
         let mapped = |field: &str| r.obj(object, field).and_then(|o| self.ids.get(&o).copied());
         let first =
@@ -1078,6 +1106,62 @@ impl Importer<'_> {
         if class == "UUsageImp" && usage && !data.stereotypes.iter().any(|s| s == "use") {
             data.stereotypes.insert(0, "use".into());
         }
+        self.create(owner, data, Some(object));
+    }
+
+    /// Astah may draw a part in a structured class for the end of a composite association that
+    /// no diagram shows. UmlCraft keeps parts as attributes: such an end becomes an attribute
+    /// of the class at the other end, and the association is not imported. Returns whether the
+    /// association was taken so.
+    fn parts(&mut self, association: ObjId) -> bool {
+        let r = self.r;
+        let ends = r.list(association, "connection");
+        let [a, b] = ends[..] else { return false };
+        let is_part = |end: ObjId| {
+            r.list(end, "presentation").iter().any(|&p| r.class(p) == "PartPresentation")
+                || !r.list(end, "connectorEnd").is_empty()
+        };
+        if !r.list(association, "presentation").is_empty() || !is_part(a) && !is_part(b) {
+            return false;
+        }
+        for (end, whole) in [(a, b), (b, a)].into_iter().filter(|&(end, _)| is_part(end)) {
+            let Some(class) = r.obj(whole, "type").and_then(|t| self.classifier(t)) else {
+                self.skip(end);
+                continue;
+            };
+            let kind = ElementKind::Attribute(AttributeProps {
+                type_ref: self.type_ref(end),
+                multiplicity: r.multiplicity(end),
+                default_value: r.text(end, "initialValue"),
+                is_static: false,
+                is_derived: false,
+                is_read_only: matches!(r.text(end, "changeable").as_str(), "frozen" | "readOnly"),
+            });
+            let data = self.data(end, kind, &[]);
+            self.create(class, data, Some(end));
+        }
+        true
+    }
+
+    /// A connector of a structured class between its parts and ports.
+    fn connector(&mut self, owner: Id, object: ObjId) {
+        let r = self.r;
+        let ends: Vec<ConnectorEnd> = r
+            .list(object, "connection")
+            .into_iter()
+            .filter_map(|end| {
+                let role = *self.ids.get(&r.obj(end, "role")?)?;
+                let part_with_port = r.obj(end, "partWithPort").and_then(|p| self.ids.get(&p));
+                let mut result = ConnectorEnd::new(role, part_with_port.copied());
+                result.multiplicity = r.multiplicity(end);
+                Some(result)
+            })
+            .collect();
+        let Ok([a, b]) = <[ConnectorEnd; 2]>::try_from(ends) else {
+            self.skip(object);
+            return;
+        };
+        let data = self.data(object, ElementKind::connector(a, b), &[]);
         self.create(owner, data, Some(object));
     }
 
@@ -1343,6 +1427,7 @@ impl Importer<'_> {
             (_, "UseCase Diagram") => DiagramKind::UseCase,
             (_, "Component Diagram") => DiagramKind::Component,
             (_, "Deployment Diagram") => DiagramKind::Deployment,
+            (_, "CompositeStructure Diagram") => DiagramKind::CompositeStructure,
             _ => {
                 self.skip(object);
                 return;

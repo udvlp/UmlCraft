@@ -144,10 +144,12 @@ impl Importer<'_> {
             };
             node.bounds.x += shift.x;
             node.bounds.y += shift.y;
-            // Containers and fragments go to the back, as when they are drawn in UmlCraft.
+            // Containers, fragments and structured classes go to the back, as when they are
+            // drawn in UmlCraft.
             let container = node.element.and_then(|e| self.model.get(e)).is_some_and(|e| {
                 palette::is_container(e.kind())
                     || matches!(e.kind(), ElementKind::CombinedFragment(_))
+                    || kind == DiagramKind::CompositeStructure && composite::is_structured(e.kind())
             });
             let presentation = Presentation {
                 id: Id::generate(),
@@ -219,14 +221,30 @@ impl Importer<'_> {
         if class == "ClassifierPresentation" {
             style.hide_attributes = r.g.bool_field(p, "allAttributeVisibility") == Some(false);
             style.hide_operations = r.g.bool_field(p, "allOperationVisibility") == Some(false);
+            // Astah's notation 1 is the circle, 3 the socket of a required interface.
+            let notation = r.g.field(p, "notationType").and_then(Value::as_i64);
             style.iconic = matches!(element_kind, ElementKind::Interface(_))
-                && r.g.field(p, "notationType").and_then(Value::as_i64) == Some(1);
+                && matches!(notation, Some(1 | 3));
+            style.socket = style.iconic && notation == Some(3);
+            // Structured classes hold their parts; they are never sized by their name.
             style.auto_size = scene::is_boxed_classifier(&element_kind)
-                && r.g.bool_field(p, "doAutoResize") == Some(true);
+                && r.g.bool_field(p, "doAutoResize") == Some(true)
+                && !(kind == DiagramKind::CompositeStructure
+                    && composite::is_structured(&element_kind));
             self.member_filters(p, &mut style);
         }
         if class == "RectPresentation" {
             style.name_offset = self.boundary_name(p).map(|(_, at)| at);
+        }
+        // A port's name stands where Astah keeps its label: the text starts at the label's
+        // left edge, its baseline 13 below the label's top.
+        if class == "PortPresentation" {
+            style.name_offset = r.obj(p, "namePresentation").and_then(|label| {
+                let at = r.obj(label, "location").and_then(|l| r.point(l))?;
+                let by = r.obj(label, "localMovement").and_then(|l| r.point(l)).unwrap_or_default();
+                let top = at.y + by.y + 13.0 - umlcraft_notation::draw::baseline(scene::FONT_SIZE);
+                Some(Point::new(at.x + by.x - origin.x, top - origin.y))
+            });
         }
         // Astah never breaks a use case's name at spaces; it widens the ellipse instead.
         if class == "UseCasePresentation" {

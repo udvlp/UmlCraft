@@ -426,6 +426,10 @@ pub struct Style {
     /// head as the icon of the represented classifier.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub iconic: bool,
+    /// Interfaces drawn iconic: as a socket, a half circle open away from the line that ends
+    /// at it, the notation of an interface a class or port requires.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub socket: bool,
     /// Messages: leave out the parentheses with the arguments. Classifier boxes: leave out the
     /// operations' parameters (`total() : int`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

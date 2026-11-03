@@ -191,8 +191,8 @@ can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
 
 ## Not yet supported
 
-- Composite structure diagrams in `.asta` files: skipped on import, exported as class diagrams
-  without ports and connectors
+- Composite structure diagrams in the `.asta` export: Astah places port names itself; the
+  diagram frame, lines between two interfaces and untyped parts of components are left out
 - More than two regions per state in the `.asta` export, because the API divides a state only
   once
 - Data flow diagrams, flowcharts, communication, timing, requirement, ER

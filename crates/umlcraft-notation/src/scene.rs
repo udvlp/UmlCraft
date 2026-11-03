@@ -244,6 +244,11 @@ pub enum Figure {
     },
     /// Interface drawn as a small circle.
     Lollipop,
+    /// Required interface drawn as a socket: a half circle of the lollipop's size, open toward
+    /// `open` (a unit vector), away from the line that ends at its back.
+    Socket {
+        open: Point,
+    },
     /// Package, with Astah's fork icon in the tab for a subsystem.
     Package {
         tab: Rect,
@@ -362,6 +367,7 @@ impl Figure {
             | Self::FlowFinal
             | Self::Circle
             | Self::Lollipop
+            | Self::Socket { .. }
             | Self::UseCase { .. } => Outline::Ellipse,
             Self::Diamond => Outline::Diamond,
             _ => Outline::Rect,
@@ -916,6 +922,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
     if kind == Some(DiagramKind::CompositeStructure) {
         place_port_names(&mut nodes);
     }
+    aim_sockets(view, &mut nodes);
     let (sequence, messages) = if is_sequence {
         let (layout, messages) = sequence::arrange(model, diagram, view, &mut nodes, measure);
         if matches!(model.get(diagram).map(|d| d.kind()), Some(ElementKind::Diagram(p)) if p.hide_frame)
@@ -942,6 +949,12 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         .presentations()
         .iter()
         .filter(|p| p.style.iconic && is_interface(model, p.element))
+        .map(|p| p.id)
+        .collect();
+    let sockets: HashSet<Id> = view
+        .presentations()
+        .iter()
+        .filter(|p| p.style.socket && iconic_interfaces.contains(&p.id))
         .map(|p| p.id)
         .collect();
     let candidates: Vec<&Presentation> = view
@@ -980,6 +993,8 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 _ => None,
             });
             let keyword = binding.is_some().then(|| "<<bind>>".to_owned());
+            // A line to a socket is its «use» already, as Astah draws it.
+            let to_socket = sockets.contains(target) || sockets.contains(source);
             let label = element.and_then(|e| {
                 let stereotypes: Vec<&str> = e
                     .data()
@@ -987,6 +1002,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                     .iter()
                     .map(String::as_str)
                     .filter(|s| binding.is_none() || *s != "bind")
+                    .filter(|s| !to_socket || *s != "use")
                     .collect();
                 let stereotypes = stereotypes.join(", ");
                 let parts: Vec<String> = [
@@ -999,7 +1015,11 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
                 .collect();
                 (!parts.is_empty()).then(|| parts.join(" "))
             });
-            let to_lollipop = iconic_interfaces.contains(target);
+            // Realizing a circle and depending on a socket are plain lines.
+            let to_lollipop = match element.map(|e| e.kind()) {
+                Some(ElementKind::Dependency(_)) => to_socket,
+                _ => iconic_interfaces.contains(target),
+            };
             let outline = |id| outlines.get(id).copied().unwrap_or(Outline::Rect);
             let clip = |id, rect| clips.get(id).copied().unwrap_or(rect);
             let qualifiers = match element.map(|e| e.kind()) {
@@ -1266,7 +1286,13 @@ fn layout_element(
                 Rect::new(r.center().x - w / 2.0, top, w, line_height(12.0)),
                 LabelAlign::Center,
             );
-            (r, Figure::Lollipop, vec![row])
+            // A socket opens to the left until `aim_sockets` turns it away from its line.
+            let figure = if style.socket {
+                Figure::Socket { open: Point::new(-1.0, 0.0) }
+            } else {
+                Figure::Lollipop
+            };
+            (r, figure, vec![row])
         }
         kind if is_boxed_classifier(kind) => {
             layout_classifier(model, e, style, bounds, false, measure)
@@ -2171,6 +2197,27 @@ fn layout_part(
     (r, Figure::Part, vec![row])
 }
 
+/// Turns each socket away from the first line that ends at it, toward the side the line does
+/// not come from.
+fn aim_sockets(view: &umlcraft_model::View, nodes: &mut [NodeShape]) {
+    let centers: HashMap<Id, Point> = nodes.iter().map(|n| (n.id, n.rect.center())).collect();
+    for node in nodes.iter_mut() {
+        let Figure::Socket { open } = &mut node.figure else { continue };
+        let other = view.presentations().iter().find_map(|p| match p.shape {
+            Shape::Edge { source, target, .. } if target == node.id => Some(source),
+            Shape::Edge { source, target, .. } if source == node.id => Some(target),
+            _ => None,
+        });
+        let Some(from) = other.and_then(|o| centers.get(&o)) else { continue };
+        let c = node.rect.center();
+        let (dx, dy) = (c.x - from.x, c.y - from.y);
+        let length = dx.hypot(dy);
+        if length > 0.01 {
+            *open = Point::new(dx / length, dy / length);
+        }
+    }
+}
+
 /// Width and height of a port's square.
 pub const PORT_SIZE: f32 = crate::composite::PORT_SIZE;
 
@@ -2567,7 +2614,7 @@ fn edge_for(
         }
         Some(ElementKind::Generalization(_)) => edge.target_marker = EndMarker::HollowTriangle,
         // Realizing an interface drawn as a circle is a plain line ("lollipop").
-        Some(ElementKind::Realization(_)) if to_lollipop => {}
+        Some(ElementKind::Realization(_) | ElementKind::Dependency(_)) if to_lollipop => {}
         Some(ElementKind::Realization(_)) => {
             edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::HollowTriangle;

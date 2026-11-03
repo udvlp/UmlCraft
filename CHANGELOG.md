@@ -10,7 +10,8 @@ today.
   ports. A part dragged over the class's border takes the border along; ports stay on their
   border when it moves or changes size. The sample project shows the dock controller of the
   bike rental this way. AI clients create them as `composite_structure` and place parts and
-  ports with `create_element` and `on`.
+  ports with `create_element` and `on`. Astah's `.asta` files bring them along both ways, with
+  the interfaces a port provides drawn as a ball and those it requires as a socket.
 - **AI clients take screenshots without disturbing**: the MCP server's new `set_window` tool
   sizes the UmlCraft window in the pixels of `screenshot` and moves it beyond the screens,
   where it keeps drawing but nobody sees it, to the taskbar or back onto a screen, without

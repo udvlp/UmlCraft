@@ -305,8 +305,11 @@ from the nodes it joins. `edit::apply` takes a `composite::Snapshot` before ever
 changed size beyond it, a port that did not move keeps its side and its distance along it when
 its host moves or changes size, a port that moved snaps onto the nearest border, and a port
 goes along when its host is removed from the diagram. Lines on these diagrams start straight
-and Arrange is not offered. The `.asta` export writes them as class diagrams without ports and
-connectors; the import skips them.
+and Arrange is not offered. An iconic interface with `Style::socket` is drawn as a socket
+(`Figure::Socket`), its opening turned away from its first line; the `.asta` import sets it for
+interfaces a port requires. The `.asta` import reads parts, ports, connectors, ball and socket;
+the export recreates them through `CompositeStructureDiagramEditor` and writes a component's
+parts as association ends, as Astah takes no attributes on components.
 
 ## .asta import
 
