@@ -12,6 +12,7 @@
 //! - [`edit`]: the editor's changes, each keeping the error rules; [`history`]: undo, redo
 //!   and the selection; [`hit`]: what is under the mouse, grips, connection points;
 //!   [`clip`]: copy and paste.
+//! - [`layout`]: automatic layout (SQL import, "arrange").
 //! - [`write`] and [`read`]: the `.ucerm` file, pretty-printed JSON like `.ucraft`.
 //! - [`metrics`], [`size`], [`geometry`]: text widths and breaks, text boxes and sizes that
 //!   fit a name, outlines, line ends and label positions as draw.io computes them.
@@ -25,6 +26,7 @@ pub mod edit;
 pub mod geometry;
 pub mod history;
 pub mod hit;
+pub mod layout;
 pub mod metrics;
 pub mod model;
 pub mod read;
