@@ -101,6 +101,7 @@ menu:
   new_structogram: Neues Struktogramm
   import_astah: .asta-Projekt importieren …
   import_structogram: Struktogramm (.nsd) importieren …
+  open_erm: ER-Diagramm (.ucerm) öffnen …
   export: Exportieren
   export_svg: Diagramm als SVG …
   export_png: Diagramm als PNG …
@@ -842,3 +843,49 @@ nsd:
   note_loop_else: das else der Schleife folgt ihr; dort läuft es auch nach einem break
   note_try_else: das else von try steht am Ende des try-Blocks
   note_nested_function: eine in der Funktion definierte Funktion ist weggelassen
+erm:
+  window_kind: "– ER-Diagramm"
+  open_failed: Das ER-Diagramm konnte nicht geöffnet werden.
+  not_utf8: Die Datei ist nicht in UTF-8 kodiert; ER-Diagramme sind UTF-8.
+  error_json: "Die Datei ist kein gültiges ER-Diagramm: %{detail}"
+  error_not_erm: Die Datei ist kein ER-Diagramm von UmlCraft.
+  error_too_new: "Die Datei hat die Formatversion %{found}; dieses UmlCraft liest bis Version %{supported}. Bitte UmlCraft aktualisieren."
+  error_migration: "Die Datei der Formatversion %{from} ließ sich nicht umwandeln: %{reason}"
+  error_field: "%{element}: %{reason}"
+  error_invalid: "Das Diagramm verletzt diese Regeln:"
+  notes: "%{count} Hinweise zum Diagramm"
+  issue_line: "%{code} – %{element}: %{what}"
+  unnamed: "%{kind} ohne Namen"
+  line_between: "Linie zwischen %{a} und %{b}"
+  free_text: freier Text
+  untitled_stem: ER-Diagramm
+  grid: Raster
+  grid_tip: Raster (10 px) auf dem Blatt zeigen oder ausblenden; nur in der Ansicht, nie im Export
+  zoom_fit_tip: "Einpassen (Strg+Umschalt+0)"
+  export_svg: SVG …
+  export_svg_tip: Diagramm als SVG-Bild speichern
+  export_png: PNG
+  export_png_white: PNG mit weißem Hintergrund …
+  export_png_transparent: PNG (transparent) …
+  kind:
+    entity: Entity
+    associativeEntity: assoziative Entity
+    attribute: Attribut
+    relationship: Beziehung
+    isA: IS-A
+  issue:
+    duplicate_id: die ID kommt mehrmals vor
+    missing_end: "das Linienende %{end} gibt es nicht"
+    not_allowed: "%{source} und %{target} lassen sich nicht verbinden"
+    no_owner: das Attribut gehört zu nichts
+    several_owners: das Attribut gehört zu mehr als einem Element
+    own_part: das Attribut ist Teil von sich selbst
+    too_few_participants: eine Beziehung braucht mindestens zwei Teilnehmer
+    identifying_without_weak: eine identifizierende Beziehung braucht eine schwache Entity
+    identifying_with_several_weak: eine identifizierende Beziehung identifiziert genau eine schwache Entity
+    weak_without_identifying: die schwache Entity hat keine identifizierende Beziehung
+    is_a_ends: ein IS-A braucht genau einen Obertyp und mindestens einen Untertyp
+    super_type_outside_is_a: nur Linien eines IS-A führen zu einem Obertyp
+    cardinality_outside_participation: Kardinalitäten gehören zwischen eine Beziehung und eine Entity
+    bad_geometry: ungültige Position oder Größe
+    bad_cardinality: ungültige Kardinalität

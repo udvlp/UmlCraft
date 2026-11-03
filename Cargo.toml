@@ -21,6 +21,7 @@ umlcraft-asta-export = { path = "crates/umlcraft-asta-export" }
 umlcraft-reverse = { path = "crates/umlcraft-reverse" }
 umlcraft-nsd = { path = "crates/umlcraft-nsd" }
 umlcraft-nsd-code = { path = "crates/umlcraft-nsd-code" }
+umlcraft-erm = { path = "crates/umlcraft-erm" }
 umlcraft-mcp = { path = "crates/umlcraft-mcp" }
 umlcraft-screenshot = { path = "crates/umlcraft-screenshot" }
 

@@ -681,6 +681,11 @@ impl MainView {
     /// Opens `path` once unsaved changes are saved or discarded, e.g. for a file the system
     /// hands over.
     pub fn ask_to_open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // An ER diagram does not replace the project.
+        if crate::erm::is_erm(&path) {
+            crate::erm::open(path, window, cx);
+            return;
+        }
         self.confirm_discard(
             window,
             cx,
@@ -697,10 +702,15 @@ impl MainView {
         );
     }
 
-    /// Opens a project, or imports an `.asta` or `.nsd` file as a new project.
+    /// Opens a project, or imports an `.asta` or `.nsd` file as a new project. An ER diagram
+    /// opens in a window of its own and leaves the project as it is.
     pub fn open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         // Relative paths (from the command line) would not open from elsewhere later.
         let path = std::path::absolute(&path).unwrap_or(path);
+        if crate::erm::is_erm(&path) {
+            crate::erm::open(path, window, cx);
+            return;
+        }
         if crate::nsd::is_structogram(&path) {
             self.open_structogram(path, window, cx);
             return;
@@ -2349,6 +2359,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
         MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
         menu_item("menu.import_astah", ImportAstah),
         menu_item("menu.import_structogram", ImportStructogram),
+        menu_item("menu.open_erm", crate::erm::OpenErm),
     ];
     file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items([
         menu_item("menu.export_svg", ExportSvg),
@@ -2483,6 +2494,7 @@ fn file_menu(
     menu = item(menu, "menu.open_sample", Box::new(OpenSample));
     menu = item(menu, "menu.import_astah", Box::new(ImportAstah));
     menu = item(menu, "menu.import_structogram", Box::new(ImportStructogram));
+    menu = item(menu, "menu.open_erm", Box::new(crate::erm::OpenErm));
     menu = menu.submenu(t!("menu.export"), window, cx, move |menu, _, _| {
         menu.menu(t!("menu.export_svg"), Box::new(ExportSvg))
             .menu(t!("menu.export_png"), Box::new(ExportPng))
@@ -2673,6 +2685,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::new_structogram))
             .on_action(cx.listener(Self::import_structogram))
+            .on_action(|_: &crate::erm::OpenErm, window, cx| crate::erm::prompt_open(window, cx))
             .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::export_astah))
             .on_action(cx.listener(Self::import_source))

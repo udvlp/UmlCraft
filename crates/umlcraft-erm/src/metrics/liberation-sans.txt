@@ -1,0 +1,630 @@
+# Liberation Sans advances and kerning pairs in font units, written by
+# tools/erm-metrics/liberation.py. Lines: `units`, `ascent`, `descent`, then per face
+# `<face> <hex code point> <advance>` and `<face> kern <hex> <hex> <value>`.
+# Liberation Sans, Version 2.1.5
+units 2048
+ascent 1854
+descent 434
+regular 0020 569
+regular 0021 569
+regular 0022 727
+regular 0023 1139
+regular 0024 1139
+regular 0025 1821
+regular 0026 1366
+regular 0027 391
+regular 0028 682
+regular 0029 682
+regular 002a 797
+regular 002b 1196
+regular 002c 569
+regular 002d 682
+regular 002e 569
+regular 002f 569
+regular 0030 1139
+regular 0031 1139
+regular 0032 1139
+regular 0033 1139
+regular 0034 1139
+regular 0035 1139
+regular 0036 1139
+regular 0037 1139
+regular 0038 1139
+regular 0039 1139
+regular 003a 569
+regular 003b 569
+regular 003c 1196
+regular 003d 1196
+regular 003e 1196
+regular 003f 1139
+regular 0040 2079
+regular 0041 1366
+regular 0042 1366
+regular 0043 1479
+regular 0044 1479
+regular 0045 1366
+regular 0046 1251
+regular 0047 1593
+regular 0048 1479
+regular 0049 569
+regular 004a 1024
+regular 004b 1366
+regular 004c 1139
+regular 004d 1706
+regular 004e 1479
+regular 004f 1593
+regular 0050 1366
+regular 0051 1593
+regular 0052 1479
+regular 0053 1366
+regular 0054 1251
+regular 0055 1479
+regular 0056 1366
+regular 0057 1933
+regular 0058 1366
+regular 0059 1366
+regular 005a 1251
+regular 005b 569
+regular 005c 569
+regular 005d 569
+regular 005e 961
+regular 005f 1139
+regular 0060 682
+regular 0061 1139
+regular 0062 1139
+regular 0063 1024
+regular 0064 1139
+regular 0065 1139
+regular 0066 569
+regular 0067 1139
+regular 0068 1139
+regular 0069 455
+regular 006a 455
+regular 006b 1024
+regular 006c 455
+regular 006d 1706
+regular 006e 1139
+regular 006f 1139
+regular 0070 1139
+regular 0071 1139
+regular 0072 682
+regular 0073 1024
+regular 0074 569
+regular 0075 1139
+regular 0076 1024
+regular 0077 1479
+regular 0078 1024
+regular 0079 1024
+regular 007a 1024
+regular 007b 684
+regular 007c 532
+regular 007d 684
+regular 007e 1196
+regular 00a0 569
+regular 00a1 682
+regular 00a2 1139
+regular 00a3 1139
+regular 00a4 1139
+regular 00a5 1139
+regular 00a6 532
+regular 00a7 1139
+regular 00a8 682
+regular 00a9 1509
+regular 00aa 758
+regular 00ab 1139
+regular 00ac 1196
+regular 00ad 682
+regular 00ae 1509
+regular 00af 1131
+regular 00b0 819
+regular 00b1 1124
+regular 00b2 682
+regular 00b3 682
+regular 00b4 682
+regular 00b5 1180
+regular 00b6 1100
+regular 00b7 682
+regular 00b8 682
+regular 00b9 682
+regular 00ba 748
+regular 00bb 1139
+regular 00bc 1708
+regular 00bd 1708
+regular 00be 1708
+regular 00bf 1251
+regular 00c0 1366
+regular 00c1 1366
+regular 00c2 1366
+regular 00c3 1366
+regular 00c4 1366
+regular 00c5 1366
+regular 00c6 2048
+regular 00c7 1479
+regular 00c8 1366
+regular 00c9 1366
+regular 00ca 1366
+regular 00cb 1366
+regular 00cc 569
+regular 00cd 569
+regular 00ce 569
+regular 00cf 569
+regular 00d0 1479
+regular 00d1 1479
+regular 00d2 1593
+regular 00d3 1593
+regular 00d4 1593
+regular 00d5 1593
+regular 00d6 1593
+regular 00d7 1196
+regular 00d8 1593
+regular 00d9 1479
+regular 00da 1479
+regular 00db 1479
+regular 00dc 1479
+regular 00dd 1366
+regular 00de 1366
+regular 00df 1251
+regular 00e0 1139
+regular 00e1 1139
+regular 00e2 1139
+regular 00e3 1139
+regular 00e4 1139
+regular 00e5 1139
+regular 00e6 1821
+regular 00e7 1024
+regular 00e8 1139
+regular 00e9 1139
+regular 00ea 1139
+regular 00eb 1139
+regular 00ec 569
+regular 00ed 569
+regular 00ee 569
+regular 00ef 569
+regular 00f0 1139
+regular 00f1 1139
+regular 00f2 1139
+regular 00f3 1139
+regular 00f4 1139
+regular 00f5 1139
+regular 00f6 1139
+regular 00f7 1124
+regular 00f8 1251
+regular 00f9 1139
+regular 00fa 1139
+regular 00fb 1139
+regular 00fc 1139
+regular 00fd 1024
+regular 00fe 1139
+regular 00ff 1024
+regular 2013 1139
+regular 2014 2048
+regular 2018 455
+regular 2019 455
+regular 201a 455
+regular 201c 682
+regular 201d 682
+regular 201e 682
+regular 2022 717
+regular 2026 2048
+regular 20ac 1139
+regular 2190 2048
+regular 2192 2048
+regular 2194 2048
+regular 2212 1196
+regular 2260 1124
+regular 2264 1124
+regular 2265 1124
+regular kern 0020 0041 -113
+regular kern 0020 0054 -37
+regular kern 0020 0059 -37
+regular kern 0031 0031 -152
+regular kern 0041 0020 -113
+regular kern 0041 0054 -152
+regular kern 0041 0056 -152
+regular kern 0041 0057 -76
+regular kern 0041 0059 -152
+regular kern 0041 0076 -37
+regular kern 0041 0077 -37
+regular kern 0041 0079 -37
+regular kern 0041 2019 -152
+regular kern 0046 002c -227
+regular kern 0046 002e -227
+regular kern 0046 0041 -113
+regular kern 004c 0020 -76
+regular kern 004c 0054 -152
+regular kern 004c 0056 -152
+regular kern 004c 0057 -152
+regular kern 004c 0059 -152
+regular kern 004c 0079 -76
+regular kern 004c 2019 -113
+regular kern 0050 0020 -37
+regular kern 0050 002c -264
+regular kern 0050 002e -264
+regular kern 0050 0041 -152
+regular kern 0052 0054 -37
+regular kern 0052 0056 -37
+regular kern 0052 0057 -37
+regular kern 0052 0059 -37
+regular kern 0054 0020 -37
+regular kern 0054 002c -227
+regular kern 0054 002d -113
+regular kern 0054 002e -227
+regular kern 0054 003a -227
+regular kern 0054 003b -227
+regular kern 0054 0041 -152
+regular kern 0054 004f -37
+regular kern 0054 0061 -227
+regular kern 0054 0063 -227
+regular kern 0054 0065 -227
+regular kern 0054 0069 -76
+regular kern 0054 006f -227
+regular kern 0054 0072 -76
+regular kern 0054 0073 -227
+regular kern 0054 0075 -76
+regular kern 0054 0077 -113
+regular kern 0054 0079 -113
+regular kern 0056 002c -188
+regular kern 0056 002d -113
+regular kern 0056 002e -188
+regular kern 0056 003a -76
+regular kern 0056 003b -76
+regular kern 0056 0041 -152
+regular kern 0056 0061 -152
+regular kern 0056 0065 -113
+regular kern 0056 0069 -37
+regular kern 0056 006f -113
+regular kern 0056 0072 -76
+regular kern 0056 0075 -76
+regular kern 0056 0079 -76
+regular kern 0057 002c -113
+regular kern 0057 002d -37
+regular kern 0057 002e -113
+regular kern 0057 003a -37
+regular kern 0057 003b -37
+regular kern 0057 0041 -76
+regular kern 0057 0061 -76
+regular kern 0057 0065 -37
+regular kern 0057 006f -37
+regular kern 0057 0072 -37
+regular kern 0057 0075 -37
+regular kern 0057 0079 -18
+regular kern 0059 0020 -37
+regular kern 0059 002c -264
+regular kern 0059 002d -188
+regular kern 0059 002e -264
+regular kern 0059 003a -113
+regular kern 0059 003b -133
+regular kern 0059 0041 -152
+regular kern 0059 0061 -152
+regular kern 0059 0065 -188
+regular kern 0059 0069 -76
+regular kern 0059 006f -188
+regular kern 0059 0070 -152
+regular kern 0059 0071 -188
+regular kern 0059 0075 -113
+regular kern 0059 0076 -113
+regular kern 0066 0066 -37
+regular kern 0066 2019 37
+regular kern 0072 002c -113
+regular kern 0072 002e -113
+regular kern 0072 2019 76
+regular kern 0076 002c -152
+regular kern 0076 002e -152
+regular kern 0077 002c -113
+regular kern 0077 002e -113
+regular kern 0079 002c -152
+regular kern 0079 002e -152
+regular kern 2018 2018 -37
+regular kern 2019 0020 -76
+regular kern 2019 0073 -37
+regular kern 2019 2019 -37
+bold 0020 569
+bold 0021 682
+bold 0022 971
+bold 0023 1139
+bold 0024 1139
+bold 0025 1821
+bold 0026 1479
+bold 0027 487
+bold 0028 682
+bold 0029 682
+bold 002a 797
+bold 002b 1196
+bold 002c 569
+bold 002d 682
+bold 002e 569
+bold 002f 569
+bold 0030 1139
+bold 0031 1139
+bold 0032 1139
+bold 0033 1139
+bold 0034 1139
+bold 0035 1139
+bold 0036 1139
+bold 0037 1139
+bold 0038 1139
+bold 0039 1139
+bold 003a 682
+bold 003b 682
+bold 003c 1196
+bold 003d 1196
+bold 003e 1196
+bold 003f 1251
+bold 0040 1997
+bold 0041 1479
+bold 0042 1479
+bold 0043 1479
+bold 0044 1479
+bold 0045 1366
+bold 0046 1251
+bold 0047 1593
+bold 0048 1479
+bold 0049 569
+bold 004a 1139
+bold 004b 1479
+bold 004c 1251
+bold 004d 1706
+bold 004e 1479
+bold 004f 1593
+bold 0050 1366
+bold 0051 1593
+bold 0052 1479
+bold 0053 1366
+bold 0054 1251
+bold 0055 1479
+bold 0056 1366
+bold 0057 1933
+bold 0058 1366
+bold 0059 1366
+bold 005a 1251
+bold 005b 682
+bold 005c 569
+bold 005d 682
+bold 005e 1196
+bold 005f 1139
+bold 0060 682
+bold 0061 1139
+bold 0062 1251
+bold 0063 1139
+bold 0064 1251
+bold 0065 1139
+bold 0066 682
+bold 0067 1251
+bold 0068 1251
+bold 0069 569
+bold 006a 569
+bold 006b 1139
+bold 006c 569
+bold 006d 1821
+bold 006e 1251
+bold 006f 1251
+bold 0070 1251
+bold 0071 1251
+bold 0072 797
+bold 0073 1139
+bold 0074 682
+bold 0075 1251
+bold 0076 1139
+bold 0077 1593
+bold 0078 1139
+bold 0079 1139
+bold 007a 1024
+bold 007b 797
+bold 007c 573
+bold 007d 797
+bold 007e 1196
+bold 00a0 569
+bold 00a1 682
+bold 00a2 1139
+bold 00a3 1139
+bold 00a4 1139
+bold 00a5 1139
+bold 00a6 573
+bold 00a7 1139
+bold 00a8 682
+bold 00a9 1509
+bold 00aa 758
+bold 00ab 1139
+bold 00ac 1196
+bold 00ad 682
+bold 00ae 1509
+bold 00af 1131
+bold 00b0 819
+bold 00b1 1124
+bold 00b2 682
+bold 00b3 682
+bold 00b4 682
+bold 00b5 1180
+bold 00b6 1139
+bold 00b7 682
+bold 00b8 682
+bold 00b9 682
+bold 00ba 748
+bold 00bb 1139
+bold 00bc 1708
+bold 00bd 1708
+bold 00be 1708
+bold 00bf 1251
+bold 00c0 1479
+bold 00c1 1479
+bold 00c2 1479
+bold 00c3 1479
+bold 00c4 1479
+bold 00c5 1479
+bold 00c6 2048
+bold 00c7 1479
+bold 00c8 1366
+bold 00c9 1366
+bold 00ca 1366
+bold 00cb 1366
+bold 00cc 569
+bold 00cd 569
+bold 00ce 569
+bold 00cf 569
+bold 00d0 1479
+bold 00d1 1479
+bold 00d2 1593
+bold 00d3 1593
+bold 00d4 1593
+bold 00d5 1593
+bold 00d6 1593
+bold 00d7 1196
+bold 00d8 1593
+bold 00d9 1479
+bold 00da 1479
+bold 00db 1479
+bold 00dc 1479
+bold 00dd 1366
+bold 00de 1366
+bold 00df 1251
+bold 00e0 1139
+bold 00e1 1139
+bold 00e2 1139
+bold 00e3 1139
+bold 00e4 1139
+bold 00e5 1139
+bold 00e6 1821
+bold 00e7 1139
+bold 00e8 1139
+bold 00e9 1139
+bold 00ea 1139
+bold 00eb 1139
+bold 00ec 569
+bold 00ed 569
+bold 00ee 569
+bold 00ef 569
+bold 00f0 1251
+bold 00f1 1251
+bold 00f2 1251
+bold 00f3 1251
+bold 00f4 1251
+bold 00f5 1251
+bold 00f6 1251
+bold 00f7 1124
+bold 00f8 1251
+bold 00f9 1251
+bold 00fa 1251
+bold 00fb 1251
+bold 00fc 1251
+bold 00fd 1139
+bold 00fe 1251
+bold 00ff 1139
+bold 2013 1139
+bold 2014 2048
+bold 2018 569
+bold 2019 569
+bold 201a 569
+bold 201c 1024
+bold 201d 1024
+bold 201e 1024
+bold 2022 717
+bold 2026 2048
+bold 20ac 1139
+bold 2190 2048
+bold 2192 2048
+bold 2194 2048
+bold 2212 1196
+bold 2260 1124
+bold 2264 1124
+bold 2265 1124
+bold kern 0020 0041 -76
+bold kern 0020 0059 -37
+bold kern 0031 0031 -113
+bold kern 0041 0020 -76
+bold kern 0041 0054 -152
+bold kern 0041 0056 -152
+bold kern 0041 0057 -113
+bold kern 0041 0059 -188
+bold kern 0041 0076 -76
+bold kern 0041 0077 -37
+bold kern 0041 0079 -76
+bold kern 0041 2019 -113
+bold kern 0046 002c -227
+bold kern 0046 002e -227
+bold kern 0046 0041 -113
+bold kern 004c 0020 -37
+bold kern 004c 0054 -152
+bold kern 004c 0056 -152
+bold kern 004c 0057 -113
+bold kern 004c 0059 -188
+bold kern 004c 0079 -76
+bold kern 004c 2019 -113
+bold kern 0050 0020 -37
+bold kern 0050 002c -264
+bold kern 0050 002e -264
+bold kern 0050 0041 -152
+bold kern 0052 0056 -37
+bold kern 0052 0057 -37
+bold kern 0052 0059 -76
+bold kern 0054 002c -227
+bold kern 0054 002d -113
+bold kern 0054 002e -227
+bold kern 0054 003a -227
+bold kern 0054 003b -227
+bold kern 0054 0041 -152
+bold kern 0054 004f -37
+bold kern 0054 0061 -152
+bold kern 0054 0063 -152
+bold kern 0054 0065 -152
+bold kern 0054 0069 -37
+bold kern 0054 006f -152
+bold kern 0054 0072 -113
+bold kern 0054 0073 -152
+bold kern 0054 0075 -152
+bold kern 0054 0077 -152
+bold kern 0054 0079 -152
+bold kern 0056 002c -188
+bold kern 0056 002d -113
+bold kern 0056 002e -188
+bold kern 0056 003a -113
+bold kern 0056 003b -113
+bold kern 0056 0041 -152
+bold kern 0056 0061 -113
+bold kern 0056 0065 -113
+bold kern 0056 0069 -37
+bold kern 0056 006f -152
+bold kern 0056 0072 -113
+bold kern 0056 0075 -76
+bold kern 0056 0079 -76
+bold kern 0057 002c -113
+bold kern 0057 002d -41
+bold kern 0057 002e -113
+bold kern 0057 003a -37
+bold kern 0057 003b -37
+bold kern 0057 0041 -113
+bold kern 0057 0061 -76
+bold kern 0057 0065 -37
+bold kern 0057 0069 -18
+bold kern 0057 006f -37
+bold kern 0057 0072 -37
+bold kern 0057 0075 -37
+bold kern 0057 0079 -37
+bold kern 0059 0020 -37
+bold kern 0059 002c -227
+bold kern 0059 002d -113
+bold kern 0059 002e -227
+bold kern 0059 003a -152
+bold kern 0059 003b -152
+bold kern 0059 0041 -188
+bold kern 0059 0061 -113
+bold kern 0059 0065 -113
+bold kern 0059 0069 -76
+bold kern 0059 006f -152
+bold kern 0059 0070 -113
+bold kern 0059 0071 -152
+bold kern 0059 0075 -113
+bold kern 0059 0076 -113
+bold kern 0066 2019 37
+bold kern 0072 002c -113
+bold kern 0072 002e -113
+bold kern 0072 2019 76
+bold kern 0076 002c -152
+bold kern 0076 002e -152
+bold kern 0077 002c -76
+bold kern 0077 002e -76
+bold kern 0079 002c -152
+bold kern 0079 002e -152
+bold kern 2018 2018 -76
+bold kern 2019 0020 -113
+bold kern 2019 0073 -76
+bold kern 2019 2019 -76

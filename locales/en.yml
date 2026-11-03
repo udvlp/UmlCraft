@@ -101,6 +101,7 @@ menu:
   new_structogram: New structogram
   import_astah: Import .asta project …
   import_structogram: Import structogram (.nsd) …
+  open_erm: Open ER diagram (.ucerm) …
   export: Export
   export_svg: Diagram as SVG …
   export_png: Diagram as PNG …
@@ -842,3 +843,49 @@ nsd:
   note_loop_else: the else of the loop follows it; it also runs there after a break
   note_try_else: the else of try ends the try block
   note_nested_function: a function defined in the function is left out
+erm:
+  window_kind: "– ER diagram"
+  open_failed: The ER diagram could not be opened.
+  not_utf8: The file is not encoded as UTF-8; ER diagrams are UTF-8.
+  error_json: "The file is not a valid ER diagram: %{detail}"
+  error_not_erm: The file is not an UmlCraft ER diagram.
+  error_too_new: "The file has format version %{found}; this UmlCraft reads up to version %{supported}. Please update UmlCraft."
+  error_migration: "The file of format version %{from} could not be converted: %{reason}"
+  error_field: "%{element}: %{reason}"
+  error_invalid: "The diagram breaks these rules:"
+  notes: "%{count} notes on the diagram"
+  issue_line: "%{code} – %{element}: %{what}"
+  unnamed: "%{kind} without a name"
+  line_between: "line between %{a} and %{b}"
+  free_text: free text
+  untitled_stem: ER diagram
+  grid: Grid
+  grid_tip: Show or hide the grid (10 px) on the sheet; on screen only, never in exports
+  zoom_fit_tip: "Fit (Ctrl+Shift+0)"
+  export_svg: SVG …
+  export_svg_tip: Save the diagram as an SVG image
+  export_png: PNG
+  export_png_white: PNG with white background …
+  export_png_transparent: PNG (transparent) …
+  kind:
+    entity: entity
+    associativeEntity: associative entity
+    attribute: attribute
+    relationship: relationship
+    isA: IS-A
+  issue:
+    duplicate_id: the id is used more than once
+    missing_end: "the line's end %{end} does not exist"
+    not_allowed: "%{source} and %{target} cannot be joined"
+    no_owner: the attribute belongs to nothing
+    several_owners: the attribute belongs to more than one element
+    own_part: the attribute is a part of itself
+    too_few_participants: a relationship needs at least two participants
+    identifying_without_weak: an identifying relationship needs a weak entity
+    identifying_with_several_weak: an identifying relationship identifies exactly one weak entity
+    weak_without_identifying: the weak entity has no identifying relationship
+    is_a_ends: an IS-A needs exactly one supertype and at least one subtype
+    super_type_outside_is_a: only lines of an IS-A lead to a supertype
+    cardinality_outside_participation: cardinalities belong between a relationship and an entity
+    bad_geometry: invalid position or size
+    bad_cardinality: invalid cardinality

@@ -1,0 +1,39 @@
+{
+  "format": "umlcraft-erm",
+  "formatVersion": 1,
+  "meta": {
+    "name": "invalid"
+  },
+  "nodes": [
+    {
+      "id": "a",
+      "type": "entity",
+      "name": "A",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 100,
+        "height": 40
+      }
+    },
+    {
+      "id": "i",
+      "type": "isA",
+      "name": "IS-A",
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 100,
+        "height": 40
+      }
+    }
+  ],
+  "links": [
+    {
+      "id": "l1",
+      "source": "i",
+      "target": "a"
+    }
+  ],
+  "texts": []
+}
