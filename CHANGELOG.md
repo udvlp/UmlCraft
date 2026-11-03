@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.18.0 – 2026-11-03
 
 - **ER diagrams**: a new diagram kind for entity-relationship diagrams in Chen notation, in
   the project like the UML diagrams and drawn on the same canvas: entities, weak and
