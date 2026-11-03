@@ -853,6 +853,7 @@ error:
   er_not_joined: These two cannot be joined. Attributes belong to entities, relationships or attributes; relationships join entities; an IS-A joins entities.
   er_attribute_owned: The attribute already belongs to something. Delete its line first.
   er_second_weak: An identifying relationship identifies exactly one weak entity.
+  er_associative_in_use: Entities take part in this associative entity, so it stays associative. Delete its lines to the entities first.
   port_outside: A port goes on the border of a class or a part.
   port_on_untyped_part: "A port on a part belongs to the part's type: give the part a class as its type first (e.g. engine : Engine)."
   multiplicity: "\"%{text}\" is not a multiplicity. Examples: 1, 0..1, 1..*, *"

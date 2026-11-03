@@ -67,6 +67,7 @@ pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
             umlcraft_notation::er::NOT_JOINED => t!("error.er_not_joined"),
             umlcraft_notation::er::ATTRIBUTE_OWNED => t!("error.er_attribute_owned"),
             umlcraft_notation::er::SECOND_WEAK => t!("error.er_second_weak"),
+            umlcraft_notation::er::ASSOCIATIVE_IN_USE => t!("error.er_associative_in_use"),
             _ => t!("error.invalid", detail = detail),
         },
     }

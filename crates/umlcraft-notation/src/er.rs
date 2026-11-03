@@ -33,6 +33,7 @@ use crate::palette::{EdgeTool, NodeTool};
 pub const NOT_JOINED: &str = "these two cannot be joined";
 pub const ATTRIBUTE_OWNED: &str = "the attribute already belongs to something";
 pub const SECOND_WEAK: &str = "an identifying relationship has one weak entity";
+pub const ASSOCIATIVE_IN_USE: &str = "entities take part in the associative entity";
 
 /// Whether `diagram` is an ER diagram.
 pub fn is_er(model: &Model, diagram: Id) -> bool {
@@ -378,6 +379,20 @@ pub fn set_identifying(tx: &mut Tx<'_>, relationship: Id, identifying: bool) -> 
     Ok(())
 }
 
+/// Makes `entity` associative or a plain entity. A plain entity cannot be a relationship, so
+/// an associative entity that entities take part in stays one, refused with
+/// [`ASSOCIATIVE_IN_USE`] until its participations are gone.
+pub fn set_associative(tx: &mut Tx<'_>, entity: Id, associative: bool) -> Result<()> {
+    if !associative && participations(tx.model(), entity).next().is_some() {
+        return Err(ModelError::Invalid(ASSOCIATIVE_IN_USE.into()));
+    }
+    tx.update(entity, |data| {
+        if let ElementKind::ErEntity(p) = &mut data.kind {
+            p.associative = associative;
+        }
+    })
+}
+
 /// Gives `owner` (an entity, a relationship or a composite attribute) a new attribute named
 /// after `base_name`, without a node: a row of its box in IE and IDEF1X; a primary key column
 /// when `key`. Returns the attribute.
@@ -687,6 +702,31 @@ mod tests {
 
     fn entity(weak: bool) -> ElementKind {
         ElementKind::ErEntity(ErEntityProps { weak, ..Default::default() })
+    }
+
+    #[test]
+    fn an_associative_entity_in_use_stays_one() {
+        let mut d = diagram();
+        let associative =
+            ElementKind::ErEntity(ErEntityProps { associative: true, ..Default::default() });
+        let (enrolment, enrolment_node) = d.add(associative);
+        let (student, student_node) = d.add(entity(false));
+        let set = |d: &mut Diagram, entity: Id, on: bool| {
+            d.doc.edit("associative", |tx| set_associative(tx, entity, on))
+        };
+        // A plain entity becomes associative and back while nothing takes part in it.
+        set(&mut d, student, true).unwrap();
+        set(&mut d, student, false).unwrap();
+        d.connect(enrolment_node, student_node).unwrap();
+        let err = set(&mut d, enrolment, false).unwrap_err();
+        assert_eq!(err, ModelError::Invalid(ASSOCIATIVE_IN_USE.into()));
+        let model = d.doc.model();
+        assert!(matches!(
+            model.element(enrolment).unwrap().kind(),
+            ElementKind::ErEntity(ErEntityProps { associative: true, .. })
+        ));
+        // Taking part in something does not keep an entity from becoming associative.
+        set(&mut d, student, true).unwrap();
     }
 
     #[test]

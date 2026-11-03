@@ -853,6 +853,7 @@ error:
   er_not_joined: Diese beiden lassen sich nicht verbinden. Attribute gehören zu Entities, Beziehungen oder Attributen, Beziehungen verbinden Entities, ein IS-A verbindet Entities.
   er_attribute_owned: Das Attribut gehört schon zu etwas. Erst seine Linie löschen.
   er_second_weak: Eine identifizierende Beziehung identifiziert genau eine schwache Entity.
+  er_associative_in_use: An dieser assoziativen Entity nehmen Entities teil, deshalb bleibt sie assoziativ. Dazu zuerst ihre Linien zu den Entities löschen.
   port_outside: Ein Port gehört auf den Rand einer Klasse oder eines Parts.
   port_on_untyped_part: "Ein Port auf einem Part gehört zum Typ des Parts: dem Part erst eine Klasse als Typ geben (etwa motor : Motor)."
   multiplicity: "„%{text}“ ist keine Multiplizität. Beispiele: 1, 0..1, 1..*, *"

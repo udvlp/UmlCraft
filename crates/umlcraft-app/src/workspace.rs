@@ -432,6 +432,15 @@ impl Workspace {
         self.report(result);
     }
 
+    /// Makes an entity associative or a plain one; refused with a message while entities take
+    /// part in it.
+    pub fn set_er_associative(&mut self, entity: Id, associative: bool) {
+        let label = t!("edit.properties").to_string();
+        let result =
+            self.edit(label, |tx| umlcraft_notation::er::set_associative(tx, entity, associative));
+        self.report(result);
+    }
+
     /// Adds an operand to a combined fragment and selects it.
     pub fn add_operand(&mut self, fragment: Id) {
         let label = t!("edit.create").to_string();

@@ -2236,18 +2236,20 @@ impl PropertiesPanel {
                             }
                         },
                     ))
-                    .child(flag(
-                        "er-associative",
-                        t!("prop.er_associative").into(),
-                        p.associative,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::ErEntity(p) = &mut d.kind {
-                                p.associative = v;
-                            }
-                        },
-                    ))
+                    .child({
+                        // Refused while entities take part in it.
+                        let workspace = workspace.clone();
+                        Checkbox::new("er-associative")
+                            .label(t!("prop.er_associative").to_string())
+                            .checked(p.associative)
+                            .on_click(move |checked: &bool, _, cx| {
+                                let checked = *checked;
+                                workspace.update(cx, |ws, cx| {
+                                    ws.set_er_associative(id, checked);
+                                    cx.notify();
+                                });
+                            })
+                    })
                     .child(heading(t!("prop.er_database").to_string()))
                     .child(input("prop.er_physical_name", &self.physical_name));
             }

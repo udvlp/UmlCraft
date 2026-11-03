@@ -1464,10 +1464,18 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         ElementKind::ErRelationship(p) if args.get("identifying").is_some() => Some(p.identifying),
         _ => None,
     };
+    let associative = match &settings {
+        ElementKind::ErEntity(p) if args.get("associative").is_some() => Some(p.associative),
+        _ => None,
+    };
     let is_alt = |kind: &ElementKind| matches!(kind, ElementKind::CombinedFragment(p) if p.operator == InteractionOperator::Alt);
     let becomes_alt = is_alt(&settings) && !is_alt(&kind);
     let recovered = args.get("covered").is_some();
     change_measured(host, "update_element", |tx, measure| {
+        // Refused while entities take part in the associative entity.
+        if let Some(associative) = associative {
+            er::set_associative(tx, id, associative)?;
+        }
         if let Some(text) = &text {
             member::apply_member_text(tx, id, text)?;
         }
@@ -2501,6 +2509,28 @@ mod tests {
             &json!({ "id": customer, "notation": "ie" }),
         );
         assert!(bad.is_error);
+        // An associative entity that entities take part in stays one.
+        let enrolment = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "erAssociativeEntity", "name": "Enrolment" }),
+        );
+        let enrolment = id(&enrolment["element"]);
+        run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "erLine", "source": enrolment, "target": customer }),
+        );
+        let plain = |host: &mut Headless, entity: &str| {
+            call(
+                host,
+                &Access::default(),
+                "update_element",
+                &json!({ "id": entity, "associative": false }),
+            )
+        };
+        assert!(plain(&mut host, &enrolment).is_error);
+        assert!(!plain(&mut host, &customer).is_error);
     }
 
     #[test]
