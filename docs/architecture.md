@@ -835,8 +835,8 @@ attributes (keys, partial keys, derived, multivalued, composite), relationships 
 n-ary, identifying, with attributes) and generalization (IS-A), with `[min,max]` on the lines
 read look-across (`[1,1]` at `Kunde` on `Kunde – bucht – Ticket`: every ticket has one
 customer). They are drawn like the ER shapes of draw.io; draw.io is Apache-2.0 licensed, its
-drawing rules were worked out from its source and exports, none of its code is used. The SQL
-import follows in a later step.
+drawing rules were worked out from its source and exports, none of its code is used.
+`umlcraft-erm-sql` makes such diagrams from SQL dumps.
 
 - **Model** (`model`). A `Diagram` is a graph like draw.io's: `Node`s with a typed `NodeKind`
   (`Entity { weak }`, `AssociativeEntity`, `Attribute { key, derived, multivalued }`,
@@ -906,6 +906,21 @@ import follows in a later step.
   Labels sit on whole pixels as draw.io puts its HTML labels. PNG images are the SVG
   rasterized by the app (`png.rs`). `cargo run -p umlcraft-erm --example erm-svg --
   FILE.ucerm [OUT.svg]` draws a file.
+- **Layout** (`layout`). `arrange` lays out any diagram, for the SQL import and the editor's
+  "Arrange". Entities, relationships and IS-As form the core graph; a relationship goes
+  below the entity on its "one" side (the line whose cardinality has the maximum 1, which is
+  the referenced table after an import) and above the others, an IS-A below its supertype.
+  Each core node reserves room for its attributes, the boxes go to
+  `umlcraft_notation::layout::layered` (unchanged, a dependency of this crate), and a second
+  round reserves the room on the sides that turned out to be free of lines. Attributes then
+  go around their owner, keys first: rows of four above and below, columns of three at the
+  sides, 30 px away, the free sides first and further out ring by ring; one that would cover a
+  node, a line or a label slides along its side, moves out or takes the nearest free place
+  around its owner. Lines float; several lines between the same two nodes get a waypoint
+  each; labels sit in the middle of their line and change side or move along it when they
+  would cover something. Everything ends on the 10 px grid from (20, 20). `overlaps` lists
+  what still covers what (the tests require none), `crossings` the lines that run through a
+  node (straight long edges of the layered layout).
 - **Tests.** `tests/roundtrip.rs` reads and writes back byte for byte the flight example
   (drawn in draw.io, translated by the reference tools), a file with every Chen shape and one
   with labels moved by offsets as today's draw.io GUI writes them; `tests/invalid.rs` has one
@@ -949,7 +964,61 @@ import follows in a later step.
   the main window lists the ER diagrams with unsaved changes first. Read errors, refused edits
   and the warnings of `check` (live) are told in the UI's language (`erm.*`, an element by its
   name, a line by its ends); a click on a warning selects the element. ER diagrams do not go
-  into the recent files (the list opens projects).
+  into the recent files (the list opens projects). "Arrange" in the toolbar and the context
+  menu runs `layout::arrange` as one undo step. File → "Import SQL dump as ER diagram …"
+  (`import.rs`) reads the dump in the background, asks in a small dialog for the dialect
+  (detected one preselected), the attributes (all, keys only, none) and, if there are several,
+  the schemas, imports in the background and opens a window with the unsaved result; above
+  its warnings a line sums up what was found, and opens into the hints (clickable: tables
+  without a primary key, placeholder entities) and the statements that could not be read.
+  Saving starts next to the dump.
+
+### SQL import
+
+`umlcraft-erm-sql` turns a dump of `mysqldump`, `mariadb-dump` or `pg_dump` (plain format)
+into a diagram, after the rules S1–S11 in `docs/erm-spec.md` (a local note; the rules are
+repeated in the code's comments).
+
+- **Dialect** (`dialect`): the dump tools' header in the first 2 KB, else backticks or
+  `ENGINE=` outside comments mean MySQL, else PostgreSQL; the database's name from
+  mysqldump's header line. `read` refuses `pg_dump`'s archive format and compressed files.
+- **Splitter** (`split`): statements from bytes, because data may be binary and need not be
+  UTF-8 and lines may be megabytes long. It knows strings (backslash escapes in MySQL and in
+  PostgreSQL's `E'…'`), quoted names, `--`, `#` and `/* */` comments, MySQL's and MariaDB's
+  version comments (their content is code; MariaDB's sandbox line is dropped), `DELIMITER`,
+  `$tag$` bodies, the data after `COPY … FROM stdin;` and psql's backslash commands.
+- **Parser** (`parse`, `ir`): its own small tokenizer instead of a full SQL parser, because
+  only a few statements matter and a dump's many options must not cost a table. It reads
+  `CREATE TABLE` (columns with their type as written, NOT NULL, default, comment, generated;
+  inline and table keys and references; `PARTITION OF`), `ALTER TABLE … ADD` keys, references
+  and columns, `ATTACH PARTITION`, `CREATE UNIQUE INDEX` on plain columns, `COMMENT ON TABLE |
+  COLUMN`, `USE`/`CREATE DATABASE` for the name and `CREATE VIEW` (older mysqldumps write a
+  placeholder table for each view first). Everything else is counted by its first words;
+  what cannot be read becomes a `Problem` with its line and costs only itself. A statement
+  that is not UTF-8 is read as Windows-1252. Partitions are folded into their parent.
+- **Mapping** (`map`): junction tables (key = two or more foreign keys, not referred to)
+  become relationships between the tables they join, with their other columns as
+  attributes; a table whose key is a foreign key plus columns of its own a weak entity with
+  an identifying relationship and partial keys; every other table an entity named with a
+  capital first letter (schemas other than `public` in front). Foreign key columns are not
+  attributes, they are the relationships: `[1,1]` or `[0,1]` (nullable) at the referenced
+  table, `[0,n]` or `[0,1]` (unique) at the referencing one. A relationship is named after
+  the foreign key column without `_id` and the like, "hat" if that only repeats the target
+  table; a self reference carries a role. A missing target becomes a placeholder entity.
+  Options: all attributes, keys only or none, and the schemas to take. The `Report` counts
+  tables, entities, relationships, attributes and skipped statements and lists hints and
+  problems. `import` maps and lays out.
+- **Tests.** The test schema (every import case, `tests/fixtures/schema`) as dumped by MySQL
+  8.4 and 9.7, MariaDB 11.8 and PostgreSQL 16 and 17.6, three dumps each (without data, with
+  data, with routines): the splitter finds as many statements as the prototype the rules
+  were checked with, every dump gives the expected table (`tests/expected/*.md`, the form of
+  the specification), the sources give the same, the laid-out result has no warnings and no
+  overlaps, and its picture stays as it is (`tests/snapshots`, `UMLCRAFT_ERM_BLESS=1`). With
+  `UMLCRAFT_ERM_REFS`, `tests/corpus.rs` imports Sakila, Pagila, Employees, Chinook and
+  Northwind (27 dumps, outside the repository for their licences) and compares them with the
+  prototype's results. `cargo run --release -p umlcraft-erm-sql --example sql-import --
+  DUMP… [--attributes keys] [--out DIR]` prints counts, size, overlaps and times (a 40 MB
+  dump of INSERTs reads in well under a second) and writes `.ucerm` and SVG.
 
 ## MCP server
 
