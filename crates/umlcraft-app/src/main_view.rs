@@ -978,6 +978,71 @@ impl MainView {
         }
     }
 
+    /// Offers the dialects for the open ER diagram as SQL, the one it was imported from
+    /// first.
+    fn export_sql(&mut self, _: &ExportSql, window: &mut Window, cx: &mut Context<Self>) {
+        self.flush_edits(window, cx);
+        let ws = self.workspace.read(cx);
+        let model = ws.doc.model();
+        let shown = ws.active_diagram.filter(|&d| umlcraft_notation::er::is_er(model, d));
+        let Some(diagram) = shown else {
+            let detail = t!("sql.export_not_er_detail");
+            self.inform(PromptLevel::Info, &t!("sql.export_not_er"), &detail, window, cx);
+            return;
+        };
+        let dialect = umlcraft_erm_sql::imported_dialect(model, diagram)
+            .unwrap_or(umlcraft_erm_sql::Dialect::ALL[0]);
+        crate::sql::export(cx.entity().downgrade(), diagram, dialect, window, cx);
+    }
+
+    /// Writes the entities of the ER diagram `diagram` as SQL for `dialect` to a file the user
+    /// picks. What went into it goes to a notification, what was left out to a message.
+    pub fn write_sql(
+        &mut self,
+        diagram: Id,
+        dialect: umlcraft_erm_sql::Dialect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ws = self.workspace.read(cx);
+        let model = ws.doc.model();
+        let out = match umlcraft_erm_sql::ddl(model, diagram, dialect) {
+            Ok(out) => out,
+            Err(err) => {
+                let detail = crate::errors::model_error(Some(model), &err);
+                self.show_error(&t!("sql.export_failed"), &detail, window, cx);
+                return;
+            }
+        };
+        let name = model.element(diagram).map(|e| e.name().to_owned()).unwrap_or_default();
+        let suggested = format!("{}.sql", sanitize_file_name(&name));
+        let directory = start_directory(ws.path.as_deref());
+        let rx = cx.prompt_for_new_path(&directory, Some(&suggested));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(path))) = rx.await else { return };
+            let path = with_extension(path, "sql");
+            let (target, sql) = (path.clone(), out.sql.clone());
+            let written =
+                cx.background_executor().spawn(async move { std::fs::write(&target, sql) }).await;
+            this.update_in(cx, |this, window, cx| match written {
+                Ok(()) => {
+                    let file = path.file_name().unwrap_or_default().to_string_lossy();
+                    let (summary, lines) = crate::sql::export_text(&out, &file);
+                    if lines.is_empty() {
+                        toast(Notification::success(summary), window, cx);
+                    } else {
+                        this.inform(PromptLevel::Info, &summary, &lines.join("\n"), window, cx);
+                    }
+                }
+                Err(err) => {
+                    this.show_error(&t!("sql.export_failed"), &err.to_string(), window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// The project the import was meant for has been replaced in the meantime.
     fn import_discarded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let message = t!("dialog.import_source_discarded");
@@ -2392,6 +2457,7 @@ fn menus(settings: &Settings) -> Vec<Menu> {
         menu_item("menu.export_svg", ExportSvg),
         menu_item("menu.export_png", ExportPng),
         menu_item("menu.export_astah", ExportAstah),
+        menu_item("menu.export_sql", ExportSql),
         menu_item("menu.export_structogram", crate::nsd::ExportStructogram),
     ])));
     file.extend([
@@ -2526,6 +2592,7 @@ fn file_menu(
         menu.menu(t!("menu.export_svg"), Box::new(ExportSvg))
             .menu(t!("menu.export_png"), Box::new(ExportPng))
             .menu(t!("menu.export_astah"), Box::new(ExportAstah))
+            .menu(t!("menu.export_sql"), Box::new(ExportSql))
             .menu_with_disabled(
                 t!("menu.export_structogram"),
                 Box::new(crate::nsd::ExportStructogram),
@@ -2722,6 +2789,7 @@ impl Render for MainView {
             }))
             .on_action(cx.listener(Self::import_astah))
             .on_action(cx.listener(Self::export_astah))
+            .on_action(cx.listener(Self::export_sql))
             .on_action(cx.listener(Self::import_source))
             .on_action(cx.listener(Self::export_svg))
             .on_action(cx.listener(Self::export_png))

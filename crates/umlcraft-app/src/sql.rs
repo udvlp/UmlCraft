@@ -2,8 +2,10 @@
 //! schemas),
 //! and the import into the project: a package named after the database with an ER diagram,
 //! which opens. What was found goes to the status bar; hints and problems to a message.
+//!
+//! "ER diagram as SQL …": the dialect, then the file the `CREATE TABLE` statements go to.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -17,8 +19,10 @@ use gpui_kit::component::{ActiveTheme, Disableable, StyledExt, WindowExt, h_flex
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_erm_sql::ir::ProblemKind;
-use umlcraft_erm_sql::{Attributes, Dialect, DumpError, Hint, Options, Report, Schema};
-use umlcraft_model::ErNotation;
+use umlcraft_erm_sql::{
+    Attributes, Ddl, Dialect, DumpError, Hint, LeftOut, Options, Report, Schema,
+};
+use umlcraft_model::{ErNotation, Id};
 
 use crate::main_view::MainView;
 
@@ -261,6 +265,84 @@ fn run(
             .ok();
     })
     .detach();
+}
+
+/// Offers the dialects for `diagram` as SQL, `dialect` chosen; OK asks for the file.
+pub fn export(
+    view: WeakEntity<MainView>,
+    diagram: Id,
+    dialect: Dialect,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let chosen = Rc::new(Cell::new(dialect));
+    window.open_dialog(cx, move |dialog, _, _| {
+        let c1 = chosen.clone();
+        let dialects = RadioGroup::horizontal("sql-export-dialect")
+            .children(Dialect::ALL.map(|d| d.name().to_owned()))
+            .selected_index(Dialect::ALL.iter().position(|&d| d == chosen.get()))
+            .on_change(move |&ix, window, _| {
+                c1.set(Dialect::ALL[ix]);
+                window.refresh();
+            });
+        let go = {
+            let (chosen, view) = (chosen.clone(), view.clone());
+            move |window: &mut Window, cx: &mut App| {
+                window.close_dialog(cx);
+                let dialect = chosen.get();
+                view.update(cx, |view, cx| view.write_sql(diagram, dialect, window, cx)).ok();
+            }
+        };
+        let go_click = go.clone();
+        let body = v_flex()
+            .gap_4()
+            .pb_1()
+            .child(div().text_sm().child(t!("sql.export_hint").to_string()))
+            .child(section(t!("sql.dialect").to_string(), dialects));
+        dialog
+            .title(t!("sql.export_title").to_string())
+            .width(px(480.0))
+            .child(body)
+            .on_ok(move |_, window, cx| {
+                go(window, cx);
+                false
+            })
+            .footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("sql-export-cancel")
+                            .label(t!("dialog.cancel").to_string())
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        Button::new("sql-export-go")
+                            .primary()
+                            .label(t!("sql.export_button").to_string())
+                            .on_click(move |_, window, cx| go_click(window, cx)),
+                    ),
+            )
+    });
+}
+
+/// What an export wrote, and what it left out one per line.
+pub fn export_text(ddl: &Ddl, file: &str) -> (String, Vec<String>) {
+    let summary =
+        t!("sql.export_done", file = file, tables = ddl.tables, foreign_keys = ddl.foreign_keys)
+            .to_string();
+    let lines = ddl
+        .left_out
+        .iter()
+        .map(|l| match l {
+            LeftOut::Multivalued { table, attribute } => {
+                t!("sql.export_multivalued", table = table, attribute = attribute)
+            }
+            LeftOut::NoKey { table, target } => {
+                t!("sql.export_no_key", table = table, target = target)
+            }
+        })
+        .map(|text| text.to_string())
+        .collect();
+    (summary, lines)
 }
 
 /// Whether the schemas chosen have tables.

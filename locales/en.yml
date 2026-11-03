@@ -97,6 +97,8 @@ ribbon:
   export: Export
   export_nsd: Save for Structorizer
   export_nsd_tip: Saves the structogram as an .nsd file that Structorizer can open and edit
+  export_sql: As SQL
+  export_sql_tip: Writes the entities of the ER diagram as CREATE TABLE statements to an .sql file
   copy_image: To clipboard
   new_diagram: New diagram
 menu:
@@ -112,6 +114,7 @@ menu:
   export_png: Diagram as PNG …
   export_astah: .asta project …
   export_structogram: Structogram as .nsd …
+  export_sql: ER diagram as SQL …
   recent: Open recent
   no_recent: (none)
   save: Save
@@ -969,3 +972,12 @@ sql:
   problem_column: column
   problem_constraint: key
   unknown_table: "Line %{line}: about a table that is not in the dump: %{text}"
+  export_title: Export ER diagram as SQL
+  export_hint: The entities of the diagram become tables, their relationships foreign keys, many-to-many relationships tables of their own.
+  export_button: Export …
+  export_not_er: No ER diagram open.
+  export_not_er_detail: Please open the ER diagram whose tables are to be exported first.
+  export_failed: The SQL file could not be written.
+  export_done: "%{file}: %{tables} tables, %{foreign_keys} foreign keys"
+  export_multivalued: "%{table}.%{attribute}: multivalued attribute, no column"
+  export_no_key: "%{table} → %{target}: %{target} has no primary key, so no foreign key"

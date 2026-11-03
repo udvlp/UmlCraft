@@ -321,6 +321,7 @@ fn column(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
             col.comment = s.string(k + 1).map(str::to_owned);
         } else if s.is(k, "AS") && s.punct(k + 1, b'(') {
             col.generated = true;
+            col.default = Some(s.text(k + 2, s.close(k + 1)));
         }
         k += 1;
     }

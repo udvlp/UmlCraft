@@ -643,6 +643,11 @@ fn tools(state: &State) -> Vec<Group> {
                     .tooltip(t!("ribbon.export_nsd_tip"))
                     .action(crate::nsd::ExportStructogram)
                     .enabled(state.structogram.is_some()),
+                // The ER diagram shown as tables.
+                Item::new("sql-export", fluent("arrow_export_ltr"), t!("ribbon.export_sql"))
+                    .tooltip(t!("ribbon.export_sql_tip"))
+                    .action(ExportSql)
+                    .enabled(state.notation.is_some()),
             ],
         ),
         group(

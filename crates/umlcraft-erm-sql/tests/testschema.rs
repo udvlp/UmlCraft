@@ -6,7 +6,7 @@
 mod support;
 
 use pretty_assertions::assert_eq;
-use support::{describe, expected, fixtures, imported};
+use support::{describe, expected, fixtures, imported, unordered};
 use umlcraft_erm_sql::{Dialect, Options, read, split::split};
 use umlcraft_model::{ErNotation, Id};
 use umlcraft_notation::er_layout;
@@ -123,26 +123,6 @@ fn the_report_counts() {
     assert_eq!(hints.len(), 1, "{hints:?}");
     assert!(hints[0].contains("fracht.Fracht Stück"));
     assert_eq!(s.schemas(), ["fracht", "public"]);
-}
-
-/// The table without the order of the tables and of a relationship's ends, which follow
-/// the source (so does which end is `m`).
-fn unordered(table: &str) -> Vec<String> {
-    let table = table.replace("[0,m]", "[0,n]");
-    let mut lines: Vec<String> = table
-        .lines()
-        .map(|l| {
-            let mut cells: Vec<String> = l.split(" | ").map(str::to_owned).collect();
-            if let Some(ends) = cells.get_mut(3) {
-                let mut e: Vec<&str> = ends.trim_end_matches(" |").split("; ").collect();
-                e.sort_unstable();
-                *ends = e.join("; ");
-            }
-            cells.join(" | ")
-        })
-        .collect();
-    lines.sort();
-    lines
 }
 
 #[test]

@@ -97,6 +97,8 @@ ribbon:
   export: Exportieren
   export_nsd: Für Structorizer speichern
   export_nsd_tip: Speichert das Struktogramm als .nsd-Datei, die Structorizer öffnen und bearbeiten kann
+  export_sql: Als SQL
+  export_sql_tip: Schreibt die Entities des ER-Diagramms als CREATE TABLE-Anweisungen in eine .sql-Datei
   copy_image: In Zwischenablage
   new_diagram: Neues Diagramm
 menu:
@@ -112,6 +114,7 @@ menu:
   export_png: Diagramm als PNG …
   export_astah: .asta-Projekt …
   export_structogram: Struktogramm als .nsd …
+  export_sql: ER-Diagramm als SQL …
   recent: Zuletzt geöffnet
   no_recent: (keine)
   save: Speichern
@@ -969,3 +972,12 @@ sql:
   problem_column: Spalte
   problem_constraint: Schlüssel
   unknown_table: "Zeile %{line}: betrifft eine Tabelle, die nicht im Dump steht: %{text}"
+  export_title: ER-Diagramm als SQL exportieren
+  export_hint: Die Entities des Diagramms werden zu Tabellen, ihre Beziehungen zu Fremdschlüsseln, Viele-zu-viele-Beziehungen zu Verbindungstabellen.
+  export_button: Exportieren …
+  export_not_er: Kein ER-Diagramm geöffnet.
+  export_not_er_detail: Bitte zuerst das ER-Diagramm öffnen, dessen Tabellen exportiert werden sollen.
+  export_failed: Die SQL-Datei konnte nicht geschrieben werden.
+  export_done: "%{file}: %{tables} Tabellen, %{foreign_keys} Fremdschlüssel"
+  export_multivalued: "%{table}.%{attribute}: mehrwertiges Attribut, keine Spalte"
+  export_no_key: "%{table} → %{target}: %{target} hat keinen Primärschlüssel, also kein Fremdschlüssel"

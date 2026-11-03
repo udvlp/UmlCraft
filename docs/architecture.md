@@ -861,7 +861,7 @@ multivalued, composite), relationships (binary, n-ary, identifying, with attribu
 generalization (IS-A), with `[min,max]` on the lines read look-across (`[1,1]` at `Kunde` on
 `Kunde – bucht – Ticket`: every ticket has one customer). The shapes are Chen's as draw.io
 draws them; the text and lines follow UmlCraft's canvas. `umlcraft-erm-sql` makes such
-diagrams from SQL dumps.
+diagrams from SQL dumps and writes them back as SQL.
 
 - **Model** (`umlcraft-model/src/er.rs`, element kinds `erEntity`, `erAttribute`,
   `erRelationship`, `erIsA`, `erParticipation`, `erSubtyping`). An entity has `weak`,
@@ -907,9 +907,12 @@ diagrams from SQL dumps.
   when a label moved onto an attribute, the attributes are placed again. Lines are straight;
   several lines between the same two nodes get a waypoint each. A line that would run
   through another entity, relationship or IS-A (one that skips a layer passes a node there)
-  goes around it (`detour`): one bend beside the node or two along its side, the one passing
-  the fewest other nodes and then the shortest, node after node; a spreading waypoint that
-  fell into a node moves out to its nearer side, so parallel lines pass on both sides. A
+  goes around it (`detour`): one bend beside the middle of a side of the node or two along
+  that side, halfway into the gap to the next node (at least 20 px, at most 30); of the eight
+  ways the one passing the fewest other nodes, then the shortest with 120 px added for each
+  line it crosses (twice that for one it would run on top of), node after node; bends that
+  can go without passing a node or crossing more lines go afterwards. A spreading waypoint
+  that fell into a node moves out to its nearer side, so parallel lines pass on both sides. A
   self-reference in IE and IDEF1X goes round the first corner of its table (top right, top
   left, bottom right, bottom left) where the loop and its labels keep clear of the other
   nodes (`place_loops`). Everything ends on the 10 px grid from (20, 20). `overlaps` lists
@@ -927,7 +930,10 @@ diagrams from SQL dumps.
   attributes (all, keys only, none) and, if there are several, the schemas, and imports into
   the project as one undo step: a package named after the database with an ER diagram, which
   opens. The counts go to a notice; tables without a primary key, placeholder entities and
-  statements that could not be read are listed in a message.
+  statements that could not be read are listed in a message. File › Export › "ER diagram as
+  SQL …" (and "As SQL" in the ribbon's tools tab, on an ER diagram) asks for the dialect,
+  the one the diagram's package was imported from preselected (`imported_dialect`), then
+  for the file.
 - **Elsewhere.** The MCP tools know the kind (`entity_relationship`), create a diagram in a
   notation (`create_diagram`'s `notation`), switch it and set the ER properties with
   `update_element`, and add columns with `add_member` (`name : TYPE(length)`, `key`);
@@ -1025,6 +1031,41 @@ into ER elements of the model. Its rules are written down in the comments of `ma
   DUMP… [--attributes keys] [--out DIR]` prints counts, size, overlaps and times (a 40 MB
   dump of INSERTs reads in well under a second) and writes `.ucraft` and SVG.
 
+### SQL export
+
+`umlcraft_erm_sql::ddl(model, diagram, dialect)` writes the entities, relationships and
+IS-As an ER diagram shows (in any notation) as SQL for MySQL/MariaDB or PostgreSQL; `Ddl`
+counts the tables and foreign keys and lists what it `left_out`.
+
+- **Tables.** An entity is a table named by its physical name, else its name (`schema.table`
+  becomes a schema of its own in PostgreSQL, created first). Attributes are columns, a
+  composite attribute's parts instead of it; a multivalued one has no column. Types and
+  lengths go together again as the import took them apart (`int(10) unsigned`,
+  `timestamp(3) without time zone`); no type is `varchar(255)`. Keys and partial keys make
+  the primary key and are `NOT NULL`. Defaults that are numbers, keywords
+  (`CURRENT_TIMESTAMP` …) or calls stay as they are, others become strings; PostgreSQL's
+  `nextval(…)` of the dump's own sequence becomes an identity column. A derived attribute
+  with an expression (the import keeps a generated column's expression as its default) is a
+  generated column. Comments go inline in MySQL and as `COMMENT ON` in PostgreSQL. Names
+  are quoted only where they must be: not plain, a reserved word, and in PostgreSQL with
+  capitals.
+- **Foreign keys** come last as `ALTER TABLE … ADD CONSTRAINT`, so the order of the tables
+  does not matter. Foreign key columns the model has (from a dump, Astah or the IE and IDEF1X
+  tools) reference the columns of the other table they are named after (`gate_nummer` →
+  `nummer`, keys first), else its key in order; a referenced set that is not the key gets a
+  `UNIQUE`. Without such columns, a binary relationship puts new ones into the table across
+  from the side with `[x,1]` (look-across), named after the parent's role, else the
+  relationship when the two tables share several or it is a self-reference, else the parent
+  table (`kunde_id`); required when that side's minimum is 1, in the key when identifying or
+  when a one-to-one child has no key of its own, `UNIQUE` for one-to-one. A relationship of
+  more than two entities, one with attributes, a many-to-many one and an associative entity
+  are tables of their own whose columns reference each entity and make the key (unless an
+  associative entity has one). A subtype references its supertype, with the supertype's key
+  as its own when it has none.
+- **Tests.** Each of the five fixture systems goes dump → ER → SQL → ER and gives the same
+  model again (`tests/ddl.rs`); a drawn Chen diagram without foreign key columns gets each
+  kind of foreign key (`ddl::tests`), and the SQL reads back without a problem.
+
 ## MCP server
 
 AI clients (Claude Code, Claude Desktop, Cursor) read and edit UML models through the Model
@@ -1045,7 +1086,8 @@ and stdout, one message per line (`umlcraft_mcp::protocol::serve`: `initialize`,
   `wrap_in_fragment`,
   `add_operand`, `update_element`, `move_node`, `arrange_diagram`, `route_lines`,
   `delete_element`, `remove_from_diagram`, `batch`, `undo`, `redo`;
-- the project: `open_diagram`, `new_document`, `open_file`, `save_file`, `export_image`.
+- the project: `open_diagram`, `new_document`, `open_file`, `save_file`, `export_image`,
+  `export_sql` (an ER diagram as `CREATE TABLE` statements, in the reply or to a file).
 
 Every editing tool is one undo step made the way the app makes it:
 `umlcraft_notation::edit::apply` fits auto-sized boxes and lets routed lines follow, the same

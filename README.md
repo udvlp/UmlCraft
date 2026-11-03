@@ -72,6 +72,11 @@ line the color of its name and of the line.
   cardinalities, with all attributes, keys only or none, in Chen, IE or IDEF1X notation;
   foreign key columns are kept as columns of their tables. Tables without a primary key and
   statements that could not be read are listed.
+- **ER diagrams as SQL** (File › Export › ER diagram as SQL …): `CREATE TABLE` statements
+  for MySQL/MariaDB or PostgreSQL with primary keys, types, defaults, comments and foreign
+  keys; many-to-many relationships become tables of their own, subtypes take the key of their
+  supertype. A diagram imported from a dump gives the same model when its SQL is imported
+  again.
 
 ## Importing source code
 
@@ -318,7 +323,7 @@ one.
 | `crates/umlcraft-nsd` | Structorizer's `.nsd` structograms: model, reading and writing, layout, drawing, SVG, editing |
 | `crates/umlcraft-nsd-code` | Methods of source files as structograms (Java, C#, Python, C++; tree-sitter) |
 | `tools/nsd-metrics` | The Java tool that writes the text metrics `umlcraft-nsd` lays structograms out with |
-| `crates/umlcraft-erm-sql` | ER diagrams from SQL dumps of MySQL, MariaDB and PostgreSQL |
+| `crates/umlcraft-erm-sql` | ER diagrams from SQL dumps of MySQL, MariaDB and PostgreSQL, and SQL from them |
 | `crates/umlcraft-mcp` | MCP server: tools on a project, the protocol, the bridge to the running app |
 | `crates/umlcraft-cli` | `umlcraft-cli`: the MCP server for AI clients and its setup |
 | `crates/umlcraft-screenshot` | The app window as an image, for the MCP server's `screenshot` (Windows) |

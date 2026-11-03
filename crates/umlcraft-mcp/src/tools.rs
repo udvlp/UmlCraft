@@ -7,6 +7,7 @@ use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
 use serde_json::{Value, json};
+use umlcraft_erm_sql::{Dialect, LeftOut};
 use umlcraft_model::{
     ActivityNodeKind, DiagramKind, ElementData, ElementKind, ErDisplay, ErKey, ErNotation, Id,
     InteractionOperator, MessageSort, Model, ModelError, Point, Rect, Shape, SharedStyle,
@@ -701,6 +702,21 @@ pub fn list() -> Vec<Value> {
             }),
             &["diagram", "path"],
         ),
+        tool(
+            "export_sql",
+            "Writes the entities of an ER diagram as CREATE TABLE statements: relationships \
+             become foreign keys, many-to-many relationships tables of their own, subtypes take \
+             their supertype's key. Returns the SQL, or writes it to `path` in an allowed \
+             folder.",
+            json!({
+                "diagram": id("The ER diagram; the one shown if omitted."),
+                "dialect": { "type": "string", "enum": ["mysql", "mariadb", "postgres"],
+                             "description": "The SQL dialect; the one the diagram was \
+                                             imported from if omitted, else mysql." },
+                "path": text("The .sql file; the SQL comes back in the reply if omitted."),
+            }),
+            &[],
+        ),
     ]
 }
 
@@ -752,6 +768,7 @@ pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> R
         "open_file" => open_file(host, access, args),
         "save_file" => save_file(host, access, args),
         "export_image" => export_image(host, access, args),
+        "export_sql" => export_sql(host, access, args),
         _ => Err(format!("unknown tool `{name}`")),
     };
     outcome.unwrap_or_else(Reply::error)
@@ -2372,6 +2389,52 @@ fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
     Ok(Reply::json(json!({ "written": path })))
 }
 
+const DIALECTS: [(&str, Dialect); 3] =
+    [("mysql", Dialect::MySql), ("mariadb", Dialect::MariaDb), ("postgres", Dialect::Postgres)];
+
+fn export_sql(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
+    let (diagram, kind) = diagram_arg(host, args, "diagram")?;
+    if kind != DiagramKind::EntityRelationship {
+        return Err(format!("{diagram} is not an ER diagram"));
+    }
+    let model = host.document().model();
+    let dialect = pick(args, "dialect", &DIALECTS)?
+        .or_else(|| umlcraft_erm_sql::imported_dialect(model, diagram))
+        .unwrap_or(Dialect::MySql);
+    let out = umlcraft_erm_sql::ddl(model, diagram, dialect).map_err(|e| e.to_string())?;
+    let left_out: Vec<String> = out
+        .left_out
+        .iter()
+        .map(|l| match l {
+            LeftOut::Multivalued { table, attribute } => {
+                format!("{table}.{attribute}: multivalued, no column")
+            }
+            LeftOut::NoKey { table, target } => {
+                format!("{table} → {target}: {target} has no primary key, no foreign key")
+            }
+        })
+        .collect();
+    let mut reply = json!({
+        "dialect": dialect.name(),
+        "tables": out.tables,
+        "foreign_keys": out.foreign_keys,
+        "left_out": left_out,
+    });
+    match opt_str(args, "path") {
+        Some(path) => {
+            let path = access.check(Path::new(path), None)?;
+            if let Some(folder) = path.parent() {
+                std::fs::create_dir_all(folder)
+                    .map_err(|e| format!("{}: {e}", folder.display()))?;
+            }
+            std::fs::write(&path, &out.sql).map_err(|e| format!("{}: {e}", path.display()))?;
+            reply["written"] = json!(path);
+        }
+        None => reply["sql"] = json!(out.sql),
+    }
+    Ok(Reply::json(reply))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3501,5 +3564,43 @@ mod tests {
             is_error: true,
         };
         assert_eq!(Reply::from_json(&reply.to_json()), reply);
+    }
+
+    #[test]
+    fn an_er_diagram_comes_out_as_sql() {
+        let mut host = Headless::new();
+        let d = run(
+            &mut host,
+            "create_diagram",
+            json!({ "kind": "entity_relationship", "name": "Shop", "notation": "ie" }),
+        );
+        let d = id(&d["diagram"]);
+        let mut entity = |name: &str, key: &str| {
+            let e = run(
+                &mut host,
+                "create_element",
+                json!({ "diagram": d, "tool": "erEntity", "name": name }),
+            );
+            let e = id(&e["element"]);
+            run(&mut host, "add_member", json!({ "owner": e, "text": key, "key": true }));
+            e
+        };
+        let (customer, order) =
+            (entity("Customer", "id : INTEGER"), entity("Order", "no : INTEGER"));
+        let link = json!({ "diagram": d, "tool": "erNonIdentifying", "source": customer, "target": order });
+        run(&mut host, "connect", link);
+        let out = run(&mut host, "export_sql", json!({ "diagram": d, "dialect": "postgres" }));
+        let sql = out["sql"].as_str().unwrap();
+        assert!(sql.contains("CREATE TABLE \"Order\" ("), "{sql}");
+        assert!(sql.contains("REFERENCES \"Customer\" (id);"), "{sql}");
+        assert_eq!((out["tables"].as_u64(), out["foreign_keys"].as_u64()), (Some(2), Some(1)));
+        let class = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "C" }));
+        let wrong = call(
+            &mut host,
+            &Access::default(),
+            "export_sql",
+            &json!({ "diagram": class["diagram"] }),
+        );
+        assert!(wrong.is_error);
     }
 }

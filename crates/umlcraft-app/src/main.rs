@@ -47,6 +47,8 @@ actions!(
         NewStructogram,
         // An SQL dump as an ER diagram in a package of its own.
         ImportSql,
+        // The entities of the open ER diagram as CREATE TABLE statements.
+        ExportSql,
         ImportAstah,
         ExportAstah,
         ExportSvg,

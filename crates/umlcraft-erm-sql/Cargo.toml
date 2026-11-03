@@ -1,6 +1,6 @@
 [package]
 name = "umlcraft-erm-sql"
-description = "Entity-relationship diagrams from SQL dumps of MySQL, MariaDB and PostgreSQL"
+description = "Entity-relationship diagrams from SQL dumps of MySQL, MariaDB and PostgreSQL, and SQL from them"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

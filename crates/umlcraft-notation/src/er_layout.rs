@@ -48,6 +48,8 @@ const PARALLEL_SPREAD: f32 = 60.0;
 const CLEARANCE: f32 = 6.0;
 /// Between a node and a line led around it.
 const DETOUR_GAP: f32 = 20.0;
+/// What crossing another line costs a detour, as a length.
+const CROSSING: f32 = 120.0;
 /// The top left corner of the arranged diagram.
 const MARGIN: f32 = 20.0;
 
@@ -441,11 +443,51 @@ fn apply(g: &mut Graph, corners: &[Point]) {
 /// nodes. A line that skips a layer of the layered layout passes a node there.
 fn detour(g: &mut Graph) {
     let boxes: Vec<(usize, Rect)> = g.core.iter().map(|&i| (i, g.nodes[i].bounds)).collect();
-    for l in g.lines.iter_mut().filter(|l| l.core && l.ends[0] != l.ends[1]) {
+    let center = |g: &Graph, i: usize| g.nodes[i].bounds.center();
+    for index in 0..g.lines.len() {
+        let line = &g.lines[index];
+        if !line.core || line.ends[0] == line.ends[1] {
+            continue;
+        }
+        // The other lines between core nodes, as they run now: a detour crosses few of them.
+        let crossed: Vec<Vec<Point>> = g
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(j, o)| *j != index && o.core && o.ends[0] != o.ends[1])
+            .map(|(_, o)| {
+                std::iter::once(center(g, o.ends[0]))
+                    .chain(o.waypoints.iter().copied())
+                    .chain([center(g, o.ends[1])])
+                    .collect()
+            })
+            .collect();
+        // Crossing another line counts once, running along one twice.
+        let crossings = |stretch: &[Point]| -> usize {
+            stretch
+                .windows(2)
+                .map(|w| {
+                    crossed
+                        .iter()
+                        .flat_map(|o| o.windows(2))
+                        .map(|v| {
+                            if crosses(w[0], w[1], v[0], v[1]) {
+                                1
+                            } else if runs_along(w[0], w[1], v[0], v[1]) {
+                                2
+                            } else {
+                                0
+                            }
+                        })
+                        .sum::<usize>()
+                })
+                .sum()
+        };
+        let (from, to) = (center(g, line.ends[0]), center(g, line.ends[1]));
+        let l = &mut g.lines[index];
         let [s, t] = l.ends;
         let others: Vec<Rect> =
             boxes.iter().filter(|(i, _)| *i != s && *i != t).map(|(_, r)| *r).collect();
-        let (from, to) = (g.nodes[s].bounds.center(), g.nodes[t].bounds.center());
         let path_of = |waypoints: &[Point]| -> Vec<Point> {
             std::iter::once(from).chain(waypoints.iter().copied()).chain([to]).collect()
         };
@@ -479,39 +521,60 @@ fn detour(g: &mut Graph) {
                 break;
             };
             let (a, b) = (path[k], path[k + 1]);
-            let (left, right) = (snap(r.x - DETOUR_GAP), snap(r.x + r.width + DETOUR_GAP));
-            let (top, bottom) = (snap(r.y - DETOUR_GAP), snap(r.y + r.height + DETOUR_GAP));
-            let (mid_x, mid_y) = (snap(r.x + r.width / 2.0), snap(r.y + r.height / 2.0));
-            // Beside the node: one bend at its middle, or two along the whole side.
-            let candidates: Vec<Vec<Point>> = if (b.y - a.y).abs() >= (b.x - a.x).abs() {
-                let (first, last) = if b.y > a.y { (top, bottom) } else { (bottom, top) };
-                [left, right]
-                    .into_iter()
-                    .flat_map(|x| {
-                        [
-                            vec![Point::new(x, mid_y)],
-                            vec![Point::new(x, first), Point::new(x, last)],
-                        ]
-                    })
-                    .collect()
-            } else {
-                let (first, last) = if b.x > a.x { (left, right) } else { (right, left) };
-                [top, bottom]
-                    .into_iter()
-                    .flat_map(|y| {
-                        [
-                            vec![Point::new(mid_x, y)],
-                            vec![Point::new(first, y), Point::new(last, y)],
-                        ]
-                    })
-                    .collect()
+            // Past the line ends crowding at the node's edge, one and a half `DETOUR_GAP`
+            // away, or halfway to the next node on that side when that is nearer, but at
+            // least `DETOUR_GAP`.
+            let beside = |o: &Rect, across: bool| {
+                if across {
+                    o.y < r.y + r.height && r.y < o.y + o.height
+                } else {
+                    o.x < r.x + r.width && r.x < o.x + o.width
+                }
             };
+            let toward = |edge: f32, sign: f32, across: bool| -> f32 {
+                let next = boxes
+                    .iter()
+                    .map(|(_, o)| o)
+                    .filter(|o| beside(o, across) && **o != r)
+                    .map(|o| match (across, sign > 0.0) {
+                        (true, true) => o.x - edge,
+                        (true, false) => edge - (o.x + o.width),
+                        (false, true) => o.y - edge,
+                        (false, false) => edge - (o.y + o.height),
+                    })
+                    .filter(|d| *d > 0.0)
+                    .fold(f32::INFINITY, f32::min);
+                let reach = (next / 2.0).clamp(DETOUR_GAP, 1.5 * DETOUR_GAP);
+                snap(edge + sign * reach)
+            };
+            let (left, right) = (toward(r.x, -1.0, true), toward(r.x + r.width, 1.0, true));
+            let (top, bottom) = (toward(r.y, -1.0, false), toward(r.y + r.height, 1.0, false));
+            let (mid_x, mid_y) = (snap(r.x + r.width / 2.0), snap(r.y + r.height / 2.0));
+            // Beside the node, on any of its sides: one bend at its middle, or two along the
+            // whole side.
+            let (first_y, last_y) = if b.y > a.y { (top, bottom) } else { (bottom, top) };
+            let (first_x, last_x) = if b.x > a.x { (left, right) } else { (right, left) };
+            let candidates: Vec<Vec<Point>> = [left, right]
+                .into_iter()
+                .flat_map(|x| {
+                    [
+                        vec![Point::new(x, mid_y)],
+                        vec![Point::new(x, first_y), Point::new(x, last_y)],
+                    ]
+                })
+                .chain([top, bottom].into_iter().flat_map(|y| {
+                    [
+                        vec![Point::new(mid_x, y)],
+                        vec![Point::new(first_x, y), Point::new(last_x, y)],
+                    ]
+                }))
+                .collect();
             let length = |p: &[Point]| -> f32 {
                 p.windows(2).map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y)).sum()
             };
             // The new stretch from `a` through the bends to `b` keeps clear of `r`; of those,
             // the one passing the fewest other nodes (the next round leads it around them),
-            // then the shortest.
+            // then the shortest, a crossing of another line counting as `CROSSING`.
             let best = candidates
                 .into_iter()
                 .filter_map(|bends| {
@@ -525,14 +588,29 @@ fn detour(g: &mut Graph) {
                         .windows(2)
                         .filter(|w| blocked(w[0], w[1], DETOUR_GAP / 2.0).is_some())
                         .count();
+                    let cost = length(&stretch) + CROSSING * crossings(&stretch) as f32;
                     let mut waypoints = l.waypoints.clone();
                     waypoints.splice(k..k, bends);
-                    Some((passed, length(&path_of(&waypoints)), waypoints))
+                    Some((passed, cost, waypoints))
                 })
                 .min_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)));
             match best {
                 Some((_, _, waypoints)) => l.waypoints = waypoints,
                 None => break,
+            }
+        }
+        // Bends the line can do without go: those that keep it neither clear of a node nor
+        // off another line, such as a spreading bend left behind by a detour.
+        let mut i = 0;
+        while i < l.waypoints.len() {
+            let path = path_of(&l.waypoints);
+            let (p, w, q) = (path[i], path[i + 1], path[i + 2]);
+            if blocked(p, q, DETOUR_GAP / 2.0).is_none()
+                && crossings(&[p, q]) <= crossings(&[p, w, q])
+            {
+                l.waypoints.remove(i);
+            } else {
+                i += 1;
             }
         }
     }
@@ -910,6 +988,25 @@ fn segment_hits(a: Point, b: Point, r: &Rect) -> bool {
     (0..4).any(|k| crosses(a, b, corners[k], corners[(k + 1) % 4]))
 }
 
+/// Whether the segments `a`–`b` and `c`–`d` lie on top of each other for a stretch: nearly
+/// parallel, closer than a few pixels and overlapping by more than a grid step.
+fn runs_along(a: Point, b: Point, c: Point, d: Point) -> bool {
+    let (ux, uy) = (b.x - a.x, b.y - a.y);
+    let len = ux.hypot(uy);
+    if len < 1.0 || (d.x - c.x).hypot(d.y - c.y) < 1.0 {
+        return false;
+    }
+    let (ux, uy) = (ux / len, uy / len);
+    // Distance of `c` and `d` from the line through `a` and `b`, and where they lie along it.
+    let off = |p: Point| ((p.x - a.x) * uy - (p.y - a.y) * ux).abs();
+    let at = |p: Point| (p.x - a.x) * ux + (p.y - a.y) * uy;
+    if off(c) > 4.0 || off(d) > 4.0 {
+        return false;
+    }
+    let (lo, hi) = (at(c).min(at(d)), at(c).max(at(d)));
+    hi.min(len) - lo.max(0.0) > GRID
+}
+
 /// Whether the segments `a`–`b` and `c`–`d` cross (touching ends do not count).
 fn crosses(a: Point, b: Point, c: Point, d: Point) -> bool {
     let cross =
@@ -1102,6 +1199,16 @@ mod tests {
         }
         d.attribute(ticket, "id", true);
         (d, kunde, ticket, bucht)
+    }
+
+    #[test]
+    fn lines_on_top_of_each_other_are_told_from_crossing_ones() {
+        let p = Point::new;
+        assert!(runs_along(p(0.0, 0.0), p(0.0, 100.0), p(2.0, 50.0), p(2.0, 150.0)));
+        assert!(!runs_along(p(0.0, 0.0), p(0.0, 100.0), p(20.0, 50.0), p(20.0, 150.0)));
+        assert!(!runs_along(p(0.0, 0.0), p(0.0, 100.0), p(0.0, 105.0), p(0.0, 150.0)));
+        assert!(!runs_along(p(0.0, 0.0), p(0.0, 100.0), p(-50.0, 50.0), p(50.0, 50.0)));
+        assert!(crosses(p(0.0, 0.0), p(0.0, 100.0), p(-50.0, 50.0), p(50.0, 50.0)));
     }
 
     #[test]

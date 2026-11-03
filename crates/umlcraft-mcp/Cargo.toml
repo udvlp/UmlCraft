@@ -11,6 +11,7 @@ publish.workspace = true
 umlcraft-model.workspace = true
 umlcraft-format.workspace = true
 umlcraft-notation.workspace = true
+umlcraft-erm-sql.workspace = true
 umlcraft-nsd.workspace = true
 resvg.workspace = true
 serde_json.workspace = true

@@ -138,7 +138,8 @@ pub struct Column {
     /// The type as written (`int unsigned`, `character varying(50)`, `enum('a','b')`).
     pub datatype: String,
     pub not_null: bool,
-    /// The default without quotes; `None` also for `DEFAULT NULL`.
+    /// The default without quotes, the expression of a generated column; `None` also for
+    /// `DEFAULT NULL`.
     pub default: Option<String>,
     pub comment: Option<String>,
     /// `GENERATED ALWAYS AS (…)` or MySQL's `AS (…)`; identity columns are not.

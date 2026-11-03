@@ -93,3 +93,23 @@ pub fn describe(model: &Model, package: Id) -> String {
     }
     lines.join("\n")
 }
+
+/// The table without the order of the tables and of a relationship's ends, which follow
+/// the source (so does which end is `m`).
+pub fn unordered(table: &str) -> Vec<String> {
+    let table = table.replace("[0,m]", "[0,n]");
+    let mut lines: Vec<String> = table
+        .lines()
+        .map(|l| {
+            let mut cells: Vec<String> = l.split(" | ").map(str::to_owned).collect();
+            if let Some(ends) = cells.get_mut(3) {
+                let mut e: Vec<&str> = ends.trim_end_matches(" |").split("; ").collect();
+                e.sort_unstable();
+                *ends = e.join("; ");
+            }
+            cells.join(" | ")
+        })
+        .collect();
+    lines.sort();
+    lines
+}

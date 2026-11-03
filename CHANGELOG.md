@@ -20,8 +20,14 @@ today.
   and the `.asta` export writes them back. Chen diagrams go out in IE notation.
 - **SQL dumps** keep their foreign key columns as columns of the tables, and the import
   dialog offers the notation.
+- **ER diagrams as SQL**: File › Export › "ER diagram as SQL …" writes `CREATE TABLE`
+  statements for MySQL/MariaDB or PostgreSQL. Relationships become foreign keys,
+  many-to-many relationships tables of their own, subtypes take their supertype's key.
+- **Arranging ER diagrams**: lines that go around a table keep clear of the other lines
+  where they can and no longer run on top of each other.
 - **AI clients** create ER diagrams in a notation, switch it with `update_element`, add
-  columns with `add_member` and set `unique`, `foreign_key` and the discriminator.
+  columns with `add_member`, set `unique`, `foreign_key` and the discriminator, and get an ER
+  diagram as SQL with `export_sql`.
 
 ## 0.18.0 – 2026-11-03
 

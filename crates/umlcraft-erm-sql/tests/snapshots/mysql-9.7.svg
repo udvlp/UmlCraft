@@ -69,11 +69,11 @@
 <text x="593.5" y="879.51" font-size="12">preis</text>
 <ellipse cx="669.5" cy="955" rx="49.5" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="636.5" y="959.51" font-size="12">start_zeit</text>
-<ellipse cx="860.16" cy="795" rx="40.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
-<text x="833.76" y="799.51" font-size="12">end_zeit</text>
-<ellipse cx="834.83" cy="965" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="0"/>
-<polyline points="879.66,965 879.49,966.31 878.98,967.6 878.13,968.88 876.96,970.13 875.46,971.34 873.66,972.5 871.55,973.6 869.17,974.64 866.53,975.61 863.65,976.49 860.54,977.29 857.25,977.99 853.78,978.59 850.16,979.1 846.43,979.49 842.62,979.77 838.74,979.94 834.83,980 830.92,979.94 827.05,979.77 823.23,979.49 819.5,979.1 815.88,978.59 812.42,977.99 809.12,977.29 806.01,976.49 803.13,975.61 800.49,974.64 798.11,973.6 796.01,972.5 794.2,971.34 792.7,970.13 791.53,968.88 790.68,967.6 790.17,966.31 790,965 790.17,963.69 790.68,962.4 791.53,961.12 792.7,959.87 794.2,958.66 796.01,957.5 798.11,956.4 800.49,955.36 803.13,954.39 806.01,953.51 809.12,952.71 812.42,952.01 815.88,951.41 819.5,950.9 823.23,950.51 827.05,950.23 830.92,950.06 834.83,950 838.74,950.06 842.62,950.23 846.43,950.51 850.16,950.9 853.78,951.41 857.25,952.01 860.54,952.71 863.65,953.51 866.53,954.39 869.17,955.36 871.55,956.4 873.66,957.5 875.46,958.66 876.96,959.87 878.13,961.12 878.98,962.4 879.49,963.69 879.66,965" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="5 5"/>
-<text x="804.83" y="969.51" font-size="12">dauer_min</text>
+<ellipse cx="610.16" cy="835" rx="40.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="583.76" y="839.51" font-size="12">end_zeit</text>
+<ellipse cx="844.83" cy="805" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="0"/>
+<polyline points="889.66,805 889.49,806.31 888.98,807.6 888.13,808.88 886.96,810.13 885.46,811.34 883.66,812.5 881.55,813.6 879.17,814.64 876.53,815.61 873.65,816.49 870.54,817.29 867.25,817.99 863.78,818.59 860.16,819.1 856.43,819.49 852.62,819.77 848.74,819.94 844.83,820 840.92,819.94 837.05,819.77 833.23,819.49 829.5,819.1 825.88,818.59 822.42,817.99 819.12,817.29 816.01,816.49 813.13,815.61 810.49,814.64 808.11,813.6 806.01,812.5 804.2,811.34 802.7,810.13 801.53,808.88 800.68,807.6 800.17,806.31 800,805 800.17,803.69 800.68,802.4 801.53,801.12 802.7,799.87 804.2,798.66 806.01,797.5 808.11,796.4 810.49,795.36 813.13,794.39 816.01,793.51 819.12,792.71 822.42,792.01 825.88,791.41 829.5,790.9 833.23,790.51 837.05,790.23 840.92,790.06 844.83,790 848.74,790.06 852.62,790.23 856.43,790.51 860.16,790.9 863.78,791.41 867.25,792.01 870.54,792.71 873.65,793.51 876.53,794.39 879.17,795.36 881.55,796.4 883.66,797.5 885.46,798.66 886.96,799.87 888.13,801.12 888.98,802.4 889.49,803.69 889.66,805" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="5 5"/>
+<text x="814.83" y="809.51" font-size="12">dauer_min</text>
 <polygon points="660,640 700,665 660,690 620,665" fill="#ffffff" stroke="#000000"/>
 <text x="650.1" y="669.51" font-size="12">hat</text>
 <polygon points="790,640 830,665 790,690 750,665" fill="#ffffff" stroke="#000000"/>
@@ -104,15 +104,15 @@
 <text x="733.5" y="39.51" font-size="12">stadt</text>
 <ellipse cx="840" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="826.8" y="39.51" font-size="12">land</text>
-<ellipse cx="590" cy="445" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
-<polyline points="583.4,451.79 596.6,451.79" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="583.4" y="449.51" font-size="12">id</text>
-<ellipse cx="630" cy="505" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
-<text x="610.2" y="509.51" font-size="12">modell</text>
-<ellipse cx="670" cy="545" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
-<text x="653.5" y="549.51" font-size="12">sitze</text>
-<ellipse cx="272.83" cy="485" rx="72.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
-<text x="223.33" y="489.51" font-size="12">geschwindigkeit</text>
+<ellipse cx="590" cy="435" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polyline points="583.4,441.79 596.6,441.79" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="583.4" y="439.51" font-size="12">id</text>
+<ellipse cx="590" cy="485" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="570.2" y="489.51" font-size="12">modell</text>
+<ellipse cx="320" cy="505" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="303.5" y="509.51" font-size="12">sitze</text>
+<ellipse cx="272.83" cy="465" rx="72.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="223.33" y="469.51" font-size="12">geschwindigkeit</text>
 <polygon points="260,250 300,275 260,300 220,275" fill="#ffffff" stroke="#000000"/>
 <text x="250.1" y="279.51" font-size="12">hat</text>
 <ellipse cx="830" cy="445" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
@@ -219,8 +219,8 @@
 <polyline points="780,881.25 890.09,884" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="680,877.92 649.76,876.66" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="713.87,900 681.25,940.43" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="760.63,860 840.22,808.02" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="754.67,900 817.73,951.13" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="680,861.22 638.49,845.64" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="760.62,860 824.39,818.35" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="642.51,650.93 454.86,500" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="486.88" y="518.53" font-size="12">[1,1]</text>
 <polyline points="666.76,685.77 723.49,860" fill="none" stroke="#000000" stroke-width="1"/>
@@ -231,11 +231,11 @@
 <text x="748.8" y="840.52" font-size="12">[0,n]</text>
 <polyline points="488.48,256.18 672.91,120" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="652.63" y="150.63" font-size="12">[1,1]</text>
-<polyline points="472.05,297.8 600,620 600,710 714.71,860" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="643.31" y="829.38" font-size="12">[0,n]</text>
+<polyline points="470.46,298.19 590,670 716.67,860" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="656.42" y="839.34" font-size="12">[0,n]</text>
 <polyline points="722.77,250.94 703.02,120" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="712.49" y="153.9" font-size="12">[1,1]</text>
-<polyline points="733.14,298.25 780,460 730,670 730,860" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="714.92,297.02 630,460 730,670 730,860" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="693" y="819.45" font-size="12">[0,n]</text>
 <polyline points="732.92,1030.19 730.39,900" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="732.23" y="923.1" font-size="12">[0,n]</text>
@@ -250,10 +250,10 @@
 <polyline points="687.69,80 668.99,49.62" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="715.38,80 738.91,49.41" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="743.08,80 814.87,46.67" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="480,469.06 555.45,452.56" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="480,486.25 592.05,500.26" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="480,493.54 637.57,536.22" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="380,481.59 344.81,482.71" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="480,465.94 558,444" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="480,481.56 550.14,483.75" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="380,491.36 354.21,497.23" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="380,475.23 338.91,471.31" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="259.69,250.19 258.05,120" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="259.78" y="143.23" font-size="12">[1,1]</text>
 <polyline points="273.65,291.47 413.41,460" fill="none" stroke="#000000" stroke-width="1"/>
@@ -280,11 +280,11 @@
 <text x="1287.25" y="440.65" font-size="12">[0,1]</text>
 <polyline points="730,1233.75 762.05,1229.74" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="730,1247.81 803.08,1259.23" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="733.75,1400.17 735.43,1324.21 693.17,1260" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="710.54" y="1277.03" font-size="12">vorgesetzter</text>
-<text x="729.07" y="1305.18" font-size="12">[0,1]</text>
+<polyline points="726.58,1401.99 685.75,1260" fill="none" stroke="#000000" stroke-width="1"/>
+<text x="696.04" y="1279.2" font-size="12">vorgesetzter</text>
+<text x="703.05" y="1303.6" font-size="12">[0,1]</text>
 <polyline points="719.46,1404.13 677.77,1340.79 679.56,1260" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="682.7" y="1311.9" font-size="12">[0,n]</text>
+<text x="642" y="1282.99" font-size="12">[0,n]</text>
 <polyline points="120,1245.42 158.43,1234.21" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="120,1262.08 150.24,1263.34" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="120,1278.75 161.72,1294.39" fill="none" stroke="#000000" stroke-width="1"/>
