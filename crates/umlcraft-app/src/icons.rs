@@ -65,6 +65,7 @@ pub fn diagram_icon(kind: DiagramKind) -> SharedString {
         DiagramKind::StateMachine => NodeTool::State,
         DiagramKind::Component => NodeTool::Component,
         DiagramKind::Deployment => NodeTool::DeploymentNode,
+        DiagramKind::CompositeStructure => NodeTool::Part,
     }))
 }
 
@@ -155,6 +156,8 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
         ElementKind::Transition(_) | ElementKind::InternalTransition(_) => edge(E::Transition),
         ElementKind::Association(_) => edge(E::Association),
         ElementKind::Link(_) => edge(E::Link),
+        ElementKind::Connector(_) => edge(E::Connector),
+        ElementKind::Port(_) => node(N::Port),
         ElementKind::Generalization(_) => edge(E::Generalization),
         ElementKind::Realization(_) => edge(E::Realization),
         ElementKind::Dependency(_) => edge(E::Dependency),
@@ -185,7 +188,7 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
 mod tests {
     use super::*;
 
-    const KINDS: [DiagramKind; 7] = [
+    const KINDS: [DiagramKind; 8] = [
         DiagramKind::Class,
         DiagramKind::UseCase,
         DiagramKind::Sequence,
@@ -193,6 +196,7 @@ mod tests {
         DiagramKind::StateMachine,
         DiagramKind::Component,
         DiagramKind::Deployment,
+        DiagramKind::CompositeStructure,
     ];
 
     #[test]

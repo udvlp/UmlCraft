@@ -132,6 +132,10 @@ ICONS = {
     'componentInstance': COMPONENT + [path('M8 10.5H14')],
     'nodeInstance': NODE + [path('M5.5 11.5H11.5')],
     'object': [rect(2.5, 3.5, 15, 13, 2), path('M6.5 7.5H13.5M2.5 10.5H17.5')],
+    # Composite structures: a part in its class, a port on a border, a line between two ports.
+    'part': [rect(2.5, 3.5, 15, 13, 2), path('M2.5 7.5H17.5'), rect(5.5, 10, 9, 4, 1)],
+    'port': [rect(5.5, 3.5, 12, 13, 2), rect(3, 8, 5, 4, extra=FILL)],
+    'connector': [rect(2.5, 7.5, 5, 5), rect(12.5, 7.5, 5, 5), path('M7.5 10H12.5')],
     # Elements without a tool, for the model tree. The model: a package with a triangle.
     'model': PACKAGE + [path('M10 8.5L13.5 14H6.5Z')],
     # Members: the compartment of a box they are shown in, filled.

@@ -403,9 +403,11 @@ fn layered_part(sizes: &[Size], edges: &[Edge], direction: Direction) -> (Vec<Po
     (points, size)
 }
 
-/// The diagram kinds [`arrange`] lays out.
+/// The diagram kinds [`arrange`] lays out. Sequence diagrams have a layout of their own;
+/// composite structure diagrams keep parts in their class and ports on borders, which the
+/// layers do not know.
 pub fn can_arrange(kind: DiagramKind) -> bool {
-    kind != DiagramKind::Sequence
+    !matches!(kind, DiagramKind::Sequence | DiagramKind::CompositeStructure)
 }
 
 /// How an edge between two shown elements orders them: (the source goes above, hierarchy).

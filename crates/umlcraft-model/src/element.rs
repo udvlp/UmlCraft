@@ -824,6 +824,48 @@ pub struct LinkProps {
     pub association: Option<Id>,
 }
 
+/// A port of a class or component: where it interacts with its surroundings, drawn as a small
+/// square on the border of the class or of a part typed by it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortProps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_ref: Option<TypeRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplicity: Option<Multiplicity>,
+    /// Requests go to the behavior of the class itself rather than to one of its parts.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub is_behavior: bool,
+}
+
+/// One end of a connector: a part (an attribute of the class that owns the connector), a port of
+/// that class, or a port of a part's type, together with the part it is reached through.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorEnd {
+    /// The part or port connected.
+    pub role: Id,
+    /// When `role` is the port of a part's type: that part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part_with_port: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplicity: Option<Multiplicity>,
+}
+
+impl ConnectorEnd {
+    pub fn new(role: Id, part_with_port: Option<Id>) -> Self {
+        Self { role, part_with_port, multiplicity: None }
+    }
+}
+
+/// A connector between two parts or ports inside a structured class (composite structure
+/// diagrams).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorProps {
+    pub ends: [ConnectorEnd; 2],
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagramProps {
@@ -892,6 +934,10 @@ pub enum ElementKind {
     Instance(InstanceProps),
     /// The value of one attribute in an object.
     Slot(SlotProps),
+    /// A port of a class or component (composite structure diagrams).
+    Port(PortProps),
+    /// Connects two parts or ports inside a structured class.
+    Connector(ConnectorProps),
     ExtensionPoint,
     /// The system (subject) whose use cases are drawn inside its boundary.
     SystemBoundary,
@@ -962,6 +1008,10 @@ pub enum RefRole {
     LinkEnd,
     /// The association a link is an instance of.
     Instantiates,
+    /// The parts and ports a connector connects.
+    ConnectorEnd,
+    /// The part through which a connector reaches the port of the part's type.
+    PartWithPort,
 }
 
 impl RefRole {
@@ -984,6 +1034,7 @@ impl RefRole {
                 | Self::TransitionEnd
                 | Self::LinkEnd
                 | Self::DefiningAttribute
+                | Self::ConnectorEnd
         )
     }
 
@@ -1010,6 +1061,10 @@ impl RefRole {
             Self::DefiningAttribute => matches!(target, ElementKind::Attribute(_)),
             Self::LinkEnd => matches!(target, ElementKind::Instance(_)),
             Self::Instantiates => matches!(target, ElementKind::Association(_)),
+            Self::ConnectorEnd => {
+                matches!(target, ElementKind::Attribute(_) | ElementKind::Port(_))
+            }
+            Self::PartWithPort => matches!(target, ElementKind::Attribute(_)),
             Self::Client | Self::Supplier | Self::Annotated => !matches!(
                 target,
                 ElementKind::Model | ElementKind::Diagram(_) | ElementKind::Structogram(_)
@@ -1051,6 +1106,14 @@ impl ElementKind {
 
     pub fn link(a: Id, b: Id) -> Self {
         Self::Link(LinkProps { ends: [LinkEnd::new(a), LinkEnd::new(b)], association: None })
+    }
+
+    pub fn port(type_ref: Option<TypeRef>) -> Self {
+        Self::Port(PortProps { type_ref, ..Default::default() })
+    }
+
+    pub fn connector(a: ConnectorEnd, b: ConnectorEnd) -> Self {
+        Self::Connector(ConnectorProps { ends: [a, b] })
     }
 
     pub fn generalization(specific: Id, general: Id) -> Self {
@@ -1132,6 +1195,8 @@ impl ElementKind {
             Self::Node(_) => "node",
             Self::Instance(_) => "instance",
             Self::Slot(_) => "slot",
+            Self::Port(_) => "port",
+            Self::Connector(_) => "connector",
             Self::ExtensionPoint => "extensionPoint",
             Self::SystemBoundary => "systemBoundary",
             Self::Interaction => "interaction",
@@ -1186,6 +1251,7 @@ impl ElementKind {
             self,
             Self::Association(_)
                 | Self::Link(_)
+                | Self::Connector(_)
                 | Self::Generalization(_)
                 | Self::Realization(_)
                 | Self::Dependency(_)
@@ -1224,6 +1290,7 @@ impl ElementKind {
             }
             K::Instance(_) | K::Link(_) => self.is_namespace(),
             K::Slot(_) => matches!(self, K::Instance(_)),
+            K::Port(_) | K::Connector(_) => matches!(self, K::Class(_) | K::Component(_)),
             K::Actor(_) | K::UseCase(_) | K::SystemBoundary => self.is_namespace(),
             K::Attribute(_) | K::Operation(_) => self.is_classifier(),
             K::EnumerationLiteral => matches!(self, K::Enumeration(_)),
@@ -1283,6 +1350,7 @@ impl ElementKind {
             | Self::Artifact(p)
             | Self::Node(p) => p.binding.iter().for_each(f),
             Self::Attribute(p) => p.type_ref.iter().for_each(f),
+            Self::Port(p) => p.type_ref.iter().for_each(f),
             Self::Operation(p) => p.return_type.iter().for_each(f),
             Self::Parameter(p) => p.type_ref.iter().for_each(f),
             Self::TemplateParameter(p) => {
@@ -1314,6 +1382,7 @@ impl ElementKind {
             | Self::Artifact(p)
             | Self::Node(p) => p.binding.iter().for_each(|t| types(t, f)),
             Self::Attribute(p) => p.type_ref.iter().for_each(|t| types(t, f)),
+            Self::Port(p) => p.type_ref.iter().for_each(|t| types(t, f)),
             Self::Operation(p) => p.return_type.iter().for_each(|t| types(t, f)),
             Self::Parameter(p) => p.type_ref.iter().for_each(|t| types(t, f)),
             Self::TemplateParameter(p) => {
@@ -1325,6 +1394,12 @@ impl ElementKind {
             Self::Link(p) => {
                 p.ends.iter().for_each(|end| f(end.instance, RefRole::LinkEnd));
                 p.association.iter().for_each(|&id| f(id, RefRole::Instantiates));
+            }
+            // The two roles first: what connects is the first two strong references.
+            Self::Connector(p) => {
+                p.ends.iter().for_each(|end| f(end.role, RefRole::ConnectorEnd));
+                let parts = p.ends.iter().filter_map(|end| end.part_with_port);
+                parts.for_each(|id| f(id, RefRole::PartWithPort));
             }
             Self::Message(p) => {
                 f(p.from, RefRole::MessageEnd);
@@ -1390,6 +1465,7 @@ impl ElementKind {
             | Self::Artifact(p)
             | Self::Node(p) => type_ref(&mut p.binding, &mut f),
             Self::Attribute(p) => type_ref(&mut p.type_ref, &mut f),
+            Self::Port(p) => type_ref(&mut p.type_ref, &mut f),
             Self::Operation(p) => type_ref(&mut p.return_type, &mut f),
             Self::Parameter(p) => type_ref(&mut p.type_ref, &mut f),
             Self::TemplateParameter(p) => {
@@ -1403,6 +1479,10 @@ impl ElementKind {
             Self::Link(p) => {
                 p.ends.iter_mut().for_each(|end| f(&mut end.instance));
                 p.association.iter_mut().for_each(f);
+            }
+            Self::Connector(p) => {
+                p.ends.iter_mut().for_each(|end| f(&mut end.role));
+                p.ends.iter_mut().filter_map(|end| end.part_with_port.as_mut()).for_each(f);
             }
             Self::Message(p) => {
                 f(&mut p.from);
@@ -1496,6 +1576,7 @@ impl ElementKind {
             | Self::Artifact(p)
             | Self::Node(p) => unlink_type(&mut p.binding),
             Self::Attribute(p) => unlink_type(&mut p.type_ref),
+            Self::Port(p) => unlink_type(&mut p.type_ref),
             Self::Operation(p) => unlink_type(&mut p.return_type),
             Self::Parameter(p) => unlink_type(&mut p.type_ref),
             Self::TemplateParameter(p) => {
@@ -1515,6 +1596,11 @@ impl ElementKind {
             Self::Lifeline(p) => unlink_opt(&mut p.represents),
             Self::Instance(p) => unlink_opt(&mut p.classifier),
             Self::Link(p) => unlink_opt(&mut p.association),
+            Self::Connector(p) => {
+                let [a, b] = &mut p.ends;
+                let a = unlink_opt(&mut a.part_with_port);
+                unlink_opt(&mut b.part_with_port) || a
+            }
             Self::Message(p) => unlink_opt(&mut p.operation),
             Self::CombinedFragment(p) => unlink_vec(&mut p.covered),
             Self::InteractionUse(p) => {
@@ -1636,6 +1722,8 @@ mod tests {
                 in_state: String::new(),
             }),
             ElementKind::attribute(Some(list_of(b, a))),
+            ElementKind::port(Some(list_of(b, a))),
+            ElementKind::connector(ConnectorEnd::new(a, Some(b)), ConnectorEnd::new(b, None)),
             ElementKind::TemplateParameter(TemplateParameterProps {
                 bounds: vec![TypeRef::Element(b), list_of(a, a)],
                 default: Some(TypeRef::Element(a)),
@@ -1694,6 +1782,25 @@ mod tests {
             component.is_classifier()
                 && !ElementKind::Instance(InstanceProps::default()).is_classifier()
         );
+        let port = ElementKind::port(None);
+        let (a, b) = (Id::from_u128(1), Id::from_u128(2));
+        let connector =
+            ElementKind::connector(ConnectorEnd::new(a, None), ConnectorEnd::new(b, Some(a)));
+        assert!(ElementKind::class().can_own(&port) && component.can_own(&port));
+        assert!(ElementKind::class().can_own(&connector) && !ElementKind::Package.can_own(&port));
+        assert!(!port.is_classifier() && connector.is_relationship());
+        assert!(RefRole::ConnectorEnd.accepts(&port));
+        assert!(RefRole::ConnectorEnd.accepts(&ElementKind::attribute(None)));
+        assert!(!RefRole::PartWithPort.accepts(&port));
+        let strong: Vec<Id> = connector
+            .references()
+            .into_iter()
+            .filter(|(_, role)| role.is_strong())
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(strong, [a, b], "the two roles, and only they, are strong");
+        let mut unlinked = connector.clone();
+        assert!(unlinked.unlink(a, "a") && unlinked.references().len() == 2);
         let enumeration = ElementKind::Enumeration(ClassifierProps::default());
         assert!(enumeration.can_own(&ElementKind::class()), "types nested in an enum");
         let parameter = ElementKind::TemplateParameter(TemplateParameterProps::default());

@@ -13,7 +13,9 @@ use umlcraft_model::{
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview};
-use umlcraft_notation::{autoroute, edit, layout, member, sequence_edit, state_edit, svg};
+use umlcraft_notation::{
+    autoroute, composite, edit, layout, member, sequence_edit, state_edit, svg,
+};
 
 use crate::base64;
 use crate::host::{Access, Host, first_diagram, new_document};
@@ -110,7 +112,7 @@ default (label `%` for none). Elements may have `comment`, `disabled` and `color
 digits). `kind` of the root: program (default), sub for a method, includable; `keywords`: \
 english (default) or german (`für`, `solange`, `bis`, `gib`).";
 
-const DIAGRAM_KINDS: [(&str, DiagramKind); 7] = [
+const DIAGRAM_KINDS: [(&str, DiagramKind); 8] = [
     ("class", DiagramKind::Class),
     ("use_case", DiagramKind::UseCase),
     ("sequence", DiagramKind::Sequence),
@@ -118,6 +120,7 @@ const DIAGRAM_KINDS: [(&str, DiagramKind); 7] = [
     ("state_machine", DiagramKind::StateMachine),
     ("component", DiagramKind::Component),
     ("deployment", DiagramKind::Deployment),
+    ("composite_structure", DiagramKind::CompositeStructure),
 ];
 
 fn diagram_key(kind: DiagramKind) -> &'static str {
@@ -271,13 +274,19 @@ pub fn list() -> Vec<Value> {
              `lifeline`, `action`, `state`, `component`, `node`, `note`, … as `get_diagram` \
              lists them) and shows it on the diagram, at `x`, `y` or right of what is there. \
              It goes into the package that owns the diagram (states into the state drawn \
-             around them).",
+             around them). On composite structure diagrams a `part` becomes an attribute of \
+             the class drawn around it, which grows to hold it, and a `port` sits on the \
+             border of a class or a part; `on` names that class or part instead of `x`, `y`. \
+             A port on a part belongs to the class that is the part's type, so type the part \
+             first (`update_element` with the member `text`, e.g. `engine : Engine`).",
             json!({
                 "diagram": id("The diagram."),
                 "tool": text("The diagram tool."),
                 "name": text("Its name; a free default name if omitted."),
                 "x": number("Left edge."),
                 "y": number("Top edge."),
+                "on": id("Composite structure diagrams: the class (or part) a part goes into or \
+                          a port goes on, when `x` and `y` are not given."),
             }),
             &["diagram", "tool"],
         ),
@@ -1011,8 +1020,12 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
     let tool = node_tool(kind, str_arg(args, "tool")?)?;
     let model = host.document().model();
-    let origin = match (opt_num(args, "x"), opt_num(args, "y")) {
-        (Some(x), Some(y)) => Point::new(x, y),
+    let origin = match (opt_num(args, "x"), opt_num(args, "y"), opt_id(args, "on")?) {
+        (Some(x), Some(y), _) => Point::new(x, y),
+        (_, _, Some(on)) => {
+            let on = on_diagram(model, diagram, on)?;
+            composite::free_spot(model, diagram, on, tool).ok_or("`on` is not a node")?
+        }
         _ => free_origin(model, diagram),
     };
     let name = opt_str(args, "name").map(str::to_owned);

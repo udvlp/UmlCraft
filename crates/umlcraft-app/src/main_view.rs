@@ -2221,6 +2221,7 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::Element(NodeTool::Component),
         NewItem::Element(NodeTool::Artifact),
         NewItem::Element(NodeTool::DeploymentNode),
+        NewItem::Element(NodeTool::Port),
         NewItem::Attribute,
         NewItem::Operation,
         NewItem::Literal,
@@ -2238,15 +2239,7 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         menu = menu.separator();
     }
     let mut any = false;
-    for kind in [
-        DiagramKind::Class,
-        DiagramKind::UseCase,
-        DiagramKind::Sequence,
-        DiagramKind::Activity,
-        DiagramKind::StateMachine,
-        DiagramKind::Component,
-        DiagramKind::Deployment,
-    ] {
+    for kind in crate::ribbon::DIAGRAM_KINDS {
         let mut items = vec![NewItem::Diagram(kind)];
         if kind == DiagramKind::Class {
             items.push(NewItem::ObjectDiagram);

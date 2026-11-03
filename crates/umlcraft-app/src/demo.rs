@@ -6,8 +6,8 @@
 
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationProps, AttributeProps,
-    ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind, DirectedProps, Document,
-    ElementData, ElementKind, ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps,
+    ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd, DiagramKind, DirectedProps,
+    Document, ElementData, ElementKind, ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps,
     InteractionOperandProps, InteractionOperator, InternalTransitionProps, LifelineProps,
     LinkProps, MessageSort, Model, ModelError, Multiplicity, Navigability, OperationProps,
     ParameterProps, Point, Presentation, PseudostateKind, Rect, Regions, Result, Shape, SlotProps,
@@ -702,7 +702,51 @@ impl Builder<'_, '_> {
             let dependency = self.stereotyped(owner, "", dependency, stereotype)?;
             self.edge(d, Some(dependency), n_client, n_supplier, &[])?;
         }
+        self.dock_controller(owner, controller)?;
         Ok(Architecture { app, rental_service: service, payment })
+    }
+
+    /// The inside of the dock controller: a card reader that opens the lock, and a modem that
+    /// reports to the fleet service.
+    fn dock_controller(&mut self, owner: Id, controller: Id) -> Result<()> {
+        let d = self.diagram(controller, "Dock controller", DiagramKind::CompositeStructure)?;
+        let class = |s: &mut Self, name| s.create(owner, name, ElementKind::class());
+        let (reader_class, lock_class, modem_class) =
+            (class(self, "CardReader")?, class(self, "Lock")?, class(self, "Modem")?);
+        let card_out = self.create(reader_class, "card", ElementKind::port(None))?;
+        let lock_in = self.create(lock_class, "open", ElementKind::port(None))?;
+        let card = self.create(controller, "card", ElementKind::port(None))?;
+        let uplink = self.create(controller, "uplink", ElementKind::port(None))?;
+        let part =
+            |s: &mut Self, name, of: Id| s.field(controller, name, Some(TypeRef::Element(of)));
+        let reader = part(self, "reader", reader_class)?;
+        let lock = part(self, "lock", lock_class)?;
+        let modem = part(self, "modem", modem_class)?;
+
+        self.node(d, controller, (40.0, 40.0, 600.0, 220.0))?;
+        let n_reader = self.node(d, reader, (70.0, 130.0, 150.0, 56.0))?;
+        self.node(d, lock, (330.0, 130.0, 110.0, 56.0))?;
+        let n_modem = self.node(d, modem, (500.0, 130.0, 120.0, 56.0))?;
+        // Ports are centered on the border they sit on.
+        let half = umlcraft_notation::composite::PORT_SIZE / 2.0;
+        let port = |s: &mut Self, port, (x, y): (f32, f32)| {
+            s.node(d, port, (x - half, y - half, 2.0 * half, 2.0 * half))
+        };
+        let n_card = port(self, card, (40.0, 158.0))?;
+        let n_uplink = port(self, uplink, (640.0, 158.0))?;
+        let n_card_out = port(self, card_out, (220.0, 158.0))?;
+        let n_lock_in = port(self, lock_in, (330.0, 158.0))?;
+
+        let end = |role, part| ConnectorEnd::new(role, part);
+        for (a, b, n_a, n_b) in [
+            (end(card, None), end(reader, None), n_card, n_reader),
+            (end(card_out, Some(reader)), end(lock_in, Some(lock)), n_card_out, n_lock_in),
+            (end(modem, None), end(uplink, None), n_modem, n_uplink),
+        ] {
+            let connector = self.create(controller, "", ElementKind::connector(a, b))?;
+            self.edge(d, Some(connector), n_a, n_b, &[])?;
+        }
+        Ok(())
     }
 
     fn deployment(&mut self, owner: Id) -> Result<()> {
@@ -1257,6 +1301,7 @@ mod tests {
             DiagramKind::StateMachine,
             DiagramKind::Component,
             DiagramKind::Deployment,
+            DiagramKind::CompositeStructure,
         ] {
             assert!(kinds.contains(&kind), "no {kind:?} diagram");
         }

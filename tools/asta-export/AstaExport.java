@@ -749,11 +749,11 @@ public final class AstaExport {
         // Sequence diagrams are moved down to Astah's frame.
         double dy = 0;
         switch (kind) {
-            case "class", "useCase", "component", "deployment" -> {
+            case "class", "useCase", "component", "deployment", "compositeStructure" -> {
                 StructureDiagramEditor editor;
                 if (!"useCase".equals(kind)) {
-                    // The API has no editors for component and deployment diagrams; a class
-                    // diagram shows the same elements.
+                    // The API has no editors for component and deployment diagrams, and composite
+                    // structures are not exported yet; a class diagram shows the same elements.
                     if (!"class".equals(kind)) {
                         drop(kind + "Diagram");
                     }

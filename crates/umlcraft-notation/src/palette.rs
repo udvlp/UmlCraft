@@ -2,11 +2,11 @@
 //! that create them.
 
 use umlcraft_model::{
-    ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, DiagramKind,
-    DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, Id, IncludeProps,
-    InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator, InteractionUseProps,
-    LifelineProps, MessageGate, MessageSort, Model, ModelError, Point, PseudostateKind, Rect,
-    Result, Shape, Size, StateProps, Tx, TypeRef, View, Visibility,
+    ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd,
+    DiagramKind, DiagramProps, DirectedProps, ElementData, ElementKind, ExtendProps, Id,
+    IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
+    InteractionUseProps, LifelineProps, MessageGate, MessageSort, Model, ModelError, Point,
+    PseudostateKind, Rect, Result, Shape, Size, StateProps, Tx, TypeRef, View, Visibility,
 };
 
 use crate::sequence::{self, Slot};
@@ -61,6 +61,10 @@ pub enum NodeTool {
     ComponentInstance,
     NodeInstance,
     Object,
+    /// Composite structure diagrams: a part of the class drawn around it, an attribute.
+    Part,
+    /// Composite structure diagrams: a port on the border of a class or a part.
+    Port,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -82,6 +86,8 @@ pub enum EdgeTool {
     LostMessage,
     Flow,
     Transition,
+    /// Composite structure diagrams: between parts and ports.
+    Connector,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -197,6 +203,10 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
             ],
             &[E::Association, E::Link, E::Dependency, E::Realization, E::NoteAnchor],
         ),
+        DiagramKind::CompositeStructure => (
+            &[N::Class, N::Part, N::Port, N::Interface, N::Note],
+            &[E::Connector, E::Realization, E::Dependency, E::NoteAnchor],
+        ),
     };
     std::iter::once(Tool::Select)
         .chain(nodes.iter().map(|&n| Tool::Node(n)))
@@ -283,6 +293,8 @@ impl NodeTool {
             Self::ComponentInstance => "componentInstance",
             Self::NodeInstance => "nodeInstance",
             Self::Object => "object",
+            Self::Part => "part",
+            Self::Port => "port",
         }
     }
 
@@ -391,6 +403,8 @@ impl NodeTool {
             Self::ComponentInstance => instance(InstanceKind::Component),
             Self::NodeInstance => instance(InstanceKind::Node),
             Self::Object => instance(InstanceKind::Object),
+            Self::Part => ElementKind::attribute(None),
+            Self::Port => ElementKind::port(None),
         }
     }
 
@@ -433,6 +447,8 @@ impl NodeTool {
             Self::Artifact => Size::new(120.0, 60.0),
             Self::DeploymentNode | Self::NodeInstance => Size::new(200.0, 140.0),
             Self::Object => Size::new(120.0, 40.0),
+            Self::Part => Size::new(120.0, 50.0),
+            Self::Port => Size::new(crate::composite::PORT_SIZE, crate::composite::PORT_SIZE),
         }
     }
 }
@@ -447,8 +463,11 @@ fn is_class_like(kind: &ElementKind) -> bool {
     )
 }
 
+/// What a dependency may connect. Ports provide interfaces by realizing them and require them
+/// by depending on them.
 fn is_dependable(kind: &ElementKind) -> bool {
-    kind.is_classifier() || matches!(kind, ElementKind::Package | ElementKind::Instance(_))
+    kind.is_classifier()
+        || matches!(kind, ElementKind::Package | ElementKind::Instance(_) | ElementKind::Port(_))
 }
 
 impl EdgeTool {
@@ -471,6 +490,7 @@ impl EdgeTool {
             Self::LostMessage => "lostMessage",
             Self::Flow => "flow",
             Self::Transition => "transition",
+            Self::Connector => "connector",
         }
     }
 
@@ -522,9 +542,17 @@ impl EdgeTool {
                 !same
                     && matches!(
                         source,
-                        K::Class(_) | K::Enumeration(_) | K::DataType(_) | K::Component(_)
+                        K::Class(_)
+                            | K::Enumeration(_)
+                            | K::DataType(_)
+                            | K::Component(_)
+                            | K::Port(_)
                     )
                     && matches!(target, K::Interface(_))
+            }
+            Self::Connector => {
+                let end = |k: &ElementKind| matches!(k, K::Attribute(_) | K::Port(_));
+                !same && end(source) && end(target)
             }
             Self::Dependency => !same && is_dependable(source) && is_dependable(target),
             Self::Include | Self::Extend => {
@@ -585,6 +613,12 @@ impl EdgeTool {
             })),
             Self::Flow => Some(ElementKind::flow(source, target)),
             Self::Transition => Some(ElementKind::transition(source, target)),
+            // Without the diagram it cannot tell which part a port is reached through;
+            // `connect` does.
+            Self::Connector => Some(ElementKind::connector(
+                ConnectorEnd::new(source, None),
+                ConnectorEnd::new(target, None),
+            )),
             Self::NoteAnchor => None,
             Self::Message
             | Self::AsyncMessage
@@ -664,6 +698,15 @@ pub fn can_show(diagram: DiagramKind, kind: &ElementKind) -> bool {
                 | ElementKind::Class(_)
                 | ElementKind::Comment(_)
         ),
+        DiagramKind::CompositeStructure => matches!(
+            kind,
+            ElementKind::Class(_)
+                | ElementKind::Component(_)
+                | ElementKind::Interface(_)
+                | ElementKind::Attribute(_)
+                | ElementKind::Port(_)
+                | ElementKind::Comment(_)
+        ),
     }
 }
 
@@ -689,6 +732,8 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
         ElementKind::Node(_) => NodeTool::DeploymentNode,
         ElementKind::Instance(p) => NodeTool::for_instance(p.instance),
         ElementKind::Partition => NodeTool::Partition,
+        ElementKind::Attribute(_) => NodeTool::Part,
+        ElementKind::Port(_) => NodeTool::Port,
         _ => NodeTool::Class,
     };
     tool.default_size()
@@ -793,14 +838,18 @@ fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Resu
         return sequence_edit::add_lifeline(tx, diagram, element, bounds.x, bounds.y);
     }
     let fragment = matches!(kind, ElementKind::CombinedFragment(_));
+    // On composite structure diagrams classes are drawn around their parts: behind them, and
+    // keeping the size they are given.
+    let structured =
+        crate::composite::is_composite(model, diagram) && crate::composite::is_structured(kind);
     let mut presentation = if fragment {
         umlcraft_model::Presentation::fragment(element, bounds)
     } else {
         umlcraft_model::Presentation::node(Some(element), bounds)
     };
     // New class boxes size themselves to their content, as in Astah.
-    presentation.style.auto_size = crate::scene::is_boxed_classifier(kind);
-    if is_container(kind) || fragment {
+    presentation.style.auto_size = crate::scene::is_boxed_classifier(kind) && !structured;
+    if is_container(kind) || fragment || structured {
         let id = presentation.id;
         tx.apply(umlcraft_model::Op::InsertPresentation { diagram, index: 0, presentation })?;
         Ok(id)
@@ -808,6 +857,9 @@ fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Resu
         tx.add_presentation(diagram, presentation)
     }
 }
+
+/// Size of a new class or component on a composite structure diagram, with room for parts.
+pub const STRUCTURED_SIZE: Size = Size { width: 320.0, height: 200.0 };
 
 /// The closest element, starting at `start` and walking up the owners, that may own `kind`.
 pub fn owner_for(model: &Model, start: Id, kind: &ElementKind) -> Option<Id> {
@@ -840,9 +892,18 @@ pub fn create_node(
     if matches!(tool, NodeTool::CombinedFragment | NodeTool::InteractionUse) {
         return create_fragment(tx, diagram, tool, None, Vec::new(), Some(origin));
     }
+    if matches!(tool, NodeTool::Part | NodeTool::Port) {
+        return crate::composite::create_node(tx, diagram, tool, origin, base_name);
+    }
     let kind = tool.element_kind();
     let diagram_owner = tx.model().element(diagram)?.owner().ok_or(ModelError::Root)?;
-    let bounds = Rect::from_origin_size(origin, tool.default_size());
+    let mut bounds = Rect::from_origin_size(origin, tool.default_size());
+    // A structured class has room for its parts.
+    if crate::composite::is_composite(tx.model(), diagram) && crate::composite::is_structured(&kind)
+    {
+        bounds.width = bounds.width.max(STRUCTURED_SIZE.width);
+        bounds.height = bounds.height.max(STRUCTURED_SIZE.height);
+    }
     // By its center, as moved vertices are.
     let enclosing = if kind.is_vertex() {
         crate::state_edit::vertex_owner_at(tx.model(), diagram, bounds.center(), &|_| false)
@@ -867,6 +928,9 @@ pub fn create_node(
 pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target: Id) -> Result<Id> {
     if tool.message_sort().is_some() {
         return connect_message(tx, diagram, tool, source, target, None);
+    }
+    if tool == EdgeTool::Connector {
+        return crate::composite::connect(tx, diagram, source, target);
     }
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;

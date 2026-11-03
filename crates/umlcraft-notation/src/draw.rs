@@ -434,6 +434,13 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             style: solid,
         }],
         Figure::Rectangle => vec![frame(r, Paint::Fill)],
+        // Astah outlines ports 2 px wide, like parts.
+        Figure::Part | Figure::Port { .. } => vec![thick_frame(r)],
+        // Drawn like a class box: 2 px around, 1 px below the name.
+        Figure::Structured { separator } => vec![
+            thick_frame(r),
+            line(vec![Point::new(r.x, *separator), Point::new(r.right(), *separator)], solid),
+        ],
         Figure::State { separator, regions, vertical } => {
             // Astah outlines states 2 px wide.
             let mut result = vec![Primitive::Frame {
