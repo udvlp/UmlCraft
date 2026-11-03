@@ -119,6 +119,8 @@ struct Graph {
     core: Vec<usize>,
     /// Core position of a node index.
     position: HashMap<usize, usize>,
+    /// Node index of an id.
+    index: HashMap<Id, usize>,
     /// Per core node the node indices of its attributes, keys first.
     attributes: Vec<Vec<usize>>,
     /// Parts of composite attributes with their parent, parents before their parts.
@@ -175,7 +177,8 @@ impl Graph {
             rest = wait;
         }
         let edges = core_edges(d, &index, &position);
-        Self { core, position, attributes, parts: ordered, owner, edges }
+        let index = d.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
+        Self { core, position, index, attributes, parts: ordered, owner, edges }
     }
 }
 
@@ -268,7 +271,8 @@ fn apply(d: &mut Diagram, g: &Graph, corners: &[Point]) {
         b.y = p.y;
     }
     // Lines float; lines that join the same two nodes are spread apart.
-    let mut groups: Vec<((Id, Id), Vec<usize>)> = Vec::new();
+    let mut order: Vec<(Id, Id)> = Vec::new();
+    let mut groups: HashMap<(Id, Id), Vec<usize>> = HashMap::new();
     for (k, l) in d.links.iter_mut().enumerate() {
         l.source_port = None;
         l.target_port = None;
@@ -278,12 +282,14 @@ fn apply(d: &mut Diagram, g: &Graph, corners: &[Point]) {
         } else {
             (l.target.clone(), l.source.clone())
         };
-        match groups.iter_mut().find(|(p, _)| *p == pair) {
-            Some((_, list)) => list.push(k),
-            None => groups.push((pair, vec![k])),
+        let list = groups.entry(pair.clone()).or_default();
+        if list.is_empty() {
+            order.push(pair);
         }
+        list.push(k);
     }
-    for ((a, b), links) in groups {
+    for (a, b) in order {
+        let links = &groups[&(a.clone(), b.clone())];
         if links.len() < 2 {
             continue;
         }
@@ -307,16 +313,16 @@ fn apply(d: &mut Diagram, g: &Graph, corners: &[Point]) {
 fn used_sides(d: &Diagram, g: &Graph) -> Vec<Used> {
     let mut used = vec![[false; 4]; g.core.len()];
     for l in &d.links {
-        let (Some(s), Some(t)) = (d.node(&l.source), d.node(&l.target)) else { continue };
+        let (Some(&si), Some(&ti)) = (g.index.get(&l.source), g.index.get(&l.target)) else {
+            continue;
+        };
+        let (s, t) = (&d.nodes[si], &d.nodes[ti]);
         if s.kind.is_attribute() || t.kind.is_attribute() {
             continue;
         }
-        for (me, other, toward) in [(s, t, l.waypoints.first()), (t, s, l.waypoints.last())] {
-            let Some(&c) =
-                d.nodes.iter().position(|n| n.id == me.id).and_then(|i| g.position.get(&i))
-            else {
-                continue;
-            };
+        let ends = [(si, s, t, l.waypoints.first()), (ti, t, s, l.waypoints.last())];
+        for (i, me, other, toward) in ends {
+            let Some(&c) = g.position.get(&i) else { continue };
             let from = me.bounds.center();
             let to = toward.copied().unwrap_or_else(|| other.bounds.center());
             if from == to {
