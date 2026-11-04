@@ -3,6 +3,11 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Empty `finally` by click**: a click into the bottom band of a try without a `finally`
+  selects the empty `finally`, so that elements can be pasted or inserted into it.
+
 ## 0.19.0 – 2026-11-04
 
 - **Structograms on the diagram canvas**: structograms are drawn like the other diagrams,

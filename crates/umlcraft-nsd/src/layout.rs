@@ -147,8 +147,8 @@ impl Layout {
         find(&self.body, x, y)
     }
 
-    /// What a click at a point selects: the innermost element, an empty branch, or the
-    /// diagram itself in its frame and title.
+    /// What a click at a point selects: the innermost element, an empty branch (a try's
+    /// missing `finally` in its bottom band), or the diagram itself in its frame and title.
     pub fn hit(&self, x: i32, y: i32) -> Option<Selection> {
         fn find(seq: &SeqBox, path: Path, x: i32, y: i32) -> Option<Selection> {
             if seq.elements.is_empty() {
@@ -159,6 +159,11 @@ impl Layout {
                 .iter()
                 .enumerate()
                 .find_map(|(i, b)| find(b, branch_path(&e.path, i), x, y))
+                .or_else(|| {
+                    finally_band(e)
+                        .filter(|band| band.contains(x, y))
+                        .map(|_| Selection::Empty(branch_path(&e.path, 2)))
+                })
                 .or_else(|| Some(Selection::element(&e.path)))
         }
         find(&self.body, Vec::new(), x, y).or_else(|| {
@@ -660,8 +665,13 @@ mod tests {
         assert_eq!((band.x, band.right(), band.bottom()), (e.x + 20, e.right() - 20, e.bottom()));
         assert!(band.h > 0);
         assert_eq!(l.slot_at(band.x + 2, band.y + 2), Some(Slot { seq: vec![0, 2], index: 0 }));
+        // A click into the band selects the empty finally, ready for pasting into it.
+        let finally = Selection::Empty(vec![0, 2]);
+        assert_eq!(l.hit(band.x + 2, band.y + 2), Some(finally.clone()));
+        assert!(finally.is_valid(&diagram(vec![Element::try_block("ex")])));
         // Outside the band the try's own places stay.
         assert_eq!(l.slot_at(e.x + 2, e.bottom() - 2), Some(Slot { seq: vec![], index: 1 }));
+        assert_eq!(l.hit(e.x + 2, e.bottom() - 2), Some(Selection::element(&[0])));
         assert_eq!(l.hidden_finally(&[0, 1]), None);
         // A finally with elements is drawn and has its own box.
         let mut t = Element::try_block("ex");
