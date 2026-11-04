@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.19.0 – 2026-11-04
 
 - **Structograms on the diagram canvas**: structograms are drawn like the other diagrams,
   sharp at every zoom and on the same grid, and open, zoom and scroll without delay even when
