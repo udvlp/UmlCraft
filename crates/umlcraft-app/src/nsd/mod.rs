@@ -1,8 +1,8 @@
 //! Structograms (Nassi-Shneiderman diagrams) of the project: shown and edited in the main
 //! window like diagrams, read from and written to Structorizer's `.nsd` files.
 
-mod dialog;
 mod paint;
+mod properties;
 pub mod source;
 mod view;
 
@@ -12,6 +12,7 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_nsd::{Diagram, ElementKind};
 
+pub use properties::NsdProperties;
 pub use view::{Allowed, NsdView, bind_actions};
 
 actions!(
@@ -34,7 +35,7 @@ actions!(
     ]
 );
 
-/// Inserts a new element of `kind` after (or before) the selection, through the dialog.
+/// Inserts a new element of `kind` after (or before) the selection; the properties panel takes its text.
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = nsd, no_json)]
 pub struct InsertElement {

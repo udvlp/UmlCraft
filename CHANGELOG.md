@@ -8,6 +8,10 @@ today.
 - **Structograms on the diagram canvas**: structograms are drawn like the other diagrams,
   sharp at every zoom and on the same grid, and open, zoom and scroll without delay even when
   large.
+- **Structogram elements in the properties panel**: text, comment and whether an element is
+  disabled, and the structogram's signature, comment and kind, are edited in the properties
+  panel instead of a dialog, and the drawing follows the typing. A new element goes in at
+  once, ready for its text; one undo takes back the element together with what was typed.
 - **ER diagrams in IE and IDEF1X notation**: besides Chen, an ER diagram can be drawn with
   crow's feet (IE) or in IDEF1X, chosen per diagram in the ribbon or the properties;
   switching converts the diagram and keeps the entities where they are. Entities are tables

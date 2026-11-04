@@ -9,7 +9,7 @@
 //! drawn in the diagrams' dark colours, while exports keep Structorizer's black on white.
 
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::{ActiveTheme, Theme, WindowExt, v_flex};
+use gpui_kit::component::{ActiveTheme, Theme, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::Id;
@@ -17,9 +17,8 @@ use umlcraft_nsd::draw::Primitive;
 use umlcraft_nsd::layout::Layout;
 use umlcraft_nsd::path::{self, Path as NsdPath, Selection, Slot, Span};
 use umlcraft_nsd::svg::Palette;
-use umlcraft_nsd::{Color, Diagram, EditError, ElementKind, clip, edit};
+use umlcraft_nsd::{Color, Diagram, EditError, ElementKind, Keywords, RootKind, clip, edit};
 
-use super::dialog::{self, Edited, Target};
 use super::paint::{self, Place};
 use super::{
     AddBranch, EditElement, ExportStructogram, ExtendDown, ExtendUp, InsertElement, MoveDown,
@@ -44,10 +43,39 @@ struct Drag {
     pressed: Option<Selection>,
 }
 
+/// What the properties panel edits: one element or the diagram itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    Element(NsdPath),
+    Root,
+}
+
+/// The selected element or the diagram as the properties panel shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shown {
+    pub target: Target,
+    /// The element's kind; `None` for the diagram.
+    pub kind: Option<ElementKind>,
+    pub text: Vec<String>,
+    pub comment: Vec<String>,
+    pub disabled: bool,
+    /// The diagram's kind and keywords.
+    pub root_kind: RootKind,
+    pub keywords: Keywords,
+}
+
+/// Asks the properties panel to put the cursor into the shown text. `inserted` is the undo
+/// depth before the element was inserted for it, so that its text joins that step.
+pub struct EditText {
+    pub inserted: Option<usize>,
+}
+
+impl EventEmitter<EditText> for NsdView {}
+
 /// What the selection allows, for the ribbon and the context menu.
 #[derive(Clone, Copy, Default)]
 pub struct Allowed {
-    /// One element or the diagram: its dialog opens.
+    /// One element or the diagram: the properties panel edits it.
     pub edit: bool,
     /// A run of elements: cut, delete, move, colour, disable.
     pub span: bool,
@@ -76,8 +104,6 @@ pub struct NsdView {
     /// The diagram's size at 100 %, the frame's right and bottom lines included.
     size: (f32, f32),
     drag: Option<Drag>,
-    /// What the open element dialog holds, taken over when the project is saved or closed.
-    dialog: Option<dialog::Pending>,
     /// Where a selection extended with Shift began; that end stays put.
     anchor: Option<NsdPath>,
     /// The canvas's, which shows the structogram and gets its commands.
@@ -137,7 +163,6 @@ impl NsdView {
             palette: palette(cx.theme()),
             size: (0.0, 0.0),
             drag: None,
-            dialog: None,
             anchor: None,
             focus,
             _subscriptions: subscriptions,
@@ -210,11 +235,31 @@ impl NsdView {
         self.select(selection, cx);
     }
 
+    /// Changes the structogram as `change` does, but keeps the selection (as far as it still
+    /// fits): for the properties panel, which edits what is selected.
+    fn change_in_place(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Diagram) -> Result<(), EditError>,
+    ) {
+        let mut changed = self.diagram.clone();
+        if f(&mut changed).is_ok() && changed != self.diagram {
+            let id = self.id;
+            self.workspace.update(cx, |ws, cx| {
+                ws.edit_structogram(id, &changed);
+                cx.notify();
+            });
+            self.sync(cx);
+        }
+        cx.notify();
+    }
+
     fn select(&mut self, selection: Selection, cx: &mut Context<Self>) {
         self.anchor = None;
         if selection.is_valid(&self.diagram) {
             self.selection = selection;
         }
+        self.claim_properties(cx);
         cx.notify();
     }
 
@@ -224,7 +269,104 @@ impl NsdView {
             self.selection = Selection::Elements(span);
         }
         self.anchor = Some(anchor);
+        self.claim_properties(cx);
         cx.notify();
+    }
+
+    /// Something of the structogram is selected: the properties panel shows it rather than
+    /// what the model tree selected before.
+    fn claim_properties(&self, cx: &mut Context<Self>) {
+        if matches!(self.selection, Selection::Nothing) {
+            return;
+        }
+        let id = self.id;
+        self.workspace.update(cx, |ws, cx| {
+            if ws.selected_element != Some(id) || !ws.selection.is_empty() {
+                ws.selected_element = Some(id);
+                ws.selection.clear();
+                cx.notify();
+            }
+        });
+    }
+
+    /// The structogram's id in the model.
+    pub fn id(&self) -> Id {
+        self.id
+    }
+
+    /// The selected element or the diagram, if one of them is selected alone.
+    pub fn shown(&self) -> Option<Shown> {
+        let d = &self.diagram;
+        let (root_kind, keywords) = (d.kind(), Keywords::of(d));
+        match &self.selection {
+            Selection::Root => Some(Shown {
+                target: Target::Root,
+                kind: None,
+                text: d.text(),
+                comment: d.comment(),
+                disabled: false,
+                root_kind,
+                keywords,
+            }),
+            selection => {
+                let p = selection.single()?;
+                let e = path::element(d, &p)?;
+                Some(Shown {
+                    target: Target::Element(p.clone()),
+                    kind: Some(e.kind),
+                    text: e.text(),
+                    comment: e.comment(),
+                    disabled: e.disabled(),
+                    root_kind,
+                    keywords,
+                })
+            }
+        }
+    }
+
+    /// Sets the text of an element or the signature of the diagram.
+    pub fn set_text(&mut self, target: &Target, text: &[String], cx: &mut Context<Self>) {
+        match target {
+            Target::Element(at) => self.change_in_place(cx, |d| {
+                if edit::has_text(path::element(d, at).ok_or(EditError::NoSuchPlace)?.kind) {
+                    edit::set_text(d, at, text)?;
+                }
+                Ok(())
+            }),
+            Target::Root => self.change_in_place(cx, |d| {
+                let (comment, kind) = (d.comment(), d.kind());
+                edit::set_root(d, text, &comment, kind).map(|_| ())
+            }),
+        }
+    }
+
+    /// Sets the comment of an element or of the diagram.
+    pub fn set_comment(&mut self, target: &Target, comment: &[String], cx: &mut Context<Self>) {
+        match target {
+            Target::Element(at) => {
+                self.change_in_place(cx, |d| edit::set_comment(d, at, comment).map(|_| ()))
+            }
+            Target::Root => self.change_in_place(cx, |d| {
+                let (text, kind) = (d.text(), d.kind());
+                edit::set_root(d, &text, comment, kind).map(|_| ())
+            }),
+        }
+    }
+
+    /// Disables an element or enables it again.
+    pub fn set_disabled(&mut self, at: &NsdPath, disabled: bool, cx: &mut Context<Self>) {
+        self.change_in_place(cx, |d| {
+            path::element_mut(d, at).ok_or(EditError::NoSuchPlace)?.set_disabled(disabled);
+            Ok(())
+        });
+    }
+
+    /// Makes the diagram a program, a subroutine or an includable diagram.
+    pub fn set_root_kind(&mut self, kind: RootKind, cx: &mut Context<Self>) {
+        self.change_in_place(cx, |d| {
+            let (text, comment) = (d.text(), d.comment());
+            edit::set_root(d, &text, &comment, kind).map(|_| ())
+        });
     }
 
     /// What the selection allows.
@@ -270,7 +412,7 @@ impl NsdView {
                     // As in Structorizer: a double click into an empty branch adds an
                     // instruction there.
                     let slot = Slot { seq, index: 0 };
-                    self.open_new(slot, ElementKind::Instruction, window, cx);
+                    self.open_new(slot, ElementKind::Instruction, cx);
                 }
                 hit => {
                     self.select(hit, cx);
@@ -393,91 +535,30 @@ impl NsdView {
         })
     }
 
-    fn open_new(
-        &mut self,
-        slot: Slot,
-        kind: ElementKind,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let keywords = umlcraft_nsd::Keywords::of(&self.diagram);
-        let start = Edited {
-            text: edit::default_text(kind, keywords),
-            comment: Vec::new(),
-            disabled: false,
-            kind: self.diagram.kind(),
-        };
-        let target = Target::New(slot, kind);
-        let view = cx.entity().downgrade();
-        if let Some(pending) =
-            dialog::open(view, &self.focus, target, Some(kind), keywords, start, window, cx)
-        {
-            self.dialog = Some(pending);
+    /// Inserts a new element of `kind` at `slot` with its default text, selects it and has the
+    /// properties panel take the text.
+    fn open_new(&mut self, slot: Slot, kind: ElementKind, cx: &mut Context<Self>) {
+        let text = edit::default_text(kind, Keywords::of(&self.diagram));
+        let depth = self.workspace.read(cx).doc.undo_depth();
+        self.change(cx, |d| {
+            let e = edit::new_element(d, kind, &text);
+            edit::insert(d, &slot, vec![e])
+        });
+        if self.workspace.read(cx).doc.undo_depth() > depth {
+            cx.emit(EditText { inserted: Some(depth) });
         }
     }
 
-    fn edit_element(&mut self, _: &EditElement, window: &mut Window, cx: &mut Context<Self>) {
-        let d = &self.diagram;
-        let (target, kind, start) = match &self.selection {
-            Selection::Root => (
-                Target::Root,
-                None,
-                Edited { text: d.text(), comment: d.comment(), disabled: false, kind: d.kind() },
-            ),
-            selection => {
-                let Some(p) = selection.single() else { return };
-                let Some(e) = path::element(d, &p) else { return };
-                let start = Edited {
-                    text: e.text(),
-                    comment: e.comment(),
-                    disabled: e.disabled(),
-                    kind: d.kind(),
-                };
-                (Target::Element(p), Some(e.kind), start)
-            }
-        };
-        let view = cx.entity().downgrade();
-        let keywords = umlcraft_nsd::Keywords::of(&self.diagram);
-        if let Some(pending) =
-            dialog::open(view, &self.focus, target, kind, keywords, start, window, cx)
-        {
-            self.dialog = Some(pending);
+    /// Puts the cursor into the properties panel's text of what is selected.
+    fn edit_element(&mut self, _: &EditElement, _: &mut Window, cx: &mut Context<Self>) {
+        if self.shown().is_some() {
+            cx.emit(EditText { inserted: None });
         }
     }
 
-    /// Takes what the element dialog hands back.
-    pub fn apply_dialog(
-        &mut self,
-        target: Target,
-        edited: Edited,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.dialog = None;
-        let Edited { text, comment, disabled, kind } = edited;
-        match target {
-            Target::New(slot, element_kind) => self.change(cx, |d| {
-                let mut e = edit::new_element(d, element_kind, &text);
-                e.set_comment(&comment);
-                e.set_disabled(disabled);
-                edit::insert(d, &slot, vec![e])
-            }),
-            Target::Element(at) => self.change(cx, |d| {
-                if edit::has_text(path::element(d, &at).ok_or(EditError::NoSuchPlace)?.kind) {
-                    edit::set_text(d, &at, &text)?;
-                }
-                edit::set_comment(d, &at, &comment)?;
-                path::element_mut(d, &at).ok_or(EditError::NoSuchPlace)?.set_disabled(disabled);
-                Ok(Selection::element(&at))
-            }),
-            Target::Root => self.change(cx, |d| edit::set_root(d, &text, &comment, kind)),
-        }
-        window.focus(&self.focus, cx);
-    }
-
-    fn insert_element(&mut self, a: &InsertElement, window: &mut Window, cx: &mut Context<Self>) {
+    fn insert_element(&mut self, a: &InsertElement, _: &mut Window, cx: &mut Context<Self>) {
         let slot = self.slot(a.after);
-        self.open_new(slot, a.kind, window, cx);
+        self.open_new(slot, a.kind, cx);
     }
 
     fn delete(&mut self, _: &DeleteSelection, _: &mut Window, cx: &mut Context<Self>) {
@@ -794,26 +875,11 @@ impl NsdView {
 
     /// Writes the structogram as a Structorizer file, with a header of today.
     fn export_nsd(&mut self, _: &ExportStructogram, window: &mut Window, cx: &mut Context<Self>) {
-        self.flush_dialog(window, cx);
         let (author, date, origin) = (super::user_name(), super::today(), super::origin());
         let made = umlcraft_nsd::Provenance { author: &author, date: &date, origin: &origin };
         let text = umlcraft_nsd::write(&umlcraft_nsd::content::to_file(&self.diagram, &made));
         let bytes = move || Ok(text.into_bytes());
         self.write_export("nsd", "nsd.save_failed", bytes, window, cx);
-    }
-
-    /// Takes over what the open element dialog holds, as OK would, so that saving and closing
-    /// the project keep it instead of losing it. An untouched dialog just closes.
-    pub fn flush_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = self.dialog.take() else { return };
-        if !window.has_active_dialog(cx) {
-            return;
-        }
-        let edited = pending(cx);
-        window.close_dialog(cx);
-        if let Some((target, edited)) = edited {
-            self.apply_dialog(target, edited, window, cx);
-        }
     }
 
     // ----- Drawing ---------------------------------------------------------------------------

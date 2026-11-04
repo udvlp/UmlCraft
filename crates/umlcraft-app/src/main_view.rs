@@ -302,7 +302,10 @@ impl MainView {
         }
         // The canvas draws the structogram shown through its editor.
         let editor = shown.and_then(|id| Some((id, self.structograms.get(&id)?.clone())));
+        let shown_editor = editor.as_ref().map(|(_, e)| e.clone());
         self.canvas.update(cx, |c, cx| c.show_structogram(editor, cx));
+        // Its selected element is edited in the properties panel.
+        self.properties.update(cx, |p, cx| p.show_structogram(shown_editor, window, cx));
         if active != self.shown {
             self.shown = active;
             if let Some(view) = self.active_structogram(cx) {
@@ -376,12 +379,9 @@ impl MainView {
 
     /// Commits text typed into the canvas or the properties panel but not yet confirmed, so
     /// that saving, exporting and the unsaved-changes check see it.
-    fn flush_edits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn flush_edits(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.canvas.update(cx, |canvas, cx| canvas.commit_edit(cx));
         self.properties.update(cx, |properties, cx| properties.flush(cx));
-        if let Some(view) = self.active_structogram(cx) {
-            view.update(cx, |view, cx| view.flush_dialog(window, cx));
-        }
     }
 
     /// Runs `then` right away, or after asking what to do with unsaved changes.
@@ -2201,7 +2201,12 @@ impl MainView {
     fn properties_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.read(cx);
         let kind = ws.selected_element.and_then(|id| ws.doc.model().get(id)).map(|e| e.kind());
+        let structogram = self.properties.read(cx).structogram_heading(cx);
         let header = match kind {
+            // The structogram's selected element, or the structogram itself.
+            _ if structogram.is_some() => {
+                panel_header(None, structogram.unwrap_or_default().to_uppercase(), None, cx)
+            }
             Some(kind) => panel_header(
                 icons::kind_icon(kind),
                 t!(format!("kind.{}", kind.type_name())).to_uppercase(),

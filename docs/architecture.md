@@ -771,7 +771,7 @@ writes, and none of its code is used.
   canvas (`DiagramCanvas`), with its zoom, panning, grid and zoom pill. `MainView` keeps an
   `NsdView` per structogram shown and hands the one shown to the canvas
   (`show_structogram`). `NsdView` has no element of its own: it is the structogram's editor
-  (selection, dragging elements, dialogs, the context menu's entries, commands, export). The
+  (selection, dragging elements, the context menu's entries, commands, export). The
   canvas passes it the left mouse in diagram pixels, the context menu and, under the key
   context `NsdView`, the structogram's commands (`nsd::bind_actions`); a press on no element
   pans. `NsdView` reads the structogram from the model and changes it only through
@@ -785,13 +785,21 @@ writes, and none of its code is used.
   GPUI cannot turn text, so turned case labels are outlines usvg flattens from the system
   fonts, cached per text. Selection and the place a drag would drop to are painted over it
   and never reach an export; the image export stays the SVG (`svg::render`) in the light
-  colours. Text, comment and the root's signature are edited in a dialog (`nsd/dialog.rs`),
-  as in Structorizer; a new element is only inserted when its dialog is confirmed, and an
-  open dialog is taken over before saving or closing the project. In the dark theme the
-  structogram takes the diagrams' colours. Opening a `.nsd` (menu, command line, system,
-  recent files) starts a new unsaved project holding just that structogram, offered for
-  saving as `<name>.ucraft` next to it; *Import › Structogram* adds `.nsd` files to the open
-  project, *Export › Structogram* writes the one shown.
+  colours. Text, comment and whether an element is disabled, or the root's signature,
+  comment and kind, are edited in the floating properties panel (`nsd/properties.rs`,
+  `NsdProperties` inside `PropertiesPanel`), which shows them while something of the
+  structogram shown is selected and the model tree has not selected anything else since
+  (`NsdView` makes the structogram the workspace's selected element). Typing changes the
+  structogram at once (`NsdView::set_text`, `set_comment`, which keep the selection); what is
+  typed into one field in a row is squashed into one undo step (`Document::squash_since`), and
+  with the insertion of the element it was typed for: inserting puts an element with its
+  default text in at once and asks the panel (`EditText`) for the cursor, with the first `?`
+  selected. Double click and Edit put the cursor there too; Shift+Enter and Ctrl+Enter give
+  the keys back to the canvas. In the dark theme the structogram takes the diagrams'
+  colours. Opening a `.nsd` (menu, command line, system, recent files) starts a new unsaved
+  project holding just that structogram, offered for saving as `<name>.ucraft` next to it;
+  *Import › Structogram* adds `.nsd` files to the open project, *Export › Structogram* writes
+  the one shown.
 - **From source code** (`umlcraft-nsd-code`; `java`, `csharp`, `python`, `cpp`): a Java, C#,
   Python or C++ file is read and parsed by the base of the class import (see "Source import":
   `SourceLanguage`, `source::read`, `parse_tree`; C and headers with the C++ grammar, C# and C++

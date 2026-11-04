@@ -56,13 +56,13 @@ line the color of its name and of the line.
   the `.ucraft` file with the UML diagrams. They open in the main window like a diagram, drawn
   line for line as Structorizer draws them (syntax highlighting off), and export as SVG or PNG.
   They are edited as in Structorizer, from the ribbon's Structogram tab: insert elements before
-  or after the selection, edit text and comment in a dialog, cut, copy, paste, drag, colour,
-  disable and delete them, add and remove branches; undo and redo share one history with the
-  diagrams. Structorizer's `.nsd` files (3.32-35) are imported and exported with their content
-  and changed parser keywords; opening one starts a new project with it. Methods of Java, C#,
-  Python or C++ files become structograms without types, with assignments as `x := 42 + a`,
-  conditions as `a > 0?` and returns as `return x`; what has no place in a structogram
-  (`continue`, labels …) is listed. New structograms and imported methods use German keywords
+  or after the selection, edit text and comment in the properties panel, cut, copy, paste,
+  drag, colour, disable and delete them, add and remove branches; undo and redo share one
+  history with the diagrams. Structorizer's `.nsd` files (3.32-35) are imported and exported
+  with their content and changed parser keywords; opening one starts a new project with it.
+  Methods of Java, C#, Python or C++ files become structograms without types, with
+  assignments as `x := 42 + a`, conditions as `a > 0?` and returns as `return x`; what has no
+  place in a structogram (`continue`, labels …) is listed. New structograms and imported methods use German keywords
   (`solange ?`, `für i := 1 bis n`, `gib x`) or Structorizer's English ones, as chosen in the
   settings; by default as the user interface.
 - **SQL dumps as ER diagrams** (File › Import SQL dump as ER diagram …): dumps of MySQL,

@@ -26,6 +26,7 @@ use umlcraft_notation::object;
 use umlcraft_notation::sequence::operator_keyword;
 
 use crate::labels::{self, VISIBILITIES};
+use crate::nsd::{NsdProperties, NsdView};
 use crate::workspace::Workspace;
 
 type Choice = SelectState<Vec<SharedString>>;
@@ -212,6 +213,9 @@ pub struct PropertiesPanel {
     /// An edit always goes back to that element, even if the selection has changed by the time
     /// the field loses focus; fields nobody typed into are never written back.
     editing: HashMap<Field, Id>,
+    /// The structogram's fields, shown instead while something of the structogram shown is
+    /// selected.
+    structogram: Entity<NsdProperties>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -536,8 +540,11 @@ impl PropertiesPanel {
         let font_color = cx.new(|cx| ColorPickerState::new(window, cx));
         let line_color = cx.new(|cx| ColorPickerState::new(window, cx));
 
+        let structogram = cx.new(|cx| NsdProperties::new(workspace.clone(), window, cx));
         let mut subscriptions =
             vec![cx.observe_in(&workspace, window, |this, _, window, cx| this.sync(window, cx))];
+        // The structogram's selection decides what the panel shows.
+        subscriptions.push(cx.observe(&structogram, |_, _, cx| cx.notify()));
         let mut watch = |state: &Entity<InputState>, field: Field, cx: &mut Context<Self>| {
             subscriptions.push(cx.subscribe_in(
                 state,
@@ -933,10 +940,27 @@ impl PropertiesPanel {
             color_step: None,
             shown: None,
             editing: HashMap::new(),
+            structogram,
             _subscriptions: subscriptions,
         };
         panel.sync(window, cx);
         panel
+    }
+
+    /// Edits the structogram `editor` edits while it is shown.
+    pub fn show_structogram(
+        &mut self,
+        editor: Option<Entity<NsdView>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.structogram.update(cx, |s, cx| s.show(editor, window, cx));
+    }
+
+    /// What the panel's heading names while it shows the structogram's selection.
+    pub fn structogram_heading(&self, cx: &App) -> Option<String> {
+        let s = self.structogram.read(cx);
+        s.is_active(cx).then(|| s.heading()).flatten()
     }
 
     /// Puts the cursor into the name (or declaration) field of `element`, e.g. for "Rename".
@@ -1830,9 +1854,12 @@ impl Render for PropertiesPanel {
         };
         let heading =
             |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
+        let body = v_flex().gap_3().p_3();
+        if self.structogram.read(cx).is_active(cx) {
+            return body.child(self.structogram.clone());
+        }
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
-        let body = v_flex().gap_3().p_3();
         // A free text or line has no element; its own options are shown instead.
         let free = match &ws.selection[..] {
             [only] => ws.active_diagram.and_then(|d| model.view(d)?.get(*only)),

@@ -898,7 +898,7 @@ error:
 nsd:
   untitled_stem: Unbenannt
   save_failed: Das Struktogramm konnte nicht exportiert werden.
-  edit: Bearbeiten …
+  edit: Bearbeiten
   edit_diagram: Diagramm
   signature: Name oder Signatur
   text: Text
