@@ -9,9 +9,9 @@ use std::sync::{Arc, OnceLock};
 use serde_json::{Value, json};
 use umlcraft_erm_sql::{Dialect, LeftOut};
 use umlcraft_model::{
-    ActivityNodeKind, DiagramKind, ElementData, ElementKind, ErDisplay, ErKey, ErNotation, Id,
-    InteractionOperator, MessageSort, Model, ModelError, Point, Rect, Shape, SharedStyle,
-    StateInvariantProps, TerminationProps, Tx, Visibility,
+    ActivityNodeKind, DiagramKind, ElementData, ElementKind, ErAction, ErDisplay, ErKey,
+    ErNotation, Id, InteractionOperator, MessageSort, Model, ModelError, Point, Rect, Shape,
+    SharedStyle, StateInvariantProps, TerminationProps, Tx, Visibility,
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview, TextMeasure};
@@ -215,10 +215,37 @@ pub fn list() -> Vec<Value> {
         "er_display": { "type": "string", "enum": ["attributes", "keys", "name"],
                         "description": "ER diagrams in IE or IDEF1X: what the tables list." },
         "physical_names": flag("ER diagrams in IE or IDEF1X: the names in the database."),
-        "datatype": text("ER attributes: the column's type, e.g. VARCHAR."),
-        "length_precision": text("ER attributes: length or precision, e.g. 10,2."),
-        "not_null": flag("ER attributes: the column is NOT NULL."),
-        "default_value": text("ER attributes: the column's default."),
+        "datatype": text("ER attributes: the column's type, e.g. VARCHAR, or the name of an \
+                          ER domain. ER domains: the type they are based on."),
+        "length_precision": text("ER attributes and domains: length or precision, e.g. 10,2."),
+        "not_null": flag("ER attributes and domains: NOT NULL."),
+        "default_value": text("ER attributes and domains: the default."),
+        "check": text("ER attributes and domains: a condition as SQL (`preis >= 0`; a domain's \
+                       with VALUE), or \"\"."),
+        "auto_increment": flag("ER attributes: the database numbers new rows (AUTO_INCREMENT, \
+                                an identity column)."),
+        "virtual": flag("ER attributes: a derived column whose expression (its default_value) \
+                         is computed when read (VIRTUAL), not stored."),
+        "on_delete": { "type": "string",
+                       "enum": ["", "cascade", "set null", "set default", "restrict", "no action"],
+                       "description": "ER relationships: what their foreign keys do when a \
+                                       referenced row is deleted; \"\" leaves it to the \
+                                       database." },
+        "on_update": { "type": "string",
+                       "enum": ["", "cascade", "set null", "set default", "restrict", "no action"],
+                       "description": "ER relationships: what their foreign keys do when a \
+                                       referenced key changes; \"\" leaves it to the \
+                                       database." },
+        "values": { "type": "array", "items": { "type": "string" },
+                    "description": "ER domains: the values of an enumerated type." },
+        "checks": { "type": "array", "items": { "type": "string" },
+                    "description": "ER entities: conditions on the table's rows as SQL." },
+        "indexes": { "type": "array",
+                     "items": { "type": "object", "properties": {
+                         "name": { "type": "string" },
+                         "columns": { "type": "array", "items": { "type": "string" } },
+                         "unique": { "type": "boolean" } } },
+                     "description": "ER entities: the table's indexes by column names." },
     });
     let structogram_schema = json!({
         "type": "object",
@@ -398,7 +425,9 @@ pub fn list() -> Vec<Value> {
         tool(
             "create_model_element",
             "Creates an element in the model tree only, without showing it, e.g. a class or \
-             package under `owner`. `tool` is a diagram tool name as for `create_element`.",
+             package under `owner`. `tool` is a diagram tool name as for `create_element`, or \
+             `erDomain` for a named column type of ER diagrams (a domain or enumeration, set \
+             with `update_element`), which columns take by its name as their datatype.",
             json!({
                 "owner": id("The package or element to put it in."),
                 "tool": text("The kind, as a diagram tool name (`class`, `package`, …)."),
@@ -1292,6 +1321,16 @@ fn create_model_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let owner = id_arg(args, "owner")?;
     let key = str_arg(args, "tool")?;
     let name = str_arg(args, "name")?.to_owned();
+    if key == "erDomain" {
+        let model = host.document().model();
+        let owner_kind = model.get(owner).ok_or_else(|| format!("no element {owner}"))?.kind();
+        let data = ElementData::new(name, ElementKind::ErDomain(Default::default()));
+        if !owner_kind.can_own(&data.kind) {
+            return Err(format!("a {} cannot own an erDomain", owner_kind.type_name()));
+        }
+        let element = change(host, "create_model_element", |tx| tx.create(owner, data))?;
+        return Ok(Reply::json(summary(host.document().model(), element)));
+    }
     let tool = DIAGRAM_KINDS
         .iter()
         .flat_map(|(_, kind)| palette::palette(*kind))
@@ -1591,7 +1630,7 @@ const ER_NOTATIONS: [(&str, ErNotation); 3] =
 
 /// The settings of the elements of ER diagrams `update_element` takes; `notation` is set on
 /// its own, as switching converts the diagram.
-const ER_KEYS: [&str; 20] = [
+const ER_KEYS: [&str; 28] = [
     "unique",
     "foreign_key",
     "discriminator",
@@ -1612,6 +1651,14 @@ const ER_KEYS: [&str; 20] = [
     "length_precision",
     "not_null",
     "default_value",
+    "check",
+    "values",
+    "checks",
+    "indexes",
+    "auto_increment",
+    "virtual",
+    "on_delete",
+    "on_update",
 ];
 
 /// Writes the ER settings of `args` into `kind`, an entity, attribute, relationship, IS-A or
@@ -1623,6 +1670,22 @@ fn set_er(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
         let flag = || value.as_bool().ok_or_else(|| format!("`{key}` is true or false"));
         let text = || {
             value.as_str().map(|s| s.trim().to_owned()).ok_or_else(|| format!("`{key}` is text"))
+        };
+        let strings = || -> Result<Vec<String>, String> {
+            serde_json::from_value(value.clone()).map_err(|_| format!("`{key}` is a list of texts"))
+        };
+        // A referential action, or "" for none.
+        let action = || -> Result<Option<ErAction>, String> {
+            let text = text()?;
+            if text.is_empty() {
+                return Ok(None);
+            }
+            text.parse().map(Some).map_err(|_| {
+                format!(
+                    "`{key}` is one of cascade, set null, set default, restrict, no action, \"\", \
+                     not `{text}`"
+                )
+            })
         };
         // An id, or "" for none.
         let reference = || -> Result<Option<Id>, String> {
@@ -1674,7 +1737,23 @@ fn set_er(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
             ("length_precision", ElementKind::ErAttribute(p)) => p.length_precision = text()?,
             ("not_null", ElementKind::ErAttribute(p)) => p.not_null = flag()?,
             ("default_value", ElementKind::ErAttribute(p)) => p.default_value = text()?,
+            ("check", ElementKind::ErAttribute(p)) => p.check = text()?,
+            ("auto_increment", ElementKind::ErAttribute(p)) => p.auto_increment = flag()?,
+            ("virtual", ElementKind::ErAttribute(p)) => p.virtual_column = flag()?,
+            ("datatype", ElementKind::ErDomain(p)) => p.datatype = text()?,
+            ("length_precision", ElementKind::ErDomain(p)) => p.length_precision = text()?,
+            ("not_null", ElementKind::ErDomain(p)) => p.not_null = flag()?,
+            ("default_value", ElementKind::ErDomain(p)) => p.default_value = text()?,
+            ("check", ElementKind::ErDomain(p)) => p.check = text()?,
+            ("values", ElementKind::ErDomain(p)) => p.values = strings()?,
+            ("checks", ElementKind::ErEntity(p)) => p.checks = strings()?,
+            ("indexes", ElementKind::ErEntity(p)) => {
+                p.indexes = serde_json::from_value(value.clone())
+                    .map_err(|_| "`indexes` is a list of { name, columns, unique }".to_owned())?;
+            }
             ("identifying", ElementKind::ErRelationship(p)) => p.identifying = flag()?,
+            ("on_delete", ElementKind::ErRelationship(p)) => p.on_delete = action()?,
+            ("on_update", ElementKind::ErRelationship(p)) => p.on_update = action()?,
             ("total", ElementKind::ErIsA(p)) => p.total = flag()?,
             ("disjoint", ElementKind::ErIsA(p)) => {
                 p.disjoint = match text()?.as_str() {
@@ -2412,6 +2491,16 @@ fn export_sql(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
             LeftOut::NoKey { table, target } => {
                 format!("{table} → {target}: {target} has no primary key, no foreign key")
             }
+            LeftOut::Check { table, check } => {
+                format!("{table}: CHECK ({check}) cannot be written in this dialect")
+            }
+            LeftOut::Generated { table, column } => {
+                format!("{table}.{column}: generated in the other dialect, a plain column here")
+            }
+            LeftOut::AutoIncrement { table, column } => format!(
+                "{table}.{column}: MySQL only counts a column that leads the key or is unique, \
+                 no AUTO_INCREMENT"
+            ),
         })
         .collect();
     let mut reply = json!({
@@ -3602,5 +3691,79 @@ mod tests {
             &json!({ "diagram": class["diagram"] }),
         );
         assert!(wrong.is_error);
+    }
+
+    #[test]
+    fn domains_checks_and_indexes_go_into_the_sql() {
+        let mut host = Headless::new();
+        let d = run(
+            &mut host,
+            "create_diagram",
+            json!({ "kind": "entity_relationship", "name": "Shop", "notation": "ie" }),
+        );
+        let d = id(&d["diagram"]);
+        let model = host.document().model();
+        let package = model.get(parse_id(&d).unwrap()).unwrap().owner().unwrap().to_string();
+        let state = run(
+            &mut host,
+            "create_model_element",
+            json!({ "owner": package, "tool": "erDomain", "name": "state" }),
+        );
+        let state = id(&state["id"]);
+        run(&mut host, "update_element", json!({ "id": state, "values": ["open", "paid"] }));
+        let order = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "erEntity", "name": "orders" }),
+        );
+        let order = id(&order["element"]);
+        let no = run(
+            &mut host,
+            "add_member",
+            json!({ "owner": order, "text": "no : int", "key": true }),
+        );
+        let status = run(&mut host, "add_member", json!({ "owner": order, "text": "status" }));
+        let total = run(&mut host, "add_member", json!({ "owner": order, "text": "total : int" }));
+        run(&mut host, "update_element", json!({ "id": id(&no["id"]), "auto_increment": true }));
+        let line = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "erEntity", "name": "lines" }),
+        );
+        let line = id(&line["element"]);
+        let has = run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "erNonIdentifying", "source": order, "target": line }),
+        );
+        let has = id(&has["element"]);
+        let actions = json!({ "id": has, "on_delete": "cascade", "on_update": "SET NULL" });
+        run(&mut host, "update_element", actions);
+        let bad = json!({ "id": has, "on_delete": "drop" });
+        assert!(call(&mut host, &Access::default(), "update_element", &bad).is_error);
+        run(&mut host, "update_element", json!({ "id": id(&status["id"]), "datatype": "state" }));
+        run(&mut host, "update_element", json!({ "id": id(&total["id"]), "check": "total >= 0" }));
+        let indexes = json!([{ "name": "ix_status", "columns": ["status"] }]);
+        run(
+            &mut host,
+            "update_element",
+            json!({ "id": order, "indexes": indexes, "checks": ["no > 0"] }),
+        );
+        let out = run(&mut host, "export_sql", json!({ "diagram": d, "dialect": "postgres" }));
+        let sql = out["sql"].as_str().unwrap();
+        assert!(sql.contains("CREATE TYPE state AS ENUM ('open', 'paid');"), "{sql}");
+        assert!(sql.contains("status state,"), "{sql}");
+        assert!(sql.contains("total int CHECK (total >= 0)"), "{sql}");
+        assert!(sql.contains("CHECK (no > 0)"), "{sql}");
+        assert!(sql.contains("CREATE INDEX ix_status ON orders (status);"), "{sql}");
+        assert!(sql.contains("no int NOT NULL GENERATED BY DEFAULT AS IDENTITY"), "{sql}");
+        assert!(
+            sql.contains("REFERENCES orders (no) ON DELETE CASCADE ON UPDATE SET NULL;"),
+            "{sql}"
+        );
+        let out = run(&mut host, "export_sql", json!({ "diagram": d, "dialect": "mysql" }));
+        let sql = out["sql"].as_str().unwrap();
+        assert!(sql.contains("status enum('open','paid'),"), "{sql}");
+        assert!(sql.contains("no int NOT NULL AUTO_INCREMENT"), "{sql}");
     }
 }

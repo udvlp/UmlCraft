@@ -2886,6 +2886,39 @@ pub fn er_name(e: &Element, physical: bool) -> &str {
     if physical && !physical_name.is_empty() { physical_name } else { e.name() }
 }
 
+/// An attribute's type as the table shows it: a column typed by a domain (an `erDomain` of
+/// that name in a package around it) shows the domain's datatype and length, as Astah does;
+/// a domain without a datatype (an enumerated type) shows its name.
+fn er_resolved(
+    model: &Model,
+    attribute: &Element,
+    mut p: umlcraft_model::ErAttributeProps,
+) -> umlcraft_model::ErAttributeProps {
+    let name = p.datatype.trim();
+    if name.is_empty() {
+        return p;
+    }
+    let mut owner = attribute.owner();
+    while let Some(o) = owner {
+        let domain =
+            model.children(o).iter().filter_map(|&c| model.get(c)).find_map(|c| match c.kind() {
+                ElementKind::ErDomain(d) if c.name().eq_ignore_ascii_case(name) => Some(d),
+                _ => None,
+            });
+        if let Some(d) = domain {
+            if !d.datatype.trim().is_empty() {
+                p.datatype = d.datatype.clone();
+                if p.length_precision.trim().is_empty() {
+                    p.length_precision = d.length_precision.clone();
+                }
+            }
+            return p;
+        }
+        owner = model.get(o).and_then(|e| e.owner());
+    }
+    p
+}
+
 /// An attribute's type as IDEF1X shows it: `VARCHAR (20)`.
 fn er_type(p: &umlcraft_model::ErAttributeProps) -> String {
     match (p.datatype.trim(), p.length_precision.trim()) {
@@ -2945,7 +2978,8 @@ fn layout_er_table(
         _ => None,
     };
     let foreign = |a: &Element| props(a).is_some_and(|p| p.foreign_key.is_some());
-    let kind_text = |a: &Element| props(a).map(|p| er_type(&p)).unwrap_or_default();
+    let kind_text =
+        |a: &Element| props(a).map(|p| er_type(&er_resolved(model, a, p))).unwrap_or_default();
     let all = compartments.iter().flat_map(|(_, rows)| rows.iter());
     let name_w = all
         .clone()
@@ -2983,7 +3017,8 @@ fn layout_er_table(
     let name = if compartments.is_empty() {
         name.place(Rect::new(r.x, r.y + PAD_Y, r.width, h), LabelAlign::Center)
     } else {
-        name.place(Rect::new(r.x, r.y - ER_NAME_GAP - h, w, h), LabelAlign::Left)
+        // At the top of the name band, where Astah's node starts.
+        name.place(Rect::new(r.x, r.y - er_name_band(size), w, h), LabelAlign::Left)
     };
     let mut rows = vec![name];
     let mut separators = Vec::new();
@@ -3319,6 +3354,9 @@ const MIN_CLASSIFIER_HEIGHT: f32 = 30.0;
 /// Astah makes automatically sized classifier boxes this much higher than their content when
 /// they show a compartment below the name; a box with only its name gets nothing extra.
 const AUTO_SIZE_EXTRA_HEIGHT: f32 = 3.0;
+/// The line spacing older Astah versions fitted boxes with (14.13 at 12 px; `Sample.asta`'s
+/// interfaces on the composite structure diagram are 36.27 high for two lines).
+const OLDER_LINE_SPACING: f32 = 1.177_734_4;
 
 /// A class on a composite structure diagram: its stereotypes and bold name centered at the top,
 /// a line below them, and room for its parts below the line. It keeps its size, growing only
@@ -3476,9 +3514,15 @@ fn layout_classifier(
 
     // Italics alone are easy to miss, so abstract classes say it in words as well: UML's
     // `{abstract}` below the name or, as a setting, «abstract» above it. A class with a
-    // stereotype «abstract» of its own says it once, as in Astah.
+    // stereotype «abstract» of its own, or whose name says it (`Person {abstract}`,
+    // `Person <<abstract>>`, as Astah users write it), says it once.
     let is_abstract = matches!(kind, ElementKind::Class(p) if p.is_abstract);
-    let says_so = !style.hide_stereotypes && e.data().stereotypes.iter().any(|s| s == "abstract");
+    let named_so = {
+        let name = e.name().to_lowercase();
+        ["{abstract}", "<<abstract>>", "«abstract»"].iter().any(|s| name.contains(s))
+    };
+    let says_so =
+        named_so || !style.hide_stereotypes && e.data().stereotypes.iter().any(|s| s == "abstract");
     let keyword = is_abstract && !measure.abstract_stereotype() && !says_so;
     let mut stereotypes: Vec<String> = match kind {
         ElementKind::Interface(_) => vec!["interface".into()],
@@ -3593,12 +3637,27 @@ fn layout_classifier(
     // A box sized automatically whose stored height is that of its content keeps its stored
     // width and only widens around its center. One whose content changed since (other
     // members, another font size) Astah fits anew, also narrower, around its stored center.
-    let stale = style.auto_size && !fit && (fitted_h - bounds.height).abs() > 0.5;
+    // One fitted by an older Astah, with its smaller line spacing, Astah draws as stored.
+    let shorter: f32 = header
+        .iter()
+        .chain(compartments.iter().flatten())
+        .map(|l| l.size * (LINE_SPACING - OLDER_LINE_SPACING))
+        .sum();
+    let older = style.auto_size
+        && !fit
+        && (fitted_h - bounds.height).abs() > 0.5
+        && (fitted_h - shorter - bounds.height).abs() <= 0.5;
+    let stale = style.auto_size && !fit && !older && (fitted_h - bounds.height).abs() > 0.5;
     let width = if refit && !fit && !stale { bounds.width.max(width) } else { width };
     // A box whose content no longer fits its stored height grows as if fitted: 3 below the
     // content (`CD_Dokus.asta`, `Serial_kurz` at 14 px).
-    let height =
-        if fit || stale || content_h > bounds.height + 0.5 { fitted_h } else { bounds.height };
+    let height = if older {
+        bounds.height
+    } else if fit || stale || content_h > bounds.height + 0.5 {
+        fitted_h
+    } else {
+        bounds.height
+    };
     let c = bounds.center();
     let r = if stale {
         Rect::new(c.x - width / 2.0, c.y - height / 2.0, width, height)
@@ -4988,6 +5047,24 @@ mod tests {
         assert_eq!(header(doc.model(), &Stereotype), once);
         let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
         assert!(!scene.node(node).unwrap().rows.iter().any(|r| r.text == "{abstract}"));
+        // So does a name that says it.
+        for name in ["Shape {abstract}", "Shape <<abstract>>", "Shape «Abstract»"] {
+            doc.edit("name", |tx| {
+                tx.update(class, |data| {
+                    data.name = name.into();
+                    data.stereotypes.clear();
+                })
+            })
+            .unwrap();
+            let rows = header(doc.model(), &ApproxMeasure);
+            assert_eq!(rows.first(), Some(&(name.to_owned(), true)), "{name}");
+            for measure in [&ApproxMeasure as &dyn TextMeasure, &Stereotype] {
+                let scene = build(doc.model(), d, &Preview::default(), measure);
+                let rows = &scene.node(node).unwrap().rows;
+                assert!(!rows.iter().any(|r| r.text.ends_with("abstract}") && r.text != name));
+                assert!(!rows.iter().any(|r| r.text == "<<abstract>>"), "{name}");
+            }
+        }
     }
 
     #[test]

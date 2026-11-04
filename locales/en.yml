@@ -459,6 +459,11 @@ prop:
   er_length_precision: Length/precision
   er_not_null: NOT NULL
   er_unique: Unique
+  er_check: Condition (CHECK)
+  er_checks: Conditions (CHECK), one per line
+  er_indexes: Indexes, one per line
+  er_indexes_placeholder: "UNIQUE ix_name (column_a, column_b)"
+  er_values: Values (enumeration), comma-separated
   er_foreign_key: Foreign key of
   er_unnamed: (unnamed relationship)
   er_notation: Notation
@@ -477,6 +482,16 @@ prop:
   er_disjoint_yes: Disjoint (d)
   er_disjoint_no: Overlapping (o)
   er_database: Database
+  er_auto_increment: Numbered by the database (AUTO_INCREMENT)
+  er_virtual: Computed when read (VIRTUAL), not stored
+  er_on_delete: On delete
+  er_on_update: On update
+  er_action_default: Database default
+  er_action_cascade: CASCADE
+  er_action_set_null: SET NULL
+  er_action_set_default: SET DEFAULT
+  er_action_restrict: RESTRICT
+  er_action_no_action: NO ACTION
 template_kind:
   type: type
   value: value
@@ -593,6 +608,9 @@ export_dropped:
   erAssociativeEntity: Associative entities (exported as entities)
   erCompositeAttribute: Composite attributes (their parts exported as columns)
   erUnique: UNIQUE of columns
+  erCheck: Conditions (CHECK)
+  erEnumeration: Values of enumeration domains
+  erIndex: Indexes without columns the table has
   erDerived: Derived attributes (exported as columns)
   erMultivalued: Multivalued attributes (exported as columns)
   erDisjoint: Disjoint or overlapping subtypes
@@ -799,6 +817,7 @@ kind:
   erIsA: IS-A
   erParticipation: Participation
   erSubtyping: Subtyping
+  erDomain: Domain
   callBehavior: Call behavior action
   sendSignal: Send signal action
   acceptEvent: Accept event action
@@ -981,3 +1000,6 @@ sql:
   export_done: "%{file}: %{tables} tables, %{foreign_keys} foreign keys"
   export_multivalued: "%{table}.%{attribute}: multivalued attribute, no column"
   export_no_key: "%{table} → %{target}: %{target} has no primary key, so no foreign key"
+  export_check: "%{table}: CHECK (%{check}) cannot be written in this dialect"
+  export_generated: "%{table}.%{column}: generated in the other dialect, a plain column here"
+  export_auto_increment: "%{table}.%{column}: MySQL only counts a column that leads the key or is unique, so no AUTO_INCREMENT"

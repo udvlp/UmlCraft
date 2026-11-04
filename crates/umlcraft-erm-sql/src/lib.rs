@@ -16,6 +16,7 @@ pub mod ir;
 pub mod map;
 pub mod parse;
 pub mod split;
+pub mod translate;
 
 pub use ddl::{Ddl, LeftOut, ddl, imported_dialect};
 pub use dialect::Dialect;

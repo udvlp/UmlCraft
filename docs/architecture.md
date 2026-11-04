@@ -385,9 +385,13 @@ value text); links (`ULinkImp`) have no owner in Astah and go into the package o
 object, their ends' navigability and aggregation come from the tagged values
 `object_navigable_type` and `object_aggregation_kind`.
 Astah's ER model (`map/er.rs`) becomes a package with its schemas and ER packages; its
-datatype and domain models are left out (a column typed by a domain gets the domain's
-datatype). Entities and columns bring their logical and physical names, keys, `NOT NULL`,
-defaults, `UNIQUE` and lengths from the entity's constraints and tags; relationships their
+datatype model is left out, its domains become `erDomain`s of that package (named by their
+physical name, with datatype, length, default and `NOT NULL`), and a column typed by a
+domain names it as its
+datatype. Entities and columns bring their logical and physical names, keys, `NOT NULL`,
+defaults, `UNIQUE` and lengths from the entity's constraints and tags (those constraints do
+not stay as constraints), entities their indexes other than Astah's own for keys and
+relationships (`erIndexes`, columns by physical name); relationships their
 participations from the ends' multiplicities, verb phrases as roles, `identifying` (the
 child weak); subtype relationships one IS-A per supertype and group (`conclusive` → total,
 discriminator). Foreign key columns are resolved once all relationships exist. ER diagrams
@@ -640,8 +644,10 @@ through its official API (`astah-api.jar`):
   (`without_structograms`) and counted as dropped.
 - ER diagrams: packages holding only ER content go into Astah's ER model
   (`ERModelEditor.createERModel`, numbered when a UML package already has its name), entities
-  into its default schema. Columns are created with their key, `NOT NULL`, default, length and
-  datatype (Astah's, found by name, or a new one); foreign key columns are not created, Astah
+  into its default schema, domains first (`createERDomain`: datatype, length, `NOT NULL`,
+  default), indexes last (`createERIndex`). Columns are created with their key, `NOT NULL`,
+  default, length and datatype (a domain of that name, else Astah's datatype found by name,
+  else a new one); foreign key columns are not created, Astah
   makes them when the relationship is (`createIdentifyingRelationship`,
   `createNonIdentifyingRelationship`, `createMultiToMultiRelationship`, with parent required,
   cardinality and verb phrases), and the export gives them UmlCraft's names. Subtypes become
@@ -649,8 +655,8 @@ through its official API (`astah-api.jar`):
   (`createSubtypeRelationshipGroup`). Diagrams get notation, display level and model type;
   nodes are placed one name band higher and that much taller, as Astah's bounds include the
   name. Chen diagrams are exported in IE (`erChenNotation`); relationships of more than two
-  entities or with attributes, `UNIQUE` (no API call) and disjointness are reported as
-  dropped.
+  entities or with attributes, `UNIQUE` and `CHECK` (no API call), the values of an
+  enumeration domain and disjointness are reported as dropped.
 - System boundaries, which Astah does not have, become what Astah users draw instead: a
   rectangle (`createRect`) and the name as a text (`createText`) centered at its top. The
   importer turns a rectangle on a use case diagram back into a boundary, named by the text
@@ -867,8 +873,14 @@ diagrams from SQL dumps and writes them back as SQL.
   `erRelationship`, `erIsA`, `erParticipation`, `erSubtyping`). An entity has `weak`,
   `associative` and its `physicalName`; an attribute its `key` (primary or partial),
   `derived`, `multivalued` and the database properties named as in Astah's ER model
-  (`physicalName`, `datatype`, `lengthPrecision`, `notNull`, `defaultValue`; kept, not drawn);
-  a relationship `identifying`; an IS-A `total` and `disjoint` (none, d, o). An attribute is
+  (`physicalName`, `datatype`, `lengthPrecision`, `notNull`, `defaultValue`, `check`; kept,
+  not drawn), and `autoIncrement` and `virtualColumn` (a derived column computed when read);
+  an entity's `checks` (conditions on its rows) and `indexes` (name, column names,
+  `unique`); a relationship `identifying` and its foreign keys' `onDelete` and `onUpdate`
+  (`ErAction`: cascade, set null, set default, restrict, no action); an IS-A `total` and `disjoint` (none, d, o). An
+  `erDomain` is a named column type in a package, not drawn: `datatype`, `lengthPrecision`,
+  `values` (an enumerated type), `notNull`, `defaultValue` and `check` (on `VALUE`); a column
+  names it as its `datatype`. An attribute is
   owned by what it describes (an entity, a relationship or, composite, another attribute), so
   deleting the owner takes it along; its line is an edge showing the attribute, drawn from
   the owner, like a containment line. A participation is owned by its relationship (or
@@ -955,7 +967,8 @@ diagrams from SQL dumps and writes them back as SQL.
   `ErKeys` and `ErColumns` for hit tests and new rows; `(FK)` after foreign key columns,
   aligned in a column (`ER_COLUMN_GAP`, `ER_FOREIGN_KEY_GAP`); rounded corners for weak
   entities. As in Astah, the node's bounds include the name band (`er_name_band`), so lines
-  end above the name. A binary relationship without attributes of its own is one edge on the
+  end above the name, and the name stands at its top. A column typed by a domain shows the
+  domain's datatype and length (`er_resolved`), one of an enumerated type its name. A binary relationship without attributes of its own is one edge on the
   `ErRelationship` from the parent (the "one" side) to the child, dashed when it is not
   identifying and the parent is optional; its participations stay in the model and give the
   ends: IE markers for one, zero or one, one or more, zero or more; IDEF1X a diamond at an
@@ -998,8 +1011,10 @@ into ER elements of the model. Its rules are written down in the comments of `ma
   only a few statements matter and a dump's many options must not cost a table. It reads
   `CREATE TABLE` (columns with their type as written, NOT NULL, default, comment, generated;
   inline and table keys and references; `PARTITION OF`), `ALTER TABLE … ADD` keys, references
-  and columns, `ATTACH PARTITION`, `CREATE UNIQUE INDEX` on plain columns, `COMMENT ON TABLE |
-  COLUMN`, `USE`/`CREATE DATABASE` for the name and `CREATE VIEW` (older mysqldumps write a
+  and columns, `CHECK` on columns and tables, MySQL's `KEY`/`INDEX` lines, `CREATE [UNIQUE]
+  INDEX` on plain columns, `CREATE DOMAIN` and `CREATE TYPE … AS ENUM` (`Schema.types`),
+  `ATTACH PARTITION`, `COMMENT ON TABLE | COLUMN | TYPE | DOMAIN`, `USE`/`CREATE DATABASE`
+  for the name and `CREATE VIEW` (older mysqldumps write a
   placeholder table for each view first). Everything else is counted by its first words;
   what cannot be read becomes a `Problem` with its line and costs only itself. A statement
   that is not UTF-8 is read as Windows-1252. Partitions are folded into their parent.
@@ -1013,6 +1028,11 @@ into ER elements of the model. Its rules are written down in the comments of `ma
   is `[0,m]`. A relationship is named after
   the foreign key column without `_id` and the like, "hat" if that only repeats the target
   table; a self reference carries a role. A missing target becomes a placeholder entity.
+  Columns keep the table's order, foreign key columns included, since a primary key follows
+  it. Domains and enumerated types become `erDomain`s of the package, and columns of such a
+  type name them; `CHECK`s become the column's `check` or the entity's `checks`, indexes the
+  entity's `indexes` (except one that only repeats a foreign key's columns, which MySQL makes
+  on its own), a `UNIQUE` of several columns a unique index.
   Options: all attributes, keys only or none, and the schemas to take. The `Report` counts
   tables, entities, relationships, attributes and skipped statements and lists hints and
   problems. `map` creates a package named after the database (or the file) with an ER
@@ -1048,7 +1068,22 @@ counts the tables and foreign keys and lists what it `left_out`.
   with an expression (the import keeps a generated column's expression as its default) is a
   generated column. Comments go inline in MySQL and as `COMMENT ON` in PostgreSQL. Names
   are quoted only where they must be: not plain, a reserved word, and in PostgreSQL with
-  capitals.
+  capitals. A column's `check` and the entity's `checks` are `CHECK`s, its `indexes`
+  `CREATE [UNIQUE] INDEX` statements after the tables.
+- **Domains.** The `erDomain`s in the packages of the shown entities and the packages around
+  them that a column names go first: PostgreSQL gets `CREATE TYPE … AS ENUM` or `CREATE
+  DOMAIN`, MySQL the domain's type (`enum(…)`), `NOT NULL`, default and check in each column
+  (`VALUE` → the column's name). A MySQL `enum` column becomes a PostgreSQL type
+  `{table}_{column}`.
+- **Dialects** (`translate`). The import names the dialect of a dump in the package; SQL for
+  the other family (MySQL/MariaDB ↔ PostgreSQL) translates types by table (`datatype`:
+  `tinyint(1)` → `boolean`, `bytea` → `longblob`, `blob` → `bytea`, `timestamp with time
+  zone` → `timestamp`, `double` ↔ `double precision` …); a drawn diagram (no dialect) keeps
+  names both know.
+  Conditions are translated where that is safe (`= ANY (ARRAY[…])` → `IN (…)`, casts and
+  `~~` → `LIKE` to MySQL, backticks and `_utf8mb4` introducers to PostgreSQL); a condition
+  that keeps something foreign is left out (`LeftOut::Check`), and a generated column for
+  the other family becomes a plain one (`LeftOut::Generated`).
 - **Foreign keys** come last as `ALTER TABLE … ADD CONSTRAINT`, so the order of the tables
   does not matter. Foreign key columns the model has (from a dump, Astah or the IE and IDEF1X
   tools) reference the columns of the other table they are named after (`gate_nummer` →
@@ -1063,8 +1098,13 @@ counts the tables and foreign keys and lists what it `left_out`.
   associative entity has one). A subtype references its supertype, with the supertype's key
   as its own when it has none.
 - **Tests.** Each of the five fixture systems goes dump → ER → SQL → ER and gives the same
-  model again (`tests/ddl.rs`); a drawn Chen diagram without foreign key columns gets each
-  kind of foreign key (`ddl::tests`), and the SQL reads back without a problem.
+  model again (`tests/ddl.rs`), types, conditions, uniqueness, indexes and domains included;
+  PostgreSQL to MySQL and MySQL/MariaDB to PostgreSQL give the same tables, keys and
+  relationships. A drawn Chen diagram without foreign key columns gets each kind of foreign
+  key (`ddl::tests`), and the SQL reads back without a problem. With `UMLCRAFT_DDL_OUT=DIR`
+  the tests of `tests/ddl.rs` write their SQL there, to load it into a real server: a
+  MySQL 9.7 started on its own (`mysqld --initialize-insecure` into an empty folder, then
+  on another port) takes all of them.
 
 ## MCP server
 

@@ -339,6 +339,15 @@ pub fn export_text(ddl: &Ddl, file: &str) -> (String, Vec<String>) {
             LeftOut::NoKey { table, target } => {
                 t!("sql.export_no_key", table = table, target = target)
             }
+            LeftOut::Check { table, check } => {
+                t!("sql.export_check", table = table, check = check)
+            }
+            LeftOut::Generated { table, column } => {
+                t!("sql.export_generated", table = table, column = column)
+            }
+            LeftOut::AutoIncrement { table, column } => {
+                t!("sql.export_auto_increment", table = table, column = column)
+            }
         })
         .map(|text| text.to_string())
         .collect();

@@ -1221,7 +1221,7 @@ impl Builder<'_, '_> {
         let d = self.diagram(owner, "Database", DiagramKind::EntityRelationship)?;
         let entity = |weak| ElementKind::ErEntity(ErEntityProps { weak, ..Default::default() });
         let relationship =
-            |identifying| ElementKind::ErRelationship(ErRelationshipProps { identifying });
+            |identifying| ElementKind::ErRelationship(ErRelationshipProps::new(identifying));
         let attribute = |key, derived, multivalued| {
             ElementKind::ErAttribute(ErAttributeProps {
                 key,

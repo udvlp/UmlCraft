@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use indexmap::IndexMap;
+use umlcraft_model::ErAction;
 
 use crate::dialect::Dialect;
 
@@ -45,6 +46,8 @@ pub struct Schema {
     pub dialect: Dialect,
     /// In the order of the dump.
     pub tables: IndexMap<TableKey, Table>,
+    /// PostgreSQL's domains and enumerated types, in the order of the dump.
+    pub types: IndexMap<TableKey, UserType>,
     /// The database's name, if the dump names it (header, `USE`, `CREATE DATABASE`).
     pub database: Option<String>,
     /// Statements that were not needed, counted by their first words (`INSERT INTO`).
@@ -62,6 +65,7 @@ impl Schema {
         Self {
             dialect,
             tables: IndexMap::new(),
+            types: IndexMap::new(),
             database: None,
             skipped: BTreeMap::new(),
             problems: Vec::new(),
@@ -107,6 +111,10 @@ pub struct Table {
     pub primary_key: Vec<String>,
     pub uniques: Vec<Vec<String>>,
     pub foreign_keys: Vec<ForeignKey>,
+    /// `CHECK` constraints of the table, their conditions as written.
+    pub checks: Vec<String>,
+    /// Indexes that are not unique (those are in `uniques`).
+    pub indexes: Vec<Index>,
     pub comment: Option<String>,
 }
 
@@ -119,6 +127,8 @@ impl Table {
             primary_key: Vec::new(),
             uniques: Vec::new(),
             foreign_keys: Vec::new(),
+            checks: Vec::new(),
+            indexes: Vec::new(),
             comment: None,
         }
     }
@@ -144,6 +154,32 @@ pub struct Column {
     pub comment: Option<String>,
     /// `GENERATED ALWAYS AS (…)` or MySQL's `AS (…)`; identity columns are not.
     pub generated: bool,
+    /// A generated column without `STORED`: computed when read.
+    pub virtual_column: bool,
+    /// `AUTO_INCREMENT`, an identity column, a `serial` or a default from a sequence.
+    pub auto_increment: bool,
+    /// The condition of a `CHECK` written with the column.
+    pub check: Option<String>,
+}
+
+/// An index: `CREATE INDEX`, or MySQL's `KEY`/`INDEX` in the table.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Index {
+    pub name: String,
+    pub columns: Vec<String>,
+}
+
+/// `CREATE DOMAIN` or `CREATE TYPE … AS ENUM`.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct UserType {
+    /// The type a domain is based on as written; empty for an enumeration.
+    pub datatype: String,
+    /// The values of an enumeration.
+    pub values: Vec<String>,
+    pub not_null: bool,
+    pub default: Option<String>,
+    pub check: Option<String>,
+    pub comment: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -152,6 +188,8 @@ pub struct ForeignKey {
     pub target: TableKey,
     /// Empty when the reference names no columns (it means the primary key).
     pub target_columns: Vec<String>,
+    pub on_delete: Option<ErAction>,
+    pub on_update: Option<ErAction>,
 }
 
 /// Something the parser could not read.

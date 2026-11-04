@@ -16,10 +16,10 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
     ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Cardinality, Color,
-    DiagramKind, ElementData, ElementKind, ErDisplay, ErKey, ErNotation, Id, InstanceKind,
-    InstanceProps, InteractionOperator, LifelineProps, LinkEnd, LinkProps, MessageSort, Model,
-    Multiplicity, Navigability, ObjectEffect, ObjectOrdering, ParameterDirections, Presentation,
-    Shape, Style, TemplateParameterKind, TypeRef, Visibility,
+    DiagramKind, ElementData, ElementKind, ErAction, ErDisplay, ErIndex, ErKey, ErNotation, Id,
+    InstanceKind, InstanceProps, InteractionOperator, LifelineProps, LinkEnd, LinkProps,
+    MessageSort, Model, Multiplicity, Navigability, ObjectEffect, ObjectOrdering,
+    ParameterDirections, Presentation, Shape, Style, TemplateParameterKind, TypeRef, Visibility,
 };
 use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
@@ -107,6 +107,13 @@ enum Field {
     Datatype,
     LengthPrecision,
     Cardinality,
+    /// An ER attribute's or domain's condition.
+    ErCheck,
+    /// An ER domain's values, comma-separated.
+    ErValues,
+    /// An ER entity's conditions and indexes, one per line.
+    ErChecks,
+    ErIndexes,
 }
 
 /// Inputs for one association end.
@@ -163,10 +170,19 @@ pub struct PropertiesPanel {
     length_precision: Entity<InputState>,
     /// ER participations: how often the entity takes part, `[0,n]`.
     cardinality: Entity<InputState>,
+    /// ER attributes and domains: their condition; domains: their values.
+    er_check: Entity<InputState>,
+    er_values: Entity<InputState>,
+    /// ER entities: their conditions and indexes, one per line.
+    er_checks: Entity<TextareaState>,
+    er_indexes: Entity<TextareaState>,
     /// ER attributes: no key, key or partial key.
     er_key: Entity<Choice>,
     /// IS-A: subtypes not stated, disjoint or overlapping.
     disjoint: Entity<Choice>,
+    /// ER relationships: what their foreign keys do on deleting and updating.
+    on_delete: Entity<Choice>,
+    on_update: Entity<Choice>,
     /// ER diagrams: Chen, IE or IDEF1X, and what IE and IDEF1X tables list.
     er_notation: Entity<Choice>,
     er_display: Entity<Choice>,
@@ -254,6 +270,29 @@ fn er_display_items() -> Vec<SharedString> {
     ["prop.er_display_attributes", "prop.er_display_keys", "prop.er_display_name"]
         .map(|k| t!(k).to_string().into())
         .to_vec()
+}
+
+/// A foreign key's actions: the database's default, then SQL's.
+const ER_ACTIONS: [Option<ErAction>; 6] = [
+    None,
+    Some(ErAction::Cascade),
+    Some(ErAction::SetNull),
+    Some(ErAction::SetDefault),
+    Some(ErAction::Restrict),
+    Some(ErAction::NoAction),
+];
+
+fn er_action_items() -> Vec<SharedString> {
+    [
+        "prop.er_action_default",
+        "prop.er_action_cascade",
+        "prop.er_action_set_null",
+        "prop.er_action_set_default",
+        "prop.er_action_restrict",
+        "prop.er_action_no_action",
+    ]
+    .map(|k| t!(k).to_string().into())
+    .to_vec()
 }
 
 fn disjoint_items() -> Vec<SharedString> {
@@ -471,8 +510,19 @@ impl PropertiesPanel {
         let datatype = cx.new(|cx| InputState::new(window, cx).placeholder("VARCHAR"));
         let length_precision = cx.new(|cx| InputState::new(window, cx).placeholder("10,2"));
         let cardinality = cx.new(|cx| InputState::new(window, cx).placeholder("[0,n]"));
+        let er_check = cx.new(|cx| InputState::new(window, cx).placeholder("preis >= 0"));
+        let er_values = cx.new(|cx| InputState::new(window, cx).placeholder("rot, grün, blau"));
+        let er_checks = cx
+            .new(|cx| TextareaState::new(window, cx).auto_grow(1, 8).placeholder("ende > beginn"));
+        let er_indexes = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(1, 8)
+                .placeholder(t!("prop.er_indexes_placeholder"))
+        });
         let er_key = cx.new(|cx| SelectState::new(er_key_items(), None, window, cx));
         let disjoint = cx.new(|cx| SelectState::new(disjoint_items(), None, window, cx));
+        let on_delete = cx.new(|cx| SelectState::new(er_action_items(), None, window, cx));
+        let on_update = cx.new(|cx| SelectState::new(er_action_items(), None, window, cx));
         let er_notation = cx.new(|cx| SelectState::new(er_notation_items(), None, window, cx));
         let er_display = cx.new(|cx| SelectState::new(er_display_items(), None, window, cx));
         let parameter_kind =
@@ -520,10 +570,23 @@ impl PropertiesPanel {
         watch(&datatype, Field::Datatype, cx);
         watch(&length_precision, Field::LengthPrecision, cx);
         watch(&cardinality, Field::Cardinality, cx);
+        watch(&er_check, Field::ErCheck, cx);
+        watch(&er_values, Field::ErValues, cx);
         for (i, end) in ends.iter().enumerate() {
             watch(&end.role, Field::Role(i), cx);
             watch(&end.multiplicity, Field::Multiplicity(i), cx);
             watch(&end.constraints, Field::Constraints(i), cx);
+        }
+        for (state, field) in [(&er_checks, Field::ErChecks), (&er_indexes, Field::ErIndexes)] {
+            subscriptions.push(cx.subscribe_in(
+                state,
+                window,
+                move |this, _, ev: &InputEvent, _, cx| {
+                    if !matches!(ev, InputEvent::PressEnter { .. }) {
+                        this.on_input(field, ev, cx);
+                    }
+                },
+            ));
         }
         subscriptions.push(cx.subscribe_in(&text, window, |this, _, ev: &InputEvent, _, cx| {
             // Enter makes a new line in the text area; only leaving it commits.
@@ -733,6 +796,27 @@ impl PropertiesPanel {
                 });
             },
         ));
+        for (state, delete) in [(&on_delete, true), (&on_update, false)] {
+            subscriptions.push(cx.subscribe_in(
+                state,
+                window,
+                move |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                    let Some(a) = selected(state, cx).and_then(|ix| ER_ACTIONS.get(ix).copied())
+                    else {
+                        return;
+                    };
+                    this.apply_shown(cx, move |data| {
+                        if let ElementKind::ErRelationship(p) = &mut data.kind {
+                            if delete {
+                                p.on_delete = a;
+                            } else {
+                                p.on_update = a;
+                            }
+                        }
+                    });
+                },
+            ));
+        }
         subscriptions.push(cx.subscribe_in(
             &directions,
             window,
@@ -824,8 +908,14 @@ impl PropertiesPanel {
             datatype,
             length_precision,
             cardinality,
+            er_check,
+            er_values,
+            er_checks,
+            er_indexes,
             er_key,
             disjoint,
+            on_delete,
+            on_update,
             er_notation,
             er_display,
             parameter_kind,
@@ -1048,6 +1138,9 @@ impl PropertiesPanel {
                     ElementKind::ErAttribute(p) if field == Field::Default => {
                         p.default_value = text;
                     }
+                    ElementKind::ErDomain(p) if field == Field::Default => {
+                        p.default_value = text;
+                    }
                     _ => {}
                 });
             }
@@ -1067,7 +1160,47 @@ impl PropertiesPanel {
                         Field::Datatype => p.datatype = value,
                         _ => p.length_precision = value,
                     },
+                    ElementKind::ErDomain(p) => match field {
+                        Field::Datatype => p.datatype = value,
+                        Field::LengthPrecision => p.length_precision = value,
+                        _ => {}
+                    },
                     _ => {}
+                });
+            }
+            Field::ErCheck | Field::ErValues => {
+                let state = if field == Field::ErCheck { &self.er_check } else { &self.er_values };
+                let value = Self::value(state, cx);
+                self.apply(id, cx, move |data| match &mut data.kind {
+                    ElementKind::ErAttribute(p) if field == Field::ErCheck => p.check = value,
+                    ElementKind::ErDomain(p) if field == Field::ErCheck => p.check = value,
+                    ElementKind::ErDomain(p) => {
+                        p.values = value
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|v| !v.is_empty())
+                            .map(str::to_owned)
+                            .collect();
+                    }
+                    _ => {}
+                });
+            }
+            Field::ErChecks | Field::ErIndexes => {
+                let state =
+                    if field == Field::ErChecks { &self.er_checks } else { &self.er_indexes };
+                let text = state.read(cx).value().to_string();
+                let lines: Vec<&str> =
+                    text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+                let checks: Vec<String> = lines.iter().map(|l| (*l).to_owned()).collect();
+                let indexes: Vec<ErIndex> = lines.iter().filter_map(|l| parse_index(l)).collect();
+                self.apply(id, cx, move |data| {
+                    if let ElementKind::ErEntity(p) = &mut data.kind {
+                        if field == Field::ErChecks {
+                            p.checks = checks;
+                        } else {
+                            p.indexes = indexes;
+                        }
+                    }
                 });
             }
             Field::Cardinality => {
@@ -1490,9 +1623,22 @@ impl PropertiesPanel {
                 );
             }
             ElementKind::ErEntity(p) => {
-                set(&self.physical_name, p.physical_name.clone(), window, cx)
+                set(&self.physical_name, p.physical_name.clone(), window, cx);
+                let checks = p.checks.join("\n");
+                let indexes: Vec<String> = p.indexes.iter().map(index_text).collect();
+                let indexes = indexes.join("\n");
+                self.er_checks.update(cx, |s, cx| s.set_value(checks, window, cx));
+                self.er_indexes.update(cx, |s, cx| s.set_value(indexes, window, cx));
+            }
+            ElementKind::ErDomain(p) => {
+                set(&self.datatype, p.datatype.clone(), window, cx);
+                set(&self.length_precision, p.length_precision.clone(), window, cx);
+                set(&self.default, p.default_value.clone(), window, cx);
+                set(&self.er_check, p.check.clone(), window, cx);
+                set(&self.er_values, p.values.join(", "), window, cx);
             }
             ElementKind::ErAttribute(p) => {
+                set(&self.er_check, p.check.clone(), window, cx);
                 set(&self.physical_name, p.physical_name.clone(), window, cx);
                 set(&self.datatype, p.datatype.clone(), window, cx);
                 set(&self.length_precision, p.length_precision.clone(), window, cx);
@@ -1509,6 +1655,14 @@ impl PropertiesPanel {
             ElementKind::ErIsA(p) => {
                 let d = DISJOINT.iter().position(|&d| d == p.disjoint);
                 choose(&self.disjoint, d, locale_changed.then(disjoint_items), window, cx);
+            }
+            ElementKind::ErRelationship(p) => {
+                for (state, action) in
+                    [(&self.on_delete, p.on_delete), (&self.on_update, p.on_update)]
+                {
+                    let a = ER_ACTIONS.iter().position(|&a| a == action);
+                    choose(state, a, locale_changed.then(er_action_items), window, cx);
+                }
             }
             ElementKind::ErParticipation(p) => {
                 let c = p.cardinality.map(|c| c.to_string()).unwrap_or_default();
@@ -1605,6 +1759,35 @@ fn delete_button(
 }
 
 /// A checkbox that flips one boolean of the element via `set`.
+/// An index as the panel lists it: `UNIQUE name (a, b)`.
+fn index_text(i: &ErIndex) -> String {
+    let unique = if i.unique { "UNIQUE " } else { "" };
+    let name = if i.name.is_empty() { String::new() } else { format!("{} ", i.name) };
+    format!("{unique}{name}({})", i.columns.join(", "))
+}
+
+/// A line of the indexes field: `[UNIQUE] [name] (a, b)`; without columns it is none.
+fn parse_index(line: &str) -> Option<ErIndex> {
+    let (head, rest) = line.split_once('(')?;
+    let columns: Vec<String> = rest
+        .trim_end()
+        .trim_end_matches(')')
+        .split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if columns.is_empty() {
+        return None;
+    }
+    let mut head = head.trim();
+    let unique = head.len() >= 6 && head[..6].eq_ignore_ascii_case("unique");
+    if unique {
+        head = head[6..].trim();
+    }
+    Some(ErIndex { name: head.to_owned(), columns, unique })
+}
+
 fn flag(
     id: &'static str,
     label: String,
@@ -1879,6 +2062,7 @@ impl PropertiesPanel {
             | ElementKind::ErAttribute(_)
             | ElementKind::ErRelationship(_)
             | ElementKind::ErIsA(_)
+            | ElementKind::ErDomain(_)
             | ElementKind::ErParticipation(_) => self.er_options(body, kind, id, cx),
             _ => self.behavior_options(body, kind, id, model, cx),
         }
@@ -2251,7 +2435,35 @@ impl PropertiesPanel {
                             })
                     })
                     .child(heading(t!("prop.er_database").to_string()))
-                    .child(input("prop.er_physical_name", &self.physical_name));
+                    .child(input("prop.er_physical_name", &self.physical_name))
+                    .child(field(
+                        t!("prop.er_checks").into(),
+                        Textarea::new(&self.er_checks).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.er_indexes").into(),
+                        Textarea::new(&self.er_indexes).small().into_any_element(),
+                    ));
+            }
+            ElementKind::ErDomain(p) => {
+                body = body
+                    .child(input("prop.er_datatype", &self.datatype))
+                    .child(input("prop.er_length_precision", &self.length_precision))
+                    .child(input("prop.er_values", &self.er_values))
+                    .child(input("prop.er_default_value", &self.default))
+                    .child(flag(
+                        "er-domain-not-null",
+                        t!("prop.er_not_null").into(),
+                        p.not_null,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErDomain(p) = &mut d.kind {
+                                p.not_null = v;
+                            }
+                        },
+                    ))
+                    .child(input("prop.er_check", &self.er_check));
             }
             ElementKind::ErAttribute(p) => {
                 body = body
@@ -2311,7 +2523,35 @@ impl PropertiesPanel {
                                 p.unique = v;
                             }
                         },
+                    ))
+                    .child(flag(
+                        "er-auto-increment",
+                        t!("prop.er_auto_increment").into(),
+                        p.auto_increment,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErAttribute(p) = &mut d.kind {
+                                p.auto_increment = v;
+                            }
+                        },
+                    ))
+                    .child(input("prop.er_check", &self.er_check));
+                // A derived column's expression is its default: stored or computed when read.
+                if p.derived {
+                    body = body.child(flag(
+                        "er-virtual",
+                        t!("prop.er_virtual").into(),
+                        p.virtual_column,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::ErAttribute(p) = &mut d.kind {
+                                p.virtual_column = v;
+                            }
+                        },
                     ));
+                }
                 // A foreign key column: of which relationship, by its name.
                 let model = self.workspace.read(cx).doc.model();
                 if let Some(by) = p.foreign_key.and_then(|r| model.get(r)) {
@@ -2337,7 +2577,17 @@ impl PropertiesPanel {
                             cx.notify();
                         });
                     });
-                body = body.child(identifying);
+                body = body
+                    .child(identifying)
+                    .child(heading(t!("prop.er_database").to_string()))
+                    .child(field(
+                        t!("prop.er_on_delete").into(),
+                        Select::new(&self.on_delete).small().into_any_element(),
+                    ))
+                    .child(field(
+                        t!("prop.er_on_update").into(),
+                        Select::new(&self.on_update).small().into_any_element(),
+                    ));
             }
             ElementKind::ErIsA(p) => {
                 body = body

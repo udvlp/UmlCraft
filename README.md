@@ -30,7 +30,7 @@ between releases is in the [changelog](CHANGELOG.md).
 | State machine | States with entry, do, exit and internal transitions, composite states, orthogonal states with regions one below the other or side by side, final states, initial, choice, junction, fork, join and history pseudostates, submachine states standing for another state machine (`include / Machine`), entry and exit points on the border of a state or the frame, stub states in submachine states, transitions labeled `trigger [guard] / effect`. A state dragged into another state or region becomes part of it |
 | Component and deployment | Components, artifacts and nodes with their icons, objects and instances, deployments |
 | Composite structure | The inside of a class or component: parts `name : Type [m]` drawn in it, ports on the border of the class and of typed parts, connectors between parts and ports, realizations and dependencies from ports to interfaces, which can be drawn as a circle or, when required, as a socket. A part dragged over its class's border takes the border along, and ports stay on their border when it moves or changes size |
-| Entity-relationship | Chen, IE (crow's feet) or IDEF1X, switched per diagram, which converts it and keeps the entities in place. IE and IDEF1X: tables with the primary key above a divider and the other columns below, foreign key columns marked `(FK)`, types and lengths optional, logical or physical names; identifying, non-identifying and many-to-many lines from parent to child that copy the parent's key into the child, cardinalities as crow's feet or IDEF1X dots, subtypes with their symbol and discriminator. Chen notation: entities (also weak and associative), attributes with keys and partial keys, derived, multivalued and composite attributes, relationships (binary, n-ary, identifying, with attributes) and IS-A (total, disjoint or overlapping); one line tool that makes what its ends call for; `[min,max]` cardinalities on the lines, read look-across, set from the context menu or edited in place, total participation as a double line; database properties of entities and attributes (physical name, type, length, not null, default, unique). Arranged automatically like the UML diagrams; Astah's ER diagrams are imported from and exported to `.asta` |
+| Entity-relationship | Chen, IE (crow's feet) or IDEF1X, switched per diagram, which converts it and keeps the entities in place. IE and IDEF1X: tables with the primary key above a divider and the other columns below, foreign key columns marked `(FK)`, types and lengths optional, logical or physical names; identifying, non-identifying and many-to-many lines from parent to child that copy the parent's key into the child, cardinalities as crow's feet or IDEF1X dots, subtypes with their symbol and discriminator. Chen notation: entities (also weak and associative), attributes with keys and partial keys, derived, multivalued and composite attributes, relationships (binary, n-ary, identifying, with attributes) and IS-A (total, disjoint or overlapping); one line tool that makes what its ends call for; `[min,max]` cardinalities on the lines, read look-across, set from the context menu or edited in place, total participation as a double line; database properties of entities, attributes and relationships (physical name, type, length, not null, default, unique, numbered by the database, `ON DELETE`/`ON UPDATE`). Arranged automatically like the UML diagrams; Astah's ER diagrams are imported from and exported to `.asta` |
 
 Diagrams imported from `.asta` files keep their layout, sizes and colors. The properties panel
 sets per class box what it shows of its members (stereotypes, visibility, types, initial
@@ -70,13 +70,17 @@ line the color of its name and of the line.
   out ER diagrams in the open project, each in a package named after the database: tables
   become entities, junction tables relationships, foreign keys relationships with their
   cardinalities, with all attributes, keys only or none, in Chen, IE or IDEF1X notation;
-  foreign key columns are kept as columns of their tables. Tables without a primary key and
-  statements that could not be read are listed.
+  foreign key columns are kept as columns of their tables, as are `CHECK` conditions,
+  indexes, domains and enumerated types, counted columns (`AUTO_INCREMENT`, identity,
+  `serial`), virtual generated columns and the `ON DELETE`/`ON UPDATE` of foreign keys. Tables without a primary key and statements that
+  could not be read are listed.
 - **ER diagrams as SQL** (File › Export › ER diagram as SQL …): `CREATE TABLE` statements
-  for MySQL/MariaDB or PostgreSQL with primary keys, types, defaults, comments and foreign
-  keys; many-to-many relationships become tables of their own, subtypes take the key of their
-  supertype. A diagram imported from a dump gives the same model when its SQL is imported
-  again.
+  for MySQL/MariaDB or PostgreSQL with primary keys, types, defaults, `CHECK`s, comments,
+  indexes and foreign keys with their actions, counted and generated columns, domains and
+  enumerated types; many-to-many relationships become
+  tables of their own, subtypes take the key of their supertype. A diagram imported from a
+  dump gives the same model when its SQL is imported again, also in the other dialect, whose
+  types it translates.
 
 ## Importing source code
 

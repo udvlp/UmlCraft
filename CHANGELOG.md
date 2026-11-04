@@ -22,11 +22,27 @@ today.
   dialog offers the notation.
 - **ER diagrams as SQL**: File › Export › "ER diagram as SQL …" writes `CREATE TABLE`
   statements for MySQL/MariaDB or PostgreSQL. Relationships become foreign keys,
-  many-to-many relationships tables of their own, subtypes take their supertype's key.
+  many-to-many relationships tables of their own, subtypes take their supertype's key. A
+  dump of one database written for the other gets that one's types.
+- **Counted columns, virtual columns and referential actions**: `AUTO_INCREMENT`, identity
+  and `serial` columns, virtual generated columns and the `ON DELETE`/`ON UPDATE` of foreign
+  keys come along from SQL dumps and go back into the SQL; the properties panel sets them on
+  attributes and relationships.
+- **Domains, `CHECK` and indexes**: SQL dumps bring along their domains and enumerated
+  types, conditions on columns and tables and their indexes, the export writes them, and the
+  properties panel edits them. They go into `.asta` files and come back from them as far as
+  Astah has them (domains with type, length, `NOT NULL` and default; indexes).
+- **Abstract classes** whose name already says so (`Person {abstract}`, `Person
+  <<abstract>>`) no longer show `{abstract}` a second time below it.
+- **`.asta` files**: tables show the type of a column's domain, their names sit where Astah
+  puts them, and boxes that an older Astah sized for its smaller line spacing keep their
+  size.
 - **Arranging ER diagrams**: lines that go around a table keep clear of the other lines
   where they can and no longer run on top of each other.
 - **AI clients** create ER diagrams in a notation, switch it with `update_element`, add
-  columns with `add_member`, set `unique`, `foreign_key` and the discriminator, and get an ER
+  columns with `add_member`, set `unique`, `foreign_key`, `check`, `auto_increment`,
+  `virtual`, a table's `checks` and `indexes`, a relationship's `on_delete` and `on_update`
+  and the discriminator, create domains with `create_model_element`, and get an ER
   diagram as SQL with `export_sql`.
 
 ## 0.18.0 – 2026-11-03

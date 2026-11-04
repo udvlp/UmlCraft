@@ -222,7 +222,7 @@ pub fn relate(tx: &mut Tx<'_>, diagram: Id, line: IeLine, parent: Id, child: Id)
         return subtype(tx, diagram, (p, parent), (c, child), owner);
     }
     let identifying = line == IeLine::Identifying;
-    let kind = ElementKind::ErRelationship(ErRelationshipProps { identifying });
+    let kind = ElementKind::ErRelationship(ErRelationshipProps::new(identifying));
     let relationship = tx.create(owner, ElementData::new("", kind))?;
     let (parent_side, child_side) = match line {
         IeLine::ManyToMany => (Cardinality::ZERO_MANY, Cardinality::ZERO_MANY),
@@ -808,7 +808,7 @@ mod tests {
     #[test]
     fn participations_and_the_one_weak_entity() {
         let mut d = diagram();
-        let identifying = ElementKind::ErRelationship(ErRelationshipProps { identifying: true });
+        let identifying = ElementKind::ErRelationship(ErRelationshipProps::new(true));
         let (rel, rel_node) = d.add(identifying);
         let (_, owner_node) = d.add(entity(false));
         let (_, weak_node) = d.add(entity(true));
@@ -838,7 +838,7 @@ mod tests {
         let (_, key_node) = d.add(ElementKind::ErAttribute(key));
         let derived = ErAttributeProps { derived: true, multivalued: true, ..Default::default() };
         let (_, derived_node) = d.add(ElementKind::ErAttribute(derived));
-        let rel = d.add(ElementKind::ErRelationship(ErRelationshipProps { identifying: true }));
+        let rel = d.add(ElementKind::ErRelationship(ErRelationshipProps::new(true)));
         let is_a = d.add(ElementKind::ErIsA(ErIsAProps {
             total: true,
             disjoint: Some(true),

@@ -1,6 +1,7 @@
 //! Reading the statements the import needs: `CREATE TABLE`,
-//! `ALTER TABLE … ADD PRIMARY KEY | UNIQUE | FOREIGN KEY`, `ATTACH PARTITION`, `CREATE UNIQUE
-//! INDEX`, `COMMENT ON TABLE | COLUMN`; `USE`/`CREATE DATABASE` for the name and
+//! `ALTER TABLE … ADD PRIMARY KEY | UNIQUE | FOREIGN KEY`, `ALTER COLUMN … ADD GENERATED … AS
+//! IDENTITY | SET DEFAULT nextval(…)`, `ATTACH PARTITION`, `CREATE UNIQUE INDEX`, `COMMENT ON
+//! TABLE | COLUMN`; `USE`/`CREATE DATABASE` for the name and
 //! `CREATE VIEW` for the placeholder tables of older `mysqldump`s.
 //!
 //! The parser is tolerant on purpose: it looks for the few things it needs and steps over
@@ -11,8 +12,11 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use crate::dialect::{Dialect, header_database};
-use crate::ir::{Column, ForeignKey, Problem, ProblemKind, Schema, Table, TableKey};
+use crate::ir::{
+    Column, ForeignKey, Index, Problem, ProblemKind, Schema, Table, TableKey, UserType,
+};
 use crate::split::split;
+use umlcraft_model::ErAction;
 
 /// Reads `bytes` as a dump in `dialect`.
 pub fn parse(bytes: &[u8], dialect: Dialect) -> Schema {
@@ -81,7 +85,16 @@ impl Parser {
             return self.create_table(s, i + 1, line);
         }
         if s.is(i, "UNIQUE") && s.is(i + 1, "INDEX") {
-            return self.unique_index(s, i + 2);
+            return self.index(s, i + 2, true);
+        }
+        if s.is(i, "INDEX") {
+            return self.index(s, i + 1, false);
+        }
+        if s.is(i, "DOMAIN") {
+            return self.domain(s, i + 1);
+        }
+        if s.is(i, "TYPE") {
+            return self.enumeration(s, i + 1);
         }
         if s.is(i, "DATABASE") || (s.is(i, "SCHEMA") && s.dialect.is_mysql()) {
             let mut j = i + 1;
@@ -172,6 +185,25 @@ impl Parser {
                 }
                 continue;
             }
+            // pg_dump numbers columns so: `ALTER COLUMN id ADD GENERATED … AS IDENTITY (…)`
+            // or `ALTER COLUMN id SET DEFAULT nextval(…)` with a sequence of its own.
+            if s.is(a, "ALTER") {
+                let c = if s.is(a + 1, "COLUMN") { a + 2 } else { a + 1 };
+                let identity = s.is(c + 1, "ADD") && (c + 2..b).any(|k| s.is(k, "IDENTITY"));
+                let sequence = s.is(c + 1, "SET")
+                    && s.is(c + 2, "DEFAULT")
+                    && s.value(c + 3, b).as_deref().is_some_and(is_sequence);
+                let column = s.ident(c);
+                if let (true, Some(column)) = (identity || sequence, column)
+                    && let Some(found) = self.schema.find(&key).cloned()
+                    && let Some(col) =
+                        self.schema.tables.get_mut(&found).and_then(|t| t.column_mut(&column))
+                {
+                    col.auto_increment = true;
+                    handled = true;
+                }
+                continue;
+            }
             if !s.is(a, "ADD") {
                 continue;
             }
@@ -196,8 +228,11 @@ impl Parser {
         handled
     }
 
-    fn unique_index(&mut self, s: &Stmt, mut i: usize) -> bool {
+    /// `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] name ON table (columns)`, from
+    /// after `INDEX`.
+    fn index(&mut self, s: &Stmt, mut i: usize, unique: bool) -> bool {
         let Some(on) = (i..s.toks.len()).find(|&k| s.is(k, "ON")) else { return false };
+        let name = (i..on).rev().find_map(|k| s.ident(k)).unwrap_or_default();
         i = on + 1;
         if s.is(i, "ONLY") {
             i += 1;
@@ -214,16 +249,81 @@ impl Parser {
         if (close + 1..s.toks.len()).any(|k| s.is(k, "WHERE")) {
             return false;
         }
-        let Some(cols) = s.ident_list(i) else { return false };
+        let Some(columns) = s.ident_list(i) else { return false };
         let Some(found) = self.schema.find(&key).cloned() else { return false };
         if let Some(t) = self.schema.tables.get_mut(&found) {
-            t.uniques.push(cols);
+            if unique {
+                t.uniques.push(columns);
+            } else {
+                t.indexes.push(Index { name, columns });
+            }
         }
+        true
+    }
+
+    /// `CREATE DOMAIN name [AS] type [COLLATE …] [DEFAULT …] [CONSTRAINT …] [NOT NULL] [CHECK
+    /// (…)]…`, from after `DOMAIN`.
+    fn domain(&mut self, s: &Stmt, mut i: usize) -> bool {
+        let Some(key) = s.table_name(&mut i) else { return false };
+        if s.is(i, "AS") {
+            i += 1;
+        }
+        let ends = ["COLLATE", "DEFAULT", "CONSTRAINT", "NOT", "NULL", "CHECK"];
+        let end = s.toks.len();
+        let at_end = |k: usize| ends.iter().any(|w| s.is(k, w));
+        let tail = (i..end).find(|&k| at_end(k)).unwrap_or(end);
+        let mut t = UserType { datatype: s.text(i, tail), ..UserType::default() };
+        let mut k = tail;
+        while k < end {
+            if s.is(k, "NOT") && s.is(k + 1, "NULL") {
+                t.not_null = true;
+            } else if s.is(k, "DEFAULT") {
+                let stop = (k + 1..end).find(|&j| j > k + 1 && at_end(j)).unwrap_or(end);
+                t.default = s.value(k + 1, stop);
+                k = stop;
+                continue;
+            } else if s.is(k, "CHECK") && s.punct(k + 1, b'(') {
+                let close = s.close(k + 1);
+                t.check = Some(s.inner(k + 1, close));
+                k = close;
+            }
+            k += 1;
+        }
+        self.schema.types.insert(key, t);
+        true
+    }
+
+    /// `CREATE TYPE name AS ENUM ('a', 'b')`, from after `TYPE`; other types are not read.
+    fn enumeration(&mut self, s: &Stmt, mut i: usize) -> bool {
+        let Some(key) = s.table_name(&mut i) else { return false };
+        if !(s.is(i, "AS") && s.is(i + 1, "ENUM") && s.punct(i + 2, b'(')) {
+            return false;
+        }
+        let close = s.close(i + 2);
+        let values =
+            s.commas(i + 3, close).into_iter().filter_map(|(a, _)| s.string(a)).map(str::to_owned);
+        let t = UserType { values: values.collect(), ..UserType::default() };
+        self.schema.types.insert(key, t);
         true
     }
 
     fn comment(&mut self, s: &Stmt, line: usize) -> bool {
         let column = s.is(2, "COLUMN");
+        if s.is(2, "TYPE") || s.is(2, "DOMAIN") {
+            let mut i = 3;
+            let Some(key) = s.table_name(&mut i) else { return false };
+            if !s.is(i, "IS") {
+                return false;
+            }
+            let text = s.string(i + 1).map(str::to_owned);
+            return match self.schema.types.get_mut(&key) {
+                Some(t) => {
+                    t.comment = text;
+                    true
+                }
+                None => false,
+            };
+        }
         if !column && !s.is(2, "TABLE") {
             return false;
         }
@@ -308,25 +408,72 @@ fn column(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
             if let Some(target) = s.table_name(&mut j) {
                 let target_columns =
                     if s.punct(j, b'(') { s.ident_list(j).unwrap_or_default() } else { vec![] };
+                let (on_delete, on_update) = actions(s, j, b);
                 table.foreign_keys.push(ForeignKey {
                     columns: vec![col.name.clone()],
                     target,
                     target_columns,
+                    on_delete,
+                    on_update,
                 });
             }
-        } else if s.is(k, "DEFAULT") {
+        } else if s.is(k, "DEFAULT") && !s.is(k.wrapping_sub(1), "BY") {
             let end = (k + 1..b).find(|&j| j > k + 1 && s.depth0_keyword(j, k + 1)).unwrap_or(b);
             col.default = s.value(k + 1, end);
+            if col.default.as_deref().is_some_and(is_sequence) {
+                (col.default, col.auto_increment) = (None, true);
+            }
         } else if s.is(k, "COMMENT") {
             col.comment = s.string(k + 1).map(str::to_owned);
         } else if s.is(k, "AS") && s.punct(k + 1, b'(') {
+            let close = s.close(k + 1);
             col.generated = true;
-            col.default = Some(s.text(k + 2, s.close(k + 1)));
+            col.default = Some(s.text(k + 2, close));
+            col.virtual_column = !s.is(close + 1, "STORED");
+        } else if s.is(k, "AUTO_INCREMENT") || s.is(k, "IDENTITY") {
+            col.auto_increment = true;
+        } else if s.is(k, "CHECK") && s.punct(k + 1, b'(') {
+            col.check = Some(s.inner(k + 1, s.close(k + 1)));
         }
         k += 1;
     }
+    // PostgreSQL's `serial` is an integer with a sequence of its own.
+    let serial = match col.datatype.to_ascii_lowercase().as_str() {
+        "serial" | "serial4" => Some("integer"),
+        "bigserial" | "serial8" => Some("bigint"),
+        "smallserial" | "serial2" => Some("smallint"),
+        _ => None,
+    };
+    if let Some(integer) = serial {
+        (col.datatype, col.auto_increment) = (integer.to_owned(), true);
+    }
     table.columns.push(col);
     true
+}
+
+/// A default that takes the next value of a sequence (`nextval('kunde_id_seq'::regclass)`).
+fn is_sequence(default: &str) -> bool {
+    default.trim_start().to_ascii_lowercase().starts_with("nextval(")
+}
+
+/// `ON DELETE …` and `ON UPDATE …` of a reference, in `from..to`.
+fn actions(s: &Stmt, from: usize, to: usize) -> (Option<ErAction>, Option<ErAction>) {
+    let mut out = (None, None);
+    for k in from..to {
+        if !s.is(k, "ON") {
+            continue;
+        }
+        let one = s.word(k + 2).and_then(|a| a.parse().ok());
+        let two =
+            s.word(k + 2).zip(s.word(k + 3)).and_then(|(a, b)| format!("{a} {b}").parse().ok());
+        let Some(action) = two.or(one) else { continue };
+        if s.is(k + 1, "DELETE") {
+            out.0 = Some(action);
+        } else if s.is(k + 1, "UPDATE") {
+            out.1 = Some(action);
+        }
+    }
+    out
 }
 
 /// A key or reference in `a..b`. True if read or not needed (indexes, checks).
@@ -370,10 +517,31 @@ fn constraint(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
         let Some(target) = s.table_name(&mut j) else { return false };
         let target_columns =
             if s.punct(j, b'(') { s.ident_list(j).unwrap_or_default() } else { vec![] };
-        table.foreign_keys.push(ForeignKey { columns, target, target_columns });
+        let (on_delete, on_update) = actions(s, j, b);
+        table.foreign_keys.push(ForeignKey {
+            columns,
+            target,
+            target_columns,
+            on_delete,
+            on_update,
+        });
         return true;
     }
-    ["KEY", "INDEX", "FULLTEXT", "SPATIAL", "CHECK", "EXCLUDE"].iter().any(|k| s.is(i, k))
+    if s.is(i, "CHECK") {
+        let Some(open) = first_paren(i + 1) else { return false };
+        table.checks.push(s.inner(open, s.close(open)));
+        return true;
+    }
+    if s.is(i, "KEY") || s.is(i, "INDEX") {
+        // MySQL: `KEY name (columns)`; one on an expression is not read.
+        let Some(open) = first_paren(i + 1) else { return false };
+        let name = (i + 1..open).find_map(|k| s.ident(k)).unwrap_or_default();
+        if let Some(columns) = s.ident_list(open) {
+            table.indexes.push(Index { name, columns });
+        }
+        return true;
+    }
+    ["FULLTEXT", "SPATIAL", "EXCLUDE"].iter().any(|k| s.is(i, k))
 }
 
 /// Words that start a constraint in a table's list (instead of a column).
@@ -704,6 +872,16 @@ impl<'a> Stmt<'a> {
         self.toks.len()
     }
 
+    /// What the parentheses `open..close` hold, without parentheses around all of it
+    /// (`((a > 0))` → `a > 0`), on one line.
+    fn inner(&self, mut open: usize, mut close: usize) -> String {
+        while self.punct(open + 1, b'(') && self.close(open + 1) + 1 == close {
+            open += 1;
+            close -= 1;
+        }
+        self.text(open + 1, close)
+    }
+
     /// The parts of `from..to` between commas outside parentheses.
     fn commas(&self, from: usize, to: usize) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
@@ -832,6 +1010,7 @@ mod tests {
         assert!(t.columns[1].not_null && !t.columns[2].not_null);
         assert_eq!(t.columns[3].default, None);
         assert!(t.columns[4].generated && !t.columns[0].generated);
+        assert!(t.columns[4].virtual_column);
         assert_eq!(t.primary_key, ["flughafen_id", "nummer"]);
         assert_eq!(t.uniques, [vec!["nummer".to_owned()]]);
         assert_eq!(
@@ -840,6 +1019,8 @@ mod tests {
                 columns: vec!["flughafen_id".into()],
                 target: TableKey::new("", "flughafen"),
                 target_columns: vec!["id".into()],
+                on_delete: Some(ErAction::Cascade),
+                on_update: None,
             }]
         );
         assert_eq!(t.comment.as_deref(), Some("Gates"));
@@ -869,16 +1050,88 @@ mod tests {
         assert!(f.columns[2].not_null);
         assert_eq!(f.columns[3].datatype, "timestamp without time zone");
         assert!(f.columns[4].generated && !f.columns[5].generated);
+        assert!(!f.columns[4].virtual_column);
+        // An identity column has no default.
+        assert!(f.columns[5].auto_increment && f.columns[5].default.is_none());
         assert_eq!(f.columns.len(), 6);
         assert_eq!(f.primary_key, ["id"]);
         assert_eq!(f.uniques, [vec!["start_zeit".to_owned()]]);
         assert_eq!(f.comment.as_deref(), Some("Ein Flug"));
         let fs = table(&s, "fracht", "Fracht Stück");
         assert_eq!(fs.foreign_keys[0].target, TableKey::new("public", "flug"));
+        assert_eq!(fs.foreign_keys[0].on_delete, Some(ErAction::SetNull));
         assert_eq!(fs.columns[0].comment.as_deref(), Some("Nr."));
         assert_eq!(s.skipped.get("ALTER TABLE"), Some(&1));
         assert_eq!(s.skipped.get("CREATE UNIQUE"), Some(&1));
         assert_eq!(s.schemas(), ["public", "fracht"]);
+    }
+
+    #[test]
+    fn counted_columns_and_referential_actions() {
+        let sql = "CREATE TABLE a (id int NOT NULL AUTO_INCREMENT, b int REFERENCES b (id) ON \
+                   UPDATE CASCADE ON DELETE NO ACTION, PRIMARY KEY (id));";
+        let s = parse(sql.as_bytes(), Dialect::MySql);
+        let a = table(&s, "", "a");
+        assert!(a.columns[0].auto_increment && !a.columns[1].auto_increment);
+        let fk = &a.foreign_keys[0];
+        assert_eq!(
+            (fk.on_delete, fk.on_update),
+            (Some(ErAction::NoAction), Some(ErAction::Cascade))
+        );
+        let sql = "CREATE TABLE public.k (id integer NOT NULL, n bigserial, m integer DEFAULT \
+                   nextval('m_seq'::regclass), x integer);\nALTER TABLE public.k ALTER COLUMN id \
+                   ADD GENERATED BY DEFAULT AS IDENTITY (\n    SEQUENCE NAME public.k_id_seq\n    \
+                   START WITH 1\n);\nALTER TABLE ONLY public.k ALTER COLUMN x SET DEFAULT \
+                   nextval('public.k_x_seq'::regclass);\n";
+        let s = parse(sql.as_bytes(), Dialect::Postgres);
+        assert_eq!(s.problems, []);
+        let k = table(&s, "public", "k");
+        let counted: Vec<bool> = k.columns.iter().map(|c| c.auto_increment).collect();
+        assert_eq!(counted, [true, true, true, true]);
+        assert_eq!(k.columns[1].datatype, "bigint");
+        assert_eq!(k.columns[2].default, None);
+        assert_eq!(s.skipped.get("ALTER TABLE"), None);
+    }
+
+    #[test]
+    fn domains_enumerations_checks_and_indexes() {
+        let sql = r#"CREATE DOMAIN public.email_t AS character varying(120) NOT NULL
+	CONSTRAINT email_t_check CHECK (((VALUE)::text ~~ '%@%'::text));
+CREATE TYPE public.ticket_status AS ENUM (
+    'reserviert',
+    'bezahlt'
+);
+CREATE TYPE public.pair AS (a integer, b integer);
+COMMENT ON TYPE public.ticket_status IS 'Stand';
+CREATE TABLE public.flugzeug (
+    sitze smallint NOT NULL CHECK (sitze > 0),
+    CONSTRAINT flugzeug_sitze_check CHECK ((sitze < 1000))
+);
+CREATE INDEX ix_sitze ON public.flugzeug USING btree (sitze);
+CREATE INDEX ix_lower ON public.flugzeug (lower(sitze));
+"#;
+        let s = parse(sql.as_bytes(), Dialect::Postgres);
+        assert_eq!(s.problems, []);
+        let email = &s.types[&TableKey::new("public", "email_t")];
+        assert_eq!(email.datatype, "character varying(120)");
+        assert!(email.not_null);
+        assert_eq!(email.check.as_deref(), Some("(VALUE)::text ~~ '%@%'::text"));
+        let status = &s.types[&TableKey::new("public", "ticket_status")];
+        assert_eq!(status.values, ["reserviert", "bezahlt"]);
+        assert_eq!(status.comment.as_deref(), Some("Stand"));
+        assert_eq!(s.types.len(), 2, "composite types are not read");
+        let f = table(&s, "public", "flugzeug");
+        assert_eq!(f.columns[0].check.as_deref(), Some("sitze > 0"));
+        assert_eq!(f.checks, ["sitze < 1000"]);
+        let ix = Index { name: "ix_sitze".into(), columns: vec!["sitze".into()] };
+        assert_eq!(f.indexes, [ix]);
+        let sql = "CREATE TABLE t (a int, b int, KEY ix_ab (a,b), UNIQUE KEY u (b), \
+                   CONSTRAINT c CHECK ((`a` > `b`)));";
+        let s = parse(sql.as_bytes(), Dialect::MySql);
+        let t = table(&s, "", "t");
+        assert_eq!(t.indexes[0].columns, ["a", "b"]);
+        assert_eq!(t.uniques, [vec!["b".to_owned()]]);
+        assert_eq!(t.checks, ["`a` > `b`"]);
     }
 
     #[test]

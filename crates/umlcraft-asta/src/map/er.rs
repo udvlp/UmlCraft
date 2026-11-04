@@ -2,12 +2,14 @@
 //! attributes, relationships and subtype relationships, and the ER diagrams that show them
 //! (`docs/asta-format.md`, "ER models").
 //!
-//! Astah draws ER diagrams in IE or IDEF1X; they come in with that notation. The domain and
-//! datatype models are not imported: an attribute keeps its type's name (a domain's datatype).
+//! Astah draws ER diagrams in IE or IDEF1X; they come in with that notation. Domains become
+//! domains of the ER model's package, which columns of that type name; the datatype model is
+//! not imported: an attribute keeps its type's name.
 
 use umlcraft_model::{
-    Cardinality, CardinalityMax, ErAttributeProps, ErDisplay, ErEntityProps, ErIsAProps, ErKey,
-    ErNotation, ErParticipationProps, ErRelationshipProps, ErSubtypingProps,
+    Cardinality, CardinalityMax, ErAttributeProps, ErDisplay, ErDomainProps, ErEntityProps,
+    ErIndex, ErIsAProps, ErKey, ErNotation, ErParticipationProps, ErRelationshipProps,
+    ErSubtypingProps,
 };
 
 use super::*;
@@ -35,10 +37,17 @@ pub(super) fn is_er_model(tags: &[(String, String)]) -> bool {
 }
 
 impl Importer<'_> {
-    /// Name, documentation and the tagged values other than Astah's ER ones.
+    /// Name, documentation and the tagged values other than Astah's ER ones; the constraints
+    /// Astah keeps keys, NOT NULL, UNIQUE and defaults in become properties.
     fn er_data(&self, object: ObjId, kind: ElementKind) -> ElementData {
         let mut data = self.data(object, kind, &[]);
         data.tagged_values.retain(|t| !ER_TAGS.contains(&t.key.as_str()));
+        data.constraints.retain(|c| {
+            !matches!(
+                c.to_ascii_uppercase().as_str(),
+                "PRIMARY KEY" | "NOT NULL" | "UNIQUE" | "FOREIGN KEY"
+            ) && !c.starts_with("DEFAULT:")
+        });
         data
     }
 
@@ -50,13 +59,16 @@ impl Importer<'_> {
             let tags = self.r.tagged_values(child);
             let tagged = |key: &str| tags.iter().any(|(k, _)| k == key);
             match self.r.class(child) {
-                // Astah's SQL types and the domains live on in the attributes that use them;
-                // only domains count as left out.
+                // Astah's SQL types live on in the attributes that use them; the domains
+                // become domains of the ER model's package.
                 "UModelImp" if tagged("jude.er.datatype.model") => {}
                 "UModelImp" if tagged("jude.er.domain.model") => {
                     for ownership in self.r.list(child, "ownedElementOwnership") {
-                        if let Some(domain) = self.r.obj(ownership, "ownedElement") {
-                            self.skip(domain);
+                        // NOT NULL is read with its domain.
+                        if let Some(domain) = self.r.obj(ownership, "ownedElement")
+                            && self.r.class(domain) != "UConstraintImp"
+                        {
+                            self.er_domain(id, domain);
                         }
                     }
                 }
@@ -87,6 +99,62 @@ impl Importer<'_> {
                 self.er_attribute(entity, attribute);
             }
         }
+        let indexes = self.er_indexes(object);
+        if !indexes.is_empty() {
+            let Some(mut data) = self.model.get(entity).map(|e| e.data().clone()) else { return };
+            if let ElementKind::ErEntity(p) = &mut data.kind {
+                p.indexes = indexes;
+                let _ = self.model.apply(Op::UpdateElement { id: entity, data });
+            }
+        }
+    }
+
+    /// The name SQL knows an Astah ER element by: its physical name, else its logical one.
+    fn er_sql_name(&self, object: ObjId) -> String {
+        let physical = self.tag(object, "alias3");
+        if physical.is_empty() { self.r.name(object) } else { physical }
+    }
+
+    /// A domain, named as SQL knows it so that the columns of that type find it.
+    fn er_domain(&mut self, owner: Id, object: ObjId) {
+        if self.tag(object, "jude.type") != "er_Domain" {
+            self.skip(object);
+            return;
+        }
+        let not_null = self
+            .r
+            .list(object, "constraint")
+            .into_iter()
+            .any(|c| self.r.text(c, "body").eq_ignore_ascii_case("not null"));
+        let props = ErDomainProps {
+            datatype: self.tag(object, "jude.domain.datatype"),
+            length_precision: self.tag(object, "jude.domain.modifier"),
+            not_null,
+            default_value: self.tag(object, "jude.domain.default"),
+            ..Default::default()
+        };
+        let mut data = self.er_data(object, ElementKind::ErDomain(props));
+        data.name = self.er_sql_name(object);
+        data.tagged_values.retain(|t| !t.key.starts_with("jude."));
+        self.create(owner, data, Some(object));
+    }
+
+    /// The entity's indexes; the ones Astah keeps for keys and relationships are not SQL's.
+    fn er_indexes(&self, entity: ObjId) -> Vec<ErIndex> {
+        let r = self.r;
+        r.list(entity, "erIndexes")
+            .into_iter()
+            .filter(|&i| !r.flag(i, "isKey") && r.list(i, "erRelationships").is_empty())
+            .map(|i| ErIndex {
+                name: r.name(i),
+                columns: r
+                    .list(i, "erAttributes")
+                    .into_iter()
+                    .map(|a| self.er_sql_name(a))
+                    .collect(),
+                unique: r.flag(i, "isUnique"),
+            })
+            .collect()
     }
 
     /// An attribute with what its entity's constraints say about it: `PRIMARY KEY`,
@@ -100,9 +168,10 @@ impl Importer<'_> {
         };
         if let Some(ty) = r.obj(object, "type") {
             if self.tag(ty, "jude.type") == "er_Domain" {
-                props.datatype = self.tag(ty, "jude.domain.datatype");
-                if props.length_precision.is_empty() {
-                    props.length_precision = self.tag(ty, "jude.domain.modifier");
+                props.datatype = self.er_sql_name(ty);
+                // Astah copies the domain's length into its columns; the domain has it.
+                if props.length_precision == self.tag(ty, "jude.domain.modifier") {
+                    props.length_precision.clear();
                 }
             } else {
                 props.datatype = r.name(ty);
@@ -173,8 +242,8 @@ impl Importer<'_> {
             return;
         };
         let identifying = r.flag(object, "isIdentifying");
-        let data =
-            self.er_data(object, ElementKind::ErRelationship(ErRelationshipProps { identifying }));
+        let data = self
+            .er_data(object, ElementKind::ErRelationship(ErRelationshipProps::new(identifying)));
         let Some(relationship) = self.create(owner, data, Some(object)) else { return };
         for (end, entity) in [(parent, parent_entity), (child, child_entity)] {
             let cardinality = r.multiplicity(end).map(|m| {

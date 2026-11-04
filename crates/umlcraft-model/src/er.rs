@@ -35,6 +35,46 @@ pub struct ErEntityProps {
     /// The table's name in the database.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub physical_name: String,
+    /// Conditions on the table's rows, as SQL (`end_zeit > start_zeit`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<String>,
+    /// The table's indexes besides its primary key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub indexes: Vec<ErIndex>,
+}
+
+/// An index of a table: its columns by their names in the database, in order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErIndex {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    pub columns: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub unique: bool,
+}
+
+/// A named type for columns: a domain (a datatype with a condition, a default or `NOT NULL`)
+/// or an enumerated type. A column takes it by its name as its datatype. Not drawn; it lives in
+/// the package of its entities.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErDomainProps {
+    /// The datatype it is based on, and its length or precision; empty for an enumeration.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub datatype: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub length_precision: String,
+    /// The values of an enumerated type, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub not_null: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_value: String,
+    /// A condition on its values, as SQL with `VALUE` for the value (`VALUE > 0`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub check: String,
 }
 
 /// What part of an identifier an attribute is.
@@ -72,6 +112,16 @@ pub struct ErAttributeProps {
     /// The column's values are unique.
     #[serde(default, skip_serializing_if = "is_default")]
     pub unique: bool,
+    /// A condition on the column's values, as SQL (`preis >= 0`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub check: String,
+    /// The database numbers new rows in it (`AUTO_INCREMENT`, an identity column).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub auto_increment: bool,
+    /// A derived column's expression (its default) is computed when read, not stored
+    /// (`VIRTUAL`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub virtual_column: bool,
     /// A foreign key column: the relationship (or the subtyping of a subtype) it belongs to,
     /// which copied it from the parent's primary key. Deleting that one keeps the column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,6 +167,60 @@ pub enum ErDisplay {
 pub struct ErRelationshipProps {
     #[serde(default, skip_serializing_if = "is_default")]
     pub identifying: bool,
+    /// What its foreign keys do when a referenced row is deleted, or its key changes; `None`
+    /// leaves it to the database (`NO ACTION`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_delete: Option<ErAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_update: Option<ErAction>,
+}
+
+impl ErRelationshipProps {
+    pub fn new(identifying: bool) -> Self {
+        Self { identifying, ..Self::default() }
+    }
+}
+
+/// A foreign key's referential action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErAction {
+    Cascade,
+    SetNull,
+    SetDefault,
+    Restrict,
+    NoAction,
+}
+
+impl ErAction {
+    pub const ALL: [Self; 5] =
+        [Self::Cascade, Self::SetNull, Self::SetDefault, Self::Restrict, Self::NoAction];
+
+    /// As SQL writes it: `CASCADE`, `SET NULL`, …
+    pub fn sql(self) -> &'static str {
+        match self {
+            Self::Cascade => "CASCADE",
+            Self::SetNull => "SET NULL",
+            Self::SetDefault => "SET DEFAULT",
+            Self::Restrict => "RESTRICT",
+            Self::NoAction => "NO ACTION",
+        }
+    }
+}
+
+impl FromStr for ErAction {
+    type Err = String;
+
+    /// The SQL words in any case, with spaces, `_` or nothing between them (`set null`,
+    /// `SET_NULL`, `setNull`).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let plain: String =
+            s.chars().filter(|c| c.is_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect();
+        Self::ALL
+            .into_iter()
+            .find(|a| a.sql().replace(' ', "").eq_ignore_ascii_case(&plain))
+            .ok_or_else(|| s.to_owned())
+    }
 }
 
 /// A triangle pointing to the supertype. A total IS-A has a double line to the supertype;
@@ -279,7 +383,17 @@ pub struct ErSubtypingProps {
 
 #[cfg(test)]
 mod tests {
-    use super::Cardinality;
+    use super::{Cardinality, ErAction};
+
+    #[test]
+    fn actions_read_their_sql_words() {
+        for a in ErAction::ALL {
+            assert_eq!(a.sql().parse::<ErAction>(), Ok(a));
+        }
+        assert_eq!("set_null".parse::<ErAction>(), Ok(ErAction::SetNull));
+        assert_eq!("noAction".parse::<ErAction>(), Ok(ErAction::NoAction));
+        assert!("drop".parse::<ErAction>().is_err());
+    }
 
     #[test]
     fn cardinalities_read_chen_and_uml_forms() {

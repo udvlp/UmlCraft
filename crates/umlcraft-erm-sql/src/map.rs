@@ -11,21 +11,24 @@
 //!   relationship is `[0,m]` (`[0,n]` to `[0,m]`).
 //!
 //! Everything goes into a new package named after the database, with an ER diagram of the
-//! same name that shows it, laid out by [`er_layout`].
+//! same name that shows it, laid out by [`er_layout`]. PostgreSQL's domains and enumerated
+//! types become ER domains in the package, which the columns name as their datatype; checks
+//! and indexes go with their columns and tables (not the indexes MySQL makes for each foreign
+//! key by itself).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use umlcraft_model::{
     Cardinality, CardinalityMax, DiagramKind, ElementData, ElementKind, ErAttributeProps,
-    ErEntityProps, ErKey, ErNotation, ErParticipationProps, ErRelationshipProps, Id, Rect, Result,
-    Tx,
+    ErDomainProps, ErEntityProps, ErIndex, ErKey, ErNotation, ErParticipationProps,
+    ErRelationshipProps, Id, Rect, Result, Tx,
 };
 use umlcraft_notation::er_layout;
 use umlcraft_notation::palette::default_size_for;
 use umlcraft_notation::scene::TextMeasure;
 
 use crate::dialect::Dialect;
-use crate::ir::{ForeignKey, Problem, Schema, Table, TableKey};
+use crate::ir::{Column, ForeignKey, Problem, Schema, Table, TableKey};
 
 /// Which attributes the import draws (O6: large schemas get very wide with all of them).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -169,6 +172,27 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
     let package = tx.create(owner, data)?;
     let kind = ElementKind::diagram(DiagramKind::EntityRelationship);
     let diagram = tx.create(package, ElementData::new(name, kind))?;
+    // Domains and enumerated types, by the ways a column may spell them.
+    let mut types = HashMap::new();
+    for (key, t) in &schema.types {
+        if options.schemas.as_ref().is_some_and(|s| !s.contains(&key.schema)) {
+            continue;
+        }
+        let (datatype, length) = split_type(&t.datatype);
+        let props = ErDomainProps {
+            datatype,
+            length_precision: length.unwrap_or_default(),
+            values: t.values.clone(),
+            not_null: t.not_null,
+            default_value: t.default.clone().unwrap_or_default(),
+            check: t.check.clone().unwrap_or_default(),
+        };
+        let mut data = ElementData::new(key.to_string(), ElementKind::ErDomain(props));
+        data.documentation = t.comment.clone().unwrap_or_default();
+        tx.create(package, data)?;
+        types.insert(format!("{}.{}", key.schema, key.name), key.to_string());
+        types.insert(key.to_string(), key.to_string());
+    }
     let mut m = Mapper {
         tx,
         package,
@@ -177,6 +201,7 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
         hints: Vec::new(),
         attributes: options.attributes,
         counts: [0; 3],
+        types,
     };
     for (t, class) in tables.iter().zip(&classes) {
         if *class == Class::Junction {
@@ -194,7 +219,8 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
         let own: Vec<&str> =
             t.columns.iter().map(|c| c.name.as_str()).filter(|c| !fk_cols.contains(c)).collect();
         if *class == Class::Junction {
-            let r = m.relationship(&t.key.to_string(), false, t.comment.clone())?;
+            let all: Vec<&ForeignKey> = fks.iter().collect();
+            let r = m.relationship(&t.key.to_string(), false, &all, t.comment.clone())?;
             for (k, fk) in fks.iter().enumerate() {
                 let role = (fks.iter().filter(|f| f.target == fk.target).count() > 1)
                     .then(|| relationship_name(&fk.columns, ""));
@@ -207,6 +233,7 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
             continue;
         }
         let owner = m.entities[&t.key];
+        m.table_rules(owner.0, t, fks)?;
         let in_pk: Vec<&ForeignKey> = if *class == Class::Weak { in_key(t, fks) } else { vec![] };
         if *class == Class::Weak {
             let id_cols: HashSet<&str> =
@@ -225,6 +252,7 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
             let r = m.relationship(
                 &relationship_name(&fk.columns, &fk.target.name),
                 identifying,
+                &[fk],
                 None,
             )?;
             m.foreign_columns(owner.0, t, fk, r.0)?;
@@ -245,6 +273,18 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
                 // A weak entity takes part totally in its identifying relationship.
                 m.join(r, other, near_target, None, false)?;
                 m.join(r, owner, near_source, None, identifying)?;
+            }
+        }
+        // The foreign key columns came last; the table's order is the order of its keys, which
+        // MySQL's foreign keys to them must follow.
+        let mut index = 0;
+        for c in &t.columns {
+            let named = m.tx.model().children_named(owner.0, &c.name);
+            if let Some(&column) = named.first() {
+                if m.tx.model().children(owner.0).get(index) != Some(&column) {
+                    m.tx.move_element(column, owner.0, index)?;
+                }
+                index += 1;
             }
         }
     }
@@ -411,6 +451,8 @@ struct Mapper<'a, 'b> {
     attributes: Attributes,
     /// Entities, relationships, attributes made.
     counts: [usize; 3],
+    /// The domains' names by the ways a column's datatype may spell them.
+    types: HashMap<String, String>,
 }
 
 impl Mapper<'_, '_> {
@@ -433,17 +475,68 @@ impl Mapper<'_, '_> {
         Ok(ids)
     }
 
+    /// A relationship for foreign keys `fks`, with their actions if they all have the same.
     fn relationship(
         &mut self,
         name: &str,
         identifying: bool,
+        fks: &[&ForeignKey],
         comment: Option<String>,
     ) -> Result<(Id, Id)> {
-        let kind = ElementKind::ErRelationship(ErRelationshipProps { identifying });
+        let actions = |fk: &&ForeignKey| (fk.on_delete, fk.on_update);
+        let first = fks.first().map(actions).unwrap_or_default();
+        let (on_delete, on_update) =
+            if fks.iter().all(|fk| actions(fk) == first) { first } else { (None, None) };
+        let props = ErRelationshipProps { identifying, on_delete, on_update };
+        let kind = ElementKind::ErRelationship(props);
         let mut data = ElementData::new(name, kind);
         data.documentation = comment.unwrap_or_default();
         self.counts[1] += 1;
         self.node(self.package, data)
+    }
+
+    /// The checks of table `t` and its indexes, those of several columns among its unique
+    /// constraints as well, without those MySQL makes for each foreign key.
+    fn table_rules(&mut self, entity: Id, t: &Table, fks: &[ForeignKey]) -> Result<()> {
+        let mut indexes: Vec<ErIndex> = t
+            .indexes
+            .iter()
+            .filter(|i| !fks.iter().any(|fk| fk.columns == i.columns))
+            .map(|i| ErIndex { name: i.name.clone(), columns: i.columns.clone(), unique: false })
+            .collect();
+        indexes.extend(t.uniques.iter().filter(|u| u.len() > 1).map(|u| ErIndex {
+            name: String::new(),
+            columns: u.clone(),
+            unique: true,
+        }));
+        if indexes.is_empty() && t.checks.is_empty() {
+            return Ok(());
+        }
+        let checks = t.checks.clone();
+        self.tx.update(entity, |data| {
+            if let ElementKind::ErEntity(p) = &mut data.kind {
+                (p.checks, p.indexes) = (checks, indexes);
+            }
+        })
+    }
+
+    /// What column `c` of `t` says about itself, as an attribute.
+    fn column(&self, t: &Table, c: &Column) -> ErAttributeProps {
+        let datatype = self.types.get(&c.datatype).cloned().unwrap_or_else(|| c.datatype.clone());
+        let (datatype, length) = split_type(&datatype);
+        ErAttributeProps {
+            derived: c.generated,
+            virtual_column: c.generated && c.virtual_column,
+            auto_increment: c.auto_increment,
+            physical_name: c.name.clone(),
+            datatype,
+            length_precision: length.unwrap_or_default(),
+            not_null: c.not_null,
+            default_value: c.default.clone().unwrap_or_default(),
+            unique: t.uniques.iter().any(|u| *u == [c.name.as_str()]),
+            check: c.check.clone().unwrap_or_default(),
+            ..Default::default()
+        }
     }
 
     /// The entity of a referenced table; S10: a placeholder if it is not there.
@@ -500,17 +593,8 @@ impl Mapper<'_, '_> {
             if !take || taken {
                 continue;
             }
-            let (datatype, length) = split_type(&c.datatype);
-            let props = ErAttributeProps {
-                key,
-                physical_name: c.name.clone(),
-                datatype,
-                length_precision: length.unwrap_or_default(),
-                not_null: c.not_null,
-                default_value: c.default.clone().unwrap_or_default(),
-                foreign_key: Some(relationship),
-                ..Default::default()
-            };
+            let props =
+                ErAttributeProps { key, foreign_key: Some(relationship), ..self.column(t, c) };
             let mut data = ElementData::new(c.name.clone(), ElementKind::ErAttribute(props));
             data.documentation = c.comment.clone().unwrap_or_default();
             self.tx.create(owner, data)?;
@@ -546,18 +630,7 @@ impl Mapper<'_, '_> {
             if !take {
                 continue;
             }
-            let (datatype, length) = split_type(&c.datatype);
-            let props = ErAttributeProps {
-                key,
-                derived: c.generated,
-                multivalued: false,
-                physical_name: c.name.clone(),
-                datatype,
-                length_precision: length.unwrap_or_default(),
-                not_null: c.not_null,
-                default_value: c.default.clone().unwrap_or_default(),
-                ..Default::default()
-            };
+            let props = ErAttributeProps { key, ..self.column(t, c) };
             let mut data = ElementData::new(c.name.clone(), ElementKind::ErAttribute(props));
             data.documentation = c.comment.clone().unwrap_or_default();
             let (attribute, node) = self.node(owner.0, data)?;
@@ -661,7 +734,7 @@ mod tests {
         let f = model.children_named(import.package, "f")[0];
         assert!(matches!(
             model.get(f).unwrap().kind(),
-            ElementKind::ErRelationship(ErRelationshipProps { identifying: false })
+            ElementKind::ErRelationship(ErRelationshipProps { identifying: false, .. })
         ));
         let roles: Vec<&str> =
             umlcraft_notation::er::participations(model, f).map(|p| p.role.as_str()).collect();

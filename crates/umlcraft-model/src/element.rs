@@ -7,8 +7,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::diagram::DiagramKind;
 use crate::er::{
-    ErAttributeProps, ErDisplay, ErEntityProps, ErIsAProps, ErNotation, ErParticipationProps,
-    ErRelationshipProps, ErSubtypingProps,
+    ErAttributeProps, ErDisplay, ErDomainProps, ErEntityProps, ErIsAProps, ErNotation,
+    ErParticipationProps, ErRelationshipProps, ErSubtypingProps,
 };
 use crate::id::Id;
 
@@ -1239,6 +1239,7 @@ pub enum ElementKind {
     ErIsA(ErIsAProps),
     ErParticipation(ErParticipationProps),
     ErSubtyping(ErSubtypingProps),
+    ErDomain(ErDomainProps),
 }
 
 /// How an element refers to another element, and what the target must be.
@@ -1547,6 +1548,7 @@ impl ElementKind {
             Self::ErIsA(_) => "erIsA",
             Self::ErParticipation(_) => "erParticipation",
             Self::ErSubtyping(_) => "erSubtyping",
+            Self::ErDomain(_) => "erDomain",
         }
     }
 
@@ -1664,7 +1666,9 @@ impl ElementKind {
                     || self.is_classifier()
                     || matches!(self, K::Interaction | K::Activity | K::StateMachine)
             }
-            K::ErEntity(_) | K::ErRelationship(_) | K::ErIsA(_) => self.is_namespace(),
+            K::ErEntity(_) | K::ErRelationship(_) | K::ErIsA(_) | K::ErDomain(_) => {
+                self.is_namespace()
+            }
             // An attribute not yet joined to anything waits in the package.
             K::ErAttribute(_) => {
                 self.is_namespace()

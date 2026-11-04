@@ -113,3 +113,65 @@ pub fn unordered(table: &str) -> Vec<String> {
     lines.sort();
     lines
 }
+
+/// What `describe` leaves out: the types, conditions, uniqueness and indexes of the tables and
+/// the domains, one line each, sorted.
+pub fn rules(model: &Model, package: Id) -> Vec<String> {
+    let mut lines = Vec::new();
+    for e in model.children(package).iter().filter_map(|&c| model.get(c)) {
+        match e.kind() {
+            ElementKind::ErEntity(p) => {
+                for c in &p.checks {
+                    lines.push(format!("{}: check {c}", e.name()));
+                }
+                for i in &p.indexes {
+                    let u = if i.unique { "unique " } else { "" };
+                    lines.push(format!(
+                        "{}: {u}index {} ({})",
+                        e.name(),
+                        i.name,
+                        i.columns.join(", ")
+                    ));
+                }
+                for a in model.children(e.id()).iter().filter_map(|&c| model.get(c)) {
+                    if let ElementKind::ErAttribute(p) = a.kind() {
+                        let mut line = format!(
+                            "{}.{}: {}({}) not null {} unique {}",
+                            e.name(),
+                            a.name(),
+                            p.datatype,
+                            p.length_precision,
+                            p.not_null,
+                            p.unique
+                        );
+                        if !p.check.is_empty() {
+                            line.push_str(&format!(" check {}", p.check));
+                        }
+                        if !p.default_value.is_empty() {
+                            line.push_str(&format!(" default {}", p.default_value));
+                        }
+                        if p.auto_increment {
+                            line.push_str(" auto_increment");
+                        }
+                        if p.virtual_column {
+                            line.push_str(" virtual");
+                        }
+                        lines.push(line);
+                    }
+                }
+            }
+            ElementKind::ErRelationship(p) if p.on_delete.is_some() || p.on_update.is_some() => {
+                lines.push(format!(
+                    "{}: on delete {:?} on update {:?}",
+                    e.name(),
+                    p.on_delete,
+                    p.on_update
+                ));
+            }
+            ElementKind::ErDomain(p) => lines.push(format!("domain {}: {p:?}", e.name())),
+            _ => {}
+        }
+    }
+    lines.sort();
+    lines
+}

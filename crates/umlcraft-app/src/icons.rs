@@ -168,6 +168,8 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
         ElementKind::ErRelationship(_) => node(N::ErRelationship),
         ElementKind::ErIsA(_) => node(N::ErIsA),
         ElementKind::ErParticipation(_) | ElementKind::ErSubtyping(_) => edge(E::ErLine),
+        ElementKind::ErDomain(p) if !p.values.is_empty() => node(N::Enumeration),
+        ElementKind::ErDomain(_) => node(N::Class),
         // Elements no tool draws, with icons of their own.
         ElementKind::Model => Some(uml("model")),
         ElementKind::EnumerationLiteral => Some(uml("enumerationLiteral")),

@@ -52,10 +52,7 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
         let id = tx.create(ticket, ElementData::new("ID", ElementKind::ErAttribute(key)))?;
         let books = tx.create(
             package,
-            ElementData::new(
-                "bucht",
-                ElementKind::ErRelationship(ErRelationshipProps { identifying: true }),
-            ),
+            ElementData::new("bucht", ElementKind::ErRelationship(ErRelationshipProps::new(true))),
         )?;
         let mut part = ErParticipationProps::new(books, customer);
         part.cardinality = Some(Cardinality::ONE_ONE);

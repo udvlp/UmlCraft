@@ -1927,7 +1927,7 @@ fn constraint_labels_through_astah() {
 /// relationship whose foreign key columns UmlCraft made, and two subtypes.
 #[test]
 fn er_diagrams_through_astah() {
-    use umlcraft_model::{ErAttributeProps, ErKey, ErNotation};
+    use umlcraft_model::{ErAttributeProps, ErDomainProps, ErIndex, ErKey, ErNotation};
     use umlcraft_notation::er::{self, IeLine};
     let mut doc = Document::new(Model::new("er"));
     let root = doc.model().root();
@@ -1960,6 +1960,26 @@ fn er_diagrams_through_astah() {
         er::relate(tx, diagram, IeLine::Identifying, order, line)?;
         er::relate(tx, diagram, IeLine::Subtype, person, employee)?;
         er::relate(tx, diagram, IeLine::Subtype, person, student)?;
+        let money = ErDomainProps {
+            datatype: "DECIMAL".into(),
+            length_precision: "10,2".into(),
+            not_null: true,
+            default_value: "0".into(),
+            ..Default::default()
+        };
+        tx.create(package, ElementData::new("money", ElementKind::ErDomain(money)))?;
+        let order = tx.model().elements().find(|e| e.name() == "Order").unwrap().id();
+        let total = ErAttributeProps { datatype: "money".into(), ..Default::default() };
+        tx.create(order, ElementData::new("total", ElementKind::ErAttribute(total)))?;
+        tx.update(order, |data| {
+            if let ElementKind::ErEntity(p) = &mut data.kind {
+                p.indexes = vec![ErIndex {
+                    name: "ix_order_customer".into(),
+                    columns: vec!["customer id".into()],
+                    unique: false,
+                }];
+            }
+        })?;
         Ok(())
     })
     .unwrap();
@@ -1989,7 +2009,42 @@ fn er_diagrams_through_astah() {
             .into_iter()
             .collect()
     };
-    assert_eq!(columns("Order"), ["customer id fk", "order no key"]);
+    assert_eq!(columns("Order"), ["customer id fk", "order no key", "total"]);
+    let ElementKind::ErEntity(order) = entity("Order").kind() else { unreachable!() };
+    assert_eq!(
+        order.indexes,
+        [ErIndex {
+            name: "ix_order_customer".into(),
+            columns: vec!["customer id".into()],
+            unique: false
+        }]
+    );
+    let domains: Vec<(String, ErDomainProps)> = model
+        .elements()
+        .filter_map(|e| match e.kind() {
+            ElementKind::ErDomain(p) => Some((e.name().to_owned(), p.clone())),
+            _ => None,
+        })
+        .collect();
+    let money = ErDomainProps {
+        datatype: "DECIMAL".into(),
+        length_precision: "10,2".into(),
+        not_null: true,
+        default_value: "0".into(),
+        ..Default::default()
+    };
+    assert_eq!(domains, [("money".to_owned(), money)]);
+    let total =
+        model.children(entity("Order").id()).iter().filter_map(|&c| model.get(c)).find_map(|a| {
+            match a.kind() {
+                ElementKind::ErAttribute(p) if a.name() == "total" => Some(p.clone()),
+                _ => None,
+            }
+        });
+    assert_eq!(
+        total.map(|p| (p.datatype, p.length_precision)),
+        Some(("money".into(), String::new()))
+    );
     assert_eq!(columns("Order line"), ["line no key", "order no key fk"]);
     assert_eq!(columns("Employee"), ["person id key fk", "staff no key"]);
     assert!(matches!(entity("Order line").kind(), ElementKind::ErEntity(p) if p.weak));

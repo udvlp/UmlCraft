@@ -459,6 +459,11 @@ prop:
   er_length_precision: Länge/Genauigkeit
   er_not_null: NOT NULL
   er_unique: Eindeutig
+  er_check: Prüfung (CHECK)
+  er_checks: Prüfungen (CHECK), eine je Zeile
+  er_indexes: Indizes, einer je Zeile
+  er_indexes_placeholder: "UNIQUE ix_name (spalte_a, spalte_b)"
+  er_values: Werte (Aufzählung), durch Kommas getrennt
   er_foreign_key: Fremdschlüssel von
   er_unnamed: (unbenannte Beziehung)
   er_notation: Notation
@@ -477,6 +482,16 @@ prop:
   er_disjoint_yes: Disjunkt (d)
   er_disjoint_no: Überlappend (o)
   er_database: Datenbank
+  er_auto_increment: Von der Datenbank nummeriert (AUTO_INCREMENT)
+  er_virtual: Beim Lesen berechnet (VIRTUAL), nicht gespeichert
+  er_on_delete: Beim Löschen
+  er_on_update: Beim Ändern
+  er_action_default: Vorgabe der Datenbank
+  er_action_cascade: CASCADE
+  er_action_set_null: SET NULL
+  er_action_set_default: SET DEFAULT
+  er_action_restrict: RESTRICT
+  er_action_no_action: NO ACTION
 template_kind:
   type: Typ
   value: Wert
@@ -593,6 +608,9 @@ export_dropped:
   erAssociativeEntity: Assoziative Entities (als Entities exportiert)
   erCompositeAttribute: Zusammengesetzte Attribute (ihre Teile als Spalten exportiert)
   erUnique: UNIQUE von Spalten
+  erCheck: Prüfungen (CHECK)
+  erEnumeration: Werte von Aufzählungs-Domänen
+  erIndex: Indizes ohne Spalten, die es in der Tabelle gibt
   erDerived: Abgeleitete Attribute (als Spalten exportiert)
   erMultivalued: Mehrwertige Attribute (als Spalten exportiert)
   erDisjoint: Disjunkte oder überlappende Subtypen
@@ -799,6 +817,7 @@ kind:
   erIsA: IS-A
   erParticipation: Teilnahme
   erSubtyping: Spezialisierung
+  erDomain: Domäne
   callBehavior: Verhaltensaufruf
   sendSignal: Signalsendeaktion
   acceptEvent: Ereignisannahmeaktion
@@ -981,3 +1000,6 @@ sql:
   export_done: "%{file}: %{tables} Tabellen, %{foreign_keys} Fremdschlüssel"
   export_multivalued: "%{table}.%{attribute}: mehrwertiges Attribut, keine Spalte"
   export_no_key: "%{table} → %{target}: %{target} hat keinen Primärschlüssel, also kein Fremdschlüssel"
+  export_check: "%{table}: CHECK (%{check}) lässt sich in diesem Dialekt nicht schreiben"
+  export_generated: "%{table}.%{column}: im anderen Dialekt berechnet, hier eine gewöhnliche Spalte"
+  export_auto_increment: "%{table}.%{column}: MySQL zählt nur eine Spalte, die den Schlüssel anführt oder eindeutig ist, also kein AUTO_INCREMENT"

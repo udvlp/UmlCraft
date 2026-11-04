@@ -15,19 +15,29 @@
 //!   them its key unless it has one.
 //! - A subtype without foreign key columns takes the supertype's key as its own.
 //! - Foreign keys come last, as `ALTER TABLE … ADD CONSTRAINT`, so that the order of the
-//!   tables does not matter.
+//!   tables does not matter; indexes before them. They take their relationship's `ON DELETE`
+//!   and `ON UPDATE`.
+//! - Counted columns are `AUTO_INCREMENT` in MySQL (where they lead the key or are unique)
+//!   and identity columns in PostgreSQL.
+//! - Domains the columns use come first in PostgreSQL (`CREATE DOMAIN`, `CREATE TYPE … AS
+//!   ENUM`); MySQL has none, so there a column gets the domain's type (`enum(…)` for an
+//!   enumeration), its condition, default and `NOT NULL`. MySQL's `enum(…)` becomes a type of
+//!   its own in PostgreSQL, named after table and column.
 //!
-//! Types are written as the model has them; attributes without one get `varchar(255)`.
+//! Types and conditions written for the other dialect are translated ([`crate::translate`]);
+//! attributes without a type get `varchar(255)`. A generated column's expression does not go
+//! from one dialect to the other: the column is a plain one there.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use umlcraft_model::{
-    Cardinality, CardinalityMax, CardinalityMin, ElementKind, ErAttributeProps, ErEntityProps, Id,
-    Model, ModelError,
+    Cardinality, CardinalityMax, CardinalityMin, ElementKind, ErAction, ErAttributeProps,
+    ErDomainProps, ErEntityProps, ErIndex, Id, Model, ModelError,
 };
 
 use crate::dialect::Dialect;
+use crate::translate;
 
 /// The type of attributes that have none.
 const DEFAULT_TYPE: &str = "varchar(255)";
@@ -51,6 +61,21 @@ pub enum LeftOut {
     Multivalued { table: String, attribute: String },
     /// A relationship to an entity without a primary key: no foreign key.
     NoKey { table: String, target: String },
+    /// A condition the other dialect cannot read.
+    Check { table: String, check: String },
+    /// A generated column written for the other dialect: a plain column.
+    Generated { table: String, column: String },
+    /// A counted column MySQL cannot count, as it does not lead the key or a unique index.
+    AutoIncrement { table: String, column: String },
+}
+
+/// A domain of the model, and whether a column uses it.
+#[derive(Clone, Debug)]
+struct Domain {
+    name: String,
+    props: ErDomainProps,
+    comment: String,
+    used: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -61,23 +86,29 @@ struct Column {
     /// The default, or the expression of a generated column.
     default: String,
     generated: bool,
+    /// The generated column's value is computed when read.
+    virtual_column: bool,
+    auto_increment: bool,
     unique: bool,
+    check: String,
     comment: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Table {
     schema: Option<String>,
     name: String,
     columns: Vec<Column>,
     key: Vec<String>,
     uniques: Vec<Vec<String>>,
+    checks: Vec<String>,
+    indexes: Vec<ErIndex>,
     comment: String,
 }
 
 impl Table {
     fn new(schema: Option<String>, name: String, comment: String) -> Table {
-        Table { schema, name, columns: Vec::new(), key: Vec::new(), uniques: Vec::new(), comment }
+        Table { schema, name, comment, ..Table::default() }
     }
 
     fn has(&self, column: &str) -> bool {
@@ -113,6 +144,8 @@ struct Reference {
     columns: Vec<String>,
     target: usize,
     target_columns: Vec<String>,
+    on_delete: Option<ErAction>,
+    on_update: Option<ErAction>,
 }
 
 /// The tables of the entities on `diagram` (an ER diagram) as SQL for `dialect`.
@@ -127,9 +160,37 @@ pub fn ddl(model: &Model, diagram: Id, dialect: Dialect) -> Result<Ddl, ModelErr
         }
     }
     let kind = |id: Id| model.get(id).map(|e| e.kind());
+    // The domains in the packages of the entities shown and the packages around them, the
+    // nearer ones first.
+    let mut domains: Vec<Domain> = Vec::new();
+    let mut packages: Vec<Id> = Vec::new();
+    for &e in &shown {
+        let mut owner = model.get(e).and_then(|e| e.owner());
+        while let Some(o) = owner {
+            if !packages.contains(&o) {
+                packages.push(o);
+            }
+            owner = model.get(o).and_then(|e| e.owner());
+        }
+    }
+    for &p in &packages {
+        for &c in model.children(p) {
+            let Some(element) = model.get(c) else { continue };
+            if let ElementKind::ErDomain(props) = element.kind() {
+                domains.push(Domain {
+                    name: element.name().to_owned(),
+                    props: props.clone(),
+                    comment: element.data().documentation.clone(),
+                    used: false,
+                });
+            }
+        }
+    }
     let mut b = Builder {
         model,
         dialect,
+        from: imported_dialect(model, diagram),
+        domains,
         tables: Vec::new(),
         of: HashMap::new(),
         refs: Vec::new(),
@@ -168,8 +229,11 @@ pub fn ddl(model: &Model, diagram: Id, dialect: Dialect) -> Result<Ddl, ModelErr
     for &e in &shown {
         match kind(e) {
             Some(ElementKind::ErRelationship(p)) => {
-                let identifying = p.identifying;
-                b.relationship(e, identifying, columns_of.get(&e).map(Vec::as_slice));
+                let before = b.refs.len();
+                b.relationship(e, p.identifying, columns_of.get(&e).map(Vec::as_slice));
+                for r in &mut b.refs[before..] {
+                    (r.on_delete, r.on_update) = (p.on_delete, p.on_update);
+                }
             }
             Some(ElementKind::ErEntity(ErEntityProps { associative: true, .. })) => {
                 b.relationship(e, false, columns_of.get(&e).map(Vec::as_slice));
@@ -192,6 +256,9 @@ pub fn imported_dialect(model: &Model, diagram: Id) -> Option<Dialect> {
 struct Builder<'a> {
     model: &'a Model,
     dialect: Dialect,
+    /// The dialect the diagram was imported from, if it was.
+    from: Option<Dialect>,
+    domains: Vec<Domain>,
     tables: Vec<Table>,
     /// The table of each entity.
     of: HashMap<Id, usize>,
@@ -213,6 +280,8 @@ impl Builder<'_> {
             _ => (None, full.to_owned()),
         };
         let mut table = Table::new(schema, name, element.data().documentation.clone());
+        table.checks = props.checks.clone();
+        table.indexes = props.indexes.clone();
         self.add_columns(&mut table, entity);
         self.of.insert(entity, self.tables.len());
         self.tables.push(table);
@@ -232,17 +301,103 @@ impl Builder<'_> {
             if p.key.is_some() {
                 table.key.push(name.clone());
             }
-            table.columns.push(Column {
+            let mut column = Column {
                 datatype: datatype_of(p),
                 not_null: p.not_null || p.key.is_some(),
                 default: p.default_value.clone(),
                 // The import keeps the expression of a generated column as its default.
                 generated: p.derived && !p.default_value.is_empty(),
+                virtual_column: p.virtual_column,
+                auto_increment: p.auto_increment,
                 unique: p.unique,
+                check: p.check.clone(),
                 comment: element.data().documentation.clone(),
                 name,
-            });
+            };
+            if column.generated && self.foreign() {
+                column.generated = false;
+                column.default.clear();
+                let (table, column) = (table.name.clone(), column.name.clone());
+                self.left_out.push(LeftOut::Generated { table, column });
+            }
+            self.resolve_type(&table.name, &mut column, p);
+            table.columns.push(column);
         }
+    }
+
+    /// Whether the diagram's types and conditions may be another dialect's: it was imported
+    /// from one, or drawn.
+    fn foreign(&self) -> bool {
+        self.from.is_none_or(|f| f.is_mysql() != self.dialect.is_mysql())
+    }
+
+    /// The type of `column` for the dialect: a domain's (in PostgreSQL by its name, in MySQL
+    /// what it stands for), MySQL's `enum(…)` as a type of its own in PostgreSQL, others
+    /// translated.
+    fn resolve_type(&mut self, table: &str, column: &mut Column, p: &ErAttributeProps) {
+        let d = self.dialect;
+        let named =
+            self.domains.iter().position(|x| x.name.eq_ignore_ascii_case(p.datatype.trim()));
+        if let Some(k) = named {
+            if d == Dialect::Postgres {
+                self.domains[k].used = true;
+                column.datatype = qualified(&self.domains[k].name, d);
+                return;
+            }
+            let domain = self.domains[k].props.clone();
+            column.datatype = if domain.values.is_empty() {
+                let base = ErAttributeProps {
+                    datatype: domain.datatype.clone(),
+                    length_precision: domain.length_precision.clone(),
+                    ..Default::default()
+                };
+                translate::datatype(&datatype_of(&base), self.from, d)
+            } else {
+                let values: Vec<String> = domain.values.iter().map(|v| string(v, d)).collect();
+                format!("enum({})", values.join(","))
+            };
+            column.not_null |= domain.not_null;
+            if column.default.is_empty() {
+                column.default = domain.default_value.clone();
+            }
+            if !domain.check.is_empty() {
+                let check = with_value(&domain.check, &quote(&column.name, d));
+                column.check = if column.check.is_empty() {
+                    check
+                } else {
+                    format!("({}) AND ({check})", column.check)
+                };
+            }
+            return;
+        }
+        if d == Dialect::Postgres
+            && let Some(values) = translate::enum_values(&column.datatype)
+        {
+            let name = format!("{}_{}", snake(table), snake(&column.name));
+            let props = ErDomainProps { values, ..Default::default() };
+            self.domains.push(Domain {
+                name: name.clone(),
+                props,
+                comment: String::new(),
+                used: true,
+            });
+            column.datatype = quote(&name, d);
+            return;
+        }
+        column.datatype = translate::datatype(&column.datatype, self.from, d);
+    }
+
+    /// A condition for the dialect; `None` (and noted) if it cannot be written there.
+    fn condition(&mut self, table: &str, check: &str) -> Option<String> {
+        if !self.foreign() {
+            return Some(check.to_owned());
+        }
+        let out = translate::condition(check, self.dialect);
+        if out.is_none() {
+            let (table, check) = (table.to_owned(), check.to_owned());
+            self.left_out.push(LeftOut::Check { table, check });
+        }
+        out
     }
 
     /// The columns of an entity's table with the attributes they come from.
@@ -295,7 +450,10 @@ impl Builder<'_> {
                 not_null: not_null || in_key,
                 default: String::new(),
                 generated: false,
+                virtual_column: false,
+                auto_increment: false,
                 unique: false,
+                check: String::new(),
                 comment: String::new(),
             });
             if in_key {
@@ -306,7 +464,14 @@ impl Builder<'_> {
         if unique {
             self.tables[table].unique(columns.clone());
         }
-        self.refs.push(Reference { table, columns, target, target_columns });
+        self.refs.push(Reference {
+            table,
+            columns,
+            target,
+            target_columns,
+            on_delete: None,
+            on_update: None,
+        });
     }
 
     /// Foreign key columns the model has: they reference the columns of `target` they are
@@ -339,7 +504,14 @@ impl Builder<'_> {
         if unique {
             self.tables[table].unique(columns.clone());
         }
-        self.refs.push(Reference { table, columns, target, target_columns });
+        self.refs.push(Reference {
+            table,
+            columns,
+            target,
+            target_columns,
+            on_delete: None,
+            on_update: None,
+        });
     }
 
     fn no_key(&mut self, table: usize, target: usize) {
@@ -482,8 +654,37 @@ impl Builder<'_> {
         }
     }
 
-    fn write(self, diagram: &str) -> Ddl {
+    fn write(mut self, diagram: &str) -> Ddl {
         let d = self.dialect;
+        // The conditions as the dialect writes them.
+        for t in 0..self.tables.len() {
+            let name = self.tables[t].name.clone();
+            let checks = std::mem::take(&mut self.tables[t].checks);
+            self.tables[t].checks =
+                checks.iter().filter_map(|c| self.condition(&name, c)).collect();
+            for c in 0..self.tables[t].columns.len() {
+                let table = &mut self.tables[t];
+                let column = &mut table.columns[c];
+                let leads = table.key.first() == Some(&column.name) || column.unique;
+                if d.is_mysql() && column.auto_increment && !leads {
+                    column.auto_increment = false;
+                    let (table, column) = (name.clone(), column.name.clone());
+                    self.left_out.push(LeftOut::AutoIncrement { table, column });
+                }
+                let check = std::mem::take(&mut self.tables[t].columns[c].check);
+                if !check.is_empty() {
+                    let check = self.condition(&name, &check).unwrap_or_default();
+                    self.tables[t].columns[c].check = check;
+                }
+            }
+        }
+        let mut domains = std::mem::take(&mut self.domains);
+        domains.retain(|x| x.used);
+        for x in &mut domains {
+            if !x.props.check.is_empty() {
+                x.props.check = self.condition(&x.name, &x.props.check).unwrap_or_default();
+            }
+        }
         let mut sql = String::new();
         let _ =
             writeln!(sql, "-- UmlCraft: the ER diagram \"{}\" for {d}", diagram.replace('\n', " "));
@@ -502,10 +703,46 @@ impl Builder<'_> {
         for s in &schemas {
             let _ = writeln!(sql, "CREATE SCHEMA IF NOT EXISTS {};", quote(s, d));
         }
+        if !domains.is_empty() {
+            sql.push('\n');
+        }
+        for x in &domains {
+            let name = qualified(&x.name, d);
+            let p = &x.props;
+            let what = if p.values.is_empty() {
+                let base = ErAttributeProps {
+                    datatype: p.datatype.clone(),
+                    length_precision: p.length_precision.clone(),
+                    ..Default::default()
+                };
+                let mut s = format!(
+                    "CREATE DOMAIN {name} AS {}",
+                    translate::datatype(&datatype_of(&base), self.from, d)
+                );
+                if !p.default_value.is_empty() {
+                    let _ = write!(s, " DEFAULT {}", literal(&p.default_value, d));
+                }
+                if p.not_null {
+                    s.push_str(" NOT NULL");
+                }
+                if !p.check.is_empty() {
+                    let _ = write!(s, " CHECK ({})", p.check);
+                }
+                let _ = writeln!(sql, "{s};");
+                "DOMAIN"
+            } else {
+                let values: Vec<String> = p.values.iter().map(|v| string(v, d)).collect();
+                let _ = writeln!(sql, "CREATE TYPE {name} AS ENUM ({});", values.join(", "));
+                "TYPE"
+            };
+            if !x.comment.is_empty() {
+                let _ = writeln!(sql, "COMMENT ON {what} {name} IS {};", string(&x.comment, d));
+            }
+        }
         for t in &self.tables {
             let name = table_name(t, d);
             let _ = write!(sql, "\nCREATE TABLE {name} (");
-            let mut lines: Vec<String> = t.columns.iter().map(|c| column(c, d)).collect();
+            let mut lines: Vec<String> = t.columns.iter().map(|c| column(c, t, d)).collect();
             if !t.key.is_empty() {
                 let key: Vec<String> = t.key.iter().map(|k| quote(k, d)).collect();
                 lines.push(format!("PRIMARY KEY ({})", key.join(", ")));
@@ -513,6 +750,9 @@ impl Builder<'_> {
             for u in &t.uniques {
                 let u: Vec<String> = u.iter().map(|c| quote(c, d)).collect();
                 lines.push(format!("UNIQUE ({})", u.join(", ")));
+            }
+            for c in &t.checks {
+                lines.push(format!("CHECK ({c})"));
             }
             for (k, line) in lines.iter().enumerate() {
                 let comma = if k + 1 < lines.len() { "," } else { "" };
@@ -537,15 +777,9 @@ impl Builder<'_> {
                 }
             }
         }
-        if !self.refs.is_empty() {
-            sql.push('\n');
-        }
         let mut names: HashSet<String> = HashSet::new();
-        for r in &self.refs {
-            let (t, target) = (&self.tables[r.table], &self.tables[r.target]);
-            let key: Vec<String> = r.target_columns.iter().map(|k| quote(k, d)).collect();
-            let columns: Vec<String> = r.columns.iter().map(|c| quote(c, d)).collect();
-            let mut base: String = format!("fk_{}_{}", snake(&t.name), snake(&r.columns.join("_")));
+        let mut name_of = |base: String| {
+            let mut base = base;
             if base.len() > NAME_LIMIT {
                 let cut = (0..=NAME_LIMIT).rev().find(|&i| base.is_char_boundary(i)).unwrap_or(0);
                 base.truncate(cut);
@@ -556,9 +790,53 @@ impl Builder<'_> {
                 base
             };
             names.insert(name.clone());
+            name
+        };
+        let indexes: Vec<(&Table, &ErIndex)> = self
+            .tables
+            .iter()
+            .flat_map(|t| t.indexes.iter().map(move |i| (t, i)))
+            .filter(|(t, i)| !i.columns.is_empty() && !(i.unique && i.columns == t.key))
+            .collect();
+        if !indexes.is_empty() {
+            sql.push('\n');
+        }
+        for (t, i) in indexes {
+            let columns: Vec<String> = i.columns.iter().map(|c| quote(c, d)).collect();
+            let prefix = if i.unique { "uq" } else { "ix" };
+            let base = if i.name.is_empty() {
+                format!("{prefix}_{}_{}", snake(&t.name), snake(&i.columns.join("_")))
+            } else {
+                i.name.clone()
+            };
+            let name = name_of(base);
+            let unique = if i.unique { "UNIQUE " } else { "" };
             let _ = writeln!(
                 sql,
-                "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({});",
+                "CREATE {unique}INDEX {} ON {} ({});",
+                quote(&name, d),
+                table_name(t, d),
+                columns.join(", ")
+            );
+        }
+        if !self.refs.is_empty() {
+            sql.push('\n');
+        }
+        for r in &self.refs {
+            let (t, target) = (&self.tables[r.table], &self.tables[r.target]);
+            let key: Vec<String> = r.target_columns.iter().map(|k| quote(k, d)).collect();
+            let columns: Vec<String> = r.columns.iter().map(|c| quote(c, d)).collect();
+            let name = name_of(format!("fk_{}_{}", snake(&t.name), snake(&r.columns.join("_"))));
+            let mut actions = String::new();
+            if let Some(a) = r.on_delete {
+                let _ = write!(actions, " ON DELETE {}", a.sql());
+            }
+            if let Some(a) = r.on_update {
+                let _ = write!(actions, " ON UPDATE {}", a.sql());
+            }
+            let _ = writeln!(
+                sql,
+                "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}){actions};",
                 table_name(t, d),
                 quote(&name, d),
                 columns.join(", "),
@@ -617,28 +895,91 @@ fn datatype_of(p: &ErAttributeProps) -> String {
     }
 }
 
-fn column(c: &Column, d: Dialect) -> String {
+fn column(c: &Column, t: &Table, d: Dialect) -> String {
     let mut out = format!("{} {}", quote(&c.name, d), c.datatype);
-    let identity = d == Dialect::Postgres && c.default.trim_start().starts_with("nextval(");
+    // A counted column; a sequence of the dump's own (as models imported before kept it)
+    // too: the table gets one of its own instead.
+    let sequence = c.auto_increment || c.default.trim_start().starts_with("nextval(");
     if c.generated {
-        let _ = write!(out, " GENERATED ALWAYS AS ({}) STORED", c.default);
+        let how = if c.virtual_column { "VIRTUAL" } else { "STORED" };
+        let _ = write!(out, " GENERATED ALWAYS AS ({}) {how}", c.default);
     }
     if c.not_null {
         out.push_str(" NOT NULL");
     }
-    if identity && !c.generated {
-        // A sequence of the dump's own; the table gets one of its own instead.
+    if c.generated {
+        // Its expression is written above.
+    } else if sequence && d == Dialect::Postgres {
         out.push_str(" GENERATED BY DEFAULT AS IDENTITY");
-    } else if !c.default.is_empty() && !c.generated {
-        let _ = write!(out, " DEFAULT {}", literal(&c.default, d));
+    } else if sequence {
+        // MySQL counts only a column that leads an index.
+        if t.key.first() == Some(&c.name) || c.unique {
+            out.push_str(" AUTO_INCREMENT");
+        }
+    } else if !c.default.is_empty() {
+        let _ = write!(out, " DEFAULT {}", default_of(&c.default, d));
     }
     if c.unique {
         out.push_str(" UNIQUE");
+    }
+    if !c.check.is_empty() {
+        let _ = write!(out, " CHECK ({})", c.check);
     }
     if d.is_mysql() && !c.comment.is_empty() {
         let _ = write!(out, " COMMENT {}", string(&c.comment, d));
     }
     out
+}
+
+/// A column's default: in MySQL a call other than the current time in parentheses, as it
+/// takes expressions only so.
+fn default_of(value: &str, d: Dialect) -> String {
+    let v = literal(value, d);
+    let lower = v.to_ascii_lowercase();
+    let time = lower.starts_with("now(") || lower.starts_with("current_timestamp");
+    if d.is_mysql() && v.contains('(') && !time && !v.starts_with('\'') {
+        format!("({v})")
+    } else {
+        v
+    }
+}
+
+/// A condition of a domain for one column: `VALUE` is the column (outside strings).
+fn with_value(check: &str, column: &str) -> String {
+    let mut out = String::new();
+    let mut word = String::new();
+    let mut in_string = false;
+    let flush = |word: &mut String, out: &mut String| {
+        if word.eq_ignore_ascii_case("value") {
+            out.push_str(column);
+        } else {
+            out.push_str(word);
+        }
+        word.clear();
+    };
+    for c in check.chars() {
+        if !in_string && (c.is_alphanumeric() || c == '_') {
+            word.push(c);
+            continue;
+        }
+        flush(&mut word, &mut out);
+        if c == '\'' {
+            in_string = !in_string;
+        }
+        out.push(c);
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// A name that may have a schema in front: `fracht.Typ` → `fracht."Typ"` in PostgreSQL.
+fn qualified(name: &str, d: Dialect) -> String {
+    match name.split_once('.') {
+        Some((s, n)) if d == Dialect::Postgres && !s.is_empty() && !n.is_empty() => {
+            format!("{}.{}", quote(s, d), quote(n, d))
+        }
+        _ => quote(name, d),
+    }
 }
 
 fn table_name(t: &Table, d: Dialect) -> String {
@@ -791,7 +1132,7 @@ mod tests {
         identifying: bool,
         ends: &[(Id, Cardinality, &str)],
     ) -> R<Id> {
-        let kind = ElementKind::ErRelationship(ErRelationshipProps { identifying });
+        let kind = ElementKind::ErRelationship(ErRelationshipProps::new(identifying));
         let r = shown(tx, at, name, kind)?;
         for &(entity, cardinality, role) in ends {
             let mut p = ErParticipationProps::new(r, entity);

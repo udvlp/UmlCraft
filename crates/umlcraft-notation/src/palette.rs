@@ -617,7 +617,7 @@ impl NodeTool {
             }
             Self::ErRelationship => ElementKind::ErRelationship(ErRelationshipProps::default()),
             Self::ErIdentifyingRelationship => {
-                ElementKind::ErRelationship(ErRelationshipProps { identifying: true })
+                ElementKind::ErRelationship(ErRelationshipProps::new(true))
             }
             Self::ErIsA => ElementKind::ErIsA(ErIsAProps::default()),
         }

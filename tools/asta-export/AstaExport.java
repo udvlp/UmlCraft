@@ -53,6 +53,7 @@ import com.change_vision.jude.api.inf.model.IClass;
 import com.change_vision.jude.api.inf.model.IClassifierTemplateParameter;
 import com.change_vision.jude.api.inf.model.IERAttribute;
 import com.change_vision.jude.api.inf.model.IERDatatype;
+import com.change_vision.jude.api.inf.model.IERDomain;
 import com.change_vision.jude.api.inf.model.IERDiagram;
 import com.change_vision.jude.api.inf.model.IEREntity;
 import com.change_vision.jude.api.inf.model.IERModel;
@@ -434,8 +435,14 @@ public final class AstaExport {
         return erSchema;
     }
 
-    /// Entities first, then the relationships and subtypes that join them.
+    /// Domains first, then entities, the relationships and subtypes that join them, and the
+    /// indexes, whose columns may be foreign keys.
     private void erModel() {
+        for (String id : erElements) {
+            if ("erDomain".equals(type(elements.get(id)))) {
+                attempt(id, () -> erDomain(id));
+            }
+        }
         for (String id : erElements) {
             if ("erEntity".equals(type(elements.get(id)))) {
                 attempt(id, () -> erEntity(id));
@@ -449,6 +456,76 @@ public final class AstaExport {
                 attempt(id, () -> erIsA(id));
             }
         }
+        for (String id : erElements) {
+            if ("erEntity".equals(type(elements.get(id))) && created.get(id) instanceof IEREntity entity) {
+                attempt(id, () -> erIndexes(id, entity));
+            }
+        }
+    }
+
+    /// The domains by name, ignoring case.
+    private final Map<String, IERDomain> erDomains = new HashMap<>();
+
+    /// A domain: Astah's have a datatype, a length, a default and NOT NULL, but no values and
+    /// no condition.
+    private Object erDomain(String id) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        erSchema();
+        IERDatatype type = erDatatype(text(e, "datatype"));
+        IERDomain domain = (IERDomain) named(id, n -> erEditor.createERDomain(erModelElement, null, n, n, type));
+        created.put(id, domain);
+        erDomains.put(domain.getName().toLowerCase(), domain);
+        if (!text(e, "lengthPrecision").isEmpty()) {
+            domain.setLengthPrecision(text(e, "lengthPrecision"));
+        }
+        if (flag(e, "notNull")) {
+            domain.setNotNull(true);
+        }
+        if (!text(e, "defaultValue").isEmpty()) {
+            domain.setDefaultValue(text(e, "defaultValue"));
+        }
+        if (e.get("values") instanceof List<?> values && !values.isEmpty()) {
+            drop("erEnumeration");
+        }
+        if (!text(e, "check").isEmpty()) {
+            drop("erCheck");
+        }
+        common(id, domain, Set.of());
+        return domain;
+    }
+
+    /// The indexes of an entity, their columns by physical or logical name.
+    @SuppressWarnings("unchecked")
+    private Object erIndexes(String id, IEREntity entity) throws Exception {
+        Map<String, Object> e = elements.get(id);
+        if (!(e.get("indexes") instanceof List<?> indexes)) {
+            return null;
+        }
+        List<IERAttribute> all = new ArrayList<>();
+        Collections.addAll(all, entity.getPrimaryKeys());
+        Collections.addAll(all, entity.getNonPrimaryKeys());
+        int n = 0;
+        for (Object o : indexes) {
+            Map<String, Object> index = (Map<String, Object>) o;
+            List<IERAttribute> columns = new ArrayList<>();
+            for (Object c : (List<Object>) index.getOrDefault("columns", List.of())) {
+                for (IERAttribute a : all) {
+                    if (c.equals(a.getPhysicalName()) || c.equals(a.getLogicalName())) {
+                        columns.add(a);
+                        break;
+                    }
+                }
+            }
+            n++;
+            String name = index.get("name") instanceof String s && !s.isEmpty() ? s : entity.getName() + "_index" + n;
+            if (columns.isEmpty()) {
+                drop("erIndex");
+                continue;
+            }
+            boolean unique = Boolean.TRUE.equals(index.get("unique"));
+            erEditor.createERIndex(name, entity, unique, false, columns.toArray(new IERAttribute[0]));
+        }
+        return null;
     }
 
     private List<String> erChildren(String id, String type) {
@@ -470,6 +547,9 @@ public final class AstaExport {
         common(id, entity, Set.of());
         if (flag(e, "associative")) {
             drop("erAssociativeEntity");
+        }
+        if (e.get("checks") instanceof List<?> checks && !checks.isEmpty()) {
+            drop("erCheck");
         }
         erAttributes(id, entity);
         return entity;
@@ -494,8 +574,11 @@ public final class AstaExport {
     private Object erAttribute(String id, IEREntity entity) throws Exception {
         Map<String, Object> e = elements.get(id);
         String physical = text(e, "physicalName");
-        IERDatatype type = erDatatype(text(e, "datatype"));
-        IERAttribute a = (IERAttribute) named(id, n -> erEditor.createERAttribute(entity, n, physical.isEmpty() ? n : physical, type));
+        IERDomain domain = erDomains.get(text(e, "datatype").toLowerCase());
+        IERDatatype type = domain == null ? erDatatype(text(e, "datatype")) : null;
+        IERAttribute a = (IERAttribute) named(id, n -> domain == null
+                ? erEditor.createERAttribute(entity, n, physical.isEmpty() ? n : physical, type)
+                : erEditor.createERAttribute(entity, n, physical.isEmpty() ? n : physical, domain));
         created.put(id, a);
         erColumn(e, a);
         common(id, a, Set.of());
@@ -521,6 +604,9 @@ public final class AstaExport {
             if (flag(e, f)) {
                 drop("er" + Character.toUpperCase(f.charAt(0)) + f.substring(1));
             }
+        }
+        if (!text(e, "check").isEmpty()) {
+            drop("erCheck");
         }
     }
 
@@ -839,7 +925,7 @@ public final class AstaExport {
                     }
                 }
                 // Attributes, participations and subtypings come with their owner.
-                case "erEntity", "erRelationship", "erIsA" -> erElements.add(child);
+                case "erEntity", "erRelationship", "erIsA", "erDomain" -> erElements.add(child);
                 case "interaction" -> {
                     List<String> own = new ArrayList<>();
                     for (String d : children(child)) {
