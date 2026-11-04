@@ -357,16 +357,21 @@ pub fn list() -> Vec<Value> {
         tool(
             "select",
             "Selects elements on the diagram shown, as a click would; the properties panel \
-             shows the first. An empty list clears the selection.",
+             shows the first. An empty list clears the selection. In a structogram `path` \
+             selects one element, named as for `edit_structogram` (`body.1.then.0`), and the \
+             structogram's own id in `ids` selects it as a whole; the properties panel then \
+             edits it.",
             json!({
                 "ids": {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Elements or their presentations on the diagram.",
                 },
-                "diagram": id("The diagram, shown first; the one shown if omitted."),
+                "path": text("In a structogram: the element to select, e.g. `body.1.then.0`."),
+                "diagram": id("The diagram or structogram, shown first; the one shown if \
+                               omitted."),
             }),
-            &["ids"],
+            &[],
         ),
         tool(
             "create_diagram",
@@ -2400,6 +2405,18 @@ fn open_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
 // ----- Files ---------------------------------------------------------------------------------
 
 fn select(host: &mut dyn Host, args: &Value) -> Outcome {
+    let target = match opt_id(args, "diagram")? {
+        Some(id) => Some(id),
+        None => host.active_diagram(),
+    };
+    if let Some(id) = target
+        && structogram_of(host.document().model(), id).is_ok()
+    {
+        return select_in_structogram(host, id, args);
+    }
+    if opt_str(args, "path").is_some() {
+        return Err("`path` selects in a structogram; give one as `diagram`, or show one".into());
+    }
     let (diagram, _) = diagram_arg(host, args, "diagram")?;
     let ids = ids_arg(args, "ids")?.ok_or("`ids` is missing")?;
     let model = host.document().model();
@@ -2408,6 +2425,29 @@ fn select(host: &mut dyn Host, args: &Value) -> Outcome {
     host.show_diagram(diagram);
     host.select(presentations.clone());
     Ok(Reply::json(json!({ "diagram": diagram, "selection": presentations })))
+}
+
+/// `select` in a structogram: the element at `path`, the structogram itself (its id in `ids`)
+/// or nothing (no `path`, no `ids`).
+fn select_in_structogram(host: &mut dyn Host, id: Id, args: &Value) -> Outcome {
+    let path = opt_str(args, "path");
+    let ids = ids_arg(args, "ids")?.unwrap_or_default();
+    let d = &structogram_of(host.document().model(), id)?.structogram;
+    let selection = match (path, ids.as_slice()) {
+        (Some(path), []) => umlcraft_nsd::Selection::element(&structogram::locate(d, path)?),
+        (None, []) => umlcraft_nsd::Selection::Nothing,
+        (None, [only]) if *only == id => umlcraft_nsd::Selection::Root,
+        _ => {
+            return Err("In a structogram `path` names the element to select (`body.1.then.0`), \
+                        the structogram's own id in `ids` selects it as a whole, and no `path` \
+                        and an empty `ids` clear the selection."
+                .into());
+        }
+    };
+    let whole = selection == umlcraft_nsd::Selection::Root;
+    host.show_diagram(id);
+    host.select_in_structogram(id, selection);
+    Ok(Reply::json(json!({ "structogram": id, "path": path, "whole": whole })))
 }
 
 fn new_project(host: &mut dyn Host, args: &Value) -> Outcome {
@@ -3087,6 +3127,22 @@ mod tests {
         assert_eq!(got["structogram"]["body"], tree["body"]);
         let document = run(&mut host, "get_document", json!({}));
         assert_eq!(document["structograms"][0]["title"], "total(n)");
+
+        // Selecting in it: an element by its path, the whole, nothing.
+        let s = &made["id"];
+        let element = run(&mut host, "select", json!({ "diagram": s, "path": "body.1.body.0" }));
+        assert_eq!(element["path"], "body.1.body.0");
+        let whole = run(&mut host, "select", json!({ "diagram": s, "ids": [s] }));
+        assert_eq!(whole["whole"], true);
+        let none = run(&mut host, "select", json!({ "diagram": s, "ids": [] }));
+        assert_eq!(none["whole"], false);
+        let refused = |host: &mut Headless, args: Value| {
+            call(host, &Access::default(), "select", &args).is_error
+        };
+        assert!(refused(&mut host, json!({ "diagram": s, "path": "body.7" })));
+        assert!(refused(&mut host, json!({ "diagram": s, "ids": [class["id"]] })));
+        let d = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "C" }));
+        assert!(refused(&mut host, json!({ "diagram": d["diagram"], "path": "body.0" })));
 
         let image = call(
             &mut host,

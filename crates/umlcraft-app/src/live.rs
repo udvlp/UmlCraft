@@ -106,6 +106,8 @@ pub struct Effects {
     pub replace: Option<(Document, Option<PathBuf>)>,
     /// The file the project was saved to, for the recent files.
     pub saved: Option<PathBuf>,
+    /// What to select in a structogram; its editor holds the selection.
+    pub structogram_selection: Option<(Id, umlcraft_nsd::Selection)>,
 }
 
 /// The open project as the tools see it.
@@ -164,6 +166,10 @@ impl Host for AppHost<'_> {
 
     fn select(&mut self, presentations: Vec<Id>) {
         self.ws.select(presentations);
+    }
+
+    fn select_in_structogram(&mut self, structogram: Id, selection: umlcraft_nsd::Selection) {
+        self.effects.structogram_selection = Some((structogram, selection));
     }
 
     fn sample(&self) -> Result<Document, String> {

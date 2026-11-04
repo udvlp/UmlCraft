@@ -32,6 +32,9 @@ pub trait Host {
     fn saved(&mut self, path: PathBuf);
     /// Selects `presentations` of the active diagram (none: clears the selection).
     fn select(&mut self, presentations: Vec<Id>);
+    /// Selects in `structogram`, which is shown: an element, the structogram as a whole or
+    /// nothing. Only the app's editor has a selection in a structogram.
+    fn select_in_structogram(&mut self, _structogram: Id, _selection: umlcraft_nsd::Selection) {}
     /// The app's sample project; only the app has it.
     fn sample(&self) -> Result<Document, String> {
         Err("The sample project comes with the UmlCraft app, which is not running.".into())

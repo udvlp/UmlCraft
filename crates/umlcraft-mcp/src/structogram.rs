@@ -277,9 +277,83 @@ pub fn edit(
     Ok(())
 }
 
+/// The element that `path` of the JSON tree names (`body.2`, `body.1.then.0`,
+/// `body.0.branches.1.body.3`), as the editor addresses it.
+pub fn locate(d: &Diagram, path: &str) -> Result<umlcraft_nsd::path::Path, String> {
+    let missing = || format!("the structogram has no element `{path}`");
+    let mut keys = path.split('.');
+    if keys.next() != Some("body") {
+        return Err(format!("`{path}` does not start with `body`, as in `body.0`"));
+    }
+    let mut at: Vec<usize> = Vec::new();
+    let mut seq = &d.children;
+    loop {
+        let index = keys.next().and_then(|k| k.parse::<usize>().ok()).ok_or_else(missing)?;
+        let element = seq.elements.get(index).ok_or_else(missing)?;
+        at.push(index);
+        let Some(key) = keys.next() else { return Ok(at) };
+        // The branch the key names, as `element` writes them.
+        let branch = match (element.kind, key) {
+            (ElementKind::Alternative, "then")
+            | (
+                ElementKind::For
+                | ElementKind::While
+                | ElementKind::Repeat
+                | ElementKind::Forever
+                | ElementKind::Try,
+                "body",
+            ) => 0,
+            (ElementKind::Alternative, "else") | (ElementKind::Try, "catch") => 1,
+            (ElementKind::Try, "finally") => 2,
+            (ElementKind::Case | ElementKind::Parallel, "branches") => {
+                let b = keys.next().and_then(|k| k.parse::<usize>().ok()).ok_or_else(missing)?;
+                if element.kind == ElementKind::Case && keys.next() != Some("body") {
+                    return Err(missing());
+                }
+                b
+            }
+            _ => return Err(missing()),
+        };
+        seq = element.branches.get(branch).ok_or_else(missing)?;
+        at.push(branch);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_name_the_elements_the_editor_selects() {
+        let d = from_json(
+            &json!({ "title": "t", "body": [
+                { "kind": "instruction", "text": "a" },
+                { "kind": "if", "text": "x?", "then": [{ "kind": "instruction", "text": "b" }],
+                  "else": [{ "kind": "instruction", "text": "c" }] },
+                { "kind": "case", "text": "u?", "branches": [
+                    { "label": "1", "body": [] },
+                    { "label": "default", "body": [{ "kind": "call", "text": "d()" }] } ] },
+                { "kind": "parallel", "branches": [[], [{ "kind": "instruction", "text": "e" }]] },
+                { "kind": "try", "text": "err", "body": [], "catch": [],
+                  "finally": [{ "kind": "instruction", "text": "f" }] } ] }),
+            None,
+        )
+        .unwrap();
+        let text = |path: &str| {
+            let p = locate(&d, path).unwrap();
+            umlcraft_nsd::path::element(&d, &p).unwrap().text().join("\n")
+        };
+        assert_eq!(text("body.0"), "a");
+        assert_eq!(text("body.1"), "x?");
+        assert_eq!(text("body.1.then.0"), "b");
+        assert_eq!(text("body.1.else.0"), "c");
+        assert_eq!(text("body.2.branches.1.body.0"), "d()");
+        assert_eq!(text("body.3.branches.1.0"), "e");
+        assert_eq!(text("body.4.finally.0"), "f");
+        for bad in ["body", "body.9", "then.0", "body.1.else.1", "body.1.body.0", "body.0.then.0"] {
+            assert!(locate(&d, bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn the_tree_goes_there_and_back() {

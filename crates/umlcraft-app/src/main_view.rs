@@ -451,6 +451,13 @@ impl MainView {
         if let Some(path) = effects.saved {
             self.remember(&path, cx);
         }
+        if let Some((id, selection)) = effects.structogram_selection {
+            // The call may have just shown the structogram: its editor comes up first.
+            self.sync_structograms(window, cx);
+            if let Some(view) = self.structograms.get(&id).cloned() {
+                view.update(cx, |v, cx| v.select_for_client(selection, cx));
+            }
+        }
         request.answer(reply);
     }
 

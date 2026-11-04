@@ -263,6 +263,13 @@ impl NsdView {
         cx.notify();
     }
 
+    /// Selects what an AI client named (the MCP tool `select`), in the structogram as the
+    /// model holds it after the client's call.
+    pub fn select_for_client(&mut self, selection: Selection, cx: &mut Context<Self>) {
+        self.sync(cx);
+        self.select(selection, cx);
+    }
+
     /// Selects `span`, stretched with Shift from its end at `anchor`.
     fn stretch(&mut self, span: Span, anchor: NsdPath, cx: &mut Context<Self>) {
         if Selection::Elements(span.clone()).is_valid(&self.diagram) {

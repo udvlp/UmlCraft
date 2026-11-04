@@ -5,6 +5,10 @@ today.
 
 ## Unreleased
 
+- **AI clients select in structograms**: `select` takes a `path`, named as for
+  `edit_structogram` (`body.1.then.0`), and selects that element of the structogram shown;
+  the structogram's own id selects it as a whole, an empty list clears the selection. The
+  properties panel then edits what is selected, as after a click.
 - **Empty `finally` by click**: a click into the bottom band of a try without a `finally`
   selects the empty `finally`, so that elements can be pasted or inserted into it.
 
