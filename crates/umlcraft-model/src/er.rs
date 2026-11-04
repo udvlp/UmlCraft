@@ -271,6 +271,12 @@ impl Cardinality {
     pub const fn new(min: u32, max: CardinalityMax) -> Self {
         Self { min: CardinalityMin::Count(min), max }
     }
+
+    /// `(min,max)`, as cardinalities read at their entity are written.
+    pub fn parenthesized(&self) -> String {
+        let text = self.to_string();
+        format!("({})", &text[1..text.len() - 1])
+    }
 }
 
 impl fmt::Display for Cardinality {
@@ -295,12 +301,17 @@ pub struct ParseCardinalityError(pub String);
 impl FromStr for Cardinality {
     type Err = ParseCardinalityError;
 
-    /// Reads `[0,n]` (brackets optional; `*` as the minimum for any; `n`, `N` or `*` as the
-    /// maximum for many, `m` or `M` for the second many) and UML's `1..*`, `0..1`, `1` and `*`.
+    /// Reads `[0,n]` (brackets optional, or parentheses; `*` as the minimum for any; `n`, `N` or
+    /// `*` as the maximum for many, `m` or `M` for the second many) and UML's `1..*`, `0..1`,
+    /// `1` and `*`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let err = || ParseCardinalityError(s.to_owned());
         let text = s.trim();
-        let text = text.strip_prefix('[').and_then(|t| t.strip_suffix(']')).unwrap_or(text);
+        let text = text
+            .strip_prefix('[')
+            .and_then(|t| t.strip_suffix(']'))
+            .or_else(|| text.strip_prefix('(').and_then(|t| t.strip_suffix(')')))
+            .unwrap_or(text);
         let count = |b: &str| b.trim().parse::<u32>().map_err(|_| err());
         let max = |b: &str| match b.trim() {
             "n" | "N" | "*" => Ok(CardinalityMax::Many),
@@ -351,6 +362,12 @@ pub struct ErParticipationProps {
     pub entity: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cardinality: Option<Cardinality>,
+    /// How often each instance of the entity takes part, read at the entity, as diagrams with
+    /// [`DiagramProps::look_here`](crate::DiagramProps::look_here) show it. Only for
+    /// relationships without exactly two participations: for those it is the other end's
+    /// `cardinality`, otherwise it does not follow from the cardinalities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look_here: Option<Cardinality>,
     /// The entity's role, needed when it takes part twice.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub role: String,
@@ -365,6 +382,7 @@ impl ErParticipationProps {
             relationship,
             entity,
             cardinality: Some(Cardinality::ZERO_MANY),
+            look_here: None,
             role: String::new(),
             total: false,
         }
@@ -409,6 +427,9 @@ mod tests {
         assert_eq!(read("[0,m]"), "[0,m]");
         assert_eq!(read("[*,M]"), "[*,m]");
         assert_eq!(read("*,n"), "[*,n]");
+        // As read at the entity, in parentheses.
+        assert_eq!(read("(1,n)"), "[1,n]");
+        assert_eq!(Cardinality::ZERO_MANY.parenthesized(), "(0,n)");
         for bad in ["", "[2,1]", "[0,0]", "x", "[n,1]", "[1,2", "[*,0]"] {
             assert!(bad.parse::<Cardinality>().is_err(), "{bad}");
         }

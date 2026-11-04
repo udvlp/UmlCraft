@@ -593,6 +593,64 @@ pub fn participations(
     })
 }
 
+/// Whether `diagram` reads cardinalities at their entity (`DiagramProps::look_here`): only ER
+/// diagrams in Chen do.
+pub fn reads_look_here(model: &Model, diagram: Id) -> bool {
+    matches!(model.get(diagram).map(|d| d.kind()), Some(ElementKind::Diagram(d))
+        if d.diagram == DiagramKind::EntityRelationship
+            && d.notation == ErNotation::Chen
+            && d.look_here)
+}
+
+/// The participations of `participation`'s relationship, by id, and which of them it is.
+fn siblings(model: &Model, participation: Id) -> Option<(Vec<(Id, &ErParticipationProps)>, usize)> {
+    let ElementKind::ErParticipation(p) = model.get(participation)?.kind() else { return None };
+    let parts: Vec<(Id, &ErParticipationProps)> = model
+        .children(p.relationship)
+        .iter()
+        .filter_map(|&c| match model.get(c)?.kind() {
+            ElementKind::ErParticipation(q) if q.relationship == p.relationship => Some((c, q)),
+            _ => None,
+        })
+        .collect();
+    let at = parts.iter().position(|(c, _)| *c == participation)?;
+    Some((parts, at))
+}
+
+/// The cardinality the line of `participation` shows at its entity: its own (look-across), or
+/// read at the entity (`look_here`): the other end's of a binary relationship, else its own
+/// [`ErParticipationProps::look_here`].
+pub fn shown_cardinality(model: &Model, participation: Id, look_here: bool) -> Option<Cardinality> {
+    let (parts, at) = siblings(model, participation)?;
+    match () {
+        _ if !look_here => parts[at].1.cardinality,
+        _ if parts.len() == 2 => parts[1 - at].1.cardinality,
+        _ => parts[at].1.look_here,
+    }
+}
+
+/// Sets what the line of `participation` shows at its entity to `cardinality`, read as
+/// [`shown_cardinality`] reads it.
+pub fn set_shown_cardinality(
+    tx: &mut Tx<'_>,
+    participation: Id,
+    cardinality: Option<Cardinality>,
+    look_here: bool,
+) -> Result<()> {
+    let Some((parts, at)) = siblings(tx.model(), participation) else { return Ok(()) };
+    let binary = parts.len() == 2;
+    let target = if look_here && binary { parts[1 - at].0 } else { participation };
+    tx.update(target, |data| {
+        if let ElementKind::ErParticipation(p) = &mut data.kind {
+            if look_here && !binary {
+                p.look_here = cardinality;
+            } else {
+                p.cardinality = cardinality;
+            }
+        }
+    })
+}
+
 /// The participation that end `end` (0 at the source, 1 at the target) of the IE or IDEF1X line
 /// `edge` on `diagram` stands for, the line being a relationship's. A loop's ends are its two
 /// participations in order.
@@ -826,6 +884,72 @@ mod tests {
         // An entity may take part twice (a role each).
         d.connect(owner_node, rel_node).unwrap();
         assert_eq!(participations(d.doc.model(), rel).count(), 3);
+    }
+
+    #[test]
+    fn cardinalities_read_at_the_entity() {
+        use crate::scene::{ApproxMeasure, Preview, build};
+        let mut d = diagram();
+        let (rel, rel_node) = d.add(ElementKind::ErRelationship(ErRelationshipProps::default()));
+        let (_, customer) = d.add(entity(false));
+        let (_, ticket) = d.add(entity(false));
+        let at_customer = d.connect(customer, rel_node).unwrap();
+        let at_ticket = d.connect(rel_node, ticket).unwrap();
+        let diagram = d.diagram;
+        let element = |d: &Diagram, edge: Id| {
+            d.doc.model().view(diagram).unwrap().get(edge).unwrap().element.unwrap()
+        };
+        let (customer_part, ticket_part) = (element(&d, at_customer), element(&d, at_ticket));
+        // Every ticket has one customer: [1,1] at the customer, read look-across.
+        d.doc
+            .edit("customer", |tx| {
+                set_shown_cardinality(tx, customer_part, Some(Cardinality::ONE_ONE), false)
+            })
+            .unwrap();
+        let shown = |d: &Diagram| {
+            let scene = build(d.doc.model(), diagram, &Preview::default(), &ApproxMeasure);
+            let text = |edge: Id| {
+                let edge = scene.edges.iter().find(|e| e.id == edge).unwrap();
+                edge.labels.iter().map(|l| l.text.clone()).collect::<Vec<_>>().join(" ")
+            };
+            (text(at_customer), text(at_ticket))
+        };
+        assert_eq!(shown(&d), ("[1,1]".into(), "[0,n]".into()));
+        // Read at the entity, each end shows the other's: a customer books any number.
+        d.doc
+            .edit("reading", |tx| {
+                tx.update(diagram, |data| {
+                    if let ElementKind::Diagram(p) = &mut data.kind {
+                        p.look_here = true;
+                    }
+                })
+            })
+            .unwrap();
+        assert!(reads_look_here(d.doc.model(), diagram));
+        assert_eq!(shown(&d), ("(0,n)".into(), "(1,1)".into()));
+        // Setting what an end shows sets the other end's cardinality.
+        d.doc
+            .edit("ticket", |tx| {
+                set_shown_cardinality(tx, ticket_part, Some(Cardinality::ZERO_ONE), true)
+            })
+            .unwrap();
+        let model = d.doc.model();
+        assert_eq!(shown_cardinality(model, customer_part, false), Some(Cardinality::ZERO_ONE));
+        assert_eq!(shown_cardinality(model, ticket_part, true), Some(Cardinality::ZERO_ONE));
+        // A third entity: read at the entity, each end keeps a value of its own.
+        let (_, flight) = d.add(entity(false));
+        let at_flight = d.connect(rel_node, flight).unwrap();
+        let flight_part = element(&d, at_flight);
+        assert_eq!(participations(d.doc.model(), rel).count(), 3);
+        assert_eq!(shown_cardinality(d.doc.model(), flight_part, true), None);
+        d.doc
+            .edit("flight", |tx| {
+                set_shown_cardinality(tx, flight_part, Some(Cardinality::ONE_MANY), true)
+            })
+            .unwrap();
+        let model = d.doc.model();
+        assert_eq!(shown_cardinality(model, flight_part, true), Some(Cardinality::ONE_MANY));
+        assert_eq!(shown_cardinality(model, flight_part, false), Some(Cardinality::ZERO_MANY));
     }
 
     #[test]

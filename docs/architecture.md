@@ -874,7 +874,12 @@ and file. Each diagram has a notation, Chen, IE (crow's feet) or IDEF1X (see "IE
 below); the model is the same for all three. Entities (also weak and associative ones), attributes (keys, partial keys, derived,
 multivalued, composite), relationships (binary, n-ary, identifying, with attributes) and
 generalization (IS-A), with `[min,max]` on the lines read look-across (`[1,1]` at `Kunde` on
-`Kunde – bucht – Ticket`: every ticket has one customer). The shapes are Chen's as draw.io
+`Kunde – bucht – Ticket`: every ticket has one customer). A Chen diagram can read them at the
+entity instead (`DiagramProps::look_here`): `(min,max)` of how often each instance takes part,
+`(0,n)` at `Kunde` there. The model keeps look-across; between two entities the value read at
+one is the other's cardinality, so the diagram only swaps the ends (`er::shown_cardinality`,
+`er::set_shown_cardinality`); for one or three and more entities it does not follow from the
+cardinalities and is kept on its own (`ErParticipationProps::look_here`). The shapes are Chen's as draw.io
 draws them; the text and lines follow UmlCraft's canvas. `umlcraft-erm-sql` makes such
 diagrams from SQL dumps and writes them back as SQL.
 

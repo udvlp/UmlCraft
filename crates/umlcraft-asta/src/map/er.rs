@@ -257,6 +257,7 @@ impl Importer<'_> {
                 relationship,
                 entity,
                 cardinality,
+                look_here: None,
                 role: r.name(end),
                 total: false,
             });

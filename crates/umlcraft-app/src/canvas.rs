@@ -1684,10 +1684,11 @@ impl DiagramCanvas {
                 _ => None,
             };
             element.and_then(|e| match model.get(e)?.kind() {
-                ElementKind::ErParticipation(p) => Some((e, p.cardinality, p.total)),
+                ElementKind::ErParticipation(p) => Some((e, ws.shown_cardinality(e), p.total)),
                 _ => None,
             })
         };
+        let look_here = canvas.read(cx).workspace.read(cx).reads_look_here();
         let mut menu = menu.action_context(focus);
         if er_owner {
             menu = menu.menu(t!("menu.add_attribute"), Box::new(AddAttribute)).separator();
@@ -1699,8 +1700,10 @@ impl DiagramCanvas {
             menu = menu
                 .submenu(t!("menu.cardinality"), window, cx, move |menu, _, _| {
                     CARDINALITIES.into_iter().fold(menu, |menu, c| {
-                        let label =
-                            c.map_or_else(|| t!("menu.unspecified").to_string(), |c| c.to_string());
+                        let label = c.map_or_else(
+                            || t!("menu.unspecified").to_string(),
+                            |c| if look_here { c.parenthesized() } else { c.to_string() },
+                        );
                         menu.menu_with_check(
                             label,
                             cardinality == c,
@@ -2219,8 +2222,12 @@ impl DiagramCanvas {
                     member::role_text(end)
                 }
             }
-            Some(ElementKind::ErParticipation(p)) if hit.multiplicity => {
-                p.cardinality.map(|c| c.to_string()).unwrap_or_default()
+            Some(ElementKind::ErParticipation(_)) if hit.multiplicity => {
+                let shown = ws.shown_cardinality(association);
+                let text = |c: Cardinality| {
+                    if ws.reads_look_here() { c.parenthesized() } else { c.to_string() }
+                };
+                shown.map(text).unwrap_or_default()
             }
             Some(ElementKind::ErParticipation(p)) => p.role.clone(),
             _ => return,

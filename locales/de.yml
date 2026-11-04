@@ -472,6 +472,7 @@ prop:
   er_display_keys: Nur Primärschlüssel
   er_display_name: Nur Namen
   er_physical_names: Physische Namen (Datenbank)
+  er_look_here: Kardinalitäten beim Entity lesen (min,max)
   er_default_value: Standardwert
   er_identifying: Identifizierend
   er_cardinality: Kardinalität

@@ -39,6 +39,10 @@ today.
   size.
 - **Arranging ER diagrams**: lines that go around a table keep clear of the other lines
   where they can and no longer run on top of each other.
+- **ER diagrams in Chen** can read cardinalities at the entity, as `(min,max)` of how often
+  each instance takes part, instead of across the relationship (still the default): a switch
+  in the diagram's properties. Between two entities the diagram only swaps the ends; for
+  relationships of three or more entities the value at the entity is entered on its own.
 - **Routing lines**: a line leaves and enters a box where it runs straight, not only in the
   middle of its side, and lines that meet a box on one side keep apart, so that the roles and
   multiplicities at their ends have room; those labels also move around a bend close to the

@@ -1207,17 +1207,13 @@ impl PropertiesPanel {
                 let text = Self::value(&self.cardinality, cx);
                 let parsed =
                     if text.is_empty() { Ok(None) } else { text.parse::<Cardinality>().map(Some) };
-                match parsed {
-                    Ok(c) => self.apply(id, cx, move |data| {
-                        if let ElementKind::ErParticipation(p) = &mut data.kind {
-                            p.cardinality = c;
-                        }
-                    }),
-                    Err(err) => self.workspace.update(cx, |ws, cx| {
-                        ws.complain(crate::errors::cardinality_error(&err));
-                        cx.notify();
-                    }),
-                }
+                self.workspace.update(cx, |ws, cx| {
+                    match parsed {
+                        Ok(c) => ws.set_association_end(id, 0, crate::EndChange::Cardinality(c)),
+                        Err(err) => ws.complain(crate::errors::cardinality_error(&err)),
+                    }
+                    cx.notify();
+                });
             }
             Field::MemberMultiplicity => {
                 let text = Self::value(&self.member_multiplicity, cx);
@@ -1396,6 +1392,10 @@ impl PropertiesPanel {
         let data = model.get(id).expect("checked above").data().clone();
         let style = selected_presentation(ws).map(|p| p.style.clone()).unwrap_or_default();
         let declaration = member_text(model, id);
+        // An ER participation's cardinality as the active diagram reads it.
+        let cardinality = ws.shown_cardinality(id).map_or_else(String::new, |c| {
+            if ws.reads_look_here() { c.parenthesized() } else { c.to_string() }
+        });
         // A template parameter's value type, bounds and default as text.
         let parameter_texts = match &data.kind {
             ElementKind::TemplateParameter(p) => {
@@ -1665,8 +1665,7 @@ impl PropertiesPanel {
                 }
             }
             ElementKind::ErParticipation(p) => {
-                let c = p.cardinality.map(|c| c.to_string()).unwrap_or_default();
-                set(&self.cardinality, c, window, cx);
+                set(&self.cardinality, cardinality.clone(), window, cx);
                 set(&self.ends[0].role, p.role.clone(), window, cx);
             }
             _ => {}
@@ -2108,6 +2107,19 @@ impl PropertiesPanel {
                                 }
                             },
                         ));
+                } else {
+                    body = body.child(flag(
+                        "er-look-here",
+                        t!("prop.er_look_here").into(),
+                        p.look_here,
+                        workspace.clone(),
+                        id,
+                        |d, v| {
+                            if let ElementKind::Diagram(p) = &mut d.kind {
+                                p.look_here = v;
+                            }
+                        },
+                    ));
                 }
             }
             ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => {

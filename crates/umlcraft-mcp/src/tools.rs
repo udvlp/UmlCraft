@@ -200,6 +200,14 @@ pub fn list() -> Vec<Value> {
                       "description": "IS-A: whether the subtypes exclude each other (d, o)." },
         "cardinality": text("ER participations: how often the entity takes part, read \
                              look-across, e.g. [0,1], [1,n], [0,m]; \"\" for none."),
+        "cardinality_here": text("ER participations of relationships of one or of three and \
+                                  more entities: how often each instance of the entity takes \
+                                  part, read at the entity, e.g. (1,n), as Chen diagrams with \
+                                  `look_here` show it. Between two entities that is the other \
+                                  participation's `cardinality`."),
+        "look_here": flag("ER diagrams in Chen: show cardinalities read at their entity, \
+                           (min,max) of how often each instance takes part, instead of \
+                           look-across."),
         "role": text("ER participations: the entity's role, when it takes part twice."),
         "physical_name": text("ER entities and attributes: the name in the database."),
         "unique": flag("ER attributes: the column is UNIQUE."),
@@ -1510,6 +1518,14 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     set_activity_node(model, id, &mut settings, args)?;
     set_submachine(model, id, &mut settings, args)?;
     set_er(&mut settings, args)?;
+    if let ElementKind::ErParticipation(p) = &kind
+        && args.get("cardinality_here").is_some()
+        && umlcraft_notation::er::participations(model, p.relationship).count() == 2
+    {
+        return Err("between two entities, the cardinality read at one is the other \
+                    participation's `cardinality`; set that instead"
+            .into());
+    }
     let notation = pick(args, "notation", &ER_NOTATIONS)?;
     let is_er_diagram =
         matches!(&kind, ElementKind::Diagram(p) if p.diagram == DiagramKind::EntityRelationship);
@@ -1630,7 +1646,7 @@ const ER_NOTATIONS: [(&str, ErNotation); 3] =
 
 /// The settings of the elements of ER diagrams `update_element` takes; `notation` is set on
 /// its own, as switching converts the diagram.
-const ER_KEYS: [&str; 28] = [
+const ER_KEYS: [&str; 30] = [
     "unique",
     "foreign_key",
     "discriminator",
@@ -1645,6 +1661,8 @@ const ER_KEYS: [&str; 28] = [
     "total",
     "disjoint",
     "cardinality",
+    "cardinality_here",
+    "look_here",
     "role",
     "physical_name",
     "datatype",
@@ -1769,15 +1787,25 @@ fn set_er(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
             }
             ("total", ElementKind::ErParticipation(p)) => p.total = flag()?,
             ("role", ElementKind::ErParticipation(p)) => p.role = text()?,
-            ("cardinality", ElementKind::ErParticipation(p)) => {
+            ("cardinality" | "cardinality_here", ElementKind::ErParticipation(p)) => {
                 let text = text()?;
-                p.cardinality = if text.is_empty() {
+                let c = if text.is_empty() {
                     None
                 } else {
                     Some(text.parse().map_err(|e: umlcraft_model::ParseCardinalityError| {
                         format!("`{}` is no cardinality, e.g. [0,1], [1,n], 0..*", e.0)
                     })?)
                 };
+                if key == "cardinality" {
+                    p.cardinality = c;
+                } else {
+                    p.look_here = c;
+                }
+            }
+            ("look_here", ElementKind::Diagram(p))
+                if p.diagram == DiagramKind::EntityRelationship =>
+            {
+                p.look_here = flag()?
             }
             _ => return Err(format!("a {type_name} has no `{key}`")),
         }

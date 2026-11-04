@@ -738,6 +738,24 @@ impl Workspace {
 
     /// Changes end `end` of an association, or the end of an ER participation.
     pub fn set_association_end(&mut self, association: Id, end: usize, change: EndChange) {
+        // An ER participation's cardinality as the active diagram reads it.
+        if let EndChange::Cardinality(c) = change
+            && matches!(
+                self.doc.model().get(association).map(|e| e.kind()),
+                Some(ElementKind::ErParticipation(_))
+            )
+        {
+            let look_here = self.reads_look_here();
+            if self.shown_cardinality(association) == c {
+                return;
+            }
+            let label = t!("edit.properties").to_string();
+            let result = self.edit(label, |tx| {
+                umlcraft_notation::er::set_shown_cardinality(tx, association, c, look_here)
+            });
+            self.report(result);
+            return;
+        }
         self.update_element(association, |data| match &mut data.kind {
             ElementKind::Association(p) => {
                 if let Some(end) = p.ends.get_mut(end) {
@@ -749,13 +767,25 @@ impl Workspace {
                     }
                 }
             }
-            ElementKind::ErParticipation(p) => match change {
-                EndChange::Cardinality(c) => p.cardinality = c,
-                EndChange::Total(t) => p.total = t,
-                _ => {}
-            },
+            ElementKind::ErParticipation(p) => {
+                if let EndChange::Total(t) = change {
+                    p.total = t;
+                }
+            }
             _ => {}
         });
+    }
+
+    /// Whether the active diagram reads ER cardinalities at their entity.
+    pub fn reads_look_here(&self) -> bool {
+        self.active_diagram
+            .is_some_and(|d| umlcraft_notation::er::reads_look_here(self.doc.model(), d))
+    }
+
+    /// The cardinality ER participation `participation` shows, as the active diagram reads it.
+    pub fn shown_cardinality(&self, participation: Id) -> Option<Cardinality> {
+        let look_here = self.reads_look_here();
+        umlcraft_notation::er::shown_cardinality(self.doc.model(), participation, look_here)
     }
 
     /// Lets a lifeline of the active diagram end at `bottom`.

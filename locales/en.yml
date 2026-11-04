@@ -472,6 +472,7 @@ prop:
   er_display_keys: Primary keys only
   er_display_name: Names only
   er_physical_names: Physical names (database)
+  er_look_here: Read cardinalities at the entity (min,max)
   er_default_value: Default value
   er_identifying: Identifying
   er_cardinality: Cardinality

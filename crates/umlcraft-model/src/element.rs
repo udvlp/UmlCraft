@@ -1127,6 +1127,10 @@ pub struct DiagramProps {
     /// ER diagrams: Chen, IE or IDEF1X.
     #[serde(default, skip_serializing_if = "is_default")]
     pub notation: ErNotation,
+    /// ER diagrams in Chen: cardinalities read at their entity, `(min,max)` of how often each
+    /// of its instances takes part, instead of look-across (the default).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub look_here: bool,
     /// ER diagrams in IE or IDEF1X: what the entities list.
     #[serde(default, skip_serializing_if = "is_default")]
     pub er_display: ErDisplay,
@@ -1473,6 +1477,7 @@ impl ElementKind {
             hide_return_values: false,
             objects: false,
             notation: ErNotation::Chen,
+            look_here: false,
             er_display: ErDisplay::Attributes,
             physical_names: false,
         })
