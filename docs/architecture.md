@@ -165,8 +165,10 @@ that a diff shows which element changed.
   system boundaries are "hollow" and clickable only on their border and title.
 - `labels` places the edge labels that were not placed by hand (`EdgeShape::free_labels`). Each
   starts where Astah's rule puts it; if that covers a node, a line or another label, it moves to
-  the spot nearby that covers least: the other side of its line, further along it, or far enough
-  off it not to cross it, with a small cost per step away from Astah's spot. Nodes with others
+  the spot nearby that covers least: the other side of its line, further along it (a role or
+  multiplicity around the bend after a short end segment, beside the segment it reaches, or on
+  that segment's extension), or far enough off it not to cross it, with a small cost per step
+  away from Astah's spot. Arrowheads, diamonds and crosses count as obstacles. Nodes with others
   inside only count by their border and name. Two greedy rounds, the second among all labels.
   Labels placed by hand, and so all labels from `.asta` files, stay and count as obstacles.
 - `route` runs edges in the line styles of `.asta` files (`Style::line_shape`): straight through the
@@ -181,9 +183,15 @@ that a diff shows which element changed.
 - `autoroute` routes edges around the nodes, orthogonally, after Wybrow, Marriott and Stuckey
   (2009): a grid of the padded node sides, their centers and the middles of the gaps between
   them; A* over (grid point, direction) with costs for length, bends and stretches other lines
-  use already; Z-shaped routes with a short middle stretch are straightened where the boxes
-  overlap; then lines on one stretch are spread apart within their channel, and end stretches
-  slide their port along the node side. Generalizations and realizations join the sides the
+  use already. A line may leave and enter a side at any grid line across it (not too close to
+  the corners; the grid has a line through the middle of where its two boxes overlap): off the
+  middle costs 0.2 per unit, so a port slides for a straight line between
+  boxes that overlap, however narrowly, and away from a port an earlier line or a self-loop
+  took on that side, for room. Self-loops are not routed; lines keep off their area like off
+  a text. Z-shaped routes with a short middle stretch are straightened
+  where the boxes overlap; then lines on one stretch (or closer than its spacing) are spread
+  apart within their channel, 8 apart, 20 where a stretch ends at a port so that the labels
+  fit between the lines, and end stretches slide their port along the node side. Generalizations and realizations join the sides the
   boxes turn to each other, so they form trees. Boxes around an end (packages, components,
   nodes) can be crossed, swimlanes are ignored, sequence diagrams are left alone. A routed
   edge is a right-angled line with `Style::auto_route` set; `Workspace::edit` takes
@@ -204,7 +212,8 @@ that a diff shows which element changed.
   bottom up so that generals are centered over theirs. Parts nothing connects are packed into
   rows, larger ones first. Containers are laid out inside out and sized around what they
   hold. Generals with two or more specifics beyond them in the layout direction get the
-  shared style. Arranging a selection keeps its top left corner; nodes it grows into move right or
+  shared style, unless the stem, the common line or a drop to a specific would cross another
+  node. Arranging a selection keeps its top left corner; nodes it grows into move right or
   down. All its lines are routed afterwards. The other kinds but sequence diagrams use the
   same layers: flows and transitions point from layer to layer (cycles give way at the edges
   met last going out from the initial node), include and extend from the base use case to

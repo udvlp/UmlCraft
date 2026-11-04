@@ -999,6 +999,21 @@ pub fn end_markers(edge: &EdgeShape) -> Vec<Primitive> {
     result
 }
 
+/// What the markers at the ends of an edge cover, one rectangle for each end that has one.
+pub(crate) fn end_marker_bounds(edge: &EdgeShape) -> Vec<Rect> {
+    let pts = &edge.points;
+    let n = pts.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    [(pts[n - 1], pts[n - 2], edge.target_marker), (pts[0], pts[1], edge.source_marker)]
+        .into_iter()
+        .filter_map(|(tip, from, m)| {
+            marker(tip, from, m).iter().filter_map(Primitive::bounds).reduce(|a, b| a.union(&b))
+        })
+        .collect()
+}
+
 /// The triangle that shows which way an association's name reads. Astah draws it black
 /// whatever the line's color.
 pub fn name_arrow(edge: &EdgeShape) -> Option<Primitive> {

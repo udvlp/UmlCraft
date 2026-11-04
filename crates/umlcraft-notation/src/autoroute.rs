@@ -25,6 +25,8 @@ use umlcraft_model::{
 pub const MARGIN: f32 = 12.0;
 /// Distance between lines that share a stretch, where there is room.
 const SPACING: f32 = 8.0;
+/// The same for stretches that start or end at a port, where the lines' labels go.
+const PORT_SPACING: f32 = 20.0;
 /// What a bend costs, as a length.
 const BEND: f32 = 40.0;
 /// Extra cost per unit of length of a stretch that an earlier route already uses.
@@ -33,6 +35,17 @@ const SHARED: f32 = 0.6;
 const HUG: f32 = 0.05;
 /// How close to a corner of its node a port may move.
 const PORT_INSET: f32 = 4.0;
+/// How close to a corner a port may slide to make a line straighter (at most a quarter of
+/// the side), and what that costs per unit of length away from the middle: much less than
+/// the length it saves, so that a port leaves the middle for a straight line through a
+/// narrow overlap of two nodes, and to spread the ends of lines on a crowded side.
+const SLIDE_INSET: f32 = 12.0;
+const OFF_MIDDLE: f32 = 0.2;
+/// What a port costs at most for lying close to a port an earlier line took on the same side,
+/// and from how far it costs nothing: lines spread their ends where they can, so that their
+/// labels find room.
+const CROWD: f32 = 40.0;
+const CROWD_RANGE: f32 = 40.0;
 /// Coordinates closer than this are the same grid line.
 const SAME: f32 = 0.5;
 /// Distance a route keeps from texts drawn outside nodes, such as a pin's name, where it can.
@@ -67,7 +80,7 @@ impl Request {
 }
 
 /// The sides of a box, in the order the router tries them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Side {
     Right,
     Left,
@@ -86,6 +99,34 @@ impl Side {
             Side::Bottom => Dir::South,
             Side::Top => Dir::North,
         }
+    }
+
+    /// The ports this side of `r` offers on `grid`: where each grid line across it meets it,
+    /// clear of the corners, with the point `MARGIN` outside it and how far it lies from the
+    /// middle. The middle is always one of them.
+    fn ports(self, r: Rect, grid: &Grid) -> Vec<(Point, Point, f32)> {
+        let (port, exit) = self.port(r);
+        let vertical = matches!(self, Side::Top | Side::Bottom);
+        let (lo, hi, middle, lines) = if vertical {
+            (r.x, r.right(), port.x, &grid.xs)
+        } else {
+            (r.y, r.bottom(), port.y, &grid.ys)
+        };
+        let inset = SLIDE_INSET.min((hi - lo) / 4.0);
+        let mut out = vec![(port, exit, 0.0)];
+        for &at in lines.iter().filter(|&&v| v >= lo + inset && v <= hi - inset) {
+            if (at - middle).abs() < SAME {
+                continue;
+            }
+            let moved = |p: Point| if vertical { Point::new(at, p.y) } else { Point::new(p.x, at) };
+            out.push((moved(port), moved(exit), (at - middle).abs()));
+        }
+        out
+    }
+
+    /// Where `p` lies along this side.
+    fn along(self, p: Point) -> f32 {
+        if matches!(self, Side::Top | Side::Bottom) { p.x } else { p.y }
     }
 
     /// The middle of this side of `r`, and the point `MARGIN` outside it.
@@ -187,7 +228,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn new(boxes: &[Rect], texts: &[Rect]) -> Grid {
+    fn new(boxes: &[Rect], texts: &[Rect], requests: &[Request]) -> Grid {
         let mut xs = Vec::new();
         let mut ys = Vec::new();
         for r in boxes {
@@ -195,6 +236,19 @@ impl Grid {
             let c = r.center();
             xs.extend([(p.x, true), (p.right(), true), (c.x, false)]);
             ys.extend([(p.y, true), (p.bottom(), true), (c.y, false)]);
+        }
+        // Through the middle of where the two ends of a line overlap, however narrow, so that
+        // a straight line can run there.
+        for r in requests {
+            let (a, b) = (boxes[r.source], boxes[r.target]);
+            let (x0, x1) = (a.x.max(b.x), a.right().min(b.right()));
+            let (y0, y1) = (a.y.max(b.y), a.bottom().min(b.bottom()));
+            if x1 > x0 {
+                xs.push(((x0 + x1) / 2.0, false));
+            }
+            if y1 > y0 {
+                ys.push(((y0 + y1) / 2.0, false));
+            }
         }
         for r in texts {
             let p = r.inflate(TEXT_MARGIN);
@@ -314,17 +368,34 @@ impl PartialOrd for Entry {
 /// corners to the border of its target; consecutive points differ in x or in y only. `None`
 /// where there is no route: a box contains the other end, or the ends are shut in.
 pub fn route(boxes: &[Rect], requests: &[Request]) -> Vec<Option<Vec<Point>>> {
-    route_around(boxes, &[], requests)
+    route_around(boxes, &[], &[], requests)
 }
 
 /// Routes `requests` around `boxes` as [`route`] does, keeping off `texts` (drawn outside
-/// nodes) where a way around them is not much longer.
+/// nodes) and the `loops` (lines from a box to itself, by box and waypoints) where a way
+/// around them is not much longer; the ends of the loops count as ports already taken.
 pub fn route_around(
     boxes: &[Rect],
     texts: &[Rect],
+    loops: &[(usize, Vec<Point>)],
     requests: &[Request],
 ) -> Vec<Option<Vec<Point>>> {
-    let grid = Grid::new(boxes, texts);
+    let mut ports: Ports = HashMap::new();
+    let mut texts = texts.to_vec();
+    for (b, waypoints) in loops {
+        let (Some(&first), Some(&last)) = (waypoints.first(), waypoints.last()) else { continue };
+        let r = boxes[*b];
+        let mut area = Rect::from_corners(first, first);
+        for p in waypoints.iter().copied().chain([leaving(r, first).1, leaving(r, last).1]) {
+            area = area.union(&Rect::from_corners(p, p));
+        }
+        texts.push(area);
+        for p in [first, last] {
+            let (side, port) = leaving(r, p);
+            ports.entry((*b, side)).or_default().push(side.along(port));
+        }
+    }
+    let grid = Grid::new(boxes, &texts, requests);
     let mut used: HashMap<(usize, usize), u32> = HashMap::new();
     let mut order: Vec<usize> = (0..requests.len()).collect();
     let span = |r: &Request| {
@@ -335,11 +406,19 @@ pub fn route_around(
     let mut routes = vec![None; requests.len()];
     let mut sides = vec![None; requests.len()];
     for i in order {
-        if let Some((points, vertices, ends)) = shortest(&grid, boxes, requests[i], &used) {
+        let request = requests[i];
+        if let Some((points, vertices, ends)) = shortest(&grid, boxes, request, &used, &ports) {
             for pair in vertices.windows(2) {
                 *used.entry((pair[0].min(pair[1]), pair[0].max(pair[1]))).or_default() += 1;
             }
-            routes[i] = Some(unjog(points, boxes, requests[i]));
+            let points = unjog(points, boxes, request);
+            for (b, side, p) in [
+                (request.source, ends.0, points[0]),
+                (request.target, ends.1, points[points.len() - 1]),
+            ] {
+                ports.entry((b, side)).or_default().push(side.along(p));
+            }
+            routes[i] = Some(points);
             sides[i] = Some(ends);
         }
     }
@@ -348,9 +427,31 @@ pub fn route_around(
     routes
 }
 
+/// The side of `r` a line to `p` outside it leaves by, and about where: across from `p`, or
+/// at the end of the side nearest to it.
+fn leaving(r: Rect, p: Point) -> (Side, Point) {
+    let (x, y) = (p.x.clamp(r.x, r.right()), p.y.clamp(r.y, r.bottom()));
+    match () {
+        _ if p.x > r.right() => (Side::Right, Point::new(r.right(), y)),
+        _ if p.x < r.x => (Side::Left, Point::new(r.x, y)),
+        _ if p.y < r.y => (Side::Top, Point::new(x, r.y)),
+        _ => (Side::Bottom, Point::new(x, r.bottom())),
+    }
+}
+
 /// A route found on the grid: its points, the grid vertices it passes and the sides it leaves
 /// and enters by.
 type Found = (Vec<Point>, Vec<usize>, (Side, Side));
+
+/// The ports earlier lines took, by box and side, as their place along the side.
+type Ports = HashMap<(usize, Side), Vec<f32>>;
+
+/// What a port at `at` along side `side` of box `b` costs for the ports already taken there.
+fn crowd(ports: &Ports, b: usize, side: Side, at: f32) -> f32 {
+    ports.get(&(b, side)).map_or(0.0, |taken| {
+        taken.iter().map(|&p| CROWD * (1.0 - (at - p).abs() / CROWD_RANGE).max(0.0)).sum()
+    })
+}
 
 /// The cheapest route for `request`.
 fn shortest(
@@ -358,6 +459,7 @@ fn shortest(
     boxes: &[Rect],
     request: Request,
     used: &HashMap<(usize, usize), u32>,
+    ports: &Ports,
 ) -> Option<Found> {
     let (source, target) = (boxes[request.source], boxes[request.target]);
     if request.source == request.target
@@ -375,19 +477,22 @@ fn shortest(
     let blocked = |list: &[u32]| list.iter().any(|b| !passable.contains(b));
 
     // Facing sides that are shut lift the restriction.
-    let anywhere = || shortest(grid, boxes, Request { facing: false, ..request }, used);
+    let anywhere = || shortest(grid, boxes, Request { facing: false, ..request }, used, ports);
     let (source_sides, target_sides) = request.sides(source, target);
 
     // States are (vertex, direction of arrival); the goal is one state past the target's
     // exits, reached through any of them.
     let goal = grid.cells.len() * 4;
-    let exits: Vec<(usize, Side, Point)> = target_sides
+    // Each with what its distance from the middle of its side costs.
+    let exits: Vec<(usize, Side, Point, f32)> = target_sides
         .iter()
-        .map(|&side| {
-            let (port, exit) = side.port(target);
-            (grid.vertex(exit), side, port)
+        .flat_map(|&side| {
+            side.ports(target, grid).into_iter().map(move |(port, exit, off)| {
+                let cost = off * OFF_MIDDLE + crowd(ports, request.target, side, side.along(port));
+                (grid.vertex(exit), side, port, cost)
+            })
         })
-        .filter(|&(v, _, _)| !blocked(&grid.cells[v]))
+        .filter(|&(v, _, _, _)| !blocked(&grid.cells[v]))
         .collect();
     // Leaving or entering a node through a text costs as running through it.
     let stub = |v: usize| MARGIN * if grid.text_cells[v] { 1.0 + THROUGH_TEXT } else { 1.0 };
@@ -398,7 +503,7 @@ fn shortest(
         let p = grid.point(v);
         exits
             .iter()
-            .map(|&(e, _, _)| {
+            .map(|&(e, _, _, _)| {
                 let q = grid.point(e);
                 (p.x - q.x).abs() + (p.y - q.y).abs()
             })
@@ -410,15 +515,21 @@ fn shortest(
     let mut queue = BinaryHeap::new();
     let mut starts: HashMap<usize, (Side, Point)> = HashMap::new();
     for side in source_sides {
-        let (port, exit) = side.port(source);
-        let v = grid.vertex(exit);
-        if blocked(&grid.cells[v]) {
-            continue;
+        for (port, exit, off) in side.ports(source, grid) {
+            let v = grid.vertex(exit);
+            if blocked(&grid.cells[v]) {
+                continue;
+            }
+            let state = v * 4 + side.outward().index();
+            let cost =
+                stub(v) + off * OFF_MIDDLE + crowd(ports, request.source, side, side.along(port));
+            if best.get(&state).is_some_and(|&b| b <= cost) {
+                continue;
+            }
+            best.insert(state, cost);
+            starts.insert(state, (side, port));
+            queue.push(Entry { estimate: cost + heuristic(v), cost, state });
         }
-        let state = v * 4 + side.outward().index();
-        best.insert(state, stub(v));
-        starts.insert(state, (side, port));
-        queue.push(Entry { estimate: stub(v) + heuristic(v), cost: stub(v), state });
     }
     let mut finish = None;
     while let Some(Entry { cost, state, .. }) = queue.pop() {
@@ -430,11 +541,11 @@ fn shortest(
             continue;
         }
         let (v, arrived) = (state / 4, Dir::ALL[state % 4]);
-        for &(e, side, _) in &exits {
+        for (k, &(e, side, _, off)) in exits.iter().enumerate() {
             if e == v {
                 let inward = side.outward().opposite();
-                let total = cost + stub(e) + if arrived == inward { 0.0 } else { BEND };
-                let done = goal + exits.iter().position(|x| x.0 == e && x.1 == side).unwrap_or(0);
+                let total = cost + stub(e) + off + if arrived == inward { 0.0 } else { BEND };
+                let done = goal + k;
                 if best.get(&done).is_none_or(|&b| total < b) {
                     best.insert(done, total);
                     came.insert(done, state);
@@ -473,7 +584,7 @@ fn shortest(
     let Some(exit) = finish else {
         return if request.facing { anywhere() } else { None };
     };
-    let (_, entered, end_port) = exits[exit];
+    let (_, entered, end_port, _) = exits[exit];
     let mut states = vec![came[&(goal + exit)]];
     while let Some(&previous) = came.get(states.last().expect("not empty")) {
         states.push(previous);
@@ -491,16 +602,18 @@ fn shortest(
 const JOG: f32 = 40.0;
 
 /// A Z-shaped route with a short middle stretch, between boxes that face each other with an
-/// overlap, made a straight line where one fits through the overlap.
+/// overlap, made a straight line where one fits through the overlap, halfway between the boxes'
+/// middles where it can.
 fn unjog(points: Vec<Point>, boxes: &[Rect], request: Request) -> Vec<Point> {
     let [a, b, c, d] = points[..] else { return points };
     let vertical = (a.x - b.x).abs() < SAME && (c.x - d.x).abs() < SAME;
     let horizontal = (a.y - b.y).abs() < SAME && (c.y - d.y).abs() < SAME;
     let (source, target) = (boxes[request.source], boxes[request.target]);
+    let (s, t) = (source.center(), target.center());
     let (lo, hi, at, jog) = if vertical {
-        (source.x.max(target.x), source.right().min(target.right()), (a.x + d.x) / 2.0, b.x - c.x)
+        (source.x.max(target.x), source.right().min(target.right()), (s.x + t.x) / 2.0, b.x - c.x)
     } else if horizontal {
-        (source.y.max(target.y), source.bottom().min(target.bottom()), (a.y + d.y) / 2.0, b.y - c.y)
+        (source.y.max(target.y), source.bottom().min(target.bottom()), (s.y + t.y) / 2.0, b.y - c.y)
     } else {
         return points;
     };
@@ -578,22 +691,34 @@ fn nudge(
             }
         }
     }
+    // Whether a segment leaves or enters a node through the side it would move its port along.
+    let at_port = |s: &Segment| {
+        let (Some(points), Some((left, entered))) = (&routes[s.line], sides[s.line]) else {
+            return false;
+        };
+        let along_side = |side: Side| matches!(side, Side::Left | Side::Right) == horizontal;
+        (s.k == 0 && along_side(left)) || (s.k + 2 == points.len() && along_side(entered))
+    };
     segments.sort_by(|a, b| a.level.total_cmp(&b.level).then(a.from.total_cmp(&b.from)));
-    let mut groups: Vec<Vec<Segment>> = Vec::new();
-    let mut reach = f32::NEG_INFINITY;
+    // Segments closer than their spacing along a common stretch are one group; at ports the
+    // spacing is wider, so that the labels at the ends fit between the lines.
+    let mut groups: Vec<(Vec<Segment>, bool, f32, f32)> = Vec::new();
     for s in segments {
-        match groups.last_mut() {
-            Some(group) if (group[0].level - s.level).abs() < SAME && s.from < reach - 1.0 => {
-                reach = reach.max(s.to);
+        let port = at_port(&s);
+        let close = |(group, ports, from, to): &(Vec<Segment>, bool, f32, f32)| {
+            let last = group.last().expect("groups are not empty").level;
+            let gap = if port && *ports { PORT_SPACING } else { SPACING };
+            s.level - last < gap - SAME && s.from < to - 1.0 && s.to > from + 1.0
+        };
+        match groups.iter_mut().rev().take(8).find(|g| close(g)) {
+            Some((group, ports, from, to)) => {
+                (*ports, *from, *to) = (*ports || port, from.min(s.from), to.max(s.to));
                 group.push(s);
             }
-            _ => {
-                reach = s.to;
-                groups.push(vec![s]);
-            }
+            None => groups.push((vec![s], port, s.from, s.to)),
         }
     }
-    for mut group in groups.into_iter().filter(|g| g.len() > 1) {
+    for (mut group, ports, _, _) in groups.into_iter().filter(|g| g.0.len() > 1) {
         // Lines that turn toward lower levels at their ends go first, so that they do not
         // cross the others where they leave the shared stretch.
         let turn = |s: &Segment| {
@@ -607,8 +732,10 @@ fn nudge(
             }
             sum
         };
-        group.sort_by(|a, b| turn(a).total_cmp(&turn(b)).then(a.line.cmp(&b.line)));
-        let level = group[0].level;
+        group.sort_by(|a, b| {
+            turn(a).total_cmp(&turn(b)).then(a.level.total_cmp(&b.level)).then(a.line.cmp(&b.line))
+        });
+        let level = group.iter().map(|s| s.level).sum::<f32>() / group.len() as f32;
         let (from, to) = group
             .iter()
             .fold((f32::INFINITY, f32::NEG_INFINITY), |(f, t), s| (f.min(s.from), t.max(s.to)));
@@ -627,7 +754,7 @@ fn nudge(
             }
         }
         let n = group.len() as f32;
-        let mut spacing = SPACING;
+        let mut spacing = if ports { PORT_SPACING } else { SPACING };
         let mut start = level - (n - 1.0) * spacing / 2.0;
         if high - low >= (n - 1.0) * spacing {
             start = start.clamp(low, high - (n - 1.0) * spacing);
@@ -743,7 +870,34 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         } else {
             Vec::new()
         };
-    let routes = route_around(&boxes, &texts, &requests);
+    // Lines keep clear of the loops of nodes to themselves, with their corners as drawn.
+    let loops: Vec<(usize, Vec<Point>)> = view
+        .presentations()
+        .iter()
+        .filter_map(|p| match &p.shape {
+            Shape::Edge { source, target, waypoints, source_anchor, target_anchor, .. }
+                if source == target =>
+            {
+                let &b = index.get(source)?;
+                let r = boxes[b];
+                let waypoints = if waypoints.is_empty() {
+                    crate::scene::self_loop(r)
+                } else {
+                    waypoints.clone()
+                };
+                let corners = if p.style.line_shape == LineShape::RightAngle {
+                    let from = crate::route::anchor_point(r, *source_anchor);
+                    let to = crate::route::anchor_point(r, *target_anchor);
+                    crate::route::orthogonalize(r, from, &waypoints, r, to)
+                } else {
+                    waypoints
+                };
+                Some((b, corners))
+            }
+            _ => None,
+        })
+        .collect();
+    let routes = route_around(&boxes, &texts, &loops, &requests);
     let relative = |r: Rect, p: Point| {
         let fraction = |v: f32, start: f32, size: f32| {
             if size > 0.0 { ((v - start) / size).clamp(0.0, 1.0) } else { 0.5 }
@@ -826,7 +980,7 @@ pub fn follow(tx: &mut Tx<'_>, before: &HashMap<Id, Snapshot>) -> Result<usize> 
 }
 
 /// Whether the horizontal or vertical segment from `a` to `b` runs through `r`.
-fn segment_hits(a: Point, b: Point, r: Rect) -> bool {
+pub(crate) fn segment_hits(a: Point, b: Point, r: Rect) -> bool {
     let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
     let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
     x0 < r.right() && x1 > r.x && y0 < r.bottom() && y1 > r.y
@@ -881,6 +1035,21 @@ mod tests {
     }
 
     #[test]
+    fn lines_keep_clear_of_a_loop() {
+        // The boxes overlap narrowly at the corner of the first, where its loop is.
+        let boxes = [Rect::new(0.0, 0.0, 100.0, 60.0), Rect::new(75.0, -150.0, 100.0, 60.0)];
+        let requests = [Request { source: 0, target: 1, facing: false }];
+        let lp = crate::scene::self_loop(boxes[0]);
+        let area = Rect::from_corners(Point::new(80.0, -30.0), Point::new(130.0, 20.0));
+        let crosses = |points: &[Point]| points.windows(2).any(|w| segment_hits(w[0], w[1], area));
+        let straight = route(&boxes, &requests);
+        assert!(crosses(straight[0].as_ref().expect("routed")));
+        let around = route_around(&boxes, &[], &[(0, lp)], &requests);
+        let points = around[0].as_ref().expect("routed");
+        assert!(!crosses(points) && clear(points, &boxes, [0, 1]), "{points:?}");
+    }
+
+    #[test]
     fn a_line_goes_around_a_box_in_its_way() {
         let boxes = [
             Rect::new(0.0, 0.0, 100.0, 60.0),
@@ -891,16 +1060,12 @@ mod tests {
         let points = routes[0].as_ref().expect("routed");
         assert!(clear(points, &boxes, [0, 1]), "{points:?}");
         // Below the box, which reaches less far down than up: out of the bottom, across and
-        // into the bottom of the target, with two bends.
-        assert_eq!(
-            points,
-            &[
-                Point::new(50.0, 60.0),
-                Point::new(50.0, 112.0),
-                Point::new(450.0, 112.0),
-                Point::new(450.0, 60.0)
-            ]
-        );
+        // into the bottom of the target, with two bends; the ports slide towards each other.
+        assert_eq!(points.len(), 4, "{points:?}");
+        assert_eq!((points[0].y, points[3].y), (60.0, 60.0), "{points:?}");
+        assert!(points[1].y > 100.0 && points[1].y == points[2].y, "{points:?}");
+        assert!((50.0..=88.0).contains(&points[0].x), "{points:?}");
+        assert!((412.0..=450.0).contains(&points[3].x), "{points:?}");
     }
 
     #[test]
@@ -921,10 +1086,11 @@ mod tests {
             Rect::new(-20.0, 160.0, 400.0, 200.0),
             Rect::new(6.0, 200.0, 100.0, 60.0),
         ];
+        // The source's port slides to the target's middle, rather than take two bends.
         let routes = route(&boxes, &[Request { source: 0, target: 2, facing: false }]);
         assert_eq!(
             routes[0].as_deref(),
-            Some(&[Point::new(53.0, 60.0), Point::new(53.0, 200.0)][..])
+            Some(&[Point::new(56.0, 60.0), Point::new(56.0, 200.0)][..])
         );
     }
 
@@ -942,8 +1108,43 @@ mod tests {
         let routes = route(&boxes, &requests);
         let (a, b) = (routes[0].as_ref().unwrap(), routes[1].as_ref().unwrap());
         assert!(clear(a, &boxes, [0, 1]) && clear(b, &boxes, [0, 2]));
-        // They leave the box through different points.
-        assert!(a[0].distance(b[0]) >= SPACING - 0.1, "{a:?} {b:?}");
+        // They leave the box through different points, far enough apart for their labels.
+        assert!(a[0].distance(b[0]) >= PORT_SPACING - 0.1, "{a:?} {b:?}");
+    }
+
+    #[test]
+    fn a_port_slides_along_its_side_for_a_straight_line() {
+        // The middles lie 100 apart, too far for a jog to be straightened: a straight line
+        // through the overlap, not one from middle to middle with two bends.
+        let boxes = [Rect::new(0.0, 0.0, 300.0, 60.0), Rect::new(100.0, 200.0, 300.0, 60.0)];
+        let routes = route(&boxes, &[Request { source: 0, target: 1, facing: false }]);
+        let points = routes[0].as_ref().expect("routed");
+        assert_eq!(points.len(), 2, "{points:?}");
+        assert!(points[0].x > 100.0 && points[0].x < 300.0, "{points:?}");
+    }
+
+    #[test]
+    fn two_lines_between_the_same_boxes_keep_apart() {
+        let boxes = [Rect::new(0.0, 0.0, 200.0, 60.0), Rect::new(0.0, 300.0, 200.0, 60.0)];
+        let requests = [
+            Request { source: 0, target: 1, facing: false },
+            Request { source: 1, target: 0, facing: false },
+        ];
+        let routes = route(&boxes, &requests);
+        let (a, b) = (routes[0].as_ref().unwrap(), routes[1].as_ref().unwrap());
+        // Both straight, not on top of each other, with room for the labels between them.
+        assert_eq!((a.len(), b.len()), (2, 2), "{a:?} {b:?}");
+        assert!((a[0].x - b[0].x).abs() >= PORT_SPACING - 0.1, "{a:?} {b:?}");
+    }
+
+    #[test]
+    fn ports_close_to_a_taken_one_cost_more() {
+        let mut ports = Ports::new();
+        ports.insert((0, Side::Top), vec![100.0]);
+        assert_eq!(crowd(&ports, 0, Side::Top, 100.0), CROWD);
+        assert_eq!(crowd(&ports, 0, Side::Top, 100.0 + CROWD_RANGE / 2.0), CROWD / 2.0);
+        assert_eq!(crowd(&ports, 0, Side::Top, 100.0 + CROWD_RANGE), 0.0);
+        assert_eq!(crowd(&ports, 0, Side::Bottom, 100.0), 0.0);
     }
 
     #[test]

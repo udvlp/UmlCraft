@@ -6,7 +6,7 @@
 
 use umlcraft_model::{Point, Rect};
 
-use crate::draw::{label_area, text_left};
+use crate::draw::{end_marker_bounds, label_area, text_left};
 use crate::route;
 use crate::scene::{
     EdgeLabel, EdgeShape, FONT_SIZE, LABEL_HEIGHT, NodeShape, TextMeasure, label_width, name_arrow,
@@ -181,7 +181,9 @@ impl Block {
 
 /// Spots for a role (`role`) or multiplicity at the source or target end of `points`, on the
 /// side Astah puts it first, then on the other: as far along the line as Astah or further, and
-/// as far across as Astah or far enough not to cross the line.
+/// as far across as Astah or far enough not to cross the line. Past the end segment the spots
+/// follow the line around its bend, beside the segment they reach, and also lie on the end
+/// segment's extension, which is clear where the line turns back (a loop).
 fn end_spots(points: &[Point], source: bool, role: bool, (w, h): (f32, f32)) -> Vec<Point> {
     let n = points.len();
     let (tip, next) = if source { (points[0], points[1]) } else { (points[n - 1], points[n - 2]) };
@@ -189,26 +191,55 @@ fn end_spots(points: &[Point], source: bool, role: bool, (w, h): (f32, f32)) -> 
     if len < 1e-3 {
         return Vec::new();
     }
+    // The line from this end on.
+    let path: Vec<Point> =
+        if source { points.to_vec() } else { points.iter().rev().copied().collect() };
     let u = ((next.x - tip.x) / len, (next.y - tip.y) / len);
-    // To the left of the direction the line runs in, from source to target.
-    let run = if source { u } else { (-u.0, -u.1) };
-    let left = (run.1, -run.0);
     let (base, first_side) = if role { (27.0, 1.0) } else { (18.0, -1.0) };
     let (half_w, half_h) = (w / 2.0, h / 2.0);
-    let across = (half_w * left.0.abs() + half_h * left.1.abs() + GAP).max(18.0);
+    // Far enough from the end not to reach back over its node.
     let clear = half_w * u.0.abs() + half_h * u.1.abs() + GAP;
     let mut spots = Vec::new();
     for side in [first_side, -first_side] {
         for extra in FURTHER {
             let along = (base + extra).max(clear);
-            let center = Point::new(
-                tip.x + along * u.0 + side * across * left.0,
-                tip.y + along * u.1 + side * across * left.1,
-            );
-            spots.push(center.offset(-half_w, -half_h));
+            let (p, d, first) = along_from_end(&path, along);
+            let extended = Point::new(tip.x + u.0 * along, tip.y + u.1 * along);
+            let beyond = (!first).then_some((extended, u, true));
+            for (p, d, first) in std::iter::once((p, d, first)).chain(beyond) {
+                // To the left of the direction the line runs in, from source to target.
+                let run = if source { d } else { (-d.0, -d.1) };
+                let left = (run.1, -run.0);
+                let mut across = half_w * left.0.abs() + half_h * left.1.abs() + GAP;
+                if first {
+                    across = across.max(18.0);
+                }
+                let center = Point::new(p.x + side * across * left.0, p.y + side * across * left.1);
+                spots.push(center.offset(-half_w, -half_h));
+            }
         }
     }
     spots
+}
+
+/// The point `length` along `path` from its start, the direction of the segment it lies on and
+/// whether that is the first; past the end, on the last segment's extension.
+fn along_from_end(path: &[Point], length: f32) -> (Point, (f32, f32), bool) {
+    let mut rest = length;
+    let mut first = true;
+    for (k, w) in path.windows(2).enumerate() {
+        let d = w[0].distance(w[1]);
+        if d < 1e-3 {
+            continue;
+        }
+        let dir = ((w[1].x - w[0].x) / d, (w[1].y - w[0].y) / d);
+        if rest <= d || k + 2 == path.len() {
+            return (Point::new(w[0].x + dir.0 * rest, w[0].y + dir.1 * rest), dir, first);
+        }
+        rest -= d;
+        first = false;
+    }
+    (path[0], (1.0, 0.0), true)
 }
 
 /// The point `length` along `path` and the direction of the segment it lies on.
@@ -279,6 +310,8 @@ impl Obstacles {
             let path = edge.path();
             obstacles.segments.extend(path.windows(2).map(|w| (w[0], w[1])));
             obstacles.boxes.extend(edge.qualifiers.iter().map(|(rect, _)| *rect));
+            // Arrowheads, diamonds and crosses, with room so that a label does not touch them.
+            obstacles.boxes.extend(end_marker_bounds(edge).into_iter().map(|r| r.inflate(2.0)));
             let free = |i: usize| {
                 edge.free_labels.iter().any(|f| (f.index..f.index + f.lines).contains(&i))
             };
@@ -369,6 +402,28 @@ mod tests {
         let diagonal = inside_length(r, Point::new(-10.0, -10.0), Point::new(20.0, 20.0));
         assert_eq!((across, outside), (10.0, 0.0));
         assert!((diagonal - 200f32.sqrt()).abs() < 1e-3);
+    }
+
+    #[test]
+    fn end_spots_follow_the_line_around_its_bend() {
+        // Down 20 from the source, then right: a role 27 along lies beside the second segment,
+        // above it (to the left of the way the line runs), not on it; others lie further down
+        // the first segment's extension, below the bend.
+        let points = [Point::new(0.0, 0.0), Point::new(0.0, 20.0), Point::new(200.0, 20.0)];
+        let (p, d, first) = along_from_end(&points, 27.0);
+        assert_eq!((p, d, first), (Point::new(7.0, 20.0), (1.0, 0.0), false));
+        let (w, h) = (40.0, 15.0);
+        let (mut above, mut below) = (0, 0);
+        for spot in end_spots(&points, true, true, (w, h)) {
+            let r = Rect::new(spot.x, spot.y, w, h);
+            let crossed: f32 = points.windows(2).map(|s| inside_length(r, s[0], s[1])).sum();
+            if spot.x > 0.0 && r.bottom() <= 20.0 {
+                assert_eq!(crossed, 0.0, "{spot:?}");
+                above += 1;
+            }
+            below += usize::from(spot.x > 0.0 && r.y > 20.0 && crossed == 0.0);
+        }
+        assert!(above > 0 && below > 0, "{above} {below}");
     }
 
     #[test]

@@ -39,6 +39,12 @@ today.
   size.
 - **Arranging ER diagrams**: lines that go around a table keep clear of the other lines
   where they can and no longer run on top of each other.
+- **Routing lines**: a line leaves and enters a box where it runs straight, not only in the
+  middle of its side, and lines that meet a box on one side keep apart, so that the roles and
+  multiplicities at their ends have room; those labels also move around a bend close to the
+  box instead of onto the line, and keep off arrowheads, diamonds and crosses. Lines keep
+  clear of a box's line to itself, which stays at the box's corner when the diagram is
+  arranged, and generalizations share one line only where it runs past no other box.
 - **AI clients** create ER diagrams in a notation, switch it with `update_element`, add
   columns with `add_member`, set `unique`, `foreign_key`, `check`, `auto_increment`,
   `virtual`, a table's `checks` and `indexes`, a relationship's `on_delete` and `on_update`

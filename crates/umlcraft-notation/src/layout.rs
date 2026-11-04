@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, DiagramKind, Element, ElementKind, Id, Model,
     ModelError, Navigability, Point, PseudostateKind, Rect, Regions, Result, Shape, SharedStyle,
-    Size, Tx,
+    Size, Tx, View,
 };
 
 use crate::scene::{self, TextMeasure};
@@ -1170,14 +1170,14 @@ pub fn arrange(
         }
         if source == target {
             if let Some(r) = view.get(*source).and_then(|n| n.bounds()) {
-                loops.push((p.id, scene::self_loop(r)));
+                loops.push((p.id, scene::self_loop(r), scene::self_loop_anchors(r)));
             }
         } else {
             lines.push(p.id);
         }
     }
-    for (edge, waypoints) in loops {
-        tx.set_route(diagram, edge, waypoints, (None, None))?;
+    for (edge, waypoints, (from, to)) in loops {
+        tx.set_route(diagram, edge, waypoints, (Some(from), Some(to)))?;
     }
     crate::autoroute::route_lines(tx, diagram, &lines)?;
     straighten_at_bars(tx, diagram, &bars, &lines)?;
@@ -1300,8 +1300,9 @@ fn outside_margins(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> Has
 }
 
 /// Generalization trees share their triangle, as Astah's shared style draws them: where two or
-/// more of the lines just routed end at one general element and all its specific elements lie
-/// beyond it in the direction of the layout, the generalizations to it get the shared style.
+/// more of the lines just routed end at one general element, all its specific elements lie
+/// beyond it in the direction of the layout and the shared lines run clear of the other nodes,
+/// the generalizations to it get the shared style.
 fn share_generalization_trees(
     tx: &mut Tx<'_>,
     diagram: Id,
@@ -1330,7 +1331,11 @@ fn share_generalization_trees(
             Direction::Down => s.y >= g.bottom(),
             Direction::Right => s.x >= g.right(),
         });
-        if touched && specifics.len() >= 2 && beyond {
+        if touched
+            && specifics.len() >= 2
+            && beyond
+            && shared_lines_clear(view, general, &specifics, direction)
+        {
             shared.push(general);
         }
     }
@@ -1350,6 +1355,59 @@ fn share_generalization_trees(
         }
     }
     Ok(())
+}
+
+/// Whether the shared lines from `general` to `specifics` would run clear of the other nodes:
+/// the stem out of the general element, the common line and the line into each specific one,
+/// each straight from the middle of its node, where the shared style draws them.
+fn shared_lines_clear(view: &View, general: Id, specifics: &[Id], direction: Direction) -> bool {
+    let bounds = |id: Id| view.get(id).and_then(|p| p.bounds());
+    let Some(g) = bounds(general) else { return false };
+    let rects: Vec<(Id, Rect)> = specifics.iter().filter_map(|&s| Some((s, bounds(s)?))).collect();
+    let specific_rects: Vec<Rect> = rects.iter().map(|r| r.1).collect();
+    let style = match direction {
+        Direction::Down => SharedStyle::Vertical,
+        Direction::Right => SharedStyle::Horizontal,
+    };
+    let at = crate::shared::default_line(g, &specific_rects, style);
+    // A point at `along` across the layout and `level` in its direction.
+    let point = |along: f32, level: f32| match direction {
+        Direction::Down => Point::new(along, level),
+        Direction::Right => Point::new(level, along),
+    };
+    let middle = |r: &Rect| match direction {
+        Direction::Down => r.center().x,
+        Direction::Right => r.center().y,
+    };
+    let near = |r: &Rect| match direction {
+        Direction::Down => r.y,
+        Direction::Right => r.x,
+    };
+    let (g_middle, g_far) = match direction {
+        Direction::Down => (g.center().x, g.bottom()),
+        Direction::Right => (g.center().y, g.right()),
+    };
+    // Each segment with the node it may end in.
+    let mut segments = vec![(point(g_middle, g_far), point(g_middle, at), general)];
+    let (lo, hi) = rects
+        .iter()
+        .map(|(_, r)| middle(r))
+        .fold((g_middle, g_middle), |(lo, hi), m| (lo.min(m), hi.max(m)));
+    segments.push((point(lo, at), point(hi, at), general));
+    for (s, r) in &rects {
+        segments.push((point(middle(r), at), point(middle(r), near(r)), *s));
+    }
+    let ends: Vec<Rect> = std::iter::once(g).chain(specific_rects.iter().copied()).collect();
+    view.presentations().iter().all(|p| {
+        let Shape::Node { bounds: r, .. } = p.shape else { return true };
+        // Containers around an end are crossed anyway.
+        if ends.iter().any(|e| *e != r && r.contains_rect(e)) {
+            return true;
+        }
+        segments.iter().all(|&(a, b, own)| {
+            p.id == own || p.id == general || !crate::autoroute::segment_hits(a, b, r.inflate(-1.0))
+        })
+    })
 }
 
 /// Lines between a fork or join bar and a node above or below it run straight up or down.

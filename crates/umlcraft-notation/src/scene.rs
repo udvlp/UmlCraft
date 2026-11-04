@@ -885,6 +885,13 @@ pub fn self_loop(r: Rect) -> Vec<Point> {
     ]
 }
 
+/// The anchors (relative to `r`) at the ends of [`self_loop`]'s waypoints, on the border, so
+/// that the loop keeps to the corner however the line is drawn.
+pub fn self_loop_anchors(r: Rect) -> (Point, Point) {
+    let fraction = |v: f32, size: f32| if size > 0.0 { (v / size).clamp(0.0, 1.0) } else { 0.5 };
+    (Point::new(1.0, fraction(20.0, r.height)), Point::new(fraction(r.width - 20.0, r.width), 0.0))
+}
+
 /// Size of the diagram font. Astah draws all class diagram texts in 12 px "Dialog" (Arial).
 pub const FONT_SIZE: f32 = 12.0;
 /// Line height relative to the font size; 15.09375 for 12 px, as Java lays out "Dialog".
