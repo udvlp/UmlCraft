@@ -5,6 +5,9 @@ today.
 
 ## Unreleased
 
+- **Structograms on the diagram canvas**: structograms are drawn like the other diagrams,
+  sharp at every zoom and on the same grid, and open, zoom and scroll without delay even when
+  large.
 - **ER diagrams in IE and IDEF1X notation**: besides Chen, an ER diagram can be drawn with
   crow's feet (IE) or in IDEF1X, chosen per diagram in the ribbon or the properties;
   switching converts the diagram and keeps the entities where they are. Entities are tables

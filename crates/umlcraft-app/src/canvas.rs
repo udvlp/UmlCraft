@@ -29,6 +29,7 @@ use umlcraft_notation::scene::{
 };
 use umlcraft_notation::sequence::SequenceLayout;
 
+use crate::nsd::NsdView;
 use crate::workspace::{EndChange, NewItem, Workspace};
 use crate::{
     AddAttribute, AddExtensionPoint, AddLiteral, AddOperation, Cancel, ChangeRelationship,
@@ -66,7 +67,7 @@ fn diagram_font() -> SharedString {
 /// centers ascent plus descent in the line: (15.09375 − 10.86328 − 2.54297) / 2 + 10.86328 =
 /// 11.70703 for Arial's 1854 and 434 units per 2048 at 12 px in a line of
 /// `scene::line_height(12)`. Texts are moved down to Astah's baseline (`draw::baseline`).
-const GPUI_BASELINE: f32 = 11.70703 / 12.0;
+pub(crate) const GPUI_BASELINE: f32 = 11.70703 / 12.0;
 const MAX_ZOOM: f32 = 4.0;
 /// Height of a hover handle and the gap between handles, in screen pixels.
 const HANDLE_SIZE: f32 = 20.0;
@@ -542,7 +543,14 @@ pub struct DiagramCanvas {
     hover: Option<Hover>,
     /// The kinds of line a line dragged from a handle can become.
     offer: Option<Offer>,
+    /// The editor of the structogram shown, if one is: the canvas paints it and hands it the
+    /// mouse and the commands instead of drawing a diagram.
+    structogram: Option<(Id, Entity<NsdView>)>,
+    _structogram_watch: Option<Subscription>,
 }
+
+/// Space between the clear area's corner and a structogram, at 100 % and when fitted.
+const STRUCTOGRAM_MARGIN: f32 = 20.0;
 
 thread_local! {
     /// Widths measured by [`FontMeasure`], by font size and boldness, then text: shaping is the
@@ -692,6 +700,8 @@ impl DiagramCanvas {
             scene_key: None,
             hover: None,
             offer: None,
+            structogram: None,
+            _structogram_watch: None,
         }
     }
 
@@ -699,15 +709,46 @@ impl DiagramCanvas {
         self.zoom
     }
 
+    /// Shows the structogram `editor` edits (`id`) while it is the active diagram.
+    pub fn show_structogram(
+        &mut self,
+        editor: Option<(Id, Entity<NsdView>)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.structogram.as_ref().map(|(id, _)| *id) == editor.as_ref().map(|(id, _)| *id) {
+            return;
+        }
+        self._structogram_watch =
+            editor.as_ref().map(|(_, e)| cx.observe(e, |_, _, cx| cx.notify()));
+        self.structogram = editor;
+        cx.notify();
+    }
+
+    /// The editor of the structogram shown, if a structogram is shown.
+    fn shown_structogram(&self) -> Option<Entity<NsdView>> {
+        self.structogram
+            .as_ref()
+            .filter(|(id, _)| Some(*id) == self.shown_diagram)
+            .map(|(_, e)| e.clone())
+    }
+
+    /// A window position in a structogram's whole pixels.
+    fn structogram_px(&self, position: Point<Pixels>) -> (i32, i32) {
+        let p = self.to_logical(position);
+        (p.x.floor() as i32, p.y.floor() as i32)
+    }
+
     /// The part of the canvas no floating panel covers, relative to the canvas.
     fn clear_area(&self) -> Bounds<Pixels> {
         crate::shell::clear_in(&self.clear, self.bounds.get())
     }
 
-    /// The pan at 100 %: the diagram's origin at the top left of the clear area.
+    /// The pan at 100 %: the diagram's origin at the top left of the clear area, a
+    /// structogram's a margin into it.
     fn home(&self) -> MPoint {
         let origin = self.clear_area().origin;
-        MPoint::new(f32::from(origin.x), f32::from(origin.y))
+        let margin = if self.shown_structogram().is_some() { STRUCTOGRAM_MARGIN } else { 0.0 };
+        MPoint::new(f32::from(origin.x) + margin, f32::from(origin.y) + margin)
     }
 
     pub fn reset_zoom(&mut self, cx: &mut Context<Self>) {
@@ -727,8 +768,13 @@ impl DiagramCanvas {
     pub fn zoom_to_fit(&mut self, cx: &mut Context<Self>) {
         let area = self.clear_area();
         let (w, h) = (f32::from(area.size.width), f32::from(area.size.height));
-        let Some(content) = self.scene.bounds().filter(|_| w > 0.0 && h > 0.0) else { return };
-        let margin = 40.0;
+        let structogram = self.shown_structogram().map(|e| {
+            let (width, height) = e.read(cx).size();
+            Rect::new(0.0, 0.0, width, height)
+        });
+        let content = structogram.or_else(|| self.scene.bounds());
+        let Some(content) = content.filter(|_| w > 0.0 && h > 0.0) else { return };
+        let margin = if structogram.is_some() { STRUCTOGRAM_MARGIN } else { 40.0 };
         let fit_w = (w - 2.0 * margin) / content.width.max(1.0);
         let fit_h = (h - 2.0 * margin) / content.height.max(1.0);
         self.zoom = fit_w.min(fit_h).clamp(MIN_ZOOM, 1.5);
@@ -782,8 +828,9 @@ impl DiagramCanvas {
         }
         let stored = diagram.and_then(|d| self.viewports.get(&d).copied());
         self.home_pending = stored.is_none();
-        (self.zoom, self.pan) = stored.unwrap_or((1.0, self.home()));
+        // First, so that the home knows whether a structogram is shown.
         self.shown_diagram = diagram;
+        (self.zoom, self.pan) = stored.unwrap_or((1.0, self.home()));
         self.drag = None;
         self.editing = None;
     }
@@ -945,6 +992,18 @@ impl DiagramCanvas {
     fn on_left_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_edit(cx);
         self.focus_handle.focus(window, cx);
+        // A structogram selects and drags itself; beside it the left button pans.
+        if let Some(editor) = self.shown_structogram() {
+            let (at, position, count, shift) =
+                (self.structogram_px(ev.position), ev.position, ev.click_count, ev.modifiers.shift);
+            let hit =
+                editor.update(cx, |e, cx| e.mouse_down(at, position, count, shift, window, cx));
+            if !hit {
+                self.drag = Some(Drag::Pan { last: ev.position });
+            }
+            cx.notify();
+            return;
+        }
         let p = self.to_logical(ev.position);
         // The second click of a line started from a handle: on an element it connects (on the
         // source itself, a loop or a message to self), elsewhere it gives up.
@@ -1547,6 +1606,12 @@ impl DiagramCanvas {
     /// A right click selects what it hits (unless that is selected already), so that the
     /// context menu acts on it, and opens the menu at `position`.
     fn open_context_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(editor) = self.shown_structogram() {
+            let at = self.structogram_px(position);
+            editor.update(cx, |e, cx| e.select_for_menu(at, cx));
+            self.menu_at = Some(crate::shell::MenuAt::new(position));
+            return;
+        }
         let p = self.to_logical(position);
         self.right_click = Some(p);
         let hit = scene::hit_test(&self.scene, p, self.hit_tolerance());
@@ -1573,15 +1638,18 @@ impl DiagramCanvas {
     /// The context menu while it is open. It is built (`context_menu`) after the frame that
     /// asks for it: the builder reads the canvas, which is being updated during its render.
     fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let structogram = self.shown_structogram();
         let at = self.menu_at.as_mut()?;
         if at.menu.is_none() && !at.building {
             at.building = true;
             let owner = cx.entity();
             window.defer(cx, move |window, cx| {
                 let builder = owner.clone();
-                let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
-                    Self::context_menu(&builder, menu, window, cx)
-                });
+                let menu =
+                    PopupMenu::build(window, cx, move |menu, window, cx| match &structogram {
+                        Some(editor) => NsdView::context_menu(editor, menu, window, cx),
+                        None => Self::context_menu(&builder, menu, window, cx),
+                    });
                 owner.update(cx, |this, cx| {
                     let Some(at) = this.menu_at.as_mut() else { return };
                     let subscription =
@@ -2030,6 +2098,10 @@ impl DiagramCanvas {
     }
 
     fn on_drop(&mut self, dragged: &DraggedElement, window: &mut Window, cx: &mut Context<Self>) {
+        // Model elements cannot be shown on a structogram.
+        if self.shown_structogram().is_some() {
+            return;
+        }
         let at = snap_point(self.to_logical(window.mouse_position()));
         let id = dragged.id;
         self.update_workspace(cx, |ws| ws.show_element(id, at));
@@ -2311,6 +2383,82 @@ impl DiagramCanvas {
             Some(object) => self.update_workspace(cx, |ws| ws.set_slot(object, element, &text)),
             None => self.update_workspace(cx, |ws| ws.apply_text(element, &text)),
         }
+    }
+}
+
+impl DiagramCanvas {
+    /// The commands of diagrams, which the canvas handles itself.
+    fn diagram_actions(&self, element: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+        element
+            .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(|this, _: &DeleteSelection, _, cx| {
+                this.update_workspace(cx, Workspace::delete_selection);
+            }))
+            .on_action(cx.listener(|this, _: &RemoveFromDiagram, _, cx| {
+                this.update_workspace(cx, Workspace::remove_selection_from_diagram);
+            }))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                this.update_workspace(cx, Workspace::select_all);
+            }))
+            .on_action(
+                cx.listener(|this, a: &SetLineShape, _, cx| this.set_line_shape(a.shape, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ResetLineEnds, _, cx| {
+                let edges: Vec<Id> = this.selected_edges(cx).iter().map(|e| e.id).collect();
+                this.update_workspace(cx, |ws| ws.reset_line_ends(&edges));
+            }))
+            .on_action(cx.listener(|this, _: &AddAttribute, window, cx| {
+                this.add_member_row(Compartment::Attributes, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AddOperation, window, cx| {
+                this.add_member_row(Compartment::Operations, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AddLiteral, window, cx| {
+                this.add_member_row(Compartment::Literals, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AddExtensionPoint, _, cx| {
+                let point = match (this.selected_use_case(cx), this.selected_extend(cx)) {
+                    (Some(use_case), _) => this
+                        .workspace
+                        .update(cx, |ws, _| ws.add_item(use_case, NewItem::ExtensionPoint)),
+                    (_, Some(extend)) => {
+                        this.workspace.update(cx, |ws, _| ws.add_extension_point_for(extend))
+                    }
+                    _ => return,
+                };
+                this.edit_when_drawn = point;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ResetLabels, _, cx| {
+                let selection = this.workspace.read(cx).selection.clone();
+                let edges: Vec<Id> =
+                    selection.into_iter().filter(|&id| this.scene.edge(id).is_some()).collect();
+                this.update_workspace(cx, |ws| ws.reset_labels(&edges));
+            }))
+            .on_action(cx.listener(|this, a: &ConnectAs, _, cx| {
+                this.offer = None;
+                this.finish_connect(a.tool, a.source, a.target, a.start, cx);
+            }))
+            .on_action(cx.listener(|this, a: &ChangeRelationship, _, cx| {
+                this.update_workspace(cx, |ws| ws.change_relationship(a.edge, a.tool));
+            }))
+            .on_action(cx.listener(|this, a: &SetSharedStyle, _, cx| {
+                this.update_workspace(cx, |ws| ws.set_shared_style(a.edge, a.style));
+            }))
+            .on_action(cx.listener(|this, a: &MakeAssociationClass, _, cx| {
+                this.update_workspace(cx, |ws| ws.make_association_class(a.edge));
+            }))
+            .on_action(cx.listener(|this, a: &DeleteMember, _, cx| {
+                this.update_workspace(cx, |ws| ws.delete_element(a.member));
+            }))
+            .on_action(cx.listener(|this, a: &SetMemberType, _, cx| {
+                this.update_workspace(cx, |ws| ws.set_member_type(a.member, a.type_ref.clone()));
+            }))
+            .on_action(cx.listener(|this, a: &SetAssociationEnd, _, cx| {
+                this.update_workspace(cx, |ws| {
+                    ws.set_association_end(a.association, a.end, a.change)
+                });
+            }))
     }
 }
 
@@ -2748,6 +2896,7 @@ impl Render for DiagramCanvas {
             (ws.active_diagram, ws.tool)
         };
         self.switch_viewport(active);
+        let structogram = self.shown_structogram();
         if self.home_pending && self.clear.get().is_some() && !self.bounds.get().is_empty() {
             self.home_pending = false;
             self.pan = self.home();
@@ -2766,8 +2915,10 @@ impl Render for DiagramCanvas {
             let ws = self.workspace.read(cx);
             let measure = FontMeasure::new(window, self.display);
             let scene = match ws.active_diagram {
-                Some(d) => scene::build(ws.doc.model(), d, &self.preview(), &measure),
-                None => Scene::empty(),
+                Some(d) if structogram.is_none() => {
+                    scene::build(ws.doc.model(), d, &self.preview(), &measure)
+                }
+                _ => Scene::empty(),
             };
             Rc::new(scene)
         };
@@ -2832,7 +2983,16 @@ impl Render for DiagramCanvas {
             self.editing.as_ref().filter(|e| e.new_member.is_none()).map(|e| e.element);
         let bounds_cell = self.bounds.clone();
         let this = cx.entity();
-        let cursor = if tool == Tool::Select { CursorStyle::Arrow } else { CursorStyle::Crosshair };
+        let cursor = match tool {
+            _ if structogram.is_some() => CursorStyle::Arrow,
+            Tool::Select => CursorStyle::Arrow,
+            _ => CursorStyle::Crosshair,
+        };
+        // What an import of the structogram could not show, along the bottom.
+        let notes =
+            structogram.as_ref().and_then(|e| e.update(cx, |e, cx| e.notes_bar(cx))).map(|bar| {
+                div().absolute().left_0().right_0().bottom_0().bg(cx.theme().background).child(bar)
+            });
 
         let handles = self.hover_handles(cx).filter(|_| tool == Tool::Select);
         let offer_menu = self.offer_menu(window, cx);
@@ -2850,9 +3010,8 @@ impl Render for DiagramCanvas {
             div().absolute().left(px(x - 4.0)).top(px(y - 4.0)).w(px(width + 8.0)).child(field)
         });
 
-        div()
+        let element = div()
             .id("diagram-canvas")
-            .key_context("Canvas")
             .track_focus(&self.focus_handle)
             .relative()
             .size_full()
@@ -2867,6 +3026,11 @@ impl Render for DiagramCanvas {
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
                 if this.drag.is_some() {
                     this.drag_to(ev.position, cx);
+                } else if let Some(editor) = this.shown_structogram() {
+                    let at = this.structogram_px(ev.position);
+                    let pressed = ev.pressed_button == Some(MouseButton::Left);
+                    let copy = ev.modifiers.secondary(cx);
+                    editor.update(cx, |e, cx| e.mouse_move(at, ev.position, pressed, copy, cx));
                 } else {
                     this.update_hover(ev.position, cx);
                 }
@@ -2878,7 +3042,14 @@ impl Render for DiagramCanvas {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, ev: &MouseUpEvent, _, cx| this.end_drag(ev.position, cx)),
+                cx.listener(|this, ev: &MouseUpEvent, _, cx| match this.shown_structogram() {
+                    // Dragged elements of a structogram: copied with Ctrl (Cmd), else moved.
+                    Some(editor) if this.drag.is_none() => {
+                        let copy = ev.modifiers.secondary(cx);
+                        editor.update(cx, |e, cx| e.mouse_up(copy, cx));
+                    }
+                    _ => this.end_drag(ev.position, cx),
+                }),
             )
             .on_mouse_up(
                 MouseButton::Middle,
@@ -2891,77 +3062,14 @@ impl Render for DiagramCanvas {
             .on_scroll(cx.listener(Self::on_scroll))
             .on_pinch(cx.listener(Self::on_pinch))
             .on_drop(cx.listener(Self::on_drop))
-            .on_action(cx.listener(Self::cancel))
-            .on_action(cx.listener(|this, _: &DeleteSelection, _, cx| {
-                this.update_workspace(cx, Workspace::delete_selection);
-            }))
-            .on_action(cx.listener(|this, _: &RemoveFromDiagram, _, cx| {
-                this.update_workspace(cx, Workspace::remove_selection_from_diagram);
-            }))
-            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
-                this.update_workspace(cx, Workspace::select_all);
-            }))
-            .on_action(
-                cx.listener(|this, a: &SetLineShape, _, cx| this.set_line_shape(a.shape, cx)),
-            )
-            .on_action(cx.listener(|this, _: &ResetLineEnds, _, cx| {
-                let edges: Vec<Id> = this.selected_edges(cx).iter().map(|e| e.id).collect();
-                this.update_workspace(cx, |ws| ws.reset_line_ends(&edges));
-            }))
-            .on_action(cx.listener(|this, _: &AddAttribute, window, cx| {
-                this.add_member_row(Compartment::Attributes, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &AddOperation, window, cx| {
-                this.add_member_row(Compartment::Operations, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &AddLiteral, window, cx| {
-                this.add_member_row(Compartment::Literals, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &AddExtensionPoint, _, cx| {
-                let point = match (this.selected_use_case(cx), this.selected_extend(cx)) {
-                    (Some(use_case), _) => this
-                        .workspace
-                        .update(cx, |ws, _| ws.add_item(use_case, NewItem::ExtensionPoint)),
-                    (_, Some(extend)) => {
-                        this.workspace.update(cx, |ws, _| ws.add_extension_point_for(extend))
-                    }
-                    _ => return,
-                };
-                this.edit_when_drawn = point;
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &ResetLabels, _, cx| {
-                let selection = this.workspace.read(cx).selection.clone();
-                let edges: Vec<Id> =
-                    selection.into_iter().filter(|&id| this.scene.edge(id).is_some()).collect();
-                this.update_workspace(cx, |ws| ws.reset_labels(&edges));
-            }))
-            .on_action(cx.listener(|this, a: &ConnectAs, _, cx| {
-                this.offer = None;
-                this.finish_connect(a.tool, a.source, a.target, a.start, cx);
-            }))
-            .on_action(cx.listener(|this, a: &ChangeRelationship, _, cx| {
-                this.update_workspace(cx, |ws| ws.change_relationship(a.edge, a.tool));
-            }))
-            .on_action(cx.listener(|this, a: &SetSharedStyle, _, cx| {
-                this.update_workspace(cx, |ws| ws.set_shared_style(a.edge, a.style));
-            }))
-            .on_action(cx.listener(|this, a: &MakeAssociationClass, _, cx| {
-                this.update_workspace(cx, |ws| ws.make_association_class(a.edge));
-            }))
-            .on_action(cx.listener(|this, a: &DeleteMember, _, cx| {
-                this.update_workspace(cx, |ws| ws.delete_element(a.member));
-            }))
-            .on_action(cx.listener(|this, a: &SetMemberType, _, cx| {
-                this.update_workspace(cx, |ws| ws.set_member_type(a.member, a.type_ref.clone()));
-            }))
-            .on_action(cx.listener(|this, a: &SetAssociationEnd, _, cx| {
-                this.update_workspace(cx, |ws| {
-                    ws.set_association_end(a.association, a.end, a.change)
-                });
-            }))
             .on_action(cx.listener(|this, _: &ResetZoom, _, cx| this.reset_zoom(cx)))
-            .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| this.zoom_to_fit(cx)))
+            .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| this.zoom_to_fit(cx)));
+        // A structogram's commands go to its editor, a diagram's to the canvas.
+        let element = match &structogram {
+            Some(editor) => crate::nsd::bind_actions(element.key_context("NsdView"), editor),
+            None => self.diagram_actions(element.key_context("Canvas"), cx),
+        };
+        element
             .child(
                 canvas(
                     move |bounds, _, _| bounds_cell.set(bounds),
@@ -2989,6 +3097,25 @@ impl Render for DiagramCanvas {
                         }
                         let t = Transform { origin: bounds.origin, pan, zoom };
                         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                            if let Some(editor) = &structogram {
+                                // A structogram is drawn by its editor, over the grid.
+                                let accent = colors.selection;
+                                Painter {
+                                    t,
+                                    c: colors,
+                                    font_family,
+                                    window,
+                                    cx,
+                                    node_fill: None,
+                                    edge_line: None,
+                                    column,
+                                }
+                                .grid(bounds);
+                                let origin = t.pt(MPoint::new(0.0, 0.0));
+                                editor
+                                    .update(cx, |e, cx| e.paint(origin, zoom, accent, window, cx));
+                                return;
+                            }
                             let mut p = Painter {
                                 t,
                                 c: colors,
@@ -3162,6 +3289,7 @@ impl Render for DiagramCanvas {
             )
             .children(editor)
             .children(handles)
+            .children(notes)
             .children(offer_menu)
             .children(context_menu)
     }

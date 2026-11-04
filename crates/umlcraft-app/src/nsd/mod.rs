@@ -2,6 +2,7 @@
 //! window like diagrams, read from and written to Structorizer's `.nsd` files.
 
 mod dialog;
+mod paint;
 pub mod source;
 mod view;
 
@@ -11,7 +12,7 @@ use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_nsd::{Diagram, ElementKind};
 
-pub use view::{Allowed, NsdView};
+pub use view::{Allowed, NsdView, bind_actions};
 
 actions!(
     nsd,

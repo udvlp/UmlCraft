@@ -44,6 +44,20 @@ impl Palette {
     /// shows and exports structograms.
     pub const PLAIN: Palette = Palette { comment: None, ..Palette::STRUCTORIZER };
 
+    /// The colour `ink` is drawn in; the hatching's pixels for [`Ink::Hatch`], the background
+    /// for comment markers the palette leaves out.
+    pub fn color(&self, ink: Ink) -> Color {
+        match ink {
+            Ink::Line => self.line,
+            Ink::Background => self.background,
+            Ink::Head => self.head,
+            Ink::Comment => self.comment.unwrap_or(self.background),
+            Ink::Hatch => self.hatch,
+            Ink::Includes => self.includes,
+            Ink::Fill(c) => self.fill(c),
+        }
+    }
+
     /// What an element's own colour `c` is drawn as.
     fn fill(&self, c: Color) -> Color {
         if c == Color::WHITE {
@@ -170,16 +184,10 @@ pub fn render_with(diagram: &Diagram, layout: &Layout, m: &Metrics, palette: &Pa
 }
 
 fn color(ink: Ink, palette: &Palette) -> String {
-    let color = match ink {
-        Ink::Line => palette.line,
-        Ink::Background => palette.background,
-        Ink::Head => palette.head,
-        Ink::Comment => palette.comment.unwrap_or(palette.background),
-        Ink::Hatch => return "url(#hatch)".into(),
-        Ink::Includes => palette.includes,
-        Ink::Fill(c) => palette.fill(c),
-    };
-    format!("#{}", color.to_hex())
+    match ink {
+        Ink::Hatch => "url(#hatch)".into(),
+        ink => format!("#{}", palette.color(ink).to_hex()),
+    }
 }
 
 fn escape(text: &str) -> String {

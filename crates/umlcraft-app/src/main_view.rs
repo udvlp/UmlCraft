@@ -296,14 +296,13 @@ impl MainView {
         {
             let notes = self.structogram_notes.remove(&id).unwrap_or_default();
             let workspace = self.workspace.clone();
-            let clear = self.clear.clone();
-            let view = cx.new(|cx| {
-                let mut view = NsdView::new(workspace, id, notes, cx);
-                view.clear = clear;
-                view
-            });
+            let focus = self.canvas.focus_handle(cx);
+            let view = cx.new(|cx| NsdView::new(workspace, id, notes, focus, cx));
             self.structograms.insert(id, view);
         }
+        // The canvas draws the structogram shown through its editor.
+        let editor = shown.and_then(|id| Some((id, self.structograms.get(&id)?.clone())));
+        self.canvas.update(cx, |c, cx| c.show_structogram(editor, cx));
         if active != self.shown {
             self.shown = active;
             if let Some(view) = self.active_structogram(cx) {
@@ -502,23 +501,15 @@ impl MainView {
             self.set_language(language, window, cx);
         }
         if let Some(zoom) = zoom {
-            match (self.active_structogram(cx), zoom) {
-                (Some(view), None) => view.update(cx, |v, cx| v.zoom_to_fit(cx)),
-                (Some(view), Some(factor)) => view.update(cx, |v, cx| {
-                    v.reset_zoom(cx);
-                    v.zoom_by(factor, cx);
-                }),
-                (None, None) => self.canvas.update(cx, |c, cx| c.zoom_to_fit(cx)),
-                (None, Some(factor)) => self.canvas.update(cx, |c, cx| {
+            match zoom {
+                None => self.canvas.update(cx, |c, cx| c.zoom_to_fit(cx)),
+                Some(factor) => self.canvas.update(cx, |c, cx| {
                     c.reset_zoom(cx);
                     c.zoom_by(factor, cx);
                 }),
             }
         }
-        let zoom = match self.active_structogram(cx) {
-            Some(view) => view.read(cx).zoom(),
-            None => self.canvas.read(cx).zoom(),
-        };
+        let zoom = self.canvas.read(cx).zoom();
         umlcraft_mcp::Reply::json(serde_json::json!({
             "theme": if cx.theme().is_dark() { "dark" } else { "light" },
             "language": &*rust_i18n::locale(),
@@ -2172,21 +2163,15 @@ impl MainView {
     /// The zoom of the diagram or structogram shown, if one is shown.
     fn shown_zoom(&self, cx: &App) -> Option<f32> {
         self.workspace.read(cx).active_diagram?;
-        Some(match self.active_structogram(cx) {
-            Some(view) => view.read(cx).zoom(),
-            None => self.canvas.read(cx).zoom(),
-        })
+        Some(self.canvas.read(cx).zoom())
     }
 
-    /// The diagram or structogram shown; the zoom over it is the main view's.
+    /// The diagram or structogram shown, both on the canvas; the zoom over it is the main
+    /// view's.
     fn diagram_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.read(cx);
-        let structogram = self.active_structogram(cx);
         let body = if ws.active_diagram.is_some() {
-            let content = match structogram {
-                Some(view) => view.into_any_element(),
-                None => self.canvas.clone().into_any_element(),
-            };
+            let content = self.canvas.clone().into_any_element();
             div().relative().flex_1().min_h_0().child(content).into_any_element()
         } else {
             // With diagrams, one click in the tree opens one; without, the hint says where
@@ -2852,24 +2837,9 @@ impl Render for MainView {
                 cx.listener(|this, _: &AlignBottom, _, cx| this.align(Alignment::Bottom, cx)),
             )
             // Zoom commands from outside the view (the tree has the focus) go to what is shown.
-            .on_action(cx.listener(
-                move |this, _: &ZoomIn, _, cx| match this.active_structogram(cx) {
-                    Some(view) => view.update(cx, |v, cx| v.zoom_by(1.25, cx)),
-                    None => c1.update(cx, |c, cx| c.zoom_by(1.2, cx)),
-                },
-            ))
-            .on_action(cx.listener(
-                move |this, _: &ZoomOut, _, cx| match this.active_structogram(cx) {
-                    Some(view) => view.update(cx, |v, cx| v.zoom_by(1.0 / 1.25, cx)),
-                    None => c2.update(cx, |c, cx| c.zoom_by(1.0 / 1.2, cx)),
-                },
-            ))
-            .on_action(cx.listener(move |this, _: &ResetZoom, _, cx| {
-                match this.active_structogram(cx) {
-                    Some(view) => view.update(cx, |v, cx| v.reset_zoom(cx)),
-                    None => c3.update(cx, |c, cx| c.reset_zoom(cx)),
-                }
-            }))
+            .on_action(move |_: &ZoomIn, _, cx| c1.update(cx, |c, cx| c.zoom_by(1.2, cx)))
+            .on_action(move |_: &ZoomOut, _, cx| c2.update(cx, |c, cx| c.zoom_by(1.0 / 1.2, cx)))
+            .on_action(move |_: &ResetZoom, _, cx| c3.update(cx, |c, cx| c.reset_zoom(cx)))
             .on_action(move |a: &SetLineShape, _, cx| {
                 c4.update(cx, |c, cx| c.set_line_shape(a.shape, cx))
             })
@@ -2894,12 +2864,7 @@ impl Render for MainView {
                     }
                 })
             }))
-            .on_action(cx.listener(move |this, _: &ZoomToFit, _, cx| {
-                match this.active_structogram(cx) {
-                    Some(view) => view.update(cx, |v, cx| v.zoom_to_fit(cx)),
-                    None => canvas.update(cx, |c, cx| c.zoom_to_fit(cx)),
-                }
-            }))
+            .on_action(move |_: &ZoomToFit, _, cx| canvas.update(cx, |c, cx| c.zoom_to_fit(cx)))
             .child(self.title_bar(window, cx))
             .children(self.update_question(cx))
             .child(body)

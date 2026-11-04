@@ -767,25 +767,31 @@ writes, and none of its code is used.
   own colours. The hatching of disabled elements repeats Structorizer's 5×10 pixel tile from
   the image's origin. `svg::render` writes it as an SVG image as large as Structorizer's PNG
   export; the app rasterizes it with `png::from_svg` like UML diagrams.
-- **In the app** (`umlcraft-app/src/nsd`), a structogram opens like a diagram, in the main
-  window's diagram card. `MainView` keeps an `NsdView` per structogram shown and puts it where
-  the canvas would be; the zoom pill, the zoom commands and the image export go to it.
-  `NsdView` reads the structogram from the model and changes it only through
+- **In the app** (`umlcraft-app/src/nsd`), a structogram opens like a diagram, on the same
+  canvas (`DiagramCanvas`), with its zoom, panning, grid and zoom pill. `MainView` keeps an
+  `NsdView` per structogram shown and hands the one shown to the canvas
+  (`show_structogram`). `NsdView` has no element of its own: it is the structogram's editor
+  (selection, dragging elements, dialogs, the context menu's entries, commands, export). The
+  canvas passes it the left mouse in diagram pixels, the context menu and, under the key
+  context `NsdView`, the structogram's commands (`nsd::bind_actions`); a press on no element
+  pans. `NsdView` reads the structogram from the model and changes it only through
   `Workspace::edit_structogram` (one `Document::edit` with the whole changed diagram), so
   structograms share the project's undo history; after an undo the selection is kept only if
   it still fits. The ribbon's diagram tab becomes a structogram tab (insert by kind, colour,
-  disabling, branches, `.nsd` export), enabled by what the selection allows (`Allowed`). It
-  shows the SVG export rasterized with resvg, made again when the diagram, the zoom or the
-  screen's scale changes, so the card holds exactly what an export does; GPUI cannot turn
-  text, which turned case branches need. Selection and the place a drag would drop to are
-  painted over the image and never reach an export. Text, comment and the root's signature
-  are edited in a dialog (`nsd/dialog.rs`), as in Structorizer; a new element is only inserted
-  when its dialog is confirmed, and an open dialog is taken over before saving or closing the
-  project. The diagram stays a white sheet in the dark theme; the area around it follows the
-  theme. Opening a `.nsd` (menu, command line, system, recent files) starts a new unsaved
-  project holding just that structogram, offered for saving as `<name>.ucraft` next to it;
-  *Import › Structogram* adds `.nsd` files to the open project, *Export › Structogram* writes
-  the one shown.
+  disabling, branches, `.nsd` export), enabled by what the selection allows (`Allowed`).
+  `nsd/paint.rs` paints `draw`'s primitives with GPUI, sharp at any zoom: areas and
+  axis-parallel lines as quads over whole pixels, slanted lines as strokes between pixel
+  centres, the hatching as clipped lines, texts shaped by GPUI at the baseline the SVG uses.
+  GPUI cannot turn text, so turned case labels are outlines usvg flattens from the system
+  fonts, cached per text. Selection and the place a drag would drop to are painted over it
+  and never reach an export; the image export stays the SVG (`svg::render`) in the light
+  colours. Text, comment and the root's signature are edited in a dialog (`nsd/dialog.rs`),
+  as in Structorizer; a new element is only inserted when its dialog is confirmed, and an
+  open dialog is taken over before saving or closing the project. In the dark theme the
+  structogram takes the diagrams' colours. Opening a `.nsd` (menu, command line, system,
+  recent files) starts a new unsaved project holding just that structogram, offered for
+  saving as `<name>.ucraft` next to it; *Import › Structogram* adds `.nsd` files to the open
+  project, *Export › Structogram* writes the one shown.
 - **From source code** (`umlcraft-nsd-code`; `java`, `csharp`, `python`, `cpp`): a Java, C#,
   Python or C++ file is read and parsed by the base of the class import (see "Source import":
   `SourceLanguage`, `source::read`, `parse_tree`; C and headers with the C++ grammar, C# and C++

@@ -1,85 +1,47 @@
-//! The view and editor of one structogram of the project: its drawing, zoom and panning,
-//! selection, editing and export. It shows the structogram as the model holds it and changes
-//! it through the workspace, so every change is a step of the project's undo history.
+//! The editor of one structogram of the project: its selection, editing and export. It shows
+//! the structogram as the model holds it and changes it through the workspace, so every change
+//! is a step of the project's undo history.
 //!
-//! The diagram is drawn by `umlcraft_nsd`'s SVG export and rasterized with resvg, so that the
-//! view shows exactly what an export holds, turned texts and hatching included. The image is
-//! made again when the diagram, the zoom or the screen's scale changes. Selection and the place
-//! a drag would drop to are drawn over it, so they never reach an export. In the dark theme the
-//! view draws it in the diagrams' dark colours, while exports keep Structorizer's black on white.
-
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::Arc;
+//! It has no surface of its own: the canvas shows the structogram (zoom, panning, the grid)
+//! and hands it the mouse in diagram pixels and the commands (`bind_actions`). The diagram is
+//! painted from `umlcraft_nsd`'s primitives with GPUI (`super::paint`), the selection and the
+//! place a drag would drop to over it, so they never reach an export. In the dark theme it is
+//! drawn in the diagrams' dark colours, while exports keep Structorizer's black on white.
 
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{ActiveTheme, Theme, WindowExt, v_flex};
 use gpui_kit::*;
-use resvg::{tiny_skia, usvg};
 use rust_i18n::t;
 use umlcraft_model::Id;
+use umlcraft_nsd::draw::Primitive;
 use umlcraft_nsd::layout::Layout;
 use umlcraft_nsd::path::{self, Path as NsdPath, Selection, Slot, Span};
 use umlcraft_nsd::svg::Palette;
 use umlcraft_nsd::{Color, Diagram, EditError, ElementKind, clip, edit};
 
 use super::dialog::{self, Edited, Target};
+use super::paint::{self, Place};
 use super::{
     AddBranch, EditElement, ExportStructogram, ExtendDown, ExtendUp, InsertElement, MoveDown,
     MoveUp, PALETTE, RemoveBranch, SelectDown, SelectLeft, SelectRight, SelectUp, SetColor,
     ToggleDisabled, kind_name,
 };
 use crate::workspace::Workspace;
-use crate::{
-    Cancel, Copy, Cut, DeleteSelection, ExportPng, ExportSvg, Paste, Redo, ResetZoom, Undo, ZoomIn,
-    ZoomOut, ZoomToFit,
-};
+use crate::{Cancel, Copy, Cut, DeleteSelection, ExportPng, ExportSvg, Paste, Redo, Undo};
 
-const MIN_ZOOM: f32 = 0.25;
-const MAX_ZOOM: f32 = 4.0;
-/// The longest side of the image a diagram is rasterized to, within GPU texture limits; a
-/// larger diagram at a high zoom is scaled up from it.
-const MAX_RASTER: f32 = 8192.0;
-/// Space around the diagram at the start and when fitted.
-const MARGIN: f32 = 20.0;
-/// How far the mouse moves before pressing on an element becomes dragging it.
+/// How far the mouse moves, in screen pixels, before pressing on an element becomes dragging
+/// it.
 const DRAG_START: f32 = 4.0;
 
-thread_local! {
-    /// The system's fonts, loaded once for all rasterizing.
-    static OPTIONS: Rc<usvg::Options<'static>> = {
-        let mut options = usvg::Options::default();
-        options.fontdb_mut().load_system_fonts();
-        Rc::new(options)
-    };
-}
-
-/// The diagram rasterized for one scale.
-struct Raster {
-    scale: f32,
-    image: Arc<RenderImage>,
-    /// Its size in pixels of the image.
-    size: (u32, u32),
-    /// The diagram changed since; the image goes on the next paint, which has the window.
-    outdated: bool,
-}
-
-enum Drag {
-    /// Panning: where it started, in window coordinates, and the pan then.
-    Pan { start: Point<Pixels>, pan: Point<Pixels> },
-    /// The right button held since `start`: moving it pans, releasing it where it was pressed
-    /// opens the context menu there.
-    RightPan { start: Point<Pixels>, pan: Point<Pixels>, panning: bool },
-    /// Pressed on selected elements: where, whether the mouse has gone far enough to drag
-    /// them, and the place they would drop to. `pressed` is what was hit inside a selection
-    /// that stays for dragging; a click without dragging selects it after all.
-    Elements {
-        span: Span,
-        start: Point<Pixels>,
-        moving: bool,
-        slot: Option<Slot>,
-        pressed: Option<Selection>,
-    },
+/// Pressed on selected elements: where, whether the mouse has gone far enough to drag them,
+/// and the place they would drop to. `pressed` is what was hit inside a selection that stays
+/// for dragging; a click without dragging selects it after all.
+struct Drag {
+    span: Span,
+    start: Point<Pixels>,
+    moving: bool,
+    slot: Option<Slot>,
+    pressed: Option<Selection>,
 }
 
 /// What the selection allows, for the ribbon and the context menu.
@@ -107,35 +69,18 @@ pub struct NsdView {
     notes: Vec<String>,
     notes_open: bool,
     layout: Layout,
-    /// The diagram as SVG, as exports have it, drawn again after each change.
-    svg: String,
-    /// The colours of the theme the view is shown in.
+    /// What the diagram draws, again after each change.
+    primitives: Vec<Primitive>,
+    /// The colours of the theme it is shown in.
     palette: Palette,
-    /// The diagram as shown, in `palette`, parsed; again only after a change.
-    tree: Option<Arc<usvg::Tree>>,
-    /// Counts the changes, so that an image rasterized meanwhile in the background is dropped.
-    generation: u64,
-    /// The diagram's size at 100 %.
+    /// The diagram's size at 100 %, the frame's right and bottom lines included.
     size: (f32, f32),
-    zoom: f32,
-    /// Where the diagram's top left corner is in the drawing area.
-    pan: Point<Pixels>,
-    raster: Option<Raster>,
-    /// An image for another zoom is being rasterized in the background.
-    rasterizing: bool,
-    /// The drawing area, as painted last.
-    area: Rc<Cell<Bounds<Pixels>>>,
-    /// What floating panels leave free of the area.
-    pub clear: crate::shell::ClearArea,
-    /// The pan waits for the layout to know where the clear area is.
-    home_pending: bool,
     drag: Option<Drag>,
-    /// The context menu, from the release of a right click until it closes.
-    menu_at: Option<crate::shell::MenuAt>,
     /// What the open element dialog holds, taken over when the project is saved or closed.
     dialog: Option<dialog::Pending>,
     /// Where a selection extended with Shift began; that end stays put.
     anchor: Option<NsdPath>,
+    /// The canvas's, which shows the structogram and gets its commands.
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -147,11 +92,13 @@ fn structogram(workspace: &Entity<Workspace>, id: Id, cx: &App) -> Option<Diagra
 }
 
 impl NsdView {
-    /// The view of structogram `id`, with what its import could not show (`notes`).
+    /// The editor of structogram `id`, with what its import could not show (`notes`), shown
+    /// on the canvas whose focus is `focus`.
     pub fn new(
         workspace: Entity<Workspace>,
         id: Id,
         notes: Vec<String>,
+        focus: FocusHandle,
         cx: &mut Context<Self>,
     ) -> Self {
         let subscriptions = vec![
@@ -186,31 +133,22 @@ impl NsdView {
             notes,
             notes_open: false,
             layout,
-            svg: String::new(),
+            primitives: Vec::new(),
             palette: palette(cx.theme()),
-            tree: None,
-            generation: 0,
             size: (0.0, 0.0),
-            zoom: 1.0,
-            pan: point(px(MARGIN), px(MARGIN)),
-            raster: None,
-            rasterizing: false,
-            area: Rc::default(),
-            clear: Rc::default(),
-            home_pending: true,
             drag: None,
-            menu_at: None,
             dialog: None,
             anchor: None,
-            focus: cx.focus_handle(),
+            focus,
             _subscriptions: subscriptions,
         };
         view.draw();
         view
     }
 
-    pub fn zoom(&self) -> f32 {
-        self.zoom
+    /// The diagram's size at 100 %.
+    pub fn size(&self) -> (f32, f32) {
+        self.size
     }
 
     /// Takes over a changed structogram from the model; whether anything changed.
@@ -238,18 +176,15 @@ impl NsdView {
     /// Draws the diagram as laid out.
     fn draw(&mut self) {
         let metrics = umlcraft_nsd::Metrics::for_platform();
-        self.svg = umlcraft_nsd::svg::render_with(&self.diagram, &self.layout, metrics, &LIGHT);
-        let shown = (self.palette != LIGHT).then(|| {
-            umlcraft_nsd::svg::render_with(&self.diagram, &self.layout, metrics, &self.palette)
-        });
-        let shown = shown.as_deref().unwrap_or(&self.svg);
-        self.tree = OPTIONS.with(|options| usvg::Tree::from_str(shown, options)).ok().map(Arc::new);
-        self.generation += 1;
+        self.primitives = umlcraft_nsd::draw::draw(&self.diagram, &self.layout, metrics);
         let (w, h) = self.layout.size;
         self.size = ((w + 1) as f32, (h + 1) as f32);
-        if let Some(raster) = &mut self.raster {
-            raster.outdated = true;
-        }
+    }
+
+    /// The diagram as exports have it: an SVG image in Structorizer's colours.
+    fn svg(&self) -> String {
+        let metrics = umlcraft_nsd::Metrics::for_platform();
+        umlcraft_nsd::svg::render_with(&self.diagram, &self.layout, metrics, &LIGHT)
     }
 
     /// Makes one undoable change of the project and shows it. Changes that are not possible
@@ -307,181 +242,28 @@ impl NsdView {
         }
     }
 
-    // ----- Zoom and pan ----------------------------------------------------------------------
+    // ----- Mouse ------------------------------------------------------------------------------
+    //
+    // The canvas hands the mouse over in diagram pixels (`at`) and in window coordinates
+    // (`position`, for how far it moved); it pans and zooms itself.
 
-    /// The diagram as an image at `scale` pixels per diagram pixel (less for a large diagram,
-    /// see [`MAX_RASTER`]), its size in pixels and the scale it has.
-    ///
-    /// After a change, and for the first paint, the image is made right away, so that it
-    /// matches the selection painted over it. Another zoom only scales the image there is
-    /// until one for the new zoom is rasterized in the background, one at a time: a large
-    /// diagram takes long enough to make zooming stutter.
-    fn raster(
+    /// A press of the left button; whether it hit the diagram (otherwise the canvas pans and
+    /// nothing is selected).
+    pub fn mouse_down(
         &mut self,
-        scale: f32,
+        at: (i32, i32),
+        position: Point<Pixels>,
+        click_count: usize,
+        shift: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<(Arc<RenderImage>, (u32, u32), f32)> {
-        let scale = scale.min(MAX_RASTER / self.size.0.max(self.size.1));
-        // Whether the image there is shows the diagram as it is, and at this scale.
-        match self.raster.as_ref().filter(|r| !r.outdated).map(|r| (r.scale - scale).abs() <= 1e-4)
-        {
-            Some(true) => {}
-            Some(false) => self.rasterize_later(scale, window, cx),
-            None => {
-                let image = self.tree.as_deref().and_then(|tree| rasterize(tree, scale));
-                self.replace_raster(image, scale, window);
-            }
-        }
-        self.raster.as_ref().map(|r| (r.image.clone(), r.size, r.scale))
-    }
-
-    fn rasterize_later(&mut self, scale: f32, window: &mut Window, cx: &mut Context<Self>) {
-        if self.rasterizing {
-            return;
-        }
-        let Some(tree) = self.tree.clone() else { return };
-        self.rasterizing = true;
-        let generation = self.generation;
-        cx.spawn_in(window, async move |this, cx| {
-            let image =
-                cx.background_executor().spawn(async move { rasterize(&tree, scale) }).await;
-            this.update_in(cx, |this, window, cx| {
-                this.rasterizing = false;
-                // A change meanwhile has made an image of its own.
-                if this.generation == generation {
-                    this.replace_raster(image, scale, window);
-                }
-                // Paints again, which asks for the zoom of now if it has moved on.
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn replace_raster(
-        &mut self,
-        image: Option<(Arc<RenderImage>, (u32, u32))>,
-        scale: f32,
-        window: &mut Window,
-    ) {
-        // GPUI keeps every image it painted in the window's atlas until it is dropped there;
-        // without this each zoom step and each change would leave its image behind.
-        if let Some(old) = self.raster.take() {
-            window.drop_image(old.image).ok();
-        }
-        self.raster = image.map(|(image, size)| Raster { scale, image, size, outdated: false });
-    }
-
-    fn set_zoom(&mut self, zoom: f32, anchor: Point<Pixels>, cx: &mut Context<Self>) {
-        let zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
-        // Keep the point under `anchor` (relative to the area) where it is.
-        let factor = zoom / self.zoom;
-        self.pan = point(
-            anchor.x - (anchor.x - self.pan.x) * factor,
-            anchor.y - (anchor.y - self.pan.y) * factor,
-        );
-        self.zoom = zoom;
-        cx.notify();
-    }
-
-    /// The part of the area no floating panel covers, relative to the area.
-    fn clear_area(&self) -> Bounds<Pixels> {
-        crate::shell::clear_in(&self.clear, self.area.get())
-    }
-
-    fn centre(&self) -> Point<Pixels> {
-        self.clear_area().center()
-    }
-
-    /// The pan at 100 %: the diagram a margin into the clear area.
-    fn home(&self) -> Point<Pixels> {
-        self.clear_area().origin + point(px(MARGIN), px(MARGIN))
-    }
-
-    /// Zooms about the middle of the area; the main window's zoom commands end up here too.
-    pub fn zoom_by(&mut self, factor: f32, cx: &mut Context<Self>) {
-        self.set_zoom(self.zoom * factor, self.centre(), cx);
-    }
-
-    fn zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
-        self.zoom_by(1.25, cx);
-    }
-
-    fn zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
-        self.zoom_by(1.0 / 1.25, cx);
-    }
-
-    pub fn reset_zoom(&mut self, cx: &mut Context<Self>) {
-        self.zoom = 1.0;
-        self.pan = self.home();
-        cx.notify();
-    }
-
-    fn on_reset_zoom(&mut self, _: &ResetZoom, _: &mut Window, cx: &mut Context<Self>) {
-        self.reset_zoom(cx);
-    }
-
-    fn on_zoom_to_fit(&mut self, _: &ZoomToFit, _: &mut Window, cx: &mut Context<Self>) {
-        self.zoom_to_fit(cx);
-    }
-
-    pub fn zoom_to_fit(&mut self, cx: &mut Context<Self>) {
-        let clear = self.clear_area();
-        let area = clear.size;
-        let fit_w = (f32::from(area.width) - 2.0 * MARGIN) / self.size.0;
-        let fit_h = (f32::from(area.height) - 2.0 * MARGIN) / self.size.1;
-        self.zoom = fit_w.min(fit_h).clamp(MIN_ZOOM, MAX_ZOOM);
-        self.pan = clear.origin
-            + point(
-                (area.width - px(self.size.0 * self.zoom)) / 2.0,
-                (area.height - px(self.size.1 * self.zoom)) / 2.0,
-            );
-        cx.notify();
-    }
-
-    fn on_scroll(&mut self, ev: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let delta = ev.delta.pixel_delta(px(20.0));
-        if ev.modifiers.secondary(cx) {
-            let origin = self.area.get().origin;
-            let anchor = point(ev.position.x - origin.x, ev.position.y - origin.y);
-            let factor = (1.0 + f32::from(delta.y) / 200.0).clamp(0.5, 2.0);
-            self.set_zoom(self.zoom * factor, anchor, cx);
-        } else {
-            self.pan = point(self.pan.x + delta.x, self.pan.y + delta.y);
-            cx.notify();
-        }
-    }
-
-    /// Two fingers spread or pinched on a touchpad zoom about the point between them.
-    fn on_pinch(&mut self, ev: &PinchEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if ev.delta != 0.0 {
-            let origin = self.area.get().origin;
-            let anchor = point(ev.position.x - origin.x, ev.position.y - origin.y);
-            self.set_zoom(self.zoom * (1.0 + ev.delta).clamp(0.5, 2.0), anchor, cx);
-        }
-    }
-
-    // ----- Mouse ------------------------------------------------------------------------------
-
-    /// A window position in diagram pixels.
-    fn to_diagram(&self, position: Point<Pixels>) -> (i32, i32) {
-        let origin = self.area.get().origin;
-        let x = f32::from(position.x - origin.x - self.pan.x) / self.zoom;
-        let y = f32::from(position.y - origin.y - self.pan.y) / self.zoom;
-        (x.floor() as i32, y.floor() as i32)
-    }
-
-    fn on_mouse_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus, cx);
-        let (x, y) = self.to_diagram(ev.position);
-        let Some(hit) = self.layout.hit(x, y) else {
-            self.drag = Some(Drag::Pan { start: ev.position, pan: self.pan });
+    ) -> bool {
+        let Some(hit) = self.layout.hit(at.0, at.1) else {
+            self.drag = None;
             self.select(Selection::Nothing, cx);
-            return;
+            return false;
         };
-        if ev.click_count >= 2 {
+        if click_count >= 2 {
             self.drag = None;
             match hit {
                 Selection::Empty(seq) => {
@@ -495,10 +277,10 @@ impl NsdView {
                     self.edit_element(&EditElement, window, cx);
                 }
             }
-            return;
+            return true;
         }
         let current = self.selection.clone();
-        if ev.modifiers.shift
+        if shift
             && let (Some(span), Some(path)) = (current.span(), hit.single())
             && path.len() == span.seq.len() + 1
             && path.starts_with(&span.seq)
@@ -507,7 +289,7 @@ impl NsdView {
             let anchor = span.element(span.fixed(self.anchor.as_deref()));
             let span = span.to(Some(&anchor), to);
             self.stretch(span, anchor, cx);
-            return;
+            return true;
         }
         // Pressing on what is selected keeps it, so that several elements can be dragged.
         let keep = match (&current, &hit) {
@@ -517,36 +299,22 @@ impl NsdView {
         let (selection, pressed) =
             if keep { (current.clone(), (hit != current).then_some(hit)) } else { (hit, None) };
         if let Selection::Elements(span) = &selection {
-            self.drag = Some(Drag::Elements {
+            self.drag = Some(Drag {
                 span: span.clone(),
-                start: ev.position,
+                start: position,
                 moving: false,
                 slot: None,
                 pressed,
             });
         }
         self.select(selection, cx);
+        true
     }
 
-    /// The right button pans while it is held and moved; released where it was pressed, it
-    /// opens the context menu (`on_right_up`).
-    fn on_right_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus, cx);
-        self.drag = Some(Drag::RightPan { start: ev.position, pan: self.pan, panning: false });
-    }
-
-    fn on_right_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(Drag::RightPan { start, panning: false, .. }) = self.drag.take() {
-            self.open_context_menu(start, cx);
-        }
-        cx.notify();
-    }
-
-    /// A right click selects what it hits, unless that is selected already, so that the
-    /// context menu acts on it, and opens the menu at `position`.
-    fn open_context_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        let (x, y) = self.to_diagram(position);
-        let hit = self.layout.hit(x, y).unwrap_or_default();
+    /// A right click at `at` selects what it hits, unless that is selected already, so that
+    /// the context menu acts on it.
+    pub fn select_for_menu(&mut self, at: (i32, i32), cx: &mut Context<Self>) {
+        let hit = self.layout.hit(at.0, at.1).unwrap_or_default();
         let inside = match (&self.selection, &hit) {
             (Selection::Elements(span), Selection::Elements(h)) => span.covers(&h.first()),
             (current, hit) => current == hit,
@@ -554,88 +322,41 @@ impl NsdView {
         if !inside {
             self.select(hit, cx);
         }
-        self.menu_at = Some(crate::shell::MenuAt::new(position));
     }
 
-    /// The context menu while it is open, built when it opens (`context_menu`).
-    fn open_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let at = self.menu_at.as_mut()?;
-        if at.menu.is_none() && !at.building {
-            // Built after the frame: the builder reads the view, which is being updated now.
-            at.building = true;
-            let owner = cx.entity();
-            window.defer(cx, move |window, cx| {
-                let builder = owner.clone();
-                let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
-                    Self::context_menu(&builder, menu, window, cx)
-                });
-                owner.update(cx, |this, cx| {
-                    let Some(at) = this.menu_at.as_mut() else { return };
-                    let subscription =
-                        cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, window, cx| {
-                            this.menu_at = None;
-                            window.focus(&this.focus, cx);
-                            cx.notify();
-                        });
-                    menu.focus_handle(cx).focus(window, cx);
-                    at.menu = Some((menu, subscription));
-                    cx.notify();
-                });
-            });
-        }
-        at.overlay()
-    }
-
-    fn on_middle_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus, cx);
-        self.drag = Some(Drag::Pan { start: ev.position, pan: self.pan });
-    }
-
-    fn on_mouse_move(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if ev.pressed_button.is_none() {
+    /// The mouse moved to `at`, with the left button `pressed`; `copy` with Ctrl (Cmd) held.
+    pub fn mouse_move(
+        &mut self,
+        at: (i32, i32),
+        position: Point<Pixels>,
+        pressed: bool,
+        copy: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !pressed {
             if self.drag.take().is_some() {
                 cx.notify();
             }
             return;
         }
-        let target = self.to_diagram(ev.position);
-        let layout = &self.layout;
-        match &mut self.drag {
-            Some(Drag::Pan { start, pan }) => {
-                self.pan = point(pan.x + ev.position.x - start.x, pan.y + ev.position.y - start.y);
-                cx.notify();
-            }
-            Some(Drag::RightPan { start, pan, panning }) => {
-                let moved = ev.position - *start;
-                // A hand that shakes a little while clicking does not pan yet.
-                *panning |= f32::from(moved.x.abs().max(moved.y.abs())) >= DRAG_START;
-                if *panning {
-                    self.pan = point(pan.x + moved.x, pan.y + moved.y);
-                    cx.notify();
-                }
-            }
-            Some(Drag::Elements { span, start, moving, slot, .. }) => {
-                let moved = ev.position - *start;
-                if !*moving && f32::from(moved.x.abs().max(moved.y.abs())) < DRAG_START {
-                    return;
-                }
-                *moving = true;
-                let copy = ev.modifiers.secondary(cx);
-                *slot =
-                    layout.slot_at(target.0, target.1).filter(|s| drops_somewhere(span, s, copy));
-                cx.notify();
-            }
-            None => {}
+        let Some(drag) = &mut self.drag else { return };
+        let moved = position - drag.start;
+        if !drag.moving && f32::from(moved.x.abs().max(moved.y.abs())) < DRAG_START {
+            return;
         }
+        drag.moving = true;
+        drag.slot =
+            self.layout.slot_at(at.0, at.1).filter(|s| drops_somewhere(&drag.span, s, copy));
+        cx.notify();
     }
 
-    fn on_mouse_up(&mut self, ev: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        // With Ctrl (Cmd) held the elements are copied, otherwise moved.
-        let copy = ev.modifiers.secondary(cx);
+    /// The left button went up; with `copy` (Ctrl or Cmd held) dragged elements are copied,
+    /// otherwise moved.
+    pub fn mouse_up(&mut self, copy: bool, cx: &mut Context<Self>) {
         let (span, slot) = match self.drag.take() {
-            Some(Drag::Elements { span, moving: true, slot: Some(slot), .. }) => (span, slot),
+            Some(Drag { span, moving: true, slot: Some(slot), .. }) => (span, slot),
             // A click into a selection selects what it hit, e.g. an element nested in it.
-            Some(Drag::Elements { moving: false, pressed: Some(hit), .. }) => {
+            Some(Drag { moving: false, pressed: Some(hit), .. }) => {
                 self.select(hit, cx);
                 return;
             }
@@ -1043,7 +764,7 @@ impl NsdView {
     }
 
     pub fn export_image(&mut self, png: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let svg = self.svg.clone();
+        let svg = self.svg();
         let bytes = move || {
             Ok(if png {
                 // `from_svg` takes images made at Astah's 4/3 pixels per unit; ours have one.
@@ -1060,7 +781,7 @@ impl NsdView {
     /// Puts the structogram on the clipboard as SVG and as PNG.
     pub fn copy_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let scale = crate::png::SCALE * umlcraft_notation::svg::SCALE;
-        crate::png::copy(self.svg.clone(), scale, window, cx);
+        crate::png::copy(self.svg(), scale, window, cx);
     }
 
     fn export_svg(&mut self, _: &ExportSvg, window: &mut Window, cx: &mut Context<Self>) {
@@ -1123,7 +844,7 @@ impl NsdView {
             }
         };
         let drop = match &self.drag {
-            Some(Drag::Elements { moving: true, slot: Some(slot), .. }) => l
+            Some(Drag { moving: true, slot: Some(slot), .. }) => l
                 .sequence(&slot.seq)
                 .map(|s| match s.elements.get(slot.index) {
                     _ if s.elements.is_empty() => rect(s.rect),
@@ -1139,8 +860,43 @@ impl NsdView {
         (boxes, drop)
     }
 
+    /// Paints the structogram with its origin at `origin` on the screen, at `zoom`, and the
+    /// selection over it in `accent`.
+    pub fn paint(
+        &self,
+        origin: Point<Pixels>,
+        zoom: f32,
+        accent: Hsla,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let place = Place { origin, zoom };
+        let family: SharedString = umlcraft_nsd::Metrics::for_platform().font_family().into();
+        paint::paint(&self.primitives, &self.palette, &family, place, window, cx);
+        let (boxes, drop) = self.overlay();
+        let on_screen = |[x, y, w, h]: [i32; 4]| {
+            Bounds::new(
+                origin + point(px(x as f32 * zoom), px(y as f32 * zoom)),
+                size(px(w as f32 * zoom), px(h as f32 * zoom)),
+            )
+        };
+        for b in boxes {
+            window.paint_quad(quad(
+                on_screen(b),
+                px(0.0),
+                accent.opacity(0.12),
+                px(2.0),
+                accent,
+                BorderStyle::Solid,
+            ));
+        }
+        if let Some(d) = drop {
+            window.paint_quad(fill(on_screen(d), accent));
+        }
+    }
+
     /// What an import could not show as written: a line that opens into the list.
-    fn notes_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    pub fn notes_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.notes.is_empty() {
             return None;
         }
@@ -1171,12 +927,13 @@ impl NsdView {
                             cx.notify();
                         })),
                 )
-                .children(list),
+                .children(list)
+                .into_any_element(),
         )
     }
 
     /// The context menu: what the selection allows.
-    fn context_menu(
+    pub fn context_menu(
         view: &Entity<Self>,
         menu: PopupMenu,
         window: &mut Window,
@@ -1285,151 +1042,44 @@ fn palette(theme: &Theme) -> Palette {
     }
 }
 
-/// The parsed SVG rasterized at `scale`, as GPUI takes images (BGRA, not premultiplied).
-fn rasterize(tree: &usvg::Tree, scale: f32) -> Option<(Arc<RenderImage>, (u32, u32))> {
-    let size = tree.size().to_int_size().scale_by(scale)?;
-    let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())?;
-    resvg::render(tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
-    let (w, h) = (pixmap.width(), pixmap.height());
-    let mut buffer = image::ImageBuffer::from_raw(w, h, pixmap.take())?;
-    for pixel in buffer.as_chunks_mut::<4>().0 {
-        // The sheet is opaque nearly everywhere, and there premultiplied is straight already:
-        // swapping red and blue is enough and several times faster than dividing.
-        if pixel[3] == 255 {
-            pixel.swap(0, 2);
-        } else {
-            swap_rgba_pa_to_bgra(pixel);
-        }
+/// Hands the structogram's commands that reach `element` (the canvas showing it) to `editor`.
+pub fn bind_actions<E: InteractiveElement>(element: E, editor: &Entity<NsdView>) -> E {
+    // Each command goes to the editor's handler of the same name.
+    macro_rules! bind {
+        ($element:expr, $($action:ty => $handler:ident),* $(,)?) => {
+            $element$(.on_action({
+                let editor = editor.clone();
+                move |a: &$action, window: &mut Window, cx: &mut App| {
+                    editor.update(cx, |e, cx| e.$handler(a, window, cx));
+                }
+            }))*
+        };
     }
-    Some((Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])), (w, h)))
-}
-
-impl Render for NsdView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let this = cx.entity();
-        let context_menu = self.open_menu(window, cx);
-        let area = self.area.clone();
-        // White around the structogram, as around a diagram.
-        let surround = cx.theme().background;
-        let accent = cx.theme().blue;
-        if self.home_pending && self.clear.get().is_some() && !self.area.get().is_empty() {
-            self.home_pending = false;
-            self.pan = self.home();
-        } else if self.home_pending {
-            // The area and the clear area come with this frame's layout: place it in the next.
-            window.request_animation_frame();
-        }
-        v_flex()
-            .size_full()
-            .bg(cx.theme().background)
-            .track_focus(&self.focus)
-            .key_context("NsdView")
-            .on_action(cx.listener(Self::zoom_in))
-            .on_action(cx.listener(Self::zoom_out))
-            .on_action(cx.listener(Self::on_reset_zoom))
-            .on_action(cx.listener(Self::on_zoom_to_fit))
-            .on_action(cx.listener(Self::export_svg))
-            .on_action(cx.listener(Self::export_png))
-            .on_action(cx.listener(Self::export_nsd))
-            .on_action(cx.listener(Self::edit_element))
-            .on_action(cx.listener(Self::insert_element))
-            .on_action(cx.listener(Self::delete))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::cut))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::cancel))
-            .on_action(cx.listener(Self::move_up))
-            .on_action(cx.listener(Self::move_down))
-            .on_action(cx.listener(Self::set_color))
-            .on_action(cx.listener(Self::toggle_disabled))
-            .on_action(cx.listener(Self::add_branch))
-            .on_action(cx.listener(Self::remove_branch))
-            .on_action(cx.listener(Self::select_up))
-            .on_action(cx.listener(Self::select_down))
-            .on_action(cx.listener(Self::select_left))
-            .on_action(cx.listener(Self::select_right))
-            .on_action(cx.listener(Self::extend_up))
-            .on_action(cx.listener(Self::extend_down))
-            .child(
-                div()
-                    .id("structogram")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .bg(surround)
-                    .on_scroll(cx.listener(Self::on_scroll))
-                    .on_pinch(cx.listener(Self::on_pinch))
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-                    .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_down))
-                    .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
-                    .on_mouse_move(cx.listener(Self::on_mouse_move))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-                    .on_mouse_up(MouseButton::Right, cx.listener(Self::on_right_up))
-                    .on_mouse_up(
-                        MouseButton::Middle,
-                        cx.listener(|this, _: &MouseUpEvent, _, _| this.drag = None),
-                    )
-                    .child(
-                        canvas(
-                            move |bounds, _, _| area.set(bounds),
-                            move |bounds, _, window, cx| {
-                                let scale = window.scale_factor();
-                                let (pan, zoom, raster, (boxes, drop)) =
-                                    this.update(cx, |this, cx| {
-                                        let raster = this.raster(this.zoom * scale, window, cx);
-                                        (this.pan, this.zoom, raster, this.overlay())
-                                    });
-                                let Some((image, (w, h), raster_scale)) = raster else {
-                                    return;
-                                };
-                                let origin =
-                                    point(bounds.origin.x + pan.x, bounds.origin.y + pan.y);
-                                // The image covers the diagram at the zoom, whatever its scale.
-                                let shown = zoom / raster_scale;
-                                let size = size(px(w as f32 * shown), px(h as f32 * shown));
-                                let image_bounds = Bounds::new(origin, size);
-                                let on_screen = |[x, y, w, h]: [i32; 4]| {
-                                    Bounds::new(
-                                        point(
-                                            origin.x + px(x as f32 * zoom),
-                                            origin.y + px(y as f32 * zoom),
-                                        ),
-                                        gpui_kit::size(px(w as f32 * zoom), px(h as f32 * zoom)),
-                                    )
-                                };
-                                window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                                    window
-                                        .paint_image(
-                                            image_bounds,
-                                            image_bounds,
-                                            Corners::default(),
-                                            image,
-                                            0,
-                                            false,
-                                        )
-                                        .ok();
-                                    for b in boxes {
-                                        window.paint_quad(quad(
-                                            on_screen(b),
-                                            px(0.0),
-                                            accent.opacity(0.12),
-                                            px(2.0),
-                                            accent,
-                                            BorderStyle::Solid,
-                                        ));
-                                    }
-                                    if let Some(d) = drop {
-                                        window.paint_quad(fill(on_screen(d), accent));
-                                    }
-                                });
-                            },
-                        )
-                        .size_full(),
-                    ),
-            )
-            .children(self.notes_bar(cx))
-            .children(context_menu)
-    }
+    bind!(
+        element,
+        ExportSvg => export_svg,
+        ExportPng => export_png,
+        ExportStructogram => export_nsd,
+        EditElement => edit_element,
+        InsertElement => insert_element,
+        DeleteSelection => delete,
+        Copy => copy,
+        Cut => cut,
+        Paste => paste,
+        Cancel => cancel,
+        MoveUp => move_up,
+        MoveDown => move_down,
+        SetColor => set_color,
+        ToggleDisabled => toggle_disabled,
+        AddBranch => add_branch,
+        RemoveBranch => remove_branch,
+        SelectUp => select_up,
+        SelectDown => select_down,
+        SelectLeft => select_left,
+        SelectRight => select_right,
+        ExtendUp => extend_up,
+        ExtendDown => extend_down,
+    )
 }
 
 impl Focusable for NsdView {
