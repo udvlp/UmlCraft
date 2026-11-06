@@ -208,8 +208,17 @@ fn hex(bytes: &[u8]) -> String {
 
 /// The SHA-256 checksum of the file at `path`, in lowercase hex.
 fn sha256_of(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    // sha2 0.11 hashes no `io::Write`: the file goes in by chunks.
+    let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut fs::File::open(path)?, &mut hasher)?;
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        match file.read(&mut buffer)? {
+            0 => break,
+            n => hasher.update(&buffer[..n]),
+        }
+    }
     Ok(hex(&hasher.finalize()))
 }
 
