@@ -525,8 +525,6 @@ status:
   imported: "Imported %{files} files: %{created} new types, %{updated} updated, %{associations} associations."
   imported_structograms: "%{count} structograms made or renewed."
 canvas:
-  no_diagram: No diagram open. A click on a diagram in the model tree opens it.
-  no_diagram_yet: No diagram yet. "New diagram" or the model tree's context menu makes one.
   handle_connect: Drag to draw a line to another element
   handle_message: Drag to draw a message to a lifeline
 dialog:

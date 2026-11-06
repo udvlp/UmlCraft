@@ -525,8 +525,6 @@ status:
   imported: "%{files} Dateien importiert: %{created} neue Typen, %{updated} aktualisiert, %{associations} Assoziationen."
   imported_structograms: "%{count} Struktogramme erstellt oder erneuert."
 canvas:
-  no_diagram: Kein Diagramm geöffnet. Ein Klick auf ein Diagramm im Modellbaum öffnet es.
-  no_diagram_yet: Noch kein Diagramm. „Neues Diagramm“ oder das Kontextmenü im Modellbaum legt eins an.
   handle_connect: Ziehen, um eine Linie zu einem anderen Element zu zeichnen
   handle_message: Ziehen, um eine Nachricht zu einer Lebenslinie zu zeichnen
 dialog:

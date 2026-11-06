@@ -992,6 +992,12 @@ impl DiagramCanvas {
     fn on_left_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_edit(cx);
         self.focus_handle.focus(window, cx);
+        // Without a diagram the canvas is only its grid: the left button pans it.
+        if self.shown_diagram.is_none() {
+            self.drag = Some(Drag::Pan { last: ev.position });
+            cx.notify();
+            return;
+        }
         // A structogram selects and drags itself; beside it the left button pans.
         if let Some(editor) = self.shown_structogram() {
             let (at, position, count, shift) =
@@ -1611,6 +1617,10 @@ impl DiagramCanvas {
     /// A right click selects what it hits (unless that is selected already), so that the
     /// context menu acts on it, and opens the menu at `position`.
     fn open_context_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        // Without a diagram there is nothing to act on.
+        if self.shown_diagram.is_none() {
+            return;
+        }
         if let Some(editor) = self.shown_structogram() {
             let at = self.structogram_px(position);
             editor.update(cx, |e, cx| e.select_for_menu(at, cx));
@@ -2108,8 +2118,8 @@ impl DiagramCanvas {
     }
 
     fn on_drop(&mut self, dragged: &DraggedElement, window: &mut Window, cx: &mut Context<Self>) {
-        // Model elements cannot be shown on a structogram.
-        if self.shown_structogram().is_some() {
+        // Model elements cannot be shown on a structogram, nor without a diagram.
+        if self.shown_diagram.is_none() || self.shown_structogram().is_some() {
             return;
         }
         let at = snap_point(self.to_logical(window.mouse_position()));

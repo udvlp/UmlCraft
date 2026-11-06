@@ -2167,39 +2167,11 @@ impl MainView {
         )
     }
 
-    /// The zoom of the diagram or structogram shown, if one is shown.
-    fn shown_zoom(&self, cx: &App) -> Option<f32> {
-        self.workspace.read(cx).active_diagram?;
-        Some(self.canvas.read(cx).zoom())
-    }
-
     /// The diagram or structogram shown, both on the canvas; the zoom over it is the main
-    /// view's.
-    fn diagram_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let ws = self.workspace.read(cx);
-        let body = if ws.active_diagram.is_some() {
-            let content = self.canvas.clone().into_any_element();
-            div().relative().flex_1().min_h_0().child(content).into_any_element()
-        } else {
-            // With diagrams, one click in the tree opens one; without, the hint says where
-            // to make one.
-            let model = ws.doc.model();
-            let hint = match model.elements().any(|e| crate::workspace::is_shown(model, e.id())) {
-                true => t!("canvas.no_diagram"),
-                false => t!("canvas.no_diagram_yet"),
-            };
-            // The same white as a diagram's, under the floating panels.
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(cx.theme().background)
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(hint.to_string())
-                .into_any_element()
-        };
+    /// view's. Without a diagram the canvas shows its empty grid.
+    fn diagram_area(&self) -> impl IntoElement {
+        let content = self.canvas.clone().into_any_element();
+        let body = div().relative().flex_1().min_h_0().child(content);
         // Nothing of the diagram area draws over the panels beside it.
         v_flex().size_full().overflow_hidden().child(body)
     }
@@ -2707,13 +2679,14 @@ impl Render for MainView {
         }
         let backdrop = shell::backdrop(cx);
         let model_browser = self.model_browser(cx).into_any_element();
-        let diagram_area = self.diagram_area(cx).into_any_element();
+        let diagram_area = self.diagram_area().into_any_element();
         let properties_area = self.properties_area(cx).into_any_element();
         let ribbon = self.ribbon(window, cx).into_any_element();
         // The diagram fills the window below the title bar; ribbon, tree and properties float
         // over it, and so do the zoom and what is running in the room between.
         let busy = self.busy_card(cx);
-        let pill = self.shown_zoom(cx).map(|zoom| self.zoom_pill(zoom, cx));
+        // The canvas shows its grid and zoom also without a diagram.
+        let pill = self.zoom_pill(self.canvas.read(cx).zoom(), cx);
         let bottom = v_flex()
             .absolute()
             .bottom_0()
@@ -2722,7 +2695,7 @@ impl Render for MainView {
             .items_center()
             .gap_2()
             .children(busy)
-            .children(pill);
+            .child(pill);
         let clear =
             div().relative().flex_1().min_w_0().child(measure(self.clear.clone())).child(bottom);
         let body = div()

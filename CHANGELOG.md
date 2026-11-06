@@ -32,6 +32,9 @@ today.
   `do / …` and `exit / …`, or an internal transition `trigger [guard] / effect`;
   `update_element` changes or clears `entry`, `do` and `exit` and rewrites an internal
   transition's `text`.
+- **Empty canvas without a diagram**: with no diagram open, the window shows the canvas with
+  its grid and the zoom instead of a blank white area with a hint. It only pans and zooms
+  until a diagram is opened.
 - **Turned calls and jumps** in case elements with many branches are drawn turned as a
   whole: the bars of a call run across, a jump points down, and the text no longer touches
   the bar.
