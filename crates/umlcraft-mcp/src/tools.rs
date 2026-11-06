@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use umlcraft_erm_sql::{Dialect, LeftOut};
 use umlcraft_model::{
     ActivityNodeKind, DiagramKind, ElementData, ElementKind, ErAction, ErDisplay, ErKey,
-    ErNotation, Id, InteractionOperator, MessageSort, Model, ModelError, Point, Rect, Shape,
-    SharedStyle, StateInvariantProps, TerminationProps, Tx, Visibility,
+    ErNotation, Id, InteractionOperator, InternalTransitionProps, MessageSort, Model, ModelError,
+    Point, Rect, Shape, SharedStyle, StateInvariantProps, TerminationProps, Tx, Visibility,
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview, TextMeasure};
@@ -491,9 +491,13 @@ pub fn list() -> Vec<Value> {
             "Adds an attribute, operation or enumeration literal to a classifier, written as \
              in a class box: `- name : String [0..1] = \"x\"`, `+ total(tax : double) : int`, \
              `RED`. Types name classes of the model or are kept as text. ER entities take \
-             columns, `name` or `name : TYPE(length)`: rows of their tables in IE and IDEF1X.",
+             columns, `name` or `name : TYPE(length)`: rows of their tables in IE and IDEF1X. \
+             States take their internal activities and transitions as listed in the state: \
+             `entry / light on`, `do / blink`, `exit / light off` (each replaces the one \
+             before), else an internal transition `trigger [guard] / effect`.",
             json!({
-                "owner": id("The class, interface, enumeration or data type, or the ER entity."),
+                "owner": id("The class, interface, enumeration or data type, the ER entity, or \
+                             the state."),
                 "text": text("The member as it reads in the box."),
                 "key": flag("ER columns: part of the primary key."),
             }),
@@ -575,7 +579,8 @@ pub fn list() -> Vec<Value> {
              ordering, upper bound, stream, control, effect and exception of an object node, \
              pin or activity parameter (a control pin, an exception pin); \
              the activity a call behavior action calls; the state machine a submachine state \
-             stands for; the constraints of an element (members show them after their text, \
+             stands for; a state's entry, do and exit activities and an internal transition's \
+             `trigger [guard] / effect` (as `text`); the constraints of an element (members show them after their text, \
              lines below their name); on every diagram showing it, the shared style of a \
              generalization (one triangle for all generalizations to its general element) \
              and whether a class «boundary», «control» or «entity» is drawn as its icon; the \
@@ -585,7 +590,11 @@ pub fn list() -> Vec<Value> {
                 json!({
                     "id": id("The element."),
                     "name": text("New name."),
-                    "text": text("Attributes and operations: the whole member as text."),
+                    "text": text("Attributes and operations: the whole member as text; internal \
+                                  transitions: `trigger [guard] / effect`."),
+                    "entry": text("States: the entry activity, without `entry /`; \"\" for none."),
+                    "do": text("States: the do activity, without `do /`; \"\" for none."),
+                    "exit": text("States: the exit activity, without `exit /`; \"\" for none."),
                     "documentation": text("New documentation."),
                     "stereotypes": { "type": "array", "items": { "type": "string" } },
                     "guard": text("Messages, operands, flows, transitions: the guard, without brackets."),
@@ -1447,6 +1456,10 @@ fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     let text = str_arg(args, "text")?.trim().to_owned();
     let model = host.document().model();
     let owner_kind = model.get(owner).ok_or_else(|| format!("no element {owner}"))?.kind();
+    if let ElementKind::State(props) = owner_kind {
+        let props = props.clone();
+        return add_state_member(host, owner, props, &text);
+    }
     let literal = matches!(owner_kind, ElementKind::Enumeration(_))
         && !text.contains('(')
         && !text.contains(':');
@@ -1481,6 +1494,68 @@ fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     })))
 }
 
+/// `entry / …`, `do / …` or `exit / …` sets that activity of `state`; any other text adds an
+/// internal transition `trigger [guard] / effect`.
+fn add_state_member(
+    host: &mut dyn Host,
+    state: Id,
+    mut props: umlcraft_model::StateProps,
+    text: &str,
+) -> Outcome {
+    if let Some((label, activity)) = state_activity(text) {
+        let activity = activity.to_owned();
+        match label {
+            "entry" => props.entry = activity,
+            "do" => props.do_activity = activity,
+            _ => props.exit = activity,
+        }
+        change(host, "add_member", |tx| tx.update(state, |d| d.kind = ElementKind::State(props)))?;
+        return Ok(Reply::json(json!({ "id": state, "kind": "state", "text": text })));
+    }
+    if text.is_empty() {
+        return Err("an internal transition needs a trigger, a guard or an effect".into());
+    }
+    let props = InternalTransitionProps::parse(text);
+    let member = change(host, "add_member", |tx| {
+        tx.create(state, ElementData::new("", ElementKind::InternalTransition(props)))
+    })?;
+    let model = host.document().model();
+    let shown = match model.get(member).map(|e| e.kind()) {
+        Some(ElementKind::InternalTransition(t)) => t.label(),
+        _ => String::new(),
+    };
+    Ok(Reply::json(json!({
+        "id": member,
+        "kind": kind_name(model, member),
+        "text": shown,
+    })))
+}
+
+/// `entry / light on` as (`entry`, `light on`); likewise `do` and `exit`, in any case.
+fn state_activity(text: &str) -> Option<(&'static str, &str)> {
+    let (head, rest) = text.split_once('/')?;
+    let label =
+        ["entry", "do", "exit"].into_iter().find(|l| head.trim().eq_ignore_ascii_case(l))?;
+    Some((label, rest.trim()))
+}
+
+/// The `entry`, `do` and `exit` arguments of a state.
+fn set_state_activities(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
+    for key in ["entry", "do", "exit"] {
+        let Some(text) = opt_str(args, key) else { continue };
+        let ElementKind::State(p) = kind else {
+            return Err(format!("a {} has no `{key}`", kind.type_name()));
+        };
+        let text = text.trim().to_owned();
+        match key {
+            "entry" => p.entry = text,
+            "do" => p.do_activity = text,
+            _ => p.exit = text,
+        }
+    }
+    Ok(())
+}
+
 fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let id = id_arg(args, "id")?;
     let model = host.document().model();
@@ -1492,9 +1567,13 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         .get("stereotypes")
         .and_then(Value::as_array)
         .map(|s| s.iter().filter_map(Value::as_str).map(str::to_owned).collect());
-    if text.is_some() && !matches!(kind, ElementKind::Attribute(_) | ElementKind::Operation(_)) {
+    let transition = matches!(kind, ElementKind::InternalTransition(_));
+    if text.is_some()
+        && !transition
+        && !matches!(kind, ElementKind::Attribute(_) | ElementKind::Operation(_))
+    {
         return Err(format!(
-            "only attributes and operations take `text`, not a {}",
+            "only attributes, operations and internal transitions take `text`, not a {}",
             kind.type_name()
         ));
     }
@@ -1522,6 +1601,10 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     set_properties(model, &mut settings, args)?;
     set_activity_node(model, id, &mut settings, args)?;
     set_submachine(model, id, &mut settings, args)?;
+    set_state_activities(&mut settings, args)?;
+    if transition && let Some(text) = &text {
+        settings = ElementKind::InternalTransition(InternalTransitionProps::parse(text));
+    }
     set_er(&mut settings, args)?;
     if let ElementKind::ErParticipation(p) = &kind
         && args.get("cardinality_here").is_some()
@@ -1553,7 +1636,7 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         if let Some(associative) = associative {
             er::set_associative(tx, id, associative)?;
         }
-        if let Some(text) = &text {
+        if let Some(text) = text.as_ref().filter(|_| !transition) {
             member::apply_member_text(tx, id, text)?;
         }
         if let Some(name) = name {
@@ -3454,6 +3537,53 @@ mod tests {
         assert!(o.is_control && o.is_exception);
         assert_eq!(o.effect, Some(umlcraft_model::ObjectEffect::Delete));
         assert_eq!(o.property_lines(), ["{delete}", "{control}"]);
+    }
+
+    #[test]
+    fn states_take_activities_and_internal_transitions() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "TU" }));
+        let d = id(&d["diagram"]);
+        let state = run(&mut host, "create_element", json!({ "diagram": d, "tool": "state" }));
+        let state = id(&state["element"]);
+        let add = |host: &mut Headless, text: &str| {
+            run(host, "add_member", json!({ "owner": state, "text": text }))
+        };
+        add(&mut host, "entry / light on");
+        add(&mut host, "DO / blink");
+        add(&mut host, "exit / light off");
+        let t = add(&mut host, "coin [credit < 2] / count");
+        assert_eq!(t["kind"], "internalTransition");
+        assert_eq!(t["text"], "coin [credit < 2] / count");
+        let props = |host: &Headless| match host.document().model().get(state.parse().unwrap()) {
+            Some(e) => match e.kind() {
+                ElementKind::State(p) => p.clone(),
+                _ => panic!(),
+            },
+            None => panic!(),
+        };
+        let p = props(&host);
+        assert_eq!((p.entry.as_str(), p.do_activity.as_str()), ("light on", "blink"));
+        assert_eq!(p.exit, "light off");
+        // update_element changes and clears them, and rewrites the transition.
+        run(&mut host, "update_element", json!({ "id": state, "entry": "", "do": "flash" }));
+        let p = props(&host);
+        assert_eq!((p.entry.as_str(), p.do_activity.as_str()), ("", "flash"));
+        let t = run(&mut host, "update_element", json!({ "id": t["id"], "text": "reset / clear" }));
+        let changed = host.document().model().get(id(&t["id"]).parse().unwrap()).unwrap();
+        let ElementKind::InternalTransition(t) = changed.kind() else { panic!() };
+        assert_eq!(
+            (t.trigger.as_str(), t.guard.as_str(), t.effect.as_str()),
+            ("reset", "", "clear")
+        );
+        let class = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "C" }));
+        let class = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": class["diagram"], "tool": "class", "name": "K" }),
+        );
+        let wrong = json!({ "id": class["element"], "entry": "x" });
+        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
     }
 
     #[test]

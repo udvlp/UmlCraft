@@ -28,6 +28,10 @@ today.
   is drawn in front of it; before, every new container went to the very back, so a substate
   added to a composite state vanished behind it.
 - **Stereotypes on states**: a state shows its stereotypes above its name.
+- **AI clients write state activities**: `add_member` on a state takes `entry / …`,
+  `do / …` and `exit / …`, or an internal transition `trigger [guard] / effect`;
+  `update_element` changes or clears `entry`, `do` and `exit` and rewrites an internal
+  transition's `text`.
 - **Turned calls and jumps** in case elements with many branches are drawn turned as a
   whole: the bars of a call run across, a jump points down, and the text no longer touches
   the bar.

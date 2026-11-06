@@ -1161,7 +1161,9 @@ Every editing tool is one undo step made the way the app makes it:
 `umlcraft_notation::edit::apply` fits auto-sized boxes and lets routed lines follow, the same
 function `Workspace::edit` uses; diagrams come from `edit::create_diagram`, nodes and lines
 from the palettes (`palette::create_node`, `palette::connect`), members from
-`member::apply_member_text`, fragments and operands from `palette::wrap_in_fragment` and
+`member::apply_member_text` (on a state, `add_member` sets `entry / …`, `do / …` and
+`exit / …` or adds an internal transition read by `InternalTransitionProps::parse`, as the
+properties panel does), fragments and operands from `palette::wrap_in_fragment` and
 `palette::add_operand`; `update_element` gives a fragment that becomes an `alt` its `else`
 (`palette::add_else`), and `delete_element` takes regions and operands out with
 `state_edit::delete_region` and `sequence_edit::delete_operand`, as the app does. A tool that fails rolls back and answers with the error, which
