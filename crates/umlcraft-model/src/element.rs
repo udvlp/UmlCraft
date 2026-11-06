@@ -945,6 +945,14 @@ impl TransitionProps {
     pub fn label(&self) -> String {
         transition_label(&self.trigger, &self.guard, &self.effect)
     }
+
+    /// Sets trigger, guard and effect from a label `trigger [guard] / effect`, as for
+    /// internal transitions.
+    pub fn set_label(&mut self, text: &str) {
+        let InternalTransitionProps { trigger, guard, effect } =
+            InternalTransitionProps::parse(text);
+        (self.trigger, self.guard, self.effect) = (trigger, guard, effect);
+    }
 }
 
 /// A transition that does not leave its state, such as `keypress [ready] / echo`. It is listed

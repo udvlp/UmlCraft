@@ -3339,6 +3339,14 @@ pub fn fitted_box(
             format!("{}\n{}", bounds.width, element.name()),
         ));
     }
+    // A state grows for its name, stereotypes and activities, so that lines and loops leave
+    // the state where it is drawn; it never shrinks below the size it was given.
+    if let ElementKind::State(props) = element.kind() {
+        let (r, _, rows) =
+            layout_state(model, element, props, p.regions(), &p.style, bounds, measure);
+        let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+        return Some((r.size(), texts.join("\n")));
+    }
     if !p.style.auto_size || p.style.iconic || !is_boxed_classifier(element.kind()) {
         return None;
     }

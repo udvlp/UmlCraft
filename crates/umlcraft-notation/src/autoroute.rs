@@ -971,12 +971,55 @@ pub fn follow(tx: &mut Tx<'_>, before: &HashMap<Id, Snapshot>) -> Result<usize> 
     let mut diagrams: Vec<&Id> = before.keys().collect();
     diagrams.sort();
     for &diagram in diagrams {
+        follow_loops(tx, diagram, &before[&diagram])?;
         let edges = stale(tx, diagram, &before[&diagram]);
         if !edges.is_empty() {
             count += route_lines(tx, diagram, &edges)?;
         }
     }
     Ok(count)
+}
+
+/// Loops from a node to itself keep to the node's top right corner: where the node moved or
+/// changed size and the edit left its loop as it was, the loop moves as far as that corner,
+/// and ends placed at the corner stay there.
+fn follow_loops(tx: &mut Tx<'_>, diagram: Id, before: &Snapshot) -> Result<()> {
+    let Some(view) = tx.model().view(diagram) else { return Ok(()) };
+    let close = |a: Option<Point>, b: Point| {
+        a.is_some_and(|a| (a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001)
+    };
+    let mut changes = Vec::new();
+    for p in view.presentations() {
+        let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, .. } = &p.shape
+        else {
+            continue;
+        };
+        if source != target || before.loops.get(&p.id) != Some(waypoints) {
+            continue;
+        }
+        let (Some(&old), Some(new)) =
+            (before.nodes.get(source), view.get(*source).and_then(|n| n.bounds()))
+        else {
+            continue;
+        };
+        if old == new {
+            continue;
+        }
+        let (dx, dy) = (new.right() - old.right(), new.y - old.y);
+        let points = waypoints.iter().map(|w| w.offset(dx, dy)).collect();
+        let (from, to) = crate::scene::self_loop_anchors(old);
+        let anchors = if close(*source_anchor, from) && close(*target_anchor, to) {
+            let (from, to) = crate::scene::self_loop_anchors(new);
+            (Some(from), Some(to))
+        } else {
+            (*source_anchor, *target_anchor)
+        };
+        changes.push((p.id, points, anchors));
+    }
+    for (edge, points, anchors) in changes {
+        tx.set_route(diagram, edge, points, anchors)?;
+    }
+    Ok(())
 }
 
 /// Whether the horizontal or vertical segment from `a` to `b` runs through `r`.
@@ -986,17 +1029,24 @@ pub(crate) fn segment_hits(a: Point, b: Point, r: Rect) -> bool {
     x0 < r.right() && x1 > r.x && y0 < r.bottom() && y1 > r.y
 }
 
-/// The node bounds and the routed edges of a diagram, to tell afterwards what an edit changed.
+/// The node bounds, the routed edges and the waypoints of the loops of a diagram, to tell
+/// afterwards what an edit changed.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     nodes: HashMap<Id, Rect>,
     edges: Vec<Id>,
+    loops: HashMap<Id, Vec<Point>>,
 }
 
 pub fn snapshot(model: &umlcraft_model::Model, diagram: Id) -> Snapshot {
     let Some(view) = model.view(diagram) else { return Snapshot::default() };
     let mut snapshot = Snapshot::default();
     for p in view.presentations() {
+        if let Shape::Edge { source, target, waypoints, .. } = &p.shape
+            && source == target
+        {
+            snapshot.loops.insert(p.id, waypoints.clone());
+        }
         match &p.shape {
             Shape::Node { bounds, .. } => {
                 snapshot.nodes.insert(p.id, *bounds);

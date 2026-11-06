@@ -19,8 +19,8 @@ today.
   room, and a selected region is outlined by itself rather than by its whole state.
 - **States moved into composite states** drop the bends of their transitions to and from
   outside, which otherwise ran from where the state was before.
-- **Swimlanes** move only sideways and stop at their neighbours instead of sliding over them
-  or below the frame.
+- **Swimlanes** move only sideways and within their row. Dropped past a neighbour's middle, a
+  lane takes its place, and the lanes close up in the new order, each with its contents.
 - **Properties after switching diagrams**: the properties panel no longer shows an element of
   the diagram shown before.
 - **Undo in structograms** selects the element it brought back or changed.
@@ -32,12 +32,19 @@ today.
   `do / …` and `exit / …`, or an internal transition `trigger [guard] / effect`;
   `update_element` changes or clears `entry`, `do` and `exit` and rewrites an internal
   transition's `text`.
+- **AI clients move as a drag does**: `move_node` takes what lies in a container along, and a
+  state moved into another one becomes its substate, drawn in front of it.
+- **Transition labels** typed in place or given by AI clients (`connect`, `update_element`)
+  are split into trigger, guard and effect, as `e2 [x > 0] / z++` reads.
+- **States grow for their activities** when one is added or made longer, and a loop from a
+  state to itself keeps to the state's corner when the state grows or moves, so its label
+  stays by the loop.
 - **Empty canvas without a diagram**: with no diagram open, the window shows the canvas with
   its grid and the zoom instead of a blank white area with a hint. It only pans and zooms
   until a diagram is opened.
-- **Turned calls and jumps** in case elements with many branches are drawn turned as a
-  whole: the bars of a call run across, a jump points down, and the text no longer touches
-  the bar.
+- **Turned calls and jumps** in case elements with many branches keep the room for the bars
+  of a call and the point of a jump, as in Structorizer: their text no longer runs over the
+  bar.
 
 ## 0.19.0 – 2026-11-04
 

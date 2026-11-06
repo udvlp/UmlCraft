@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use rust_i18n::t;
@@ -549,47 +549,47 @@ impl Workspace {
             }
             // A state dropped into another one (or out of it) becomes its substate.
             if states {
-                let owners = |tx: &umlcraft_model::Tx<'_>| -> HashMap<Id, Option<Id>> {
-                    let view = tx.model().view(diagram);
-                    presentations
-                        .iter()
-                        .filter_map(|&p| Some((p, view?.get(p)?.element?)))
-                        .map(|(p, e)| (p, tx.model().get(e).and_then(|e| e.owner())))
-                        .collect()
-                };
-                let before = owners(tx);
-                state_edit::reparent_vertices(tx, diagram, presentations)?;
-                let after = owners(tx);
-                // Lines from a state that changed its owner to one that stayed lose their bends:
-                // made for the old place, they would lead out of the new one and back.
-                let changed: HashSet<Id> = after
-                    .iter()
-                    .filter(|(p, o)| before.get(p) != Some(o))
-                    .map(|(p, _)| *p)
-                    .collect();
-                let straightened: Vec<Id> = tx
-                    .model()
-                    .view(diagram)
-                    .map(|v| {
-                        v.presentations()
-                            .iter()
-                            .filter(|p| match &p.shape {
-                                Shape::Edge { source, target, waypoints, .. } => {
-                                    !waypoints.is_empty()
-                                        && moved.contains(source) != moved.contains(target)
-                                        && (changed.contains(source) || changed.contains(target))
-                                }
-                                _ => false,
-                            })
-                            .map(|p| p.id)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for edge in straightened {
-                    tx.set_waypoints(diagram, edge, Vec::new())?;
-                }
+                state_edit::after_move(tx, diagram, presentations)?;
             }
             Ok(())
+        });
+        self.report(result);
+    }
+
+    /// Moves each group of nodes sideways by its own distance, in one step: swimlanes put into
+    /// a new order, each with what lies in it. Lines between two nodes of one group keep their
+    /// shape.
+    pub fn move_groups(&mut self, groups: &[(Vec<Id>, f32)]) {
+        let Some(diagram) = self.active_diagram else { return };
+        let Some(view) = self.doc.model().view(diagram) else { return };
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        for (members, dx) in groups.iter().filter(|(_, dx)| *dx != 0.0) {
+            let group: HashSet<Id> = members.iter().copied().collect();
+            for p in members.iter().filter_map(|&p| view.get(p)) {
+                if let Some(b) = p.bounds() {
+                    nodes.push((p.id, b.translate(*dx, 0.0)));
+                }
+            }
+            for p in view.presentations() {
+                if let Shape::Edge { source, target, waypoints, .. } = &p.shape
+                    && !waypoints.is_empty()
+                    && group.contains(source)
+                    && group.contains(target)
+                {
+                    edges.push((p.id, waypoints.iter().map(|w| w.offset(*dx, 0.0)).collect()));
+                }
+            }
+        }
+        if nodes.is_empty() {
+            return;
+        }
+        let label = t!("edit.move").to_string();
+        let result = self.edit(label, |tx| {
+            nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
+            edges
+                .into_iter()
+                .try_for_each(|(e, w): (Id, Vec<Point>)| tx.set_waypoints(diagram, e, w))
         });
         self.report(result);
     }
@@ -961,6 +961,13 @@ impl Workspace {
                 d.kind = ElementKind::InternalTransition(
                     umlcraft_model::InternalTransitionProps::parse(text),
                 );
+            }),
+            // A transition's label is its trigger, guard and effect; a name it had goes.
+            ElementKind::Transition(_) => tx.update(element, |d| {
+                if let ElementKind::Transition(p) = &mut d.kind {
+                    p.set_label(text);
+                }
+                d.name.clear();
             }),
             ElementKind::Message(_) => tx.update(element, |d| {
                 let text = text.trim();

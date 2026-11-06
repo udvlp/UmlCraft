@@ -519,6 +519,9 @@ pub struct DiagramCanvas {
     /// The scene as last painted; mouse handling works on what the user sees.
     scene: Rc<Scene>,
     drag: Option<Drag>,
+    /// The swimlanes as they stood when a drag began, before the preview moved any; how far a
+    /// lane may go and where it lands are measured from there.
+    lanes_at_start: Option<Vec<(Id, Rect)>>,
     /// Where the last right click went, for the context menu.
     right_click: Option<MPoint>,
     /// The context menu, from the release of a right click until it closes.
@@ -687,6 +690,7 @@ impl DiagramCanvas {
             bounds: Rc::new(Cell::new(Bounds::default())),
             clear: Rc::default(),
             home_pending: false,
+            lanes_at_start: None,
             scene: Rc::new(Scene::empty()),
             drag: None,
             right_click: None,
@@ -992,6 +996,8 @@ impl DiagramCanvas {
     fn on_left_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_edit(cx);
         self.focus_handle.focus(window, cx);
+        // A drag cancelled with Escape leaves its lanes behind; this one measures afresh.
+        self.lanes_at_start = None;
         // Without a diagram the canvas is only its grid: the left button pans it.
         if self.shown_diagram.is_none() {
             self.drag = Some(Drag::Pan { last: ev.position });
@@ -1907,13 +1913,15 @@ impl DiagramCanvas {
 
     fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let p = self.to_logical(position);
+        // The first move of a drag still sees the scene without a preview.
+        let lanes = self.lanes_at_start.get_or_insert_with(|| lanes_of(&self.scene));
         let Some(drag) = self.drag.as_mut() else { return };
         match drag {
             Drag::Move { start, dx, dy, moved, .. } => {
                 *dx = snap(p.x - start.x);
                 *dy = snap(p.y - start.y);
-                // Swimlanes move sideways only, up to the lanes beside them.
-                if let Some((left, right)) = lane_room(&self.scene, moved) {
+                // Swimlanes move sideways only, within their row.
+                if let Some((left, right)) = lane_room(lanes, moved) {
                     *dx = dx.clamp(left, right);
                     *dy = 0.0;
                 }
@@ -1957,12 +1965,21 @@ impl DiagramCanvas {
 
     fn end_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let p = self.to_logical(position);
+        let lanes = self.lanes_at_start.take().unwrap_or_default();
         match self.drag.take() {
             Some(Drag::Move { dx: 0.0, dy: 0.0, reselect: Some(id), .. }) => {
                 self.update_workspace(cx, |ws| ws.select(vec![id]));
             }
             Some(Drag::Move { dx, dy, moved, .. }) => {
-                self.update_workspace(cx, |ws| ws.move_nodes(&moved, dx, dy))
+                // A swimlane dropped beside others takes its place in their row.
+                let lanes = {
+                    let ws = self.workspace.read(cx);
+                    lane_order(ws.doc.model(), &self.scene, &lanes, &moved, dx)
+                };
+                match lanes {
+                    Some(groups) => self.update_workspace(cx, |ws| ws.move_groups(&groups)),
+                    None => self.update_workspace(cx, |ws| ws.move_nodes(&moved, dx, dy)),
+                }
             }
             Some(Drag::Resize { presentation, original, rect, .. }) if rect != original => {
                 self.update_workspace(cx, |ws| ws.set_bounds(presentation, rect));
@@ -2195,6 +2212,15 @@ impl DiagramCanvas {
             ElementKind::Message(m) => (format!("{}({})", e.name(), m.arguments), false),
             // A state's row `trigger [guard] / effect`, read back by `apply_text`.
             ElementKind::InternalTransition(t) => (t.label(), false),
+            // A transition's label as drawn: a name it may have, then `trigger [guard] / effect`.
+            ElementKind::Transition(t) => {
+                let label = t.label();
+                let parts = [e.name(), label.as_str()];
+                (
+                    parts.iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" "),
+                    false,
+                )
+            }
             _ if role == RowRole::Member => (member_text(model, element), false),
             // A slot shows as `name = value`; only the value is taken back.
             _ if role == RowRole::Slot => {
@@ -2490,31 +2516,95 @@ impl Focusable for DiagramCanvas {
     }
 }
 
-/// How far the swimlanes among `moved` may go to the left (as a negative) and to the right
-/// before they run into a lane that stays; `None` when no swimlane moves. Lanes that overlap
-/// already do not hold each other back.
-fn lane_room(scene: &Scene, moved: &[Id]) -> Option<(f32, f32)> {
-    let lanes = || scene.nodes.iter().filter(|n| matches!(n.figure, Figure::Partition { .. }));
-    let (moving, staying): (Vec<&NodeShape>, Vec<&NodeShape>) =
-        lanes().partition(|n| moved.contains(&n.id));
+/// How far the swimlanes among `moved` may go to the left (as a negative) and to the right:
+/// within the row of lanes side by side with them, over their neighbours, whose places they
+/// take when dropped ([`lane_order`]); `None` when no swimlane moves.
+fn lane_room(lanes: &[(Id, Rect)], moved: &[Id]) -> Option<(f32, f32)> {
+    let (moving, staying): (Vec<Rect>, Vec<Rect>) = {
+        let (moving, staying): (Vec<_>, Vec<_>) =
+            lanes.iter().partition(|(id, _)| moved.contains(id));
+        let rects = |l: Vec<&(Id, Rect)>| l.into_iter().map(|(_, r)| *r).collect();
+        (rects(moving), rects(staying))
+    };
     if moving.is_empty() {
         return None;
     }
     let (mut left, mut right) = (f32::NEG_INFINITY, f32::INFINITY);
     for m in &moving {
-        for s in &staying {
-            let side_by_side = m.rect.y < s.rect.bottom() && s.rect.y < m.rect.bottom();
-            if !side_by_side {
-                continue;
-            }
-            if s.rect.x >= m.rect.right() - 0.5 {
-                right = right.min(s.rect.x - m.rect.right());
-            } else if s.rect.right() <= m.rect.x + 0.5 {
-                left = left.max(s.rect.right() - m.rect.x);
-            }
+        let row: Vec<Rect> = staying.iter().copied().filter(|s| side_by_side(*m, *s)).collect();
+        if row.is_empty() {
+            continue;
         }
+        let start = row.iter().map(|s| s.x).fold(m.x, f32::min);
+        let end = row.iter().map(|s| s.right()).fold(m.right(), f32::max);
+        left = left.max(start - m.x);
+        right = right.min(end - m.right());
     }
     Some((left.min(0.0), right.max(0.0)))
+}
+
+/// The swimlanes of `scene` and where they are drawn.
+fn lanes_of(scene: &Scene) -> Vec<(Id, Rect)> {
+    scene
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.figure, Figure::Partition { .. }))
+        .map(|n| (n.id, n.rect))
+        .collect()
+}
+
+/// Whether two swimlanes stand side by side: their heights overlap.
+fn side_by_side(a: Rect, b: Rect) -> bool {
+    a.y < b.bottom() && b.y < a.bottom()
+}
+
+/// Where the lanes of a row go when the one swimlane among `moved` (with what lies in it) is
+/// dropped `dx` from where it stood: in the order of their centres, next to each other from
+/// the row's left edge, each keeping its width. `lanes` are where they stood when the drag
+/// began; `scene` finds what lies in the others. One group per lane that moves, with what lies
+/// in it and how far; `None` unless one swimlane and only its contents moved beside others.
+fn lane_order(
+    model: &Model,
+    scene: &Scene,
+    lanes: &[(Id, Rect)],
+    moved: &[Id],
+    dx: f32,
+) -> Option<Vec<(Vec<Id>, f32)>> {
+    let mut moving = lanes.iter().filter(|(id, _)| moved.contains(id));
+    let &(lane, rect) = moving.next()?;
+    if moving.next().is_some() {
+        return None;
+    }
+    let mut row: Vec<(Id, Rect)> =
+        lanes.iter().copied().filter(|&(id, r)| id != lane && side_by_side(rect, r)).collect();
+    if row.is_empty() {
+        return None;
+    }
+    row.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
+    let start = row.iter().map(|(_, r)| r.x).fold(rect.x, f32::min);
+    let centre = rect.center().x + dx;
+    let at = row.iter().filter(|(_, r)| r.center().x < centre).count();
+    row.insert(at, (lane, rect));
+    let mut x = start;
+    let mut groups = Vec::new();
+    for (id, r) in row {
+        let shift = x - r.x;
+        x += r.width;
+        if shift == 0.0 {
+            continue;
+        }
+        let members = if id == lane {
+            moved.to_vec()
+        } else {
+            // What the dragged lane carries may lie over this one by now.
+            scene::with_contents(model, scene, &[id])
+                .into_iter()
+                .filter(|p| !moved.contains(p))
+                .collect()
+        };
+        groups.push((members, shift));
+    }
+    Some(groups)
 }
 
 /// Logical → screen mapping for one frame.
@@ -3362,5 +3452,47 @@ impl Render for DiagramCanvas {
             .children(notes)
             .children(offer_menu)
             .children(context_menu)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
+    use umlcraft_model::Id;
+    use umlcraft_model::sample::order_system;
+    use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
+
+    use super::{lane_order, lane_room, lanes_of};
+    use crate::workspace::Workspace;
+
+    #[test]
+    fn a_swimlane_dropped_past_its_neighbour_swaps_places_with_it() {
+        let (doc, ids) = order_system();
+        let d = ids.activity_diagram;
+        let mut ws = Workspace::new(doc, None);
+        ws.open_diagram(d);
+        let model = ws.doc.model();
+        let scene = scene::build(model, d, &Preview::default(), &ApproxMeasure);
+        let lane = |name: &str| {
+            scene.nodes.iter().find(|n| n.rows.iter().any(|r| r.text == name)).unwrap().id
+        };
+        let (clerk, warehouse) = (lane("Clerk"), lane("Warehouse"));
+        let lanes = lanes_of(&scene);
+        let moved = scene::with_contents(model, &scene, &[clerk]);
+        // The clerk's lane can go as far as the row reaches, over the warehouse's.
+        assert_eq!(lane_room(&lanes, &moved), Some((0.0, 220.0)));
+        // Dropped short of the warehouse's middle, it goes back to its place.
+        let back = lane_order(model, &scene, &lanes, &moved, 100.0).unwrap();
+        assert!(back.is_empty());
+        // Dropped past it, the two lanes swap, each with what lies in it.
+        let groups = lane_order(model, &scene, &lanes, &moved, 250.0).unwrap();
+        let shift = |id: Id| groups.iter().find(|(m, _)| m[0] == id).map(|g| g.1);
+        assert_eq!((shift(clerk), shift(warehouse)), (Some(220.0), Some(-220.0)));
+        let check = scene.nodes.iter().find(|n| n.rows.iter().any(|r| r.text == "Check stock"));
+        let check = check.unwrap().id;
+        ws.move_groups(&groups);
+        let view = ws.doc.model().view(d).unwrap();
+        let x = |id: Id| view.get(id).unwrap().bounds().unwrap().x;
+        assert_eq!((x(clerk), x(warehouse), x(check)), (260.0, 40.0, 310.0));
     }
 }

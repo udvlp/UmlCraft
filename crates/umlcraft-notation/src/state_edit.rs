@@ -6,6 +6,8 @@
 //! ([`crate::composite`]) they keep their place there when the state moves or changes size.
 //! Stub states go inside a submachine state, which holds nothing else.
 
+use std::collections::{HashMap, HashSet};
+
 use umlcraft_model::{
     ElementData, ElementKind, Id, InternalTransitionProps, Model, ModelError, Point,
     PseudostateKind, Rect, Regions, Result, Shape, Tx,
@@ -170,6 +172,84 @@ pub fn regions_of(model: &Model, state: Id) -> Vec<Id> {
         .copied()
         .filter(|&c| model.get(c).is_some_and(|c| matches!(c.kind(), ElementKind::Region)))
         .collect()
+}
+
+/// What follows when the nodes `moved` (with their contents) have been moved on a state
+/// machine `diagram`, by a drag in the app or by an AI client: each vertex becomes part of the
+/// state or region now drawn around it ([`reparent_vertices`]); lines between a vertex that
+/// changed its owner and one that stayed lose their bends, which were made for the old place
+/// and would lead out of the new one and back; and a vertex is drawn after the state it now
+/// belongs to, which would otherwise hide it.
+pub fn after_move(tx: &mut Tx<'_>, diagram: Id, moved: &[Id]) -> Result<()> {
+    let owners = |tx: &Tx<'_>| -> HashMap<Id, Option<Id>> {
+        let model = tx.model();
+        let view = model.view(diagram);
+        moved
+            .iter()
+            .filter_map(|&p| Some((p, view?.get(p)?.element?)))
+            .map(|(p, e)| (p, model.get(e).and_then(|e| e.owner())))
+            .collect()
+    };
+    let before = owners(tx);
+    reparent_vertices(tx, diagram, moved)?;
+    let after = owners(tx);
+    let changed: HashSet<Id> =
+        after.iter().filter(|(p, o)| before.get(p) != Some(o)).map(|(p, _)| *p).collect();
+    if changed.is_empty() {
+        return Ok(());
+    }
+    let moving: HashSet<Id> = moved.iter().copied().collect();
+    let straightened: Vec<Id> = tx
+        .model()
+        .view(diagram)
+        .map(|v| {
+            v.presentations()
+                .iter()
+                .filter(|p| match &p.shape {
+                    Shape::Edge { source, target, waypoints, .. } => {
+                        !waypoints.is_empty()
+                            && moving.contains(source) != moving.contains(target)
+                            && (changed.contains(source) || changed.contains(target))
+                    }
+                    _ => false,
+                })
+                .map(|p| p.id)
+                .collect()
+        })
+        .unwrap_or_default();
+    for edge in straightened {
+        tx.set_waypoints(diagram, edge, Vec::new())?;
+    }
+    in_front_of_owners(tx, diagram, moved)
+}
+
+/// Puts each of `presentations` that is drawn before a state it belongs to right after that
+/// state, in the order they are drawn, so that contents move along behind their state's
+/// substates.
+fn in_front_of_owners(tx: &mut Tx<'_>, diagram: Id, presentations: &[Id]) -> Result<()> {
+    let model = tx.model();
+    let Some(view) = model.view(diagram) else { return Ok(()) };
+    let at = |id: Id| view.presentations().iter().position(|p| p.id == id);
+    let mut order: Vec<(usize, Id)> =
+        presentations.iter().filter_map(|&p| Some((at(p)?, p))).collect();
+    order.sort_unstable();
+    for (_, p) in order {
+        let model = tx.model();
+        let Some(view) = model.view(diagram) else { break };
+        let index = |id: Id| view.presentations().iter().position(|q| q.id == id);
+        let Some(element) = view.get(p).and_then(|p| p.element) else { continue };
+        let Some(own) = index(p) else { continue };
+        // The last presentation, on this diagram, of a state this vertex lies in.
+        let last_owner = model
+            .ancestors(element)
+            .into_iter()
+            .filter_map(|a| view.presentations_of(a).next().and_then(|q| index(q.id)))
+            .max();
+        if let Some(owner) = last_owner.filter(|&o| o > own) {
+            tx.apply(umlcraft_model::Op::ReorderPresentation { diagram, id: p, index: owner })?;
+        }
+    }
+    Ok(())
 }
 
 /// Gives the vertices shown by `presentations` on `diagram` the owner their place says: the

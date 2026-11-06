@@ -482,7 +482,7 @@ pub fn list() -> Vec<Value> {
                 "source": id("Element or presentation it starts at."),
                 "target": id("Element or presentation it ends at; not for found and lost messages and time constraints."),
                 "y": number("Sequence diagrams: the height of the message."),
-                "name": text("Its name, e.g. a message's or an association's."),
+                "name": text("Its name, e.g. a message's or an association's; a transition's label `trigger [guard] / effect`."),
             }),
             &["diagram", "tool", "source"],
         ),
@@ -579,8 +579,8 @@ pub fn list() -> Vec<Value> {
              ordering, upper bound, stream, control, effect and exception of an object node, \
              pin or activity parameter (a control pin, an exception pin); \
              the activity a call behavior action calls; the state machine a submachine state \
-             stands for; a state's entry, do and exit activities and an internal transition's \
-             `trigger [guard] / effect` (as `text`); the constraints of an element (members show them after their text, \
+             stands for; a state's entry, do and exit activities and the `trigger [guard] / \
+             effect` of a transition or internal transition (as `text`); the constraints of an element (members show them after their text, \
              lines below their name); on every diagram showing it, the shared style of a \
              generalization (one triangle for all generalizations to its general element) \
              and whether a class «boundary», «control» or «entity» is drawn as its icon; the \
@@ -590,8 +590,9 @@ pub fn list() -> Vec<Value> {
                 json!({
                     "id": id("The element."),
                     "name": text("New name."),
-                    "text": text("Attributes and operations: the whole member as text; internal \
-                                  transitions: `trigger [guard] / effect`."),
+                    "text": text("Attributes and operations: the whole member as text; \
+                                  transitions and internal transitions: `trigger [guard] / \
+                                  effect`."),
                     "entry": text("States: the entry activity, without `entry /`; \"\" for none."),
                     "do": text("States: the do activity, without `do /`; \"\" for none."),
                     "exit": text("States: the exit activity, without `exit /`; \"\" for none."),
@@ -630,8 +631,10 @@ pub fn list() -> Vec<Value> {
         ),
         tool(
             "move_node",
-            "Moves a node of a diagram, or gives it another size. In a sequence diagram it \
-             also moves a message (to height `y`) or a fragment (its top to `y`) as dragging \
+            "Moves a node of a diagram, or gives it another size, as dragging does: what lies \
+             in it (substates, the contents of a package or swimlane) moves along, and on \
+             state machine diagrams a state moved into another one becomes its substate (out \
+             of it, no longer). In a sequence diagram it also moves a message (to height `y`) or a fragment (its top to `y`) as dragging \
              does: into the interaction or operand found there, with the bar a message starts; \
              `get_diagram` gives the heights of messages and operands.",
             json!({
@@ -1437,7 +1440,17 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
             Some(ElementKind::Association(a)) if tool == EdgeTool::AssociationClass => a.class,
             _ => None,
         };
-        if let (Some(name), Some(element)) = (&name, class.or(element)) {
+        let transition = element.filter(|&e| {
+            matches!(tx.model().get(e).map(|e| e.kind()), Some(ElementKind::Transition(_)))
+        });
+        if let (Some(name), Some(element)) = (&name, transition) {
+            // A transition's name is its label: trigger, guard and effect, as UML has them.
+            tx.update(element, |d| {
+                if let ElementKind::Transition(p) = &mut d.kind {
+                    p.set_label(name);
+                }
+            })?;
+        } else if let (Some(name), Some(element)) = (&name, class.or(element)) {
             tx.rename(element, name.clone())?;
         }
         Ok(edge)
@@ -1567,13 +1580,14 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         .get("stereotypes")
         .and_then(Value::as_array)
         .map(|s| s.iter().filter_map(Value::as_str).map(str::to_owned).collect());
-    let transition = matches!(kind, ElementKind::InternalTransition(_));
+    let transition =
+        matches!(kind, ElementKind::InternalTransition(_) | ElementKind::Transition(_));
     if text.is_some()
         && !transition
         && !matches!(kind, ElementKind::Attribute(_) | ElementKind::Operation(_))
     {
         return Err(format!(
-            "only attributes, operations and internal transitions take `text`, not a {}",
+            "only attributes, operations and transitions take `text`, not a {}",
             kind.type_name()
         ));
     }
@@ -1602,8 +1616,12 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     set_activity_node(model, id, &mut settings, args)?;
     set_submachine(model, id, &mut settings, args)?;
     set_state_activities(&mut settings, args)?;
-    if transition && let Some(text) = &text {
-        settings = ElementKind::InternalTransition(InternalTransitionProps::parse(text));
+    if let Some(text) = &text {
+        match &mut settings {
+            ElementKind::InternalTransition(p) => *p = InternalTransitionProps::parse(text),
+            ElementKind::Transition(p) => p.set_label(text),
+            _ => {}
+        }
     }
     set_er(&mut settings, args)?;
     if let ElementKind::ErParticipation(p) = &kind
@@ -2290,19 +2308,84 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
     let x = opt_num(args, "x").unwrap_or(bounds.x);
     let width = opt_num(args, "width").unwrap_or(bounds.width).max(4.0);
     let height = opt_num(args, "height").unwrap_or(bounds.height).max(4.0);
+    let (dx, dy) = (x - bounds.x, y - bounds.y);
+    let model = host.document().model();
+    let sequence = is_sequence(model, diagram);
+    let states =
+        model.get(diagram).and_then(|e| e.kind().as_diagram()) == Some(DiagramKind::StateMachine);
+    // As when dragged: what lies in a container (substates, the nodes of a package or swimlane)
+    // moves along, and so do the bends of lines between what moves.
+    let contents: Vec<Id> = if sequence || (dx == 0.0 && dy == 0.0) {
+        Vec::new()
+    } else {
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), diagram, &Preview::default(), measure);
+        scene::with_contents(doc.model(), &scene, &[node])
+            .into_iter()
+            .filter(|&p| p != node)
+            .collect()
+    };
     change(host, "move_node", |tx| {
         if let (Some(item), Some(slot)) = (item, slot) {
             palette::move_to_slot(tx, item, slot)?;
         }
         tx.set_bounds(diagram, node, Rect::new(x, y, width, height))?;
-        if is_sequence(tx.model(), diagram) {
+        move_along(tx, diagram, node, &contents, dx, dy)?;
+        if sequence {
             sequence_edit::tidy(tx, diagram)?;
+        }
+        // A state moved into another one (or out of it) becomes its substate.
+        if states {
+            let moved: Vec<Id> = std::iter::once(node).chain(contents.iter().copied()).collect();
+            state_edit::after_move(tx, diagram, &moved)?;
         }
         Ok(())
     })?;
     Ok(Reply::json(
         json!({ "presentation": node, "x": x, "y": y, "width": width, "height": height }),
     ))
+}
+
+/// Moves the `contents` of `node`, which has moved by (`dx`, `dy`), along with it, and the
+/// bends of lines between any two of them.
+fn move_along(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    node: Id,
+    contents: &[Id],
+    dx: f32,
+    dy: f32,
+) -> Result<(), ModelError> {
+    if contents.is_empty() {
+        return Ok(());
+    }
+    let model = tx.model();
+    let Some(view) = model.view(diagram) else { return Ok(()) };
+    let moved: std::collections::HashSet<Id> =
+        std::iter::once(node).chain(contents.iter().copied()).collect();
+    let nodes: Vec<(Id, Rect)> = contents
+        .iter()
+        .filter_map(|&p| Some((p, view.get(p)?.bounds()?.translate(dx, dy))))
+        .collect();
+    let edges: Vec<(Id, Vec<Point>)> = view
+        .presentations()
+        .iter()
+        .filter_map(|p| match &p.shape {
+            Shape::Edge { source, target, waypoints, .. }
+                if !waypoints.is_empty() && moved.contains(source) && moved.contains(target) =>
+            {
+                Some((p.id, waypoints.iter().map(|w| w.offset(dx, dy)).collect()))
+            }
+            _ => None,
+        })
+        .collect();
+    for (p, b) in nodes {
+        tx.set_bounds(diagram, p, b)?;
+    }
+    for (e, w) in edges {
+        tx.set_waypoints(diagram, e, w)?;
+    }
+    Ok(())
 }
 
 fn arrange_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
@@ -3540,6 +3623,85 @@ mod tests {
     }
 
     #[test]
+    fn moved_states_become_substates_and_take_theirs_along() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "TU" }));
+        let d = id(&d["diagram"]);
+        let make = |host: &mut Headless, name: &str, x: f32, y: f32| {
+            let args = json!({ "diagram": d, "tool": "state", "name": name, "x": x, "y": y });
+            run(host, "create_element", args)
+        };
+        // A state made first, then a larger one, drawn later, moved over it.
+        let inner = make(&mut host, "z1", 600.0, 100.0);
+        let deeper = make(&mut host, "z2", 100.0, 400.0);
+        let outer = make(&mut host, "Outer", 100.0, 100.0);
+        let size = json!({ "diagram": d, "node": outer["presentation"], "x": 100, "y": 100,
+                           "width": 360, "height": 220 });
+        run(&mut host, "move_node", size);
+        for (node, x, y) in [(&inner, 140, 160), (&deeper, 300, 160)] {
+            let args = json!({ "diagram": d, "node": node["presentation"], "x": x, "y": y });
+            run(&mut host, "move_node", args);
+        }
+        let model = host.document().model();
+        let owner = |e: &Value| model.get(id(e).parse().unwrap()).unwrap().owner();
+        let outer_id: Id = id(&outer["element"]).parse().unwrap();
+        assert_eq!(owner(&inner["element"]), Some(outer_id));
+        assert_eq!(owner(&deeper["element"]), Some(outer_id));
+        // Both are drawn after the state they are in, so it does not hide them.
+        let view = model.view(d.parse().unwrap()).unwrap();
+        let at = |p: &Value| {
+            let p: Id = id(p).parse().unwrap();
+            view.presentations().iter().position(|q| q.id == p).unwrap()
+        };
+        assert!(at(&inner["presentation"]) > at(&outer["presentation"]));
+        assert!(at(&deeper["presentation"]) > at(&outer["presentation"]));
+        // Moving the composite state takes its substates along.
+        let args = json!({ "diagram": d, "node": outer["presentation"], "x": 200, "y": 100 });
+        run(&mut host, "move_node", args);
+        let model = host.document().model();
+        let view = model.view(d.parse().unwrap()).unwrap();
+        let x = |p: &Value| view.get(id(p).parse().unwrap()).unwrap().bounds().unwrap().x;
+        assert_eq!(x(&inner["presentation"]), 240.0);
+        assert_eq!(
+            model.get(id(&inner["element"]).parse().unwrap()).unwrap().owner(),
+            Some(outer_id)
+        );
+    }
+
+    #[test]
+    fn a_loop_keeps_to_the_corner_of_its_state() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "TU" }));
+        let d = id(&d["diagram"]);
+        let args = json!({ "diagram": d, "tool": "state", "name": "C", "x": 100, "y": 100 });
+        let state = run(&mut host, "create_element", args);
+        let args = json!({ "diagram": d, "tool": "transition", "source": state["element"],
+                           "target": state["element"], "name": "e2 / z = z * 2" });
+        let line = run(&mut host, "connect", args);
+        let at_corner = |host: &Headless| {
+            let view = host.document().model().view(d.parse().unwrap()).unwrap();
+            let r =
+                view.get(id(&state["presentation"]).parse().unwrap()).unwrap().bounds().unwrap();
+            let Shape::Edge { waypoints, .. } =
+                &view.get(id(&line["presentation"]).parse().unwrap()).unwrap().shape
+            else {
+                panic!("not a line")
+            };
+            assert_eq!(waypoints, &scene::self_loop(r), "{r:?}");
+            r
+        };
+        let first = at_corner(&host);
+        // The state grows for a long activity: the loop stays at its corner.
+        let args = json!({ "owner": state["element"], "text": "entry / x = x + 2 and a lot more" });
+        run(&mut host, "add_member", args);
+        let grown = at_corner(&host);
+        assert!(grown.width > first.width, "{grown:?}");
+        let args = json!({ "diagram": d, "node": state["presentation"], "x": 300, "y": 250 });
+        run(&mut host, "move_node", args);
+        at_corner(&host);
+    }
+
+    #[test]
     fn states_take_activities_and_internal_transitions() {
         let mut host = Headless::new();
         let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "TU" }));
@@ -3584,6 +3746,21 @@ mod tests {
         );
         let wrong = json!({ "id": class["element"], "entry": "x" });
         assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+
+        // A transition's name is read as `trigger [guard] / effect`, as the app shows it.
+        let other = run(&mut host, "create_element", json!({ "diagram": d, "tool": "state" }));
+        let args = json!({ "diagram": d, "tool": "transition", "source": state,
+                           "target": other["element"], "name": "e8 [x > 0] / z++" });
+        let line = run(&mut host, "connect", args);
+        let transition = |host: &Headless| {
+            let e = host.document().model().get(id(&line["element"]).parse().unwrap()).unwrap();
+            let ElementKind::Transition(p) = e.kind() else { panic!() };
+            (e.name().to_owned(), p.trigger.clone(), p.guard.clone(), p.effect.clone())
+        };
+        let parts = |a: &str, b: &str, c: &str| (String::new(), a.into(), b.into(), c.into());
+        assert_eq!(transition(&host), parts("e8", "x > 0", "z++"));
+        run(&mut host, "update_element", json!({ "id": line["element"], "text": "e9 / z--" }));
+        assert_eq!(transition(&host), parts("e9", "", "z--"));
     }
 
     #[test]
