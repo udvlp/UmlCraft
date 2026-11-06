@@ -218,14 +218,24 @@ impl Drawing<'_> {
         match &b.shape {
             Shape::Plain { rotated } => {
                 self.outline(r);
-                let x = match e.kind {
-                    ElementKind::Call | ElementKind::Jump => r.x + PADDING,
-                    _ => r.x + PADDING / 2,
+                // Where the text starts, from the edge it starts at.
+                let inset = match e.kind {
+                    ElementKind::Call | ElementKind::Jump => PADDING,
+                    _ => PADDING / 2,
                 };
-                if *rotated {
+                // A turned element is the upright one turned as a whole, reading upwards: its
+                // left edge becomes the bottom and its top the left. `(dx, dy)` is a point
+                // of the upright element, `(w, h)` its size.
+                let rotated = *rotated;
+                let (w, h) = if rotated { (r.h, r.w) } else { (r.w, r.h) };
+                let pt = |dx: i32, dy: i32| {
+                    if rotated { (r.x + dy, r.bottom() - dx) } else { (r.x + dx, r.y + dy) }
+                };
+                if rotated {
                     for (i, l) in text.iter().enumerate() {
+                        let (x, y) = pt(inset, PADDING / 2 + self.m.line() * (i as i32 + 1));
                         self.texts.push(Primitive::Text {
-                            at: px(x + 13 + self.m.line() * i as i32, r.bottom() - 10),
+                            at: px(x, y),
                             text: l.clone(),
                             bold: false,
                             upwards: true,
@@ -233,17 +243,20 @@ impl Drawing<'_> {
                         });
                     }
                 } else {
-                    self.lines_at(&text, x, r.y + PADDING / 2 + self.m.line());
+                    self.lines_at(&text, r.x + inset, r.y + PADDING / 2 + self.m.line());
                 }
+                let mut segment = |a: (i32, i32), b: (i32, i32)| {
+                    let ((x1, y1), (x2, y2)) = (pt(a.0, a.1), pt(b.0, b.1));
+                    self.line(x1, y1, x2, y2);
+                };
                 match e.kind {
                     ElementKind::Call => {
-                        self.line(r.x + 10, r.y, r.x + 10, r.bottom());
-                        self.line(r.right() - 10, r.y, r.right() - 10, r.bottom());
+                        segment((10, 0), (10, h));
+                        segment((w - 10, 0), (w - 10, h));
                     }
                     ElementKind::Jump => {
-                        let mid = r.y + r.h / 2;
-                        self.line(r.x + 10, r.y, r.x, mid);
-                        self.line(r.x, mid, r.x + 10, r.bottom());
+                        segment((10, 0), (0, h / 2));
+                        segment((0, h / 2), (10, h));
                     }
                     _ => {}
                 }
@@ -427,4 +440,66 @@ fn rounded(r: Rect, radius: i32) -> Vec<Px> {
         }
     }
     points
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::create::{Provenance, lines};
+
+    /// A case with so many branches that its plain elements are turned.
+    fn turned(e: Element) -> (Rect, Vec<Primitive>) {
+        let mut case =
+            Element::case(&lines(&["c", "1", "2", "3", "4", "5", "6", "7", "8", "9", "%"]));
+        case.branches[0] = Sequence::new(vec![e]);
+        let made = Provenance { author: "", date: "", origin: "" };
+        let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
+        d.children = Sequence::new(vec![case]);
+        let m = Metrics::linux();
+        let layout = Layout::of(&d, m);
+        let b = layout.element(&[0, 0, 0]).unwrap();
+        assert_eq!(b.shape, Shape::Plain { rotated: true });
+        (b.rect, draw(&d, &layout, m))
+    }
+
+    fn texts(primitives: &[Primitive]) -> Vec<(Px, &str)> {
+        primitives
+            .iter()
+            .filter_map(|p| match p {
+                Primitive::Text { at, text, upwards: true, .. } => Some((*at, text.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn has_line(primitives: &[Primitive], from: Px, to: Px) -> bool {
+        primitives
+            .iter()
+            .any(|p| matches!(p, Primitive::Line { from: f, to: t, .. } if *f == from && *t == to))
+    }
+
+    #[test]
+    fn a_turned_call_is_the_upright_one_turned_as_a_whole() {
+        let (r, drawn) = turned(Element::call(&lines(&["ab", "cd"])));
+        // Its bars run across, 10 px inside the bottom and the top.
+        assert!(has_line(&drawn, px(r.x, r.bottom() - 10), px(r.right(), r.bottom() - 10)));
+        assert!(has_line(&drawn, px(r.x, r.y + 10), px(r.right(), r.y + 10)));
+        // Its lines start above the bottom bar, the last one's baseline inside the box.
+        let line = Metrics::linux().line();
+        let shown = texts(&drawn);
+        let at: Vec<Px> = shown.iter().filter(|(_, t)| *t != "c").map(|(at, _)| *at).collect();
+        assert_eq!(
+            at,
+            [px(r.x + 10 + line, r.bottom() - 20), px(r.x + 10 + 2 * line, r.bottom() - 20)]
+        );
+        assert!(at[1].x < r.right());
+    }
+
+    #[test]
+    fn a_turned_jump_points_down() {
+        let (r, drawn) = turned(Element::jump(&lines(&["leave"])));
+        let mid = r.x + r.w / 2;
+        assert!(has_line(&drawn, px(r.x, r.bottom() - 10), px(mid, r.bottom())));
+        assert!(has_line(&drawn, px(mid, r.bottom()), px(r.right(), r.bottom() - 10)));
+    }
 }

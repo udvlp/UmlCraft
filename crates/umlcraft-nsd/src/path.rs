@@ -36,6 +36,44 @@ pub fn element_mut<'a>(d: &'a mut Diagram, path: &[usize]) -> Option<&'a mut Ele
     sequence_mut(d, seq)?.elements.get_mut(*last)
 }
 
+/// Where `new` first differs from `old`, reading top down: the innermost element whose own text,
+/// comment, colour or branches changed, or the place in a sequence where one has an element the
+/// other lacks. `None` when the elements are the same (the root's own text may still differ).
+/// After an undo, what it names in `new` is what came back or changed.
+pub fn first_difference(old: &Diagram, new: &Diagram) -> Option<Path> {
+    fn same_itself(a: &Element, b: &Element) -> bool {
+        a.kind == b.kind && a.attrs == b.attrs && a.branches.len() == b.branches.len()
+    }
+    fn in_sequence(a: &Sequence, b: &Sequence, at: &mut Path) -> bool {
+        for (i, (x, y)) in a.elements.iter().zip(&b.elements).enumerate() {
+            if x == y {
+                continue;
+            }
+            at.push(i);
+            if same_itself(x, y) {
+                for (j, (p, q)) in x.branches.iter().zip(&y.branches).enumerate() {
+                    if p == q {
+                        continue;
+                    }
+                    at.push(j);
+                    if in_sequence(p, q, at) {
+                        return true;
+                    }
+                    at.pop();
+                }
+            }
+            return true;
+        }
+        if a.elements.len() == b.elements.len() {
+            return false;
+        }
+        at.push(a.elements.len().min(b.elements.len()));
+        true
+    }
+    let mut at = Vec::new();
+    in_sequence(&old.children, &new.children, &mut at).then_some(at)
+}
+
 /// A place between two elements of a sequence: before the element `index`, or at the end.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Slot {
@@ -190,6 +228,28 @@ mod tests {
         assert!(element(&d, &[1, 1, 0]).is_none());
         assert!(sequence(&d, &[0, 0]).is_none());
         assert!(element(&d, &[]).is_none());
+    }
+
+    #[test]
+    fn the_first_difference_names_what_changed() {
+        let d = sample();
+        assert_eq!(first_difference(&d, &d), None);
+        // An element deleted, then back: the place where it is again.
+        let mut gone = d.clone();
+        gone.children.elements.remove(1);
+        assert_eq!(first_difference(&gone, &d), Some(vec![1]));
+        // Deleted at the end: where it was, which the shorter one lacks.
+        let mut last = d.clone();
+        last.children.elements.pop();
+        assert_eq!(first_difference(&last, &d), Some(vec![2]));
+        // A change inside a branch names the element there, not the one around it.
+        let mut inner = d.clone();
+        inner.children.elements[1].branches[0].elements[0].set_text(&lines(&["y"]));
+        assert_eq!(first_difference(&d, &inner), Some(vec![1, 0, 0]));
+        // A change of the element itself names it.
+        let mut outer = d.clone();
+        outer.children.elements[1].set_text(&lines(&["a < b"]));
+        assert_eq!(first_difference(&d, &outer), Some(vec![1]));
     }
 
     #[test]

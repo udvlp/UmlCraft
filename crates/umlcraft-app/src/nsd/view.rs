@@ -187,11 +187,16 @@ impl NsdView {
         if diagram == self.diagram {
             return false;
         }
-        self.diagram = diagram;
-        // The change has made a selection of its own, or left one that no longer fits.
+        let old = std::mem::replace(&mut self.diagram, diagram);
+        // What an undo or redo changed is selected, e.g. the element a deletion undone brings
+        // back; edits of this editor select their result afterwards anyway.
         self.anchor = None;
-        if !self.selection.is_valid(&self.diagram) {
-            self.selection = Selection::Nothing;
+        match path::first_difference(&old, &self.diagram) {
+            Some(at) if path::element(&self.diagram, &at).is_some() => {
+                self.selection = Selection::element(&at);
+            }
+            _ if !self.selection.is_valid(&self.diagram) => self.selection = Selection::Nothing,
+            _ => {}
         }
         self.layout = Layout::of(&self.diagram, umlcraft_nsd::Metrics::for_platform());
         self.draw();

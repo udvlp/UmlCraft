@@ -11,6 +11,10 @@ today.
   properties panel then edits what is selected, as after a click.
 - **Empty `finally` by click**: a click into the bottom band of a try without a `finally`
   selects the empty `finally`, so that elements can be pasted or inserted into it.
+- **Undo in structograms** selects the element it brought back or changed.
+- **Turned calls and jumps** in case elements with many branches are drawn turned as a
+  whole: the bars of a call run across, a jump points down, and the text no longer touches
+  the bar.
 
 ## 0.19.0 – 2026-11-04
 
