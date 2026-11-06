@@ -218,24 +218,14 @@ impl Drawing<'_> {
         match &b.shape {
             Shape::Plain { rotated } => {
                 self.outline(r);
-                // Where the text starts, from the edge it starts at.
-                let inset = match e.kind {
-                    ElementKind::Call | ElementKind::Jump => PADDING,
-                    _ => PADDING / 2,
+                let x = match e.kind {
+                    ElementKind::Call | ElementKind::Jump => r.x + PADDING,
+                    _ => r.x + PADDING / 2,
                 };
-                // A turned element is the upright one turned as a whole, reading upwards: its
-                // left edge becomes the bottom and its top the left. `(dx, dy)` is a point
-                // of the upright element, `(w, h)` its size.
-                let rotated = *rotated;
-                let (w, h) = if rotated { (r.h, r.w) } else { (r.w, r.h) };
-                let pt = |dx: i32, dy: i32| {
-                    if rotated { (r.x + dy, r.bottom() - dx) } else { (r.x + dx, r.y + dy) }
-                };
-                if rotated {
+                if *rotated {
                     for (i, l) in text.iter().enumerate() {
-                        let (x, y) = pt(inset, PADDING / 2 + self.m.line() * (i as i32 + 1));
                         self.texts.push(Primitive::Text {
-                            at: px(x, y),
+                            at: px(x + 13 + self.m.line() * i as i32, r.bottom() - 10),
                             text: l.clone(),
                             bold: false,
                             upwards: true,
@@ -243,20 +233,19 @@ impl Drawing<'_> {
                         });
                     }
                 } else {
-                    self.lines_at(&text, r.x + inset, r.y + PADDING / 2 + self.m.line());
+                    self.lines_at(&text, x, r.y + PADDING / 2 + self.m.line());
                 }
-                let mut segment = |a: (i32, i32), b: (i32, i32)| {
-                    let ((x1, y1), (x2, y2)) = (pt(a.0, a.1), pt(b.0, b.1));
-                    self.line(x1, y1, x2, y2);
-                };
                 match e.kind {
                     ElementKind::Call => {
-                        segment((10, 0), (10, h));
-                        segment((w - 10, 0), (w - 10, h));
+                        // Structorizer puts the right bar of a turned call one further out.
+                        let right = r.right() - if *rotated { 9 } else { 10 };
+                        self.line(r.x + 10, r.y, r.x + 10, r.bottom());
+                        self.line(right, r.y, right, r.bottom());
                     }
                     ElementKind::Jump => {
-                        segment((10, 0), (0, h / 2));
-                        segment((0, h / 2), (10, h));
+                        let mid = r.y + r.h / 2;
+                        self.line(r.x + 10, r.y, r.x, mid);
+                        self.line(r.x, mid, r.x + 10, r.bottom());
                     }
                     _ => {}
                 }
@@ -479,27 +468,22 @@ mod tests {
     }
 
     #[test]
-    fn a_turned_call_is_the_upright_one_turned_as_a_whole() {
+    fn a_turned_call_keeps_its_bars_upright_and_its_text_between_them() {
         let (r, drawn) = turned(Element::call(&lines(&["ab", "cd"])));
-        // Its bars run across, 10 px inside the bottom and the top.
-        assert!(has_line(&drawn, px(r.x, r.bottom() - 10), px(r.right(), r.bottom() - 10)));
-        assert!(has_line(&drawn, px(r.x, r.y + 10), px(r.right(), r.y + 10)));
-        // Its lines start above the bottom bar, the last one's baseline inside the box.
-        let line = Metrics::linux().line();
+        // As Structorizer draws it: only the text is turned; the bars stand 10 inside the
+        // sides, and the text lies between them.
+        assert!(has_line(&drawn, px(r.x + 10, r.y), px(r.x + 10, r.bottom())));
+        assert!(has_line(&drawn, px(r.right() - 9, r.y), px(r.right() - 9, r.bottom())));
         let shown = texts(&drawn);
-        let at: Vec<Px> = shown.iter().filter(|(_, t)| *t != "c").map(|(at, _)| *at).collect();
-        assert_eq!(
-            at,
-            [px(r.x + 10 + line, r.bottom() - 20), px(r.x + 10 + 2 * line, r.bottom() - 20)]
-        );
-        assert!(at[1].x < r.right());
+        let last = shown.iter().filter(|(_, t)| *t != "c").map(|(at, _)| at.x).max().unwrap();
+        assert!(last + 3 < r.right() - 9, "{last} {r:?}");
     }
 
     #[test]
-    fn a_turned_jump_points_down() {
+    fn a_turned_jump_points_left() {
         let (r, drawn) = turned(Element::jump(&lines(&["leave"])));
-        let mid = r.x + r.w / 2;
-        assert!(has_line(&drawn, px(r.x, r.bottom() - 10), px(mid, r.bottom())));
-        assert!(has_line(&drawn, px(mid, r.bottom()), px(r.right(), r.bottom() - 10)));
+        let mid = r.y + r.h / 2;
+        assert!(has_line(&drawn, px(r.x + 10, r.y), px(r.x, mid)));
+        assert!(has_line(&drawn, px(r.x, mid), px(r.x + 10, r.bottom())));
     }
 }

@@ -364,7 +364,14 @@ impl Layouter<'_> {
         match e.kind {
             ElementKind::Instruction | ElementKind::Call | ElementKind::Jump => {
                 let s = self.plain_size(e);
-                if rotate && s.h < s.w { Size { w: s.h, h: s.w } } else { s }
+                if rotate && s.h < s.w {
+                    // Only the text turns: the bars of a call and the point of a jump keep
+                    // their room across, as Structorizer draws them.
+                    let sides = s.w - tw - PADDING;
+                    Size { w: s.h + sides, h: tw + PADDING }
+                } else {
+                    s
+                }
             }
             ElementKind::Alternative => {
                 let (head, min_w, l, r) = self.alternative_parts(e, n);
@@ -684,13 +691,20 @@ mod tests {
     #[test]
     fn turned_calls_are_placed_as_measured() {
         // Two short lines: a call is 56 wide and 46 high, so with many branches it is turned.
+        // Only its text turns: its bars keep their room across, so Structorizer's export
+        // draws it 66 wide (two lines of 13, padding, 20 for the bars), a jump 43 and an
+        // instruction 33 for one line.
         let mut case =
             Element::case(&lines(&["c", "1", "2", "3", "4", "5", "6", "7", "8", "9", "%"]));
         case.branches[0] = Sequence::new(vec![Element::call(&lines(&["ab", "cd"]))]);
+        case.branches[1] = Sequence::new(vec![Element::jump(&lines(&["leave"]))]);
+        case.branches[2] = Sequence::new(vec![Element::instruction(&lines(&["w <- 6"]))]);
         let l = Layout::of(&diagram(vec![case]), Metrics::linux());
         let call = l.element(&[0, 0, 0]).unwrap();
         assert_eq!(call.shape, Shape::Plain { rotated: true });
-        assert!(call.rect.h > call.rect.w);
+        assert_eq!(call.rect.w, 66);
+        assert_eq!(l.element(&[0, 1, 0]).unwrap().rect.w, 43);
+        assert_eq!(l.element(&[0, 2, 0]).unwrap().rect.w, 33);
     }
 
     #[test]
