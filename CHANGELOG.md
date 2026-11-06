@@ -11,10 +11,18 @@ today.
   properties panel then edits what is selected, as after a click.
 - **Empty `finally` by click**: a click into the bottom band of a try without a `finally`
   selects the empty `finally`, so that elements can be pasted or inserted into it.
+- **Internal transitions inline**: double-clicking an internal transition in a state opens
+  it with its text (`trigger [guard] / effect`) instead of an empty field.
+- **Names right after placing**: a new class, object or other box opens its name for typing
+  as soon as it is placed.
 - **Regions**: dividing a small state into regions enlarges it so that each region has
   room, and a selected region is outlined by itself rather than by its whole state.
 - **States moved into composite states** drop the bends of their transitions to and from
   outside, which otherwise ran from where the state was before.
+- **Swimlanes** move only sideways and stop at their neighbours instead of sliding over them
+  or below the frame.
+- **Properties after switching diagrams**: the properties panel no longer shows an element of
+  the diagram shown before.
 - **Undo in structograms** selects the element it brought back or changed.
 - **Substates stay visible**: a state, package or other container placed inside another one
   is drawn in front of it; before, every new container went to the very back, so a substate

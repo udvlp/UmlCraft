@@ -85,7 +85,10 @@ impl Workspace {
         }
         if self.active_diagram != Some(diagram) {
             self.active_diagram = Some(diagram);
+            // What was selected on the diagram before is not shown here: the properties panel
+            // lets go of it too. Callers that select something select it afterwards.
             self.selection.clear();
+            self.selected_element = None;
             self.tool = Tool::Select;
         }
     }
@@ -185,8 +188,8 @@ impl Workspace {
     }
 
     /// Creates an element with `tool` at `origin` on the active diagram and selects it.
-    pub fn create_node(&mut self, tool: NodeTool, origin: Point) {
-        let Some(diagram) = self.active_diagram else { return };
+    pub fn create_node(&mut self, tool: NodeTool, origin: Point) -> Option<Id> {
+        let diagram = self.active_diagram?;
         // A system boundary is named for the system it bounds, not for itself.
         let key = match tool {
             NodeTool::SystemBoundary => "new_name.systemBoundary".to_string(),
@@ -195,10 +198,10 @@ impl Workspace {
         let base = name_base(&key, keeps_words(tool));
         let label = t!("edit.create").to_string();
         let result = self.edit(label, |tx| palette::create_node(tx, diagram, tool, origin, &base));
-        if let Some((element, node)) = self.report(result) {
-            self.selection = vec![node];
-            self.selected_element = Some(element);
-        }
+        let (element, node) = self.report(result)?;
+        self.selection = vec![node];
+        self.selected_element = Some(element);
+        Some(element)
     }
 
     /// Gives what node `owner` of the active ER diagram shows a new attribute and selects it.

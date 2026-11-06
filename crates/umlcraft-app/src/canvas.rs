@@ -1040,16 +1040,21 @@ impl DiagramCanvas {
                         matches!(node_tool, NodeTool::CombinedFragment | NodeTool::InteractionUse)
                     })
                     .map(|l| (l.slot_at(p.y), l.lanes_around(p.x)));
-                self.workspace.update(cx, |ws, cx| {
-                    match place {
+                let created = self.workspace.update(cx, |ws, cx| {
+                    let created = match place {
                         Some((slot, covered)) => {
-                            ws.create_fragment(node_tool, slot, covered, origin)
+                            ws.create_fragment(node_tool, slot, covered, origin);
+                            None
                         }
                         None => ws.create_node(node_tool, origin),
-                    }
+                    };
                     ws.tool = Tool::Select;
                     cx.notify();
+                    created
                 });
+                // Its name is edited at once, the default name selected for typing over (a node
+                // without a name row, like a start state, opens nothing).
+                self.edit_when_drawn = created;
             }
             Tool::Text => {
                 let origin = snap_point(p);
@@ -1894,9 +1899,14 @@ impl DiagramCanvas {
         let p = self.to_logical(position);
         let Some(drag) = self.drag.as_mut() else { return };
         match drag {
-            Drag::Move { start, dx, dy, .. } => {
+            Drag::Move { start, dx, dy, moved, .. } => {
                 *dx = snap(p.x - start.x);
                 *dy = snap(p.y - start.y);
+                // Swimlanes move sideways only, up to the lanes beside them.
+                if let Some((left, right)) = lane_room(&self.scene, moved) {
+                    *dx = dx.clamp(left, right);
+                    *dy = 0.0;
+                }
             }
             Drag::Resize { handle, original, start, rect, .. } => {
                 *rect =
@@ -2173,6 +2183,8 @@ impl DiagramCanvas {
             }
             ElementKind::Message(m) if m.arguments.is_empty() => (e.name().to_owned(), false),
             ElementKind::Message(m) => (format!("{}({})", e.name(), m.arguments), false),
+            // A state's row `trigger [guard] / effect`, read back by `apply_text`.
+            ElementKind::InternalTransition(t) => (t.label(), false),
             _ if role == RowRole::Member => (member_text(model, element), false),
             // A slot shows as `name = value`; only the value is taken back.
             _ if role == RowRole::Slot => {
@@ -2466,6 +2478,33 @@ impl Focusable for DiagramCanvas {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
+}
+
+/// How far the swimlanes among `moved` may go to the left (as a negative) and to the right
+/// before they run into a lane that stays; `None` when no swimlane moves. Lanes that overlap
+/// already do not hold each other back.
+fn lane_room(scene: &Scene, moved: &[Id]) -> Option<(f32, f32)> {
+    let lanes = || scene.nodes.iter().filter(|n| matches!(n.figure, Figure::Partition { .. }));
+    let (moving, staying): (Vec<&NodeShape>, Vec<&NodeShape>) =
+        lanes().partition(|n| moved.contains(&n.id));
+    if moving.is_empty() {
+        return None;
+    }
+    let (mut left, mut right) = (f32::NEG_INFINITY, f32::INFINITY);
+    for m in &moving {
+        for s in &staying {
+            let side_by_side = m.rect.y < s.rect.bottom() && s.rect.y < m.rect.bottom();
+            if !side_by_side {
+                continue;
+            }
+            if s.rect.x >= m.rect.right() - 0.5 {
+                right = right.min(s.rect.x - m.rect.right());
+            } else if s.rect.right() <= m.rect.x + 0.5 {
+                left = left.max(s.rect.right() - m.rect.x);
+            }
+        }
+    }
+    Some((left.min(0.0), right.max(0.0)))
 }
 
 /// Logical → screen mapping for one frame.
