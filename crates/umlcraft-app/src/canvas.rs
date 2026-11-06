@@ -2876,6 +2876,19 @@ impl Painter<'_> {
         self.line(&line, 2.0, s, LineStyle::Solid);
     }
 
+    /// A region selected on its own (in the properties panel), inside its selected state.
+    fn region(&mut self, area: Rect) {
+        let s = self.c.selection;
+        self.window.paint_quad(quad(
+            self.t.rect(area.inflate(-2.0)),
+            px(0.0),
+            Hsla { a: 0.10, ..s },
+            px(1.5),
+            s,
+            BorderStyle::Solid,
+        ));
+    }
+
     fn rubber_band(&mut self, area: Rect) {
         let s = self.c.selection;
         self.window.paint_quad(quad(
@@ -2946,6 +2959,7 @@ impl Render for DiagramCanvas {
             }
         }
         let selection = self.workspace.read(cx).selection.clone();
+        let selected_element = self.workspace.read(cx).selected_element;
         // A single selected free line shows grips at its ends, a lifeline one at its end.
         let line_ends = match selection[..] {
             [single] if self.is_free_line(single, cx) => {
@@ -3141,6 +3155,13 @@ impl Render for DiagramCanvas {
                             let single = selection.len() == 1;
                             for node in &selected_nodes {
                                 p.selection(node.rect, single && node.resizable());
+                                // The region selected of a selected state, if one is.
+                                if let Figure::State { regions, .. } = &node.figure
+                                    && let Some(r) =
+                                        regions.iter().find(|r| Some(r.region) == selected_element)
+                                {
+                                    p.region(r.rect);
+                                }
                             }
                             if single && let Some(edge) = scene.edge(selection[0]) {
                                 p.edge_handles(edge);

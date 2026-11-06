@@ -11,7 +11,15 @@ today.
   properties panel then edits what is selected, as after a click.
 - **Empty `finally` by click**: a click into the bottom band of a try without a `finally`
   selects the empty `finally`, so that elements can be pasted or inserted into it.
+- **Regions**: dividing a small state into regions enlarges it so that each region has
+  room, and a selected region is outlined by itself rather than by its whole state.
+- **States moved into composite states** drop the bends of their transitions to and from
+  outside, which otherwise ran from where the state was before.
 - **Undo in structograms** selects the element it brought back or changed.
+- **Substates stay visible**: a state, package or other container placed inside another one
+  is drawn in front of it; before, every new container went to the very back, so a substate
+  added to a composite state vanished behind it.
+- **Stereotypes on states**: a state shows its stereotypes above its name.
 - **Turned calls and jumps** in case elements with many branches are drawn turned as a
   whole: the bars of a call run across, a jump points down, and the text no longer touches
   the bar.

@@ -1778,7 +1778,7 @@ fn layout_element(
         // The sequence layout places lifelines.
         ElementKind::Lifeline(_) => (bounds, Figure::Other, Vec::new()),
         ElementKind::ActivityNode(p) => layout_activity_node(model, e, p, bounds, measure),
-        ElementKind::State(p) => layout_state(model, e, p, regions, bounds, measure),
+        ElementKind::State(p) => layout_state(model, e, p, regions, style, bounds, measure),
         ElementKind::Component(_) | ElementKind::Artifact(_) | ElementKind::Node(_) => {
             layout_box(model, e, e.kind(), None, style, bounds, measure)
         }
@@ -2507,13 +2507,14 @@ fn layout_object(
     (r, Figure::Classifier { separators, compartments, template: None }, rows)
 }
 
-/// States: the name, centered; below a line the internal activities (`entry / …`), or room for
-/// the substates of a composite state.
+/// States: their stereotypes and the name, centered; below a line the internal activities
+/// (`entry / …`), or room for the substates of a composite state.
 fn layout_state(
     model: &Model,
     e: &Element,
     props: &StateProps,
     layout: Option<&Regions>,
+    style: &Style,
     bounds: Rect,
     measure: &dyn TextMeasure,
 ) -> (Rect, Figure, Vec<Row>) {
@@ -2552,22 +2553,34 @@ fn layout_state(
     if props.submachine.is_some() {
         return layout_submachine_state(model, props, name, activities, bounds, measure);
     }
-    let widest = activities.iter().chain([&name]).map(|l| l.width(measure)).fold(0.0, f32::max);
-    let header = h + 2.0 * PAD_Y;
+    let own = (!style.hide_stereotypes).then_some(&e.data().stereotypes);
+    let mut head = stereotype_lines(own, FONT_SIZE, id);
+    head.push(name);
+    let widest = activities.iter().chain(&head).map(|l| l.width(measure)).fold(0.0, f32::max);
+    let header = h * head.len() as f32 + 2.0 * PAD_Y;
     let body = if activities.is_empty() { 0.0 } else { h * activities.len() as f32 + 2.0 * PAD_Y };
     // Every region keeps at least `MIN_REGION` across the lines, however small the state is
     // stored.
     let across = if regions.len() >= 2 { MIN_REGION * regions.len() as f32 } else { 0.0 };
+    // Regions side by side keep some depth below the activities instead of running into them.
+    let depth = if regions.len() >= 2 { 2.0 * MIN_REGION } else { 0.0 };
     let vertical = layout.is_some_and(|l| l.vertical);
-    let (min_width, min_height) = if vertical { (across, 0.0) } else { (0.0, across) };
+    let (min_width, min_height) = if vertical { (across, depth) } else { (0.0, across) };
     let r = Rect::new(
         bounds.x,
         bounds.y,
         bounds.width.max(widest + 2.0 * PAD_X).max(BOX_MIN_WIDTH).max(min_width),
         bounds.height.max(header + body + min_height).max(BOX_MIN_HEIGHT),
     );
-    // As in Astah, the name heads every state, above a line.
-    let mut rows = vec![name.place(Rect::new(r.x, r.y + PAD_Y, r.width, h), LabelAlign::Center)];
+    // As in Astah, the name heads every state, above a line, with its stereotypes above it.
+    let mut rows: Vec<Row> = head
+        .into_iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let y = r.y + PAD_Y + h * i as f32;
+            line.place(Rect::new(r.x, y, r.width, h), LabelAlign::Center)
+        })
+        .collect();
     let separator = Some(r.y + header);
     for (i, line) in activities.into_iter().enumerate() {
         let y = r.y + header + PAD_Y + h * i as f32;
@@ -6225,6 +6238,29 @@ mod tests {
         // Moving the composite state moves its substates.
         let moved = with_contents(doc.model(), &scene, &[open.id]);
         assert_eq!(moved.len(), 4, "the state, its initial pseudostate and two substates");
+    }
+
+    #[test]
+    fn states_show_their_stereotypes_above_the_name() {
+        let (mut doc, ids) = order_system();
+        let d = ids.state_diagram;
+        let shipped = doc.model().elements().find(|e| e.name() == "Shipped").unwrap().id();
+        let before = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let height = |scene: &Scene| {
+            scene.nodes.iter().find(|n| n.element == Some(shipped)).unwrap().rect.height
+        };
+        let plain = height(&before);
+        doc.edit("stereotype", |tx| {
+            tx.update(shipped, |e| e.stereotypes = vec!["accepting".into()])
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let node = scene.nodes.iter().find(|n| n.element == Some(shipped)).unwrap();
+        let texts: Vec<&str> = node.rows.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts[..2], ["<<accepting>>", "Shipped"]);
+        let Figure::State { separator: Some(line), .. } = node.figure else { panic!() };
+        assert!(node.rows[1].rect.bottom() <= line, "both above the line");
+        assert!(height(&scene) >= plain);
     }
 
     #[test]

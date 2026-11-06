@@ -1194,11 +1194,26 @@ fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Resu
     presentation.style.auto_size = crate::scene::is_boxed_classifier(kind) && !structured;
     if is_container(kind) || fragment || structured {
         let id = presentation.id;
-        tx.apply(umlcraft_model::Op::InsertPresentation { diagram, index: 0, presentation })?;
+        let index = behind_contents(model, diagram, bounds);
+        tx.apply(umlcraft_model::Op::InsertPresentation { diagram, index, presentation })?;
         Ok(id)
     } else {
         tx.add_presentation(diagram, presentation)
     }
+}
+
+/// Where a new container at `bounds` goes in the drawing order: behind what is drawn there
+/// already, but in front of the containers drawn around it (a substate in front of its
+/// composite state, a nested package in front of the outer one), each of which is larger and
+/// holds its centre.
+fn behind_contents(model: &Model, diagram: Id, bounds: Rect) -> usize {
+    let Some(view) = model.view(diagram) else { return 0 };
+    let centre = bounds.center();
+    let area = bounds.width * bounds.height;
+    view.presentations()
+        .iter()
+        .rposition(|p| p.bounds().is_some_and(|b| b.contains(centre) && b.width * b.height > area))
+        .map_or(0, |i| i + 1)
 }
 
 /// Size of a new class or component on a composite structure diagram, with room for parts.
@@ -2257,6 +2272,29 @@ mod tests {
             panic!()
         };
         assert_eq!(waypoints.len(), 3, "a self-transition loops");
+    }
+
+    #[test]
+    fn a_new_substate_is_drawn_in_front_of_its_composite_state() {
+        let (mut doc, ids) = order_system();
+        let d = ids.state_diagram;
+        let (outer, inner, around) = doc
+            .edit("create", |tx| {
+                let (_, outer) =
+                    create_node(tx, d, NodeTool::State, Point::new(600.0, 600.0), "Outer")?;
+                tx.set_bounds(d, outer, Rect::new(600.0, 600.0, 400.0, 300.0))?;
+                let (_, inner) =
+                    create_node(tx, d, NodeTool::State, Point::new(650.0, 680.0), "Inner")?;
+                // A state drawn where nothing is goes to the back, as before.
+                let (_, around) =
+                    create_node(tx, d, NodeTool::State, Point::new(1200.0, 600.0), "Alone")?;
+                Ok((outer, inner, around))
+            })
+            .unwrap();
+        let view = doc.model().view(d).unwrap();
+        let at = |id| view.presentations().iter().position(|p| p.id == id).unwrap();
+        assert!(at(outer) < at(inner), "the substate is drawn after its composite state");
+        assert_eq!(at(around), 0);
     }
 
     #[test]

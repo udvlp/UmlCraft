@@ -259,6 +259,9 @@ pub fn add_region(tx: &mut Tx<'_>, state: Id, vertical: bool, diagram: Option<Id
         set_layout(tx, diagram, presentation, layout)?;
     }
     if existing.is_empty() {
+        grow_for_regions(tx, &shown)?;
+    }
+    if existing.is_empty() {
         let decides = diagram
             .filter(|d| shown.iter().any(|(s, _)| s == d))
             .or(shown.first().map(|(d, _)| *d));
@@ -267,6 +270,38 @@ pub fn add_region(tx: &mut Tx<'_>, state: Id, vertical: bool, diagram: Option<Id
         }
     }
     Ok(*created.last().expect("at least one region"))
+}
+
+/// How deep and wide a state just divided makes its regions at least: room for a substate.
+pub const NEW_REGION: f32 = 60.0;
+
+/// Makes the state shown by each of `shown` (just divided into regions) large enough that
+/// every region gets [`NEW_REGION`] below its name and activities, so that a small state does
+/// not end up with regions squeezed into what is left below its text.
+fn grow_for_regions(tx: &mut Tx<'_>, shown: &[(Id, Id)]) -> Result<()> {
+    let model = tx.model();
+    let mut grown = Vec::new();
+    for &(diagram, presentation) in shown {
+        let Some(p) = model.view(diagram).and_then(|v| v.get(presentation)) else { continue };
+        let (Some(bounds), Some(layout)) = (p.bounds(), p.regions()) else { continue };
+        let shapes = scene::state_regions(model, p);
+        let Some(first) = shapes.first() else { continue };
+        let n = shapes.len() as f32;
+        let top = first.rect.y - bounds.y;
+        let (width, height) = if layout.vertical {
+            (bounds.width.max(n * NEW_REGION), bounds.height.max(top + NEW_REGION))
+        } else {
+            (bounds.width, bounds.height.max(top + n * NEW_REGION))
+        };
+        if (width, height) != (bounds.width, bounds.height) {
+            let rect = umlcraft_model::Rect::new(bounds.x, bounds.y, width, height);
+            grown.push((diagram, presentation, rect));
+        }
+    }
+    for (diagram, presentation, rect) in grown {
+        tx.set_bounds(diagram, presentation, rect)?;
+    }
+    Ok(())
 }
 
 /// Deletes `region` with what it holds; the line before it (after it, for the first region)
@@ -498,6 +533,48 @@ mod tests {
         while doc.undo() {}
         assert!(regions_of(doc.model(), open).is_empty());
         assert_eq!(doc.model().get(empty).unwrap().owner(), Some(open));
+    }
+
+    #[test]
+    fn a_small_state_grows_to_give_its_regions_room() {
+        let (mut doc, ids) = order_system();
+        let d = ids.state_diagram;
+        let (small, node) = doc
+            .edit("create", |tx| {
+                let at = Point::new(600.0, 500.0);
+                let (s, n) = create_node(tx, d, NodeTool::State, at, "Small")?;
+                tx.update(s, |data| {
+                    if let ElementKind::State(p) = &mut data.kind {
+                        p.entry = "light on".into();
+                        p.exit = "light off".into();
+                    }
+                })?;
+                Ok((s, n))
+            })
+            .unwrap();
+        let before = doc.model().view(d).unwrap().get(node).unwrap().bounds().unwrap();
+        doc.edit("divide", |tx| add_region(tx, small, true, Some(d))).unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        let p = model.view(d).unwrap().get(node).unwrap();
+        let after = p.bounds().unwrap();
+        assert_eq!((after.x, after.y), (before.x, before.y), "it grows, it does not move");
+        let shapes = scene::state_regions(model, p);
+        assert_eq!(shapes.len(), 2);
+        for s in &shapes {
+            assert!(s.rect.height >= NEW_REGION, "{s:?} is deep enough");
+            assert!(s.rect.width >= NEW_REGION, "{s:?} is wide enough");
+            // Below the name and both activities (header 22, two rows of 16 and padding).
+            assert!(s.rect.y >= after.y + 50.0, "{s:?} starts below the text");
+        }
+        // A large state keeps its size.
+        doc.undo();
+        let open = named(doc.model(), "Open");
+        let (_, open_node) = node_of(doc.model(), open);
+        let open_before = doc.model().view(d).unwrap().get(open_node).unwrap().bounds();
+        doc.edit("divide", |tx| add_region(tx, open, false, Some(d))).unwrap();
+        let open_after = doc.model().view(d).unwrap().get(open_node).unwrap().bounds();
+        assert_eq!(open_before, open_after);
     }
 
     #[test]

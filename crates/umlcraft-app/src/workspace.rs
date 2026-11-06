@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rust_i18n::t;
@@ -546,7 +546,45 @@ impl Workspace {
             }
             // A state dropped into another one (or out of it) becomes its substate.
             if states {
+                let owners = |tx: &umlcraft_model::Tx<'_>| -> HashMap<Id, Option<Id>> {
+                    let view = tx.model().view(diagram);
+                    presentations
+                        .iter()
+                        .filter_map(|&p| Some((p, view?.get(p)?.element?)))
+                        .map(|(p, e)| (p, tx.model().get(e).and_then(|e| e.owner())))
+                        .collect()
+                };
+                let before = owners(tx);
                 state_edit::reparent_vertices(tx, diagram, presentations)?;
+                let after = owners(tx);
+                // Lines from a state that changed its owner to one that stayed lose their bends:
+                // made for the old place, they would lead out of the new one and back.
+                let changed: HashSet<Id> = after
+                    .iter()
+                    .filter(|(p, o)| before.get(p) != Some(o))
+                    .map(|(p, _)| *p)
+                    .collect();
+                let straightened: Vec<Id> = tx
+                    .model()
+                    .view(diagram)
+                    .map(|v| {
+                        v.presentations()
+                            .iter()
+                            .filter(|p| match &p.shape {
+                                Shape::Edge { source, target, waypoints, .. } => {
+                                    !waypoints.is_empty()
+                                        && moved.contains(source) != moved.contains(target)
+                                        && (changed.contains(source) || changed.contains(target))
+                                }
+                                _ => false,
+                            })
+                            .map(|p| p.id)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for edge in straightened {
+                    tx.set_waypoints(diagram, edge, Vec::new())?;
+                }
             }
             Ok(())
         });
@@ -1634,6 +1672,63 @@ mod tests {
             &check(ws.doc.model(), &ApproxMeasure),
         );
         assert!(broken.is_empty(), "{broken:?}");
+    }
+
+    #[test]
+    fn a_state_moved_into_another_one_takes_no_old_bends_along() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        let d = ids.state_diagram;
+        ws.open_diagram(d);
+        let named = |ws: &Workspace, name: &str| {
+            let model = ws.doc.model();
+            let e = model.elements().find(|e| e.name() == name).unwrap().id();
+            let (_, p) = model.shown_on(e)[0];
+            (e, p, model.view(d).unwrap().get(p).unwrap().bounds().unwrap())
+        };
+        let (shipped, shipped_node, from) = named(&ws, "Shipped");
+        let (open, _, into) = named(&ws, "Open");
+        // Every line at "Shipped" gets a bend, as drawn by hand.
+        let edges: Vec<Id> = ws
+            .doc
+            .model()
+            .view(d)
+            .unwrap()
+            .presentations()
+            .iter()
+            .filter(|p| {
+                matches!(&p.shape, Shape::Edge { source, target, .. }
+                if *source == shipped_node || *target == shipped_node)
+            })
+            .map(|p| p.id)
+            .collect();
+        assert!(!edges.is_empty());
+        let bend = Point::new(from.x - 80.0, from.y - 80.0);
+        ws.doc
+            .edit("bend", |tx| edges.iter().try_for_each(|&e| tx.set_waypoints(d, e, vec![bend])))
+            .unwrap();
+        // Dropped into "Open", it becomes its substate and its lines lose the bend.
+        let (cx, cy) = (into.x + into.width / 2.0, into.y + into.height - 30.0);
+        let (dx, dy) = (cx - (from.x + from.width / 2.0), cy - (from.y + from.height / 2.0));
+        ws.move_nodes(&[shipped_node], dx, dy);
+        let model = ws.doc.model();
+        let owner = model.get(shipped).unwrap().owner().unwrap();
+        assert!(owner == open || model.is_ancestor(open, owner), "inside Open");
+        for e in &edges {
+            let p = model.view(d).unwrap().get(*e).unwrap();
+            assert!(
+                matches!(&p.shape, Shape::Edge { waypoints, .. } if waypoints.is_empty()),
+                "{p:?}"
+            );
+        }
+        // Moved without changing its owner, a state keeps its lines' bends.
+        ws.doc.undo();
+        ws.move_nodes(&[shipped_node], 10.0, 0.0);
+        let model = ws.doc.model();
+        assert!(edges.iter().all(|e| matches!(
+            &model.view(d).unwrap().get(*e).unwrap().shape,
+            Shape::Edge { waypoints, .. } if waypoints.len() == 1
+        )));
     }
 
     #[test]
