@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.20.0 – 2026-11-07
 
 - **AI clients select in structograms**: `select` takes a `path`, named as for
   `edit_structogram` (`body.1.then.0`), and selects that element of the structogram shown;
