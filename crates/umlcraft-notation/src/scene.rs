@@ -885,6 +885,20 @@ pub fn self_loop(r: Rect) -> Vec<Point> {
     ]
 }
 
+/// The anchor (relative to `r`) straight across from a loop's bend `w` on the nearest side of
+/// `r`: above or below it when `w` lies within its width, else left or right of it.
+fn loop_anchor(r: Rect, w: Point) -> Point {
+    let fraction = |v: f32, from: f32, size: f32| {
+        if size > 0.0 { ((v - from) / size).clamp(0.0, 1.0) } else { 0.5 }
+    };
+    let (fx, fy) = (fraction(w.x, r.x, r.width), fraction(w.y, r.y, r.height));
+    if w.x >= r.x && w.x <= r.right() {
+        Point::new(fx, if w.y < r.center().y { 0.0 } else { 1.0 })
+    } else {
+        Point::new(if w.x < r.x { 0.0 } else { 1.0 }, fy)
+    }
+}
+
 /// The anchors (relative to `r`) at the ends of [`self_loop`]'s waypoints, on the border, so
 /// that the loop keeps to the corner however the line is drawn.
 pub fn self_loop_anchors(r: Rect) -> (Point, Point) {
@@ -1204,151 +1218,160 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
         // On sequence diagrams the layout draws the messages.
         .filter(|p| !(is_sequence && is_message(p)))
         .collect();
-    let edge_shape =
-        |p: &Presentation, rects: &HashMap<Id, Rect>, outlines: &HashMap<Id, Outline>| {
-            let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, labels } =
-                &p.shape
-            else {
-                return None;
-            };
-            let (source_rect, target_rect) = (*rects.get(source)?, *rects.get(target)?);
-            let (mut points, anchors) = match &preview.route {
-                Some((id, r)) if *id == p.id => {
-                    (r.waypoints.clone(), [r.source_anchor, r.target_anchor])
-                }
-                _ => (waypoints.clone(), [*source_anchor, *target_anchor]),
-            };
-            if preview.moved.contains(source) && preview.moved.contains(target) {
-                points.iter_mut().for_each(|w| *w = w.offset(preview.dx, preview.dy));
-            }
-            if source == target && points.is_empty() {
-                points = self_loop(source_rect);
-            }
-            // Shared generalizations run over their group's common line.
-            let dragged = matches!(&preview.route, Some((id, _)) if *id == p.id);
-            if !p.style.shared.is_separate()
-                && !dragged
-                && let Some((general, _)) = crate::shared::ends(model, view, p)
-                && let Some(&at) = common_lines.get(&(general, p.style.shared))
-            {
-                let from = route::anchor_point(source_rect, anchors[0]);
-                let to = route::anchor_point(target_rect, anchors[1]);
-                points = if general == *target {
-                    crate::shared::waypoints(from, to, at, p.style.shared)
-                } else {
-                    let mut w = crate::shared::waypoints(to, from, at, p.style.shared);
-                    w.reverse();
-                    w
-                };
-                points.dedup();
-            }
-            let element = p.element.and_then(|e| model.get(e));
-            // An association class's line shows the class's name and constraints, as Astah
-            // draws its one element.
-            let class = match element.map(|e| e.kind()) {
-                Some(ElementKind::Association(a)) => a.class.and_then(|c| model.get(c)),
-                _ => None,
-            };
-            let name = |e: &Element| match class {
-                Some(c) if e.name().is_empty() => c.name().to_owned(),
-                _ => e.name().to_owned(),
-            };
-            let constraints: Vec<String> = match element {
-                Some(e) if !p.style.hide_constraints => {
-                    let own = e.data().constraints.iter();
-                    own.chain(class.iter().flat_map(|c| &c.data().constraints)).cloned().collect()
-                }
-                _ => Vec::new(),
-            };
-            // A bound class's «bind» stands above the line like «include», what it
-            // substitutes below it in place of a name.
-            let binding = element.and_then(|e| match e.kind() {
-                ElementKind::Dependency(d) if e.data().stereotypes.iter().any(|s| s == "bind") => {
-                    crate::member::binding_text(model, d.client, d.supplier)
-                }
-                _ => None,
-            });
-            let keyword = binding.is_some().then(|| "<<bind>>".to_owned());
-            // A line to a socket is its «use» already, as Astah draws it.
-            let to_socket = sockets.contains(target) || sockets.contains(source);
-            let label = element.and_then(|e| {
-                let stereotypes: Vec<&str> = e
-                    .data()
-                    .stereotypes
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|s| binding.is_none() || *s != "bind")
-                    .filter(|s| !to_socket || *s != "use")
-                    .collect();
-                let stereotypes = stereotypes.join(", ");
-                let name = name(e);
-                let parts: Vec<String> = [
-                    (!stereotypes.is_empty()).then(|| format!("<<{stereotypes}>>")),
-                    (!name.is_empty()).then_some(name),
-                    binding.clone(),
-                ]
-                .into_iter()
-                .flatten()
-                .collect();
-                (!parts.is_empty()).then(|| parts.join(" "))
-            });
-            // Realizing a circle and depending on a socket are plain lines.
-            let to_lollipop = match element.map(|e| e.kind()) {
-                Some(ElementKind::Dependency(_)) => to_socket,
-                _ => iconic_interfaces.contains(target),
-            };
-            let outline = |id| outlines.get(id).copied().unwrap_or(Outline::Rect);
-            let clip = |id, rect| clips.get(id).copied().unwrap_or(rect);
-            let qualifiers = match element.map(|e| e.kind()) {
-                Some(ElementKind::Association(a)) => a
-                    .ends
-                    .each_ref()
-                    .map(|end| end.qualifiers.iter().map(|q| qualifier_text(model, q)).collect()),
-                _ => Default::default(),
-            };
-            let er = listing.and_then(|l| {
-                let entity = |node: &Id| view.get(*node).and_then(|n| n.element);
-                er_ends(model, element?, entity(source), entity(target), l.idef1x)
-            });
-            // In Chen, read at the entity, a participation shows what that reading gives.
-            let read_here = element.filter(|_| look_here).and_then(|e| match e.kind() {
-                ElementKind::ErParticipation(_) => {
-                    Some(crate::er::shown_cardinality(model, e.id(), true))
-                }
-                _ => None,
-            });
-            let mut edge = edge_for(
-                p.id,
-                element.map(|e| e.kind()),
-                &qualifiers,
-                (
-                    (source_rect, clip(source, source_rect), outline(source)),
-                    (target_rect, clip(target, target_rect), outline(target)),
-                ),
-                anchors,
-                p.style.line_shape,
-                &points,
-                (label, element.is_some_and(|e| !name(e).is_empty()), keyword),
-                &constraints,
-                to_lollipop,
-                labels,
-                &p.style,
-                er.as_ref(),
-                read_here,
-                measure,
-            );
-            // A total IS-A has a double line to its supertype, in Chen.
-            if listing.is_none()
-                && let Some(ElementKind::ErSubtyping(s)) = element.map(|e| e.kind())
-            {
-                let total = matches!(
-                    model.get(s.is_a).map(|e| e.kind()),
-                    Some(ElementKind::ErIsA(i)) if i.total
-                );
-                edge.double = s.supertype && total;
-            }
-            Some(edge)
+    let edge_shape = |p: &Presentation,
+                      rects: &HashMap<Id, Rect>,
+                      outlines: &HashMap<Id, Outline>| {
+        let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, labels } =
+            &p.shape
+        else {
+            return None;
         };
+        let (source_rect, target_rect) = (*rects.get(source)?, *rects.get(target)?);
+        let (mut points, mut anchors) = match &preview.route {
+            Some((id, r)) if *id == p.id => {
+                (r.waypoints.clone(), [r.source_anchor, r.target_anchor])
+            }
+            _ => (waypoints.clone(), [*source_anchor, *target_anchor]),
+        };
+        if preview.moved.contains(source) && preview.moved.contains(target) {
+            points.iter_mut().for_each(|w| *w = w.offset(preview.dx, preview.dy));
+        }
+        if source == target && points.is_empty() {
+            points = self_loop(source_rect);
+        }
+        // A loop without anchors leaves and enters its node square to its first and last
+        // bend, not aiming at the middle.
+        if source == target
+            && anchors == [None, None]
+            && let (Some(&first), Some(&last)) = (points.first(), points.last())
+        {
+            anchors = [Some(loop_anchor(source_rect, first)), Some(loop_anchor(source_rect, last))];
+        }
+        // Shared generalizations run over their group's common line.
+        let dragged = matches!(&preview.route, Some((id, _)) if *id == p.id);
+        if !p.style.shared.is_separate()
+            && !dragged
+            && let Some((general, _)) = crate::shared::ends(model, view, p)
+            && let Some(&at) = common_lines.get(&(general, p.style.shared))
+        {
+            let from = route::anchor_point(source_rect, anchors[0]);
+            let to = route::anchor_point(target_rect, anchors[1]);
+            points = if general == *target {
+                crate::shared::waypoints(from, to, at, p.style.shared)
+            } else {
+                let mut w = crate::shared::waypoints(to, from, at, p.style.shared);
+                w.reverse();
+                w
+            };
+            points.dedup();
+        }
+        let element = p.element.and_then(|e| model.get(e));
+        // An association class's line shows the class's name and constraints, as Astah
+        // draws its one element.
+        let class = match element.map(|e| e.kind()) {
+            Some(ElementKind::Association(a)) => a.class.and_then(|c| model.get(c)),
+            _ => None,
+        };
+        let name = |e: &Element| match class {
+            Some(c) if e.name().is_empty() => c.name().to_owned(),
+            _ => e.name().to_owned(),
+        };
+        let constraints: Vec<String> = match element {
+            Some(e) if !p.style.hide_constraints => {
+                let own = e.data().constraints.iter();
+                own.chain(class.iter().flat_map(|c| &c.data().constraints)).cloned().collect()
+            }
+            _ => Vec::new(),
+        };
+        // A bound class's «bind» stands above the line like «include», what it
+        // substitutes below it in place of a name.
+        let binding = element.and_then(|e| match e.kind() {
+            ElementKind::Dependency(d) if e.data().stereotypes.iter().any(|s| s == "bind") => {
+                crate::member::binding_text(model, d.client, d.supplier)
+            }
+            _ => None,
+        });
+        let keyword = binding.is_some().then(|| "<<bind>>".to_owned());
+        // A line to a socket is its «use» already, as Astah draws it.
+        let to_socket = sockets.contains(target) || sockets.contains(source);
+        let label = element.and_then(|e| {
+            let stereotypes: Vec<&str> = e
+                .data()
+                .stereotypes
+                .iter()
+                .map(String::as_str)
+                .filter(|s| binding.is_none() || *s != "bind")
+                .filter(|s| !to_socket || *s != "use")
+                .collect();
+            let stereotypes = stereotypes.join(", ");
+            let name = name(e);
+            let parts: Vec<String> = [
+                (!stereotypes.is_empty()).then(|| format!("<<{stereotypes}>>")),
+                (!name.is_empty()).then_some(name),
+                binding.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            (!parts.is_empty()).then(|| parts.join(" "))
+        });
+        // Realizing a circle and depending on a socket are plain lines.
+        let to_lollipop = match element.map(|e| e.kind()) {
+            Some(ElementKind::Dependency(_)) => to_socket,
+            _ => iconic_interfaces.contains(target),
+        };
+        let outline = |id| outlines.get(id).copied().unwrap_or(Outline::Rect);
+        let clip = |id, rect| clips.get(id).copied().unwrap_or(rect);
+        let qualifiers = match element.map(|e| e.kind()) {
+            Some(ElementKind::Association(a)) => a
+                .ends
+                .each_ref()
+                .map(|end| end.qualifiers.iter().map(|q| qualifier_text(model, q)).collect()),
+            _ => Default::default(),
+        };
+        let er = listing.and_then(|l| {
+            let entity = |node: &Id| view.get(*node).and_then(|n| n.element);
+            er_ends(model, element?, entity(source), entity(target), l.idef1x)
+        });
+        // In Chen, read at the entity, a participation shows what that reading gives.
+        let read_here = element.filter(|_| look_here).and_then(|e| match e.kind() {
+            ElementKind::ErParticipation(_) => {
+                Some(crate::er::shown_cardinality(model, e.id(), true))
+            }
+            _ => None,
+        });
+        let mut edge = edge_for(
+            p.id,
+            element.map(|e| e.kind()),
+            &qualifiers,
+            (
+                (source_rect, clip(source, source_rect), outline(source)),
+                (target_rect, clip(target, target_rect), outline(target)),
+            ),
+            anchors,
+            p.style.line_shape,
+            &points,
+            (label, element.is_some_and(|e| !name(e).is_empty()), keyword),
+            &constraints,
+            to_lollipop,
+            labels,
+            &p.style,
+            er.as_ref(),
+            read_here,
+            measure,
+        );
+        // A total IS-A has a double line to its supertype, in Chen.
+        if listing.is_none()
+            && let Some(ElementKind::ErSubtyping(s)) = element.map(|e| e.kind())
+        {
+            let total = matches!(
+                model.get(s.is_a).map(|e| e.kind()),
+                Some(ElementKind::ErIsA(i)) if i.total
+            );
+            edge.double = s.supertype && total;
+        }
+        Some(edge)
+    };
     let mut edges: Vec<EdgeShape> =
         candidates.iter().filter_map(|p| edge_shape(p, &rects, &outlines)).collect();
     // Lines that end on another line (notes anchored to a relationship) end in the middle of

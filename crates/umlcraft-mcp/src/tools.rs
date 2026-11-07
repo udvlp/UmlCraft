@@ -1129,6 +1129,17 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
             if let Shape::Message { y, .. } = p.shape {
                 line["y"] = json!(y);
             }
+            // A transition's label as drawn: `trigger [guard] / effect`.
+            if let Some(ElementKind::Transition(t)) =
+                p.element.and_then(|e| model.get(e)).map(|e| e.kind())
+            {
+                let label = [name.as_str(), &t.label()]
+                    .into_iter()
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                line["label"] = json!(label);
+            }
             lines.push(line);
         } else if let Some(bounds) = scene.node(p.id).map(|n| n.rect).or(p.bounds()) {
             let mut node = json!({
@@ -3666,6 +3677,59 @@ mod tests {
             model.get(id(&inner["element"]).parse().unwrap()).unwrap().owner(),
             Some(outer_id)
         );
+    }
+
+    #[test]
+    fn states_grow_around_their_substates() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "TU" }));
+        let d = id(&d["diagram"]);
+        let make = |host: &mut Headless, name: &str, x: f32, y: f32| {
+            let args = json!({ "diagram": d, "tool": "state", "name": name, "x": x, "y": y });
+            run(host, "create_element", args)
+        };
+        let bounds = |host: &Headless, node: &Value| {
+            let view = host.document().model().view(d.parse().unwrap()).unwrap();
+            view.get(id(&node["presentation"]).parse().unwrap()).unwrap().bounds().unwrap()
+        };
+        // Resizes in place, so that nothing moves along.
+        let resize = |host: &mut Headless, node: &Value, w: f32, h: f32| {
+            let r = bounds(host, node);
+            let args = json!({ "diagram": d, "node": node["presentation"], "x": r.x, "y": r.y,
+                               "width": w, "height": h });
+            run(host, "move_node", args);
+        };
+        let u = make(&mut host, "U", 20.0, 300.0);
+        resize(&mut host, &u, 200.0, 100.0);
+        let dd = make(&mut host, "D", 40.0, 340.0);
+        let e = make(&mut host, "E", 600.0, 340.0);
+        let args = json!({ "diagram": d, "tool": "transition", "source": e["element"],
+                           "target": e["element"], "name": "e2 [z > 0] / z = z * 2" });
+        run(&mut host, "connect", args);
+        let lines = run(&mut host, "get_diagram", json!({ "diagram": d }))["lines"].clone();
+        assert_eq!(lines[0]["label"], "e2 [z > 0] / z = z * 2");
+        // Dropped half over the right border, E becomes a substate and U grows around it.
+        let args = json!({ "diagram": d, "node": e["presentation"], "x": 150, "y": 340 });
+        run(&mut host, "move_node", args);
+        let model = host.document().model();
+        let owner = model.get(id(&e["element"]).parse().unwrap()).unwrap().owner();
+        assert_eq!(owner, Some(id(&u["element"]).parse().unwrap()));
+        assert!(bounds(&host, &u).contains_rect(&bounds(&host, &e)), "{:?}", bounds(&host, &u));
+        // So does the loop at E's top right corner, with room for its label.
+        let corner = scene::self_loop(bounds(&host, &e))[1];
+        assert!(bounds(&host, &u).contains(corner.offset(0.0, -scene::LABEL_HEIGHT)));
+        // Shrunk below its substates, U grows around them again when the diagram is arranged.
+        resize(&mut host, &u, 120.0, 80.0);
+        assert!(!bounds(&host, &u).contains_rect(&bounds(&host, &e)));
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        for inner in [&dd, &e] {
+            assert!(
+                bounds(&host, &u).contains_rect(&bounds(&host, inner)),
+                "{:?} {:?}",
+                bounds(&host, &u),
+                bounds(&host, inner)
+            );
+        }
     }
 
     #[test]

@@ -192,6 +192,7 @@ pub fn after_move(tx: &mut Tx<'_>, diagram: Id, moved: &[Id]) -> Result<()> {
     };
     let before = owners(tx);
     reparent_vertices(tx, diagram, moved)?;
+    grow_owners(tx, diagram, moved)?;
     let after = owners(tx);
     let changed: HashSet<Id> =
         after.iter().filter(|(p, o)| before.get(p) != Some(o)).map(|(p, _)| *p).collect();
@@ -221,6 +222,53 @@ pub fn after_move(tx: &mut Tx<'_>, diagram: Id, moved: &[Id]) -> Result<()> {
         tx.set_waypoints(diagram, edge, Vec::new())?;
     }
     in_front_of_owners(tx, diagram, moved)
+}
+
+/// Room a state keeps around a substate it grows for.
+const GROW_MARGIN: f32 = 20.0;
+
+/// Grows the states that the vertices `presentations` lie in, innermost first, where a vertex
+/// reaches out of one, so that each holds it with some room: a state dropped into a smaller
+/// one, or moved over its state's border, stays inside.
+pub fn grow_owners(tx: &mut Tx<'_>, diagram: Id, presentations: &[Id]) -> Result<()> {
+    for &id in presentations {
+        let model = tx.model();
+        let Some(view) = model.view(diagram) else { break };
+        let Some(p) = view.get(id) else { continue };
+        let (Some(element), Some(mut inner)) = (p.element, p.bounds()) else { continue };
+        // A loop from the vertex to itself stays inside too, with room above it for its label.
+        // Its waypoints may not have followed the move yet (`autoroute::follow` moves them
+        // afterwards), so it is taken where it ends up: at the vertex's top right corner.
+        let looped = view.presentations().iter().any(|q| {
+            matches!(&q.shape, Shape::Edge { source, target, .. } if *source == id && *target == id)
+        });
+        if looped {
+            for w in scene::self_loop(inner) {
+                inner = inner.union(&Rect::new(w.x, w.y - scene::LABEL_HEIGHT, 0.0, 0.0));
+            }
+        }
+        let mut grown = Vec::new();
+        for owner in model.ancestors(element) {
+            if !matches!(model.get(owner).map(|e| e.kind()), Some(ElementKind::State(_))) {
+                continue;
+            }
+            let Some((q, outer)) =
+                view.presentations_of(owner).find_map(|q| Some((q.id, q.bounds()?)))
+            else {
+                continue;
+            };
+            if outer.contains_rect(&inner) {
+                break;
+            }
+            let r = outer.union(&inner.inflate(GROW_MARGIN));
+            grown.push((q, r));
+            inner = r;
+        }
+        for (q, r) in grown {
+            tx.set_bounds(diagram, q, r)?;
+        }
+    }
+    Ok(())
 }
 
 /// Puts each of `presentations` that is drawn before a state it belongs to right after that

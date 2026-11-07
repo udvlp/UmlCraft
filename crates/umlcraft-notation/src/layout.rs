@@ -630,9 +630,25 @@ pub fn arrange(
         )
     };
     let index: HashMap<Id, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
-    // Each node's container: the smallest one drawn around it.
+    // Each node's container: on state machine diagrams the nearest state it belongs to that
+    // is drawn, wherever it is drawn; otherwise the smallest container drawn around it.
+    let by_element: HashMap<Id, usize> =
+        nodes.iter().enumerate().filter_map(|(i, n)| Some((n.element?, i))).collect();
+    let owning_state = |i: usize| {
+        let element = nodes[i].element?;
+        model
+            .ancestors(element)
+            .into_iter()
+            .filter(|&a| matches!(model.get(a).map(|e| e.kind()), Some(ElementKind::State(_))))
+            .find_map(|a| by_element.get(&a).copied().filter(|&c| nodes[c].container))
+    };
     let parent: Vec<Option<usize>> = (0..nodes.len())
         .map(|i| {
+            if kind == DiagramKind::StateMachine
+                && let Some(c) = owning_state(i)
+            {
+                return Some(c);
+            }
             (0..nodes.len())
                 .filter(|&c| {
                     c != i

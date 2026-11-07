@@ -39,6 +39,9 @@ today.
 - **States grow for their activities** when one is added or made longer, and a loop from a
   state to itself keeps to the state's corner when the state grows or moves, so its label
   stays by the loop.
+- **Substates stay inside**: a state dropped into a smaller one, or moved over its state's
+  border, makes that state grow around it, and arranging a state machine diagram grows each
+  composite state around its substates, however far they reached out of it.
 - **Empty canvas without a diagram**: with no diagram open, the window shows the canvas with
   its grid and the zoom instead of a blank white area with a hint. It only pans and zooms
   until a diagram is opened.
