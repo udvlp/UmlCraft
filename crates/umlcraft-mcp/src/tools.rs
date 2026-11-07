@@ -3680,6 +3680,35 @@ mod tests {
     }
 
     #[test]
+    fn opposite_transitions_between_states_side_by_side_run_apart() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "S" }));
+        let d = id(&d["diagram"]);
+        let make = |host: &mut Headless, x: f32| {
+            run(host, "create_element", json!({ "diagram": d, "tool": "state", "x": x, "y": 100 }))
+        };
+        let (a, b) = (make(&mut host, 100.0), make(&mut host, 400.0));
+        let connect = |host: &mut Headless, s: &Value, t: &Value| {
+            let args = json!({ "diagram": d, "tool": "transition", "source": s["element"],
+                               "target": t["element"] });
+            id(&run(host, "connect", args)["presentation"])
+        };
+        let there = connect(&mut host, &a, &b);
+        let back = connect(&mut host, &b, &a);
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let points = |e: &str| scene.edge(e.parse().unwrap()).unwrap().points.clone();
+        let ys = |e: &str| points(e).iter().map(|p| p.y).collect::<Vec<_>>();
+        // The second line, routed with the first, does not lie on it.
+        assert!(
+            ys(&there).iter().all(|y| !ys(&back).contains(y)),
+            "{:?} {:?}",
+            points(&there),
+            points(&back)
+        );
+    }
+
+    #[test]
     fn states_grow_around_their_substates() {
         let mut host = Headless::new();
         let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "TU" }));

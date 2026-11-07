@@ -810,7 +810,8 @@ pub fn route_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usi
     ) {
         return Ok(0);
     }
-    route_lines(tx, diagram, edges)
+    let edges = with_neighbours(tx.model(), diagram, edges);
+    route_lines(tx, diagram, &edges)
 }
 
 /// Routes the edges `edges` of `diagram` around its nodes and makes them right-angled lines
@@ -974,10 +975,33 @@ pub fn follow(tx: &mut Tx<'_>, before: &HashMap<Id, Snapshot>) -> Result<usize> 
         follow_loops(tx, diagram, &before[&diagram])?;
         let edges = stale(tx, diagram, &before[&diagram]);
         if !edges.is_empty() {
+            let edges = with_neighbours(tx.model(), diagram, &edges);
             count += route_lines(tx, diagram, &edges)?;
         }
     }
     Ok(count)
+}
+
+/// `edges` and the lines the router keeps that share an end node with one of them: routed
+/// together, lines leaving one side get ports of their own and lines between the same two
+/// nodes run apart, which a line routed alone cannot know of.
+pub fn with_neighbours(model: &umlcraft_model::Model, diagram: Id, edges: &[Id]) -> Vec<Id> {
+    let Some(view) = model.view(diagram) else { return edges.to_vec() };
+    let ends = |p: &umlcraft_model::Presentation| match &p.shape {
+        Shape::Edge { source, target, .. } => Some((*source, *target)),
+        _ => None,
+    };
+    let nodes: std::collections::HashSet<Id> =
+        edges.iter().filter_map(|&e| ends(view.get(e)?)).flat_map(|(s, t)| [s, t]).collect();
+    let mut result = edges.to_vec();
+    for p in view.presentations() {
+        let Some((s, t)) = ends(p) else { continue };
+        let kept = p.style.auto_route && p.style.shared.is_separate() && s != t;
+        if kept && (nodes.contains(&s) || nodes.contains(&t)) && !result.contains(&p.id) {
+            result.push(p.id);
+        }
+    }
+    result
 }
 
 /// Loops from a node to itself keep to the node's top right corner: where the node moved or

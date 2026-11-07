@@ -42,6 +42,8 @@ today.
 - **Substates stay inside**: a state dropped into a smaller one, or moved over its state's
   border, makes that state grow around it, and arranging a state machine diagram grows each
   composite state around its substates, however far they reached out of it.
+- **Opposite transitions** between two states side by side no longer lie on one line: a new
+  or moved line is routed together with the lines that share one of its states.
 - **Empty canvas without a diagram**: with no diagram open, the window shows the canvas with
   its grid and the zoom instead of a blank white area with a hint. It only pans and zooms
   until a diagram is opened.
