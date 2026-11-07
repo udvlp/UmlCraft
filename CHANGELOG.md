@@ -5,6 +5,11 @@ today.
 
 ## Unreleased
 
+- **`ja` and `nein` in German structograms**: an alternative in a structogram with German
+  keywords labels its branches `ja` and `nein`, as German schoolbooks do, instead of
+  Structorizer's `T` and `F`. Structograms with English keywords keep `T` and `F`. The branch
+  columns are wide enough that the diagonals of the head pass above the longer labels, also over
+  an empty `nein` branch.
 - **AI clients select in structograms**: `select` takes a `path`, named as for
   `edit_structogram` (`body.1.then.0`), and selects that element of the structogram shown;
   the structogram's own id selects it as a whole, an empty list clears the selection. The

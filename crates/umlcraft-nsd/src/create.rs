@@ -1,6 +1,7 @@
 //! New diagrams and elements in the form Structorizer 3.32-35 gives them, so that the editor
 //! and the code import only make what Structorizer would write itself.
 
+use crate::layout::{FALSE_LABEL, TRUE_LABEL};
 use crate::model::{
     Attrs, Color, Diagram, Element, ElementKind, Lines, ROOT_ORDER, RootKind, Sequence,
 };
@@ -77,6 +78,15 @@ impl Keywords {
     /// The keyword `name` (`preFor`, `postFor`, …) without the space some end in.
     pub fn word(self, name: &str) -> &'static str {
         self.header().iter().find(|(n, _)| *n == name).map_or("", |(_, v)| v.trim())
+    }
+
+    /// The labels of an alternative's two branches: Structorizer's `T` and `F`, or `ja` and
+    /// `nein` as German schoolbooks write them.
+    pub fn branch_labels(self) -> (&'static str, &'static str) {
+        match self {
+            Self::English => (TRUE_LABEL, FALSE_LABEL),
+            Self::German => ("ja", "nein"),
+        }
     }
 }
 
