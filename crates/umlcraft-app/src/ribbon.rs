@@ -157,13 +157,9 @@ impl Item {
         mut self,
         label: impl Into<String>,
         icon: SharedString,
-        action: impl Action,
+        action: Box<dyn Action>,
     ) -> Self {
-        self.menu.push(MenuEntry::Command {
-            label: label.into(),
-            icon: Some(icon),
-            action: Box::new(action),
-        });
+        self.menu.push(MenuEntry::Command { label: label.into(), icon: Some(icon), action });
         self
     }
 
@@ -174,11 +170,6 @@ impl Item {
         action: impl Action,
     ) -> Self {
         self.menu.push(MenuEntry::Check { label: label.into(), checked, action: Box::new(action) });
-        self
-    }
-
-    fn menu_separator(mut self) -> Self {
-        self.menu.push(MenuEntry::Separator);
         self
     }
 
@@ -340,28 +331,48 @@ fn home(state: &State) -> Vec<Group> {
     ]
 }
 
-/// A button whose menu creates a diagram of the chosen kind or a structogram.
+/// A button whose menu creates a diagram of the chosen kind or a structogram, in the
+/// alphabetical order of their names in the language shown.
 fn new_diagram() -> Item {
-    let mut item = Item::new("new-diagram", fluent("document_add"), t!("ribbon.new_diagram"));
+    let mut entries: Vec<(String, SharedString, Box<dyn Action>)> = Vec::new();
     for kind in DIAGRAM_KINDS {
-        item = item.menu_icon_entry(
-            t!(diagram_key(kind)),
-            icons::diagram_icon(kind),
-            NewDiagram { kind, objects: false },
-        );
+        let action = NewDiagram { kind, objects: false };
+        entries.push((t!(diagram_key(kind)).into(), icons::diagram_icon(kind), Box::new(action)));
         if kind == DiagramKind::Class {
-            item = item.menu_icon_entry(
-                t!("diagram.object"),
+            let action = NewDiagram { kind, objects: true };
+            entries.push((
+                t!("diagram.object").into(),
                 icons::object_diagram_icon(),
-                NewDiagram { kind, objects: true },
-            );
+                Box::new(action),
+            ));
         }
     }
-    item.menu_separator().menu_icon_entry(
-        t!("kind.structogram"),
+    entries.push((
+        t!("kind.structogram").into(),
         icons::structogram_icon(),
-        NewStructogram,
-    )
+        Box::new(NewStructogram),
+    ));
+    entries.sort_by_cached_key(|(label, ..)| sort_key(label));
+    let item = Item::new("new-diagram", fluent("document_add"), t!("ribbon.new_diagram"));
+    entries
+        .into_iter()
+        .fold(item, |item, (label, icon, action)| item.menu_icon_entry(label, icon, action))
+}
+
+/// `label` for sorting by the alphabet: without case, an umlaut as its vowel and ß as ss, as
+/// German dictionaries sort.
+fn sort_key(label: &str) -> String {
+    label
+        .to_lowercase()
+        .chars()
+        .flat_map(|c| match c {
+            'ä' => vec!['a'],
+            'ö' => vec!['o'],
+            'ü' => vec!['u'],
+            'ß' => vec!['s', 's'],
+            c => vec![c],
+        })
+        .collect()
 }
 
 /// Which group of the diagram tab a tool belongs to.
@@ -1051,7 +1062,9 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
-    use super::{DIAGRAM_KINDS, RibbonTab, State, diagram, label_lines, tabs};
+    use super::{
+        DIAGRAM_KINDS, RibbonTab, State, diagram, diagram_key, label_lines, sort_key, tabs,
+    };
     use umlcraft_model::{DiagramKind, DiagramProps, ElementKind, ErNotation};
     use umlcraft_notation::palette::{self, Tool};
 
@@ -1060,6 +1073,50 @@ mod tests {
             ElementKind::Diagram(p) => p,
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn new_diagram_lists_its_kinds_by_the_alphabet() {
+        let sorted = |locale: &str| {
+            let mut keys: Vec<String> = DIAGRAM_KINDS.into_iter().map(diagram_key).collect();
+            keys.extend(["diagram.object".to_owned(), "kind.structogram".to_owned()]);
+            let mut labels: Vec<String> =
+                keys.iter().map(|k| rust_i18n::t!(k.as_str(), locale = locale).into()).collect();
+            labels.sort_by_cached_key(|l| sort_key(l));
+            labels
+        };
+        assert_eq!(
+            sorted("de"),
+            [
+                "Aktivitätsdiagramm",
+                "Anwendungsfalldiagramm",
+                "ER-Diagramm",
+                "Klassendiagramm",
+                "Komponentendiagramm",
+                "Kompositionsstrukturdiagramm",
+                "Objektdiagramm",
+                "Sequenzdiagramm",
+                "Struktogramm",
+                "Verteilungsdiagramm",
+                "Zustandsdiagramm",
+            ]
+        );
+        assert_eq!(
+            sorted("en"),
+            [
+                "Activity diagram",
+                "Class diagram",
+                "Component diagram",
+                "Composite structure diagram",
+                "Deployment diagram",
+                "ER diagram",
+                "Object diagram",
+                "Sequence diagram",
+                "State machine diagram",
+                "Structogram",
+                "Use case diagram",
+            ]
+        );
     }
 
     #[test]

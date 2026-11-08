@@ -3,6 +3,11 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **New diagram** lists the diagram kinds and the structogram in alphabetical order of their
+  names in the language shown, without a separator before the structogram.
+
 ## 0.20.0 – 2026-11-07
 
 - **AI clients select in structograms**: `select` takes a `path`, named as for
