@@ -1451,20 +1451,9 @@ impl Workspace {
                     let kind = ElementKind::TemplateParameter(TemplateParameterProps::default());
                     tx.create(owner, ElementData::new(name, kind))
                 }
-                // At the root, a diagram comes in a package of its own name, so that what is
-                // drawn on it has a place apart from other diagrams'.
-                NewItem::Diagram(_) | NewItem::ObjectDiagram => {
-                    let owner = if owner == tx.model().root() {
-                        let package = ElementData::new(name.clone(), ElementKind::Package);
-                        tx.create(owner, package)?
-                    } else {
-                        owner
-                    };
-                    match item {
-                        NewItem::Diagram(kind) => edit::create_diagram(tx, owner, kind, &name),
-                        _ => edit::create_object_diagram(tx, owner, &name),
-                    }
-                }
+                // Packages are made on purpose, never along with a diagram.
+                NewItem::Diagram(kind) => edit::create_diagram(tx, owner, kind, &name),
+                NewItem::ObjectDiagram => edit::create_object_diagram(tx, owner, &name),
                 NewItem::Structogram => {
                     let text = free_structogram_text(tx.model(), owner, &base);
                     let made = umlcraft_nsd::Provenance { author: "", date: "", origin: "" };
@@ -1901,31 +1890,29 @@ mod tests {
     }
 
     #[test]
-    fn a_diagram_at_the_root_comes_in_its_own_package() {
+    fn a_new_diagram_makes_no_package() {
         let (doc, ids) = order_system();
         let mut ws = Workspace::new(doc, None);
         let root = ws.doc.model().root();
+        let packages = |ws: &Workspace| {
+            let model = ws.doc.model();
+            model.elements().filter(|e| matches!(e.kind(), ElementKind::Package)).count()
+        };
+        let before = packages(&ws);
+        // At the root it goes right into the model, in a package into that package.
         let diagram = ws.add_item(root, NewItem::Diagram(DiagramKind::Class)).unwrap();
-        let model = ws.doc.model();
-        let package = model.get(diagram).unwrap().owner().unwrap();
-        let package = model.get(package).unwrap();
-        assert!(matches!(package.kind(), ElementKind::Package));
-        assert_eq!(package.name(), model.get(diagram).unwrap().name());
-        assert_eq!(package.owner(), Some(root));
-        let package = package.id();
-        // In a package it stays there; one undo step takes both back.
+        assert_eq!(ws.doc.model().get(diagram).unwrap().owner(), Some(root));
         let inside = ws.add_item(ids.domain, NewItem::Diagram(DiagramKind::Class)).unwrap();
         assert_eq!(ws.doc.model().get(inside).unwrap().owner(), Some(ids.domain));
-        assert!(ws.doc.undo() && ws.doc.undo());
-        assert!(!ws.doc.model().contains(package));
-        // An object diagram is a class diagram that says so, in a package of its own too.
+        // An object diagram is a class diagram that says so.
         let objects = ws.add_item(root, NewItem::ObjectDiagram).unwrap();
         let model = ws.doc.model();
         let diagram = model.get(objects).unwrap();
         assert!(matches!(diagram.kind(), ElementKind::Diagram(p) if p.objects));
         assert_eq!(diagram.kind().as_diagram(), Some(DiagramKind::Class));
-        assert_eq!(model.get(diagram.owner().unwrap()).unwrap().name(), diagram.name());
+        assert_eq!(diagram.owner(), Some(root));
         assert_eq!(ws.active_diagram, Some(objects));
+        assert_eq!(packages(&ws), before);
     }
 
     #[test]

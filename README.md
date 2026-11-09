@@ -166,7 +166,8 @@ case. Undo and redo for every change, copy,
 cut and paste (as a copy or as the same elements), rubber-band and multiple selection, alignment,
 waypoints, zoom to fit, drag and drop within the model tree and from the tree onto the canvas.
 The model tree lists the contents of packages sorted: packages, diagrams, then elements by
-kind and name. A new diagram at the top of the model comes in a package of its own name.
+kind and name. A new diagram goes into the package selected or right-clicked in the tree,
+else into the model itself; packages are made only on purpose.
 Automatic layout: new lines are routed around the nodes at right angles and follow when their
 nodes move, until their route is edited by hand (on use case and composite structure diagrams they start straight);
 Route lines (Ctrl+Shift+R) does that for the selected lines or the whole diagram. Arrange automatically (Ctrl+Shift+L) lays out every

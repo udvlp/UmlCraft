@@ -7,6 +7,9 @@ today.
 
 - **New diagram** lists the diagram kinds and the structogram in alphabetical order of their
   names in the language shown, without a separator before the structogram.
+- **No package along with a new diagram**: a diagram made at the top of the model goes right
+  into it instead of into a new package of its own name. Packages are made on purpose, in
+  the model tree or with the Package tool; a diagram made in one stays there.
 
 ## 0.20.0 – 2026-11-07
 
