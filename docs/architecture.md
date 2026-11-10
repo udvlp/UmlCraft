@@ -1235,7 +1235,9 @@ tool answers with an error.
 first), otherwise the headless project. Once the headless project was changed or a file
 opened in it, the server stays headless, so a model is never split between two places; a lost
 connection to the app gives one error and the next call looks for the app again.
-`--headless`, `--in FILE` and `--connect PORT --token T` fix the choice.
+`--headless`, `--in FILE` and `--connect PORT` fix the choice; with `--connect` the token
+still comes from the app's announcement, never from the command line, which other users of
+the computer can read.
 
 ### Files
 

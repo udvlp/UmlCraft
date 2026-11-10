@@ -23,8 +23,9 @@ pub struct Auto {
     headless: Headless,
     live: Option<LiveClient>,
     mode: Mode,
-    /// The app's port and token, given on the command line instead of looked up.
-    connect: Option<(u16, String)>,
+    /// The app's port, given on the command line instead of looked up; its token comes from
+    /// the app's announcement.
+    connect: Option<u16>,
 }
 
 impl Auto {
@@ -38,14 +39,14 @@ impl Auto {
     }
 
     /// Always the app at `port`, never headless (`--connect`).
-    pub fn connect(access: Access, port: u16, token: String) -> Self {
-        Self { connect: Some((port, token)), ..Self::new(access) }
+    pub fn connect(access: Access, port: u16) -> Self {
+        Self { connect: Some(port), ..Self::new(access) }
     }
 
     fn find_app(&mut self) -> Option<&mut LiveClient> {
         if self.live.is_none() {
-            self.live = match &self.connect {
-                Some((port, token)) => LiveClient::connect(*port, token).ok(),
+            self.live = match self.connect {
+                Some(port) => LiveClient::at_port(port),
                 None => LiveClient::discover(),
             };
         }

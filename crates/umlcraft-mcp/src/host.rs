@@ -89,10 +89,46 @@ impl Access {
 }
 
 /// `path` absolute and without `.` and `..`, also for files that do not exist yet: the
-/// existing part is canonicalized (links resolved), the rest appended.
+/// existing part is canonicalized (links resolved), the rest appended. On Unix
+/// `std::path::absolute` keeps `..`, and one after a folder that does not exist yet survives
+/// canonicalizing; such a path is resolved again with its `..` taken back, so that
+/// `allowed/new/../../x` counts as the `x` beside `allowed` that writing it reaches.
 pub(crate) fn absolute(path: &Path) -> PathBuf {
     let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut existing = path.as_path();
+    let mut resolved = resolve(&path);
+    // Each round takes back the `..` that the folders left after the existing part hold; the
+    // existing part is canonical, so going up from it is going up on the disk.
+    for _ in 0..8 {
+        let dotted = resolved
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir));
+        if !dotted {
+            break;
+        }
+        resolved = resolve(&lexical(&resolved));
+    }
+    resolved
+}
+
+/// `path` with `.` dropped and each `..` taking back the component before it.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The existing part of `path` canonicalized, the rest appended as it is.
+fn resolve(path: &Path) -> PathBuf {
+    let mut existing = path;
     let mut rest = Vec::new();
     loop {
         if let Ok(canonical) = std::fs::canonicalize(existing) {
@@ -105,7 +141,7 @@ pub(crate) fn absolute(path: &Path) -> PathBuf {
                 rest.push(name.to_owned());
                 existing = parent;
             }
-            _ => return path,
+            _ => return path.to_path_buf(),
         }
     }
 }
@@ -240,8 +276,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let access = Access { folders: vec![dir.clone()], any: false };
         assert!(access.check(&dir.join("new").join("a.ucraft"), None).is_ok());
-        // Leaving the folder with `..` does not count as inside it.
+        // Leaving the folder with `..` does not count as inside it, also after a folder that
+        // does not exist yet; going back into it does.
         assert!(access.check(&dir.join("..").join("b.ucraft"), None).is_err());
+        let up = dir.join("missing").join("..").join("..").join("b.ucraft");
+        assert!(access.check(&up, None).is_err(), "{:?}", access.check(&up, None));
+        let back = dir.join("missing").join("..").join("c.ucraft");
+        assert_eq!(access.check(&back, None), Ok(absolute(&dir).join("c.ucraft")));
         let own = std::env::temp_dir().join("own.ucraft");
         assert!(access.check(&own, Some(&own)).is_ok());
         assert!(Access::default().check(&own, None).is_err());
