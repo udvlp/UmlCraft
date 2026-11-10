@@ -1857,14 +1857,14 @@ impl MainView {
                 // file downloaded now.
                 this.update_download = UpdateDownload::Idle;
                 cx.notify();
-                let Ok(file) = downloaded else {
+                let Ok(package) = downloaded else {
                     this.update_download = UpdateDownload::Failed;
                     return;
                 };
                 this.confirm_discard(
                     window,
                     cx,
-                    Box::new(move |this, _, cx| match update::apply(install, &file) {
+                    Box::new(move |this, _, cx| match update::apply(install, &package) {
                         Ok(()) => cx.quit(),
                         Err(_) => {
                             this.update_download = UpdateDownload::Failed;

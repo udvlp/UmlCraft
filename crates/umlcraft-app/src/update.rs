@@ -208,9 +208,12 @@ fn hex(bytes: &[u8]) -> String {
 
 /// The SHA-256 checksum of the file at `path`, in lowercase hex.
 fn sha256_of(path: &Path) -> std::io::Result<String> {
-    use std::io::Read;
+    sha256_read(&mut fs::File::open(path)?)
+}
+
+/// The SHA-256 checksum of what `file` holds from where it stands, in lowercase hex.
+fn sha256_read(file: &mut impl Read) -> std::io::Result<String> {
     // sha2 0.11 hashes no `io::Write`: the file goes in by chunks.
-    let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; 64 * 1024];
     loop {
@@ -222,14 +225,21 @@ fn sha256_of(path: &Path) -> std::io::Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
+/// A package downloaded and checked, with the checksum it has to keep until it is installed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Download {
+    pub file: PathBuf,
+    sha256: String,
+}
+
 /// Downloads the package of `version` for `install` and checks it against the release's
 /// checksums, reporting the bytes so far and in all as they come. A package downloaded and
 /// checked before is taken again. It blocks for minutes at most: call it off the main thread.
 pub fn download(
     install: &Install,
     version: &str,
-    mut progress: impl FnMut(u64, Option<u64>),
-) -> Result<PathBuf, String> {
+    progress: impl FnMut(u64, Option<u64>),
+) -> Result<Download, String> {
     let name = install.asset(version);
     let dir = install.download_dir().ok_or("no folder for the download")?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -237,13 +247,26 @@ pub fn download(
     let mut sums = get(&agent, &download_url(version, "SHA256SUMS.txt"))?;
     let sums = sums.body_mut().read_to_string().map_err(|e| e.to_string())?;
     let expected = checksum_of(&sums, &name).ok_or("the release lists no checksum for it")?;
-    let file = dir.join(&name);
+    let file = fetch(&agent, version, &name, &dir, &expected, progress)?;
+    Ok(Download { file, sha256: expected })
+}
+
+/// The package `name` in `dir`, downloaded unless it is there with the checksum `expected`.
+fn fetch(
+    agent: &ureq::Agent,
+    version: &str,
+    name: &str,
+    dir: &Path,
+    expected: &str,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<PathBuf, String> {
+    let file = dir.join(name);
     if file.is_file() && sha256_of(&file).is_ok_and(|hash| hash == expected) {
         return Ok(file);
     }
 
     let part = dir.join(format!("{name}.part"));
-    let mut response = get(&agent, &download_url(version, &name))?;
+    let mut response = get(agent, &download_url(version, name))?;
     let total = response.body().content_length();
     let mut reader = response.body_mut().as_reader();
     let mut out = fs::File::create(&part).map_err(|e| e.to_string())?;
@@ -292,7 +315,23 @@ fn make_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Starts installing the downloaded `file`; UmlCraft has to quit right after.
+/// Opens `file` for reading so that, on Windows, nothing can change or replace it while the
+/// handle is open.
+fn open_locked(file: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ alone: others may read and run it, not write, rename or delete it.
+        options.share_mode(0x1);
+    }
+    options.open(file)
+}
+
+/// Starts installing the downloaded package; UmlCraft has to quit right after. The package is
+/// checked once more right before, held so that it cannot change in between: it may have lain
+/// in a folder of temporary files since it was downloaded.
 ///
 /// - Windows: the installer runs without questions where UmlCraft is installed, closes what
 ///   still uses its files and starts UmlCraft again (`/RELAUNCH`, see `umlcraft.iss`).
@@ -300,7 +339,18 @@ fn make_executable(path: &Path) -> Result<(), String> {
 ///   UmlCraft has quit.
 /// - macOS: a shell script waits for UmlCraft to quit, puts the app from the disk image in
 ///   place of the bundle and starts it.
-pub fn apply(install: &Install, file: &Path) -> Result<(), String> {
+pub fn apply(install: &Install, download: &Download) -> Result<(), String> {
+    let file = download.file.as_path();
+    let mut held = open_locked(file).map_err(|e| e.to_string())?;
+    if sha256_read(&mut held).map_err(|e| e.to_string())? != download.sha256 {
+        return Err("the package changed after it was downloaded".into());
+    }
+    let started = start(install, file);
+    drop(held);
+    started
+}
+
+fn start(install: &Install, file: &Path) -> Result<(), String> {
     let pid = std::process::id().to_string();
     let started = match install {
         Install::WindowsSetup { all_users } => Command::new(file)
@@ -413,6 +463,27 @@ mod tests {
         assert_eq!(&hex(&Sha256::digest(b"abc"))[..8], "ba7816bf");
     }
 
+    #[test]
+    fn a_package_that_changed_after_its_download_is_not_started() {
+        let dir = std::env::temp_dir().join(format!("umlcraft-apply-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("package");
+        fs::write(&file, "checked").unwrap();
+        let sha256 = sha256_of(&file).unwrap();
+        fs::write(&file, "swapped").unwrap();
+        let install = Install::WindowsSetup { all_users: false };
+        let download = Download { file: file.clone(), sha256 };
+        assert!(apply(&install, &download).is_err());
+        // Held for the check, the file cannot be replaced meanwhile on Windows.
+        #[cfg(windows)]
+        {
+            let _held = open_locked(&file).unwrap();
+            assert!(fs::write(&file, "again").is_err());
+            assert!(fs::remove_file(&file).is_err());
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     // Windows paths: elsewhere a backslash separates nothing.
     #[cfg(windows)]
     #[test]
@@ -518,13 +589,13 @@ mod tests {
             Install::AppImage(std::env::temp_dir().join("UmlCraft.AppImage"))
         };
         let mut last = (0, None);
-        let file = download(&install, &version, |done, total| last = (done, total)).unwrap();
-        let size = fs::metadata(&file).unwrap().len();
+        let first = download(&install, &version, |done, total| last = (done, total)).unwrap();
+        let size = fs::metadata(&first.file).unwrap().len();
         assert_eq!(last, (size, Some(size)));
         // The second time it takes the file checked before.
         let mut called = false;
-        assert_eq!(download(&install, &version, |_, _| called = true).unwrap(), file);
+        assert_eq!(download(&install, &version, |_, _| called = true).unwrap(), first);
         assert!(!called);
-        fs::remove_file(&file).unwrap();
+        fs::remove_file(&first.file).unwrap();
     }
 }

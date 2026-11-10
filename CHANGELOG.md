@@ -18,6 +18,8 @@ today.
   existing Claude Code entry is replaced only when the new one could not be added.
 - **Regions stay put**: when a state with regions grows to the left or upwards around a
   substate, the lines between its regions keep their place.
+- **Updates**: the downloaded package is checked once more right before it is started, and
+  held so that nothing can replace it meanwhile.
 - **No package along with a new diagram**: a diagram made at the top of the model goes right
   into it instead of into a new package of its own name. Packages are made on purpose, in
   the model tree or with the Package tool; a diagram made in one stays there.
