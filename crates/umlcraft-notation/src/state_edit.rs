@@ -261,11 +261,21 @@ pub fn grow_owners(tx: &mut Tx<'_>, diagram: Id, presentations: &[Id]) -> Result
                 break;
             }
             let r = outer.union(&inner.inflate(GROW_MARGIN));
-            grown.push((q, r));
+            // The lines between regions keep their place among the contents: they are
+            // measured from the top (or left) edge, which moves when the state grows that way.
+            let regions = view.get(q).and_then(|q| q.regions()).map(|layout| {
+                let shift = if layout.vertical { outer.x - r.x } else { outer.y - r.y };
+                let separators = layout.separators.iter().map(|s| s + shift).collect();
+                Regions { separators, ..layout.clone() }
+            });
+            grown.push((q, r, regions));
             inner = r;
         }
-        for (q, r) in grown {
+        for (q, r, regions) in grown {
             tx.set_bounds(diagram, q, r)?;
+            if let Some(regions) = regions {
+                set_layout(tx, diagram, q, regions)?;
+            }
         }
     }
     Ok(())
@@ -521,8 +531,8 @@ fn redistribute(tx: &mut Tx<'_>, diagram: Id, state: Id) -> Result<()> {
 mod tests {
     use super::*;
     use crate::palette::{NodeTool, create_node};
-    use umlcraft_model::Rect;
     use umlcraft_model::sample::order_system;
+    use umlcraft_model::{Document, Rect};
 
     fn named(model: &Model, name: &str) -> Id {
         model.elements().find(|e| e.name() == name).map(|e| e.id()).expect("in the sample")
@@ -612,6 +622,36 @@ mod tests {
         .unwrap();
         assert_eq!(owner_name(doc.model(), open), "Order lifecycle");
         doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn a_state_grown_to_the_left_keeps_its_region_line_in_place() {
+        let (mut doc, _) = order_system();
+        let model = doc.model();
+        let (open, empty) = (named(model, "Open"), named(model, "Empty"));
+        let (diagram, node) = node_of(model, open);
+        doc.edit("divide", |tx| add_region(tx, open, true, None)).unwrap();
+        doc.edit("line", |tx| move_region_line(tx, diagram, node, 0, 250.0)).unwrap();
+        let bounds = |doc: &Document, id: Id| {
+            doc.model().view(diagram).unwrap().get(id).unwrap().bounds().unwrap()
+        };
+        let line_x = |doc: &Document| {
+            let p = doc.model().view(diagram).unwrap().get(node).unwrap();
+            bounds(doc, node).x + p.regions().unwrap().separators[0]
+        };
+        let (before, state) = (line_x(&doc), bounds(&doc, node));
+        // "Empty", in the left region, dragged half over the state's left border.
+        let (_, empty_node) = node_of(doc.model(), empty);
+        let moved =
+            bounds(&doc, empty_node).translate(state.x - bounds(&doc, empty_node).x - 30.0, 0.0);
+        doc.edit("move", |tx| {
+            tx.set_bounds(diagram, empty_node, moved)?;
+            after_move(tx, diagram, &[empty_node])
+        })
+        .unwrap();
+        assert!(bounds(&doc, node).x < state.x, "the state grew to the left");
+        assert_eq!(line_x(&doc), before);
+        assert_eq!(doc.model().get(empty).unwrap().owner(), Some(regions_of(doc.model(), open)[0]));
     }
 
     #[test]
