@@ -530,7 +530,7 @@ pub fn arrange(
     let kind =
         tx.model().element(diagram)?.kind().as_diagram().ok_or(ModelError::NotADiagram(diagram))?;
     if !can_arrange(kind) {
-        return Err(ModelError::Invalid("sequence diagrams are not arranged".into()));
+        return Err(ModelError::Invalid(crate::refusal::SEQUENCE_NOT_ARRANGED.into()));
     }
     // Attributes go around what they describe; always the whole diagram.
     if kind == DiagramKind::EntityRelationship {
@@ -745,7 +745,7 @@ pub fn arrange(
             a.right().min(b.right()) - b.x <= a.width.min(b.width) / 2.0
         });
         if !side_by_side {
-            return Err(ModelError::Invalid("partitions one below the other".into()));
+            return Err(ModelError::Invalid(crate::refusal::PARTITIONS_STACKED.into()));
         }
         let movable: Vec<usize> = (0..nodes.len()).filter(|&i| !nodes[i].partition).collect();
         let local: HashMap<usize, usize> =

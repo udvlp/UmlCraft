@@ -324,7 +324,8 @@ pub fn paste(
         let mut pending = Pending::default();
         for root in roots {
             let owner = owner_for(tx.model(), diagram_owner, &root.data.kind).ok_or_else(|| {
-                ModelError::Invalid(format!("cannot paste a {} here", root.data.kind.type_name()))
+                let refusal = crate::refusal::CANNOT_PASTE;
+                ModelError::Invalid(format!("{refusal}{} here", root.data.kind.type_name()))
             })?;
             insert_tree(tx, root, owner, None, &element_map, true, &mut pending)?;
         }

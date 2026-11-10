@@ -316,10 +316,8 @@ fn connector_end(model: &Model, view: &View, p: &Presentation) -> Result<Connect
             .filter(|&e| matches!(model.get(e).map(|e| e.kind()), Some(ElementKind::Attribute(_)))),
         ElementKind::Attribute(_) => None,
         other => {
-            return Err(ModelError::Invalid(format!(
-                "a connector cannot connect a {}",
-                other.type_name()
-            )));
+            let refusal = crate::refusal::CONNECTOR_CANNOT;
+            return Err(ModelError::Invalid(format!("{refusal}{}", other.type_name())));
         }
     };
     Ok(ConnectorEnd::new(role, part_with_port))
@@ -334,7 +332,7 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<I
     let ends =
         [connector_end(model, view, node(source)?)?, connector_end(model, view, node(target)?)?];
     if ends[0].role == ends[1].role && ends[0].part_with_port == ends[1].part_with_port {
-        return Err(ModelError::Invalid("a connector needs two different ends".into()));
+        return Err(ModelError::Invalid(crate::refusal::CONNECTOR_SAME_ENDS.into()));
     }
     // The class that holds the parts: the owner of a part, of the part a port is reached
     // through, or of a port of the class itself.
@@ -343,7 +341,7 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<I
         .iter()
         .filter_map(|end| model.get(end.part_with_port.unwrap_or(end.role))?.owner())
         .find(|&o| model.get(o).is_some_and(|o| o.kind().can_own(&kind)))
-        .ok_or_else(|| ModelError::Invalid("no class holds both ends of the connector".into()))?;
+        .ok_or_else(|| ModelError::Invalid(crate::refusal::CONNECTOR_NO_CLASS.into()))?;
     let element = tx.create(owner, ElementData::new("", kind))?;
     tx.add_edge(diagram, Some(element), source, target, Vec::new())
 }

@@ -16,10 +16,15 @@ today.
 - **`mcp setup` keeps the clients' settings**: a configuration it cannot read or that is no
   JSON object is left as it is instead of being replaced, it is written in one go, and an
   existing Claude Code entry is replaced only when the new one could not be added.
+- **Deeply nested structograms**: a `.nsd` file nested deeper than 200 levels is refused
+  with a message instead of crashing UmlCraft.
 - **Regions stay put**: when a state with regions grows to the left or upwards around a
   substate, the lines between its regions keep their place.
 - **Updates**: the downloaded package is checked once more right before it is started, and
   held so that nothing can replace it meanwhile.
+- **Messages in your language**: refused edits (an element already on the diagram, lines
+  that cannot connect, typing errors in attributes and operations …) are told in German or
+  English instead of in English after a German introduction.
 - **Lines between the same states** are routed together, but moving a node no longer
   reroutes the lines of its neighbours to other nodes.
 - **No package along with a new diagram**: a diagram made at the top of the model goes right

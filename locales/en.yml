@@ -847,6 +847,7 @@ error:
   nsd_encoding: "The file is encoded as %{encoding}; structograms are UTF-8."
   nsd_not_utf8: The file is not encoded as UTF-8; structograms are UTF-8.
   nsd_truncated: "The file ends inside <%{element}>."
+  nsd_too_deep: "Line %{line}, column %{column}: the elements are nested deeper than %{max} levels."
   named: "\"%{name}\""
   unnamed: an element
   not_found: "%{a} does not exist."
@@ -869,7 +870,27 @@ error:
   reference_cycle: "%{a} would connect itself through other relationships."
   not_finite: A position or size is not a valid number.
   type_too_deep: "A type of %{a} is nested more than %{max} levels deep."
-  invalid: "The model is inconsistent: %{detail}"
+  invalid: The model is inconsistent here; the step was not taken.
+  already_shown: The element is on this diagram already.
+  other_interaction: The element belongs to another interaction and can only stand on its sequence diagram.
+  cannot_show: "%{what} cannot stand on this kind of diagram."
+  cannot_connect: "%{source} and %{target} cannot be connected this way."
+  cannot_paste: "%{what} cannot be pasted here."
+  connector_same_ends: A connector needs two different ends.
+  connector_no_class: The two ends belong to different classes; a connector joins parts and ports of one class.
+  connector_cannot: "A connector cannot connect an element of the kind %{what}."
+  created_already: Another message creates this lifeline already.
+  no_room: There is no room for the message between these lifelines there.
+  messages_connect_lifelines: Messages connect lifelines.
+  partitions_stacked: Activities with partitions one below the other cannot be arranged automatically.
+  sequence_not_arranged: Sequence diagrams are not arranged automatically.
+  empty_name: The name must not be empty.
+  binding_without_template: A binding names a template and its arguments, such as Box<int>.
+  has_association_class: The association has an association class already.
+  member_no_name: "No valid name in %{text}."
+  member_multiplicity: "Invalid multiplicity %{text}; for example 0..1, 1..* or *."
+  member_missing: "A “%{missing}” is missing."
+  member_unexpected: After the parameter list only “:” with the return type may follow.
   part_outside: A part goes inside a class. Draw the class first, then click inside it.
   er_not_joined: These two cannot be joined. Attributes belong to entities, relationships or attributes; relationships join entities; an IS-A joins entities.
   er_attribute_owned: The attribute already belongs to something. Delete its line first.

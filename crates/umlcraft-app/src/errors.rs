@@ -19,6 +19,57 @@ fn kind(type_name: &str) -> String {
     t!(format!("kind.{type_name}")).to_string()
 }
 
+/// Why an edit the user asked for was refused (`umlcraft_notation::refusal`), in the user's
+/// language; `None` for a text that is no refusal.
+fn refusal(detail: &str) -> Option<std::borrow::Cow<'static, str>> {
+    use umlcraft_notation::refusal as r;
+    let plain = [
+        (r::ALREADY_SHOWN, "error.already_shown"),
+        (r::OTHER_INTERACTION, "error.other_interaction"),
+        (r::CONNECTOR_SAME_ENDS, "error.connector_same_ends"),
+        (r::CONNECTOR_NO_CLASS, "error.connector_no_class"),
+        (r::CREATED_ALREADY, "error.created_already"),
+        (r::NO_ROOM, "error.no_room"),
+        (r::MESSAGES_CONNECT_LIFELINES, "error.messages_connect_lifelines"),
+        (r::PARTITIONS_STACKED, "error.partitions_stacked"),
+        (r::SEQUENCE_NOT_ARRANGED, "error.sequence_not_arranged"),
+        (r::EMPTY_NAME, "error.empty_name"),
+        (r::BINDING_WITHOUT_TEMPLATE, "error.binding_without_template"),
+        (r::HAS_ASSOCIATION_CLASS, "error.has_association_class"),
+    ];
+    if let Some((_, key)) = plain.iter().find(|(text, _)| *text == detail) {
+        return Some(t!(*key));
+    }
+    if let Some(what) = detail.strip_prefix("a ").and_then(|d| d.strip_suffix(r::CANNOT_SHOW)) {
+        return Some(t!("error.cannot_show", what = kind(what)));
+    }
+    if let Some((_, ends)) = detail.split_once(r::CANNOT_CONNECT)
+        && let Some((source, target)) = ends.split_once(" to ")
+    {
+        return Some(t!("error.cannot_connect", source = kind(source), target = kind(target)));
+    }
+    if let Some(what) = detail.strip_prefix(r::CANNOT_PASTE).and_then(|d| d.strip_suffix(" here")) {
+        return Some(t!("error.cannot_paste", what = kind(what)));
+    }
+    if let Some(what) = detail.strip_prefix(r::CONNECTOR_CANNOT) {
+        return Some(t!("error.connector_cannot", what = kind(what)));
+    }
+    if let Some(text) = detail.strip_prefix(r::MEMBER_NO_NAME) {
+        return Some(t!("error.member_no_name", text = text));
+    }
+    if let Some(text) = detail.strip_prefix(r::MEMBER_MULTIPLICITY) {
+        return Some(t!("error.member_multiplicity", text = text));
+    }
+    if let Some(rest) = detail.strip_prefix(r::MEMBER_MISSING) {
+        let missing = rest.chars().next().unwrap_or(')');
+        return Some(t!("error.member_missing", missing = missing));
+    }
+    if detail.starts_with(r::MEMBER_UNEXPECTED) {
+        return Some(t!("error.member_unexpected"));
+    }
+    None
+}
+
 /// Why the model refused an edit, or why a file holds no valid model.
 pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
     let a = |id: Id| named(model, id);
@@ -68,7 +119,12 @@ pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
             umlcraft_notation::er::ATTRIBUTE_OWNED => t!("error.er_attribute_owned"),
             umlcraft_notation::er::SECOND_WEAK => t!("error.er_second_weak"),
             umlcraft_notation::er::ASSOCIATIVE_IN_USE => t!("error.er_associative_in_use"),
-            _ => t!("error.invalid", detail = detail),
+            detail => refusal(detail).unwrap_or_else(|| {
+                // A check of the model's own consistency: what failed is for the log, in
+                // English; the user learns that the edit was not made.
+                eprintln!("umlcraft: model inconsistent: {detail}");
+                t!("error.invalid")
+            }),
         },
     }
     .to_string()
@@ -158,6 +214,9 @@ pub fn nsd_error(err: &umlcraft_nsd::ReadError) -> String {
         }
         ReadError::Encoding(encoding) => t!("error.nsd_encoding", encoding = encoding),
         ReadError::Truncated(element) => t!("error.nsd_truncated", element = element),
+        ReadError::TooDeep { line, column, max } => {
+            t!("error.nsd_too_deep", line = line, column = column, max = max)
+        }
     }
     .to_string()
 }
@@ -175,6 +234,36 @@ mod tests {
         assert!(text.contains("Order") && !text.contains(&ids.order.to_string()), "{text}");
         let text = model_error(None, &err);
         assert!(!text.contains(&ids.order.to_string()) && !text.contains("error."), "{text}");
+    }
+
+    #[test]
+    fn refusals_are_told_in_the_users_language() {
+        use umlcraft_notation::member::{parse_attribute, parse_operation};
+        use umlcraft_notation::refusal as r;
+        let parse = |e: umlcraft_notation::member::ParseError| ModelError::Invalid(e.to_string());
+        let errors = [
+            ModelError::Invalid(r::ALREADY_SHOWN.into()),
+            ModelError::Invalid(format!("a class{}", r::CANNOT_SHOW)),
+            ModelError::Invalid(format!("transition{}class to actor", r::CANNOT_CONNECT)),
+            ModelError::Invalid(format!("{}state here", r::CANNOT_PASTE)),
+            ModelError::Invalid(format!("{}class", r::CONNECTOR_CANNOT)),
+            ModelError::Invalid(r::NO_ROOM.into()),
+            parse(parse_attribute("x : int [a..b]").unwrap_err()),
+            parse(parse_attribute(": int").unwrap_err()),
+            parse(parse_operation("op(").unwrap_err()),
+            parse(parse_operation("op() int").unwrap_err()),
+        ];
+        for err in errors {
+            for locale in ["de", "en"] {
+                rust_i18n::set_locale(locale);
+                let text = model_error(None, &err);
+                assert!(!text.contains("error.") && !text.contains("kind."), "{err:?}: {text}");
+            }
+        }
+        rust_i18n::set_locale("en");
+        // What is no refusal is a check of the model; its English stays out of the message.
+        let text = model_error(None, &ModelError::Invalid("the name index is out of date".into()));
+        assert!(!text.contains("index"), "{text}");
     }
 
     #[test]

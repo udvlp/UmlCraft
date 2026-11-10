@@ -1070,10 +1070,8 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
         model.element(diagram)?.kind().as_diagram().ok_or(ModelError::NotADiagram(diagram))?;
     let kind = model.element(element)?.kind().clone();
     if !can_show(diagram_kind, &kind) {
-        return Err(ModelError::Invalid(format!(
-            "a {} cannot be shown on this diagram",
-            kind.type_name()
-        )));
+        let refusal = crate::refusal::CANNOT_SHOW;
+        return Err(ModelError::Invalid(format!("a {}{refusal}", kind.type_name())));
     }
     // Lifelines and fragments belong to one interaction and show only on its diagram.
     let interaction = model.element(diagram)?.owner();
@@ -1081,11 +1079,11 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
         && !matches!(kind, ElementKind::Comment(_))
         && !interaction.is_some_and(|i| model.is_ancestor(i, element))
     {
-        return Err(ModelError::Invalid("the element belongs to another interaction".into()));
+        return Err(ModelError::Invalid(crate::refusal::OTHER_INTERACTION.into()));
     }
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     if view.presentations_of(element).next().is_some() {
-        return Err(ModelError::Invalid("the element is already on this diagram".into()));
+        return Err(ModelError::Invalid(crate::refusal::ALREADY_SHOWN.into()));
     }
     // Relationships connecting the element to something shown, as (relationship, source, target)
     // with `None` standing for the new node.
@@ -1343,12 +1341,9 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
         EdgeTool::Association | EdgeTool::AssociationClass | EdgeTool::Link | EdgeTool::Transition
     );
     if (self_loop && !may_loop) || !tool.accepts(sk, tk, s == t) {
-        return Err(ModelError::Invalid(format!(
-            "{} cannot connect {} to {}",
-            tool.key(),
-            sk.type_name(),
-            tk.type_name()
-        )));
+        let (refusal, tool) = (crate::refusal::CANNOT_CONNECT, tool.key());
+        let (sk, tk) = (sk.type_name(), tk.type_name());
+        return Err(ModelError::Invalid(format!("{tool}{refusal}{sk} to {tk}")));
     }
 
     match tool.element_kind(s, t) {
@@ -1405,7 +1400,7 @@ pub fn make_association_class(
         return Err(ModelError::Invalid(format!("{association} is no association")));
     };
     if a.class.is_some() {
-        return Err(ModelError::Invalid("the association has an association class".into()));
+        return Err(ModelError::Invalid(crate::refusal::HAS_ASSOCIATION_CLASS.into()));
     }
     let Shape::Edge { source, target, waypoints, .. } = &presentation.shape else {
         return Err(ModelError::Invalid(format!("{edge} is no edge")));
@@ -1682,7 +1677,7 @@ pub fn set_binding(
         Some(_) => None,
     };
     if binding.is_some() && template.is_none() {
-        return Err(ModelError::Invalid("a binding names a template and its arguments".into()));
+        return Err(ModelError::Invalid(crate::refusal::BINDING_WITHOUT_TEMPLATE.into()));
     }
     tx.update(class, |data| {
         if let ElementKind::Class(p) = &mut data.kind {

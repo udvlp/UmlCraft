@@ -35,7 +35,13 @@ pub enum ReadError {
     Encoding(String),
     #[error("the file ends inside <{0}>")]
     Truncated(String),
+    #[error("{line}:{column}: elements nested deeper than {max}")]
+    TooDeep { line: usize, column: usize, max: usize },
 }
+
+/// How deep elements may nest. Structograms people draw stay far below; without a limit a
+/// file nested thousands deep would overflow the stack while it is read, laid out or drawn.
+pub const MAX_DEPTH: usize = 200;
 
 /// Reads a whole `.nsd` file. A byte order mark is skipped.
 pub fn read(xml: &str) -> Result<Diagram, ReadError> {
@@ -47,6 +53,8 @@ struct Parser<'a> {
     reader: Reader<&'a [u8]>,
     /// Where the last event started.
     at: usize,
+    /// How many elements are open around the one being read.
+    depth: usize,
 }
 
 /// What the next event means for the structure.
@@ -59,7 +67,7 @@ enum Next<'a> {
 
 impl<'a> Parser<'a> {
     fn new(xml: &'a str) -> Self {
-        Parser { xml, reader: Reader::from_str(xml), at: 0 }
+        Parser { xml, reader: Reader::from_str(xml), at: 0, depth: 0 }
     }
 
     fn position(&self, at: usize) -> (usize, usize) {
@@ -180,6 +188,23 @@ impl<'a> Parser<'a> {
         empty: bool,
     ) -> Result<Element, ReadError> {
         let started = self.at;
+        if self.depth >= MAX_DEPTH {
+            let (line, column) = self.position(started);
+            return Err(ReadError::TooDeep { line, column, max: MAX_DEPTH });
+        }
+        self.depth += 1;
+        let element = self.element_inside(kind, start, empty, started);
+        self.depth -= 1;
+        element
+    }
+
+    fn element_inside(
+        &mut self,
+        kind: ElementKind,
+        start: &BytesStart,
+        empty: bool,
+        started: usize,
+    ) -> Result<Element, ReadError> {
         let attrs = self.attrs(start)?;
         let mut branches = Vec::new();
         let mut tags = Vec::new();
@@ -329,6 +354,23 @@ mod tests {
         assert!(matches!(read("<root a=\"1></root>"), Err(ReadError::Xml { .. })));
         let latin = "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><root></root>";
         assert_eq!(read(latin), Err(ReadError::Encoding("ISO-8859-1".into())));
+    }
+
+    #[test]
+    fn refuses_elements_nested_too_deep() {
+        let nested = |depth: usize| {
+            let open =
+                r#"<while text="&#34;x&#34;" comment="" color="ffffff" disabled="0"><qWhile>"#;
+            let close = "</qWhile></while>";
+            with_body(&format!("{}{}", open.repeat(depth), close.repeat(depth)))
+        };
+        assert!(read(&nested(MAX_DEPTH)).is_ok());
+        assert!(matches!(
+            read(&nested(MAX_DEPTH + 1)),
+            Err(ReadError::TooDeep { max: MAX_DEPTH, .. })
+        ));
+        // Far deeper than the stack would take: an error, not a crash.
+        assert!(matches!(read(&nested(100_000)), Err(ReadError::TooDeep { .. })));
     }
 
     #[test]

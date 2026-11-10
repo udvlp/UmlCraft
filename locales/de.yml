@@ -847,6 +847,7 @@ error:
   nsd_encoding: "Die Datei ist als %{encoding} kodiert; Struktogramme sind UTF-8."
   nsd_not_utf8: Die Datei ist nicht in UTF-8 kodiert; Struktogramme sind UTF-8.
   nsd_truncated: "Die Datei endet mitten in <%{element}>."
+  nsd_too_deep: "Zeile %{line}, Spalte %{column}: Die Elemente sind tiefer als %{max} Ebenen verschachtelt."
   named: "„%{name}“"
   unnamed: ein Element
   not_found: "%{a} gibt es nicht."
@@ -869,7 +870,27 @@ error:
   reference_cycle: "%{a} würde sich über andere Beziehungen mit sich selbst verbinden."
   not_finite: Eine Position oder Größe ist keine gültige Zahl.
   type_too_deep: "Ein Typ von %{a} ist tiefer als %{max} Ebenen verschachtelt."
-  invalid: "Das Modell ist widersprüchlich: %{detail}"
+  invalid: Das Modell ist an dieser Stelle widersprüchlich; der Schritt wurde nicht ausgeführt.
+  already_shown: Das Element ist schon auf diesem Diagramm.
+  other_interaction: Das Element gehört zu einer anderen Interaktion und kann nur auf deren Sequenzdiagramm stehen.
+  cannot_show: "%{what} kann auf dieser Diagrammart nicht stehen."
+  cannot_connect: "%{source} und %{target} lassen sich so nicht verbinden."
+  cannot_paste: "%{what} kann hier nicht eingefügt werden."
+  connector_same_ends: Ein Konnektor braucht zwei verschiedene Enden.
+  connector_no_class: Die beiden Enden gehören zu verschiedenen Klassen; ein Konnektor verbindet Parts und Ports einer Klasse.
+  connector_cannot: "Ein Konnektor kann kein Element der Art %{what} verbinden."
+  created_already: Die Lebenslinie wird schon von einer anderen Nachricht erzeugt.
+  no_room: Zwischen diesen Lebenslinien ist dort kein Platz für die Nachricht.
+  messages_connect_lifelines: Nachrichten verbinden Lebenslinien.
+  partitions_stacked: Aktivitäten mit Partitionen untereinander lassen sich nicht automatisch anordnen.
+  sequence_not_arranged: Sequenzdiagramme werden nicht automatisch angeordnet.
+  empty_name: Der Name darf nicht leer sein.
+  binding_without_template: Eine Bindung nennt eine Vorlage und ihre Argumente, etwa Box<int>.
+  has_association_class: Die Assoziation hat schon eine Assoziationsklasse.
+  member_no_name: "Kein gültiger Name in %{text}."
+  member_multiplicity: "Ungültige Multiplizität %{text}, etwa 0..1, 1..* oder *."
+  member_missing: "Es fehlt ein „%{missing}“."
+  member_unexpected: Nach der Parameterliste darf nur „:“ mit dem Rückgabetyp folgen.
   part_outside: Ein Part gehört in eine Klasse. Erst die Klasse zeichnen, dann in sie hineinklicken.
   er_not_joined: Diese beiden lassen sich nicht verbinden. Attribute gehören zu Entities, Beziehungen oder Attributen, Beziehungen verbinden Entities, ein IS-A verbindet Entities.
   er_attribute_owned: Das Attribut gehört schon zu etwas. Erst seine Linie löschen.
