@@ -3706,6 +3706,23 @@ mod tests {
             points(&there),
             points(&back)
         );
+        // A line from B to a third state is routed with neither: it shares only B with them.
+        let c = make(&mut host, 700.0);
+        let onward = connect(&mut host, &b, &c);
+        let model = host.document().model();
+        let ids = |e: &[&String]| e.iter().map(|e| e.parse().unwrap()).collect::<Vec<_>>();
+        let along = umlcraft_notation::autoroute::with_neighbours(
+            model,
+            d.parse().unwrap(),
+            &ids(&[&there]),
+        );
+        assert_eq!(along, ids(&[&there, &back]));
+        let along = umlcraft_notation::autoroute::with_neighbours(
+            model,
+            d.parse().unwrap(),
+            &ids(&[&onward]),
+        );
+        assert_eq!(along, ids(&[&onward]));
     }
 
     #[test]

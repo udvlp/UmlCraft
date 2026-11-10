@@ -15,7 +15,7 @@
 //! back as the waypoints and anchors of right-angled lines.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use umlcraft_model::{
     DiagramKind, ElementKind, Id, LineShape, ModelError, Point, Rect, Result, Shape, Tx,
@@ -982,22 +982,26 @@ pub fn follow(tx: &mut Tx<'_>, before: &HashMap<Id, Snapshot>) -> Result<usize> 
     Ok(count)
 }
 
-/// `edges` and the lines the router keeps that share an end node with one of them: routed
-/// together, lines leaving one side get ports of their own and lines between the same two
-/// nodes run apart, which a line routed alone cannot know of.
+/// `edges` and the lines the router keeps between the same two nodes as one of them, either
+/// way: routed together they run apart, which a line routed alone cannot know of. Lines that
+/// share only one node stay as they are, so that moving a node does not reroute every line
+/// of its neighbours.
 pub fn with_neighbours(model: &umlcraft_model::Model, diagram: Id, edges: &[Id]) -> Vec<Id> {
     let Some(view) = model.view(diagram) else { return edges.to_vec() };
     let ends = |p: &umlcraft_model::Presentation| match &p.shape {
         Shape::Edge { source, target, .. } => Some((*source, *target)),
         _ => None,
     };
-    let nodes: std::collections::HashSet<Id> =
-        edges.iter().filter_map(|&e| ends(view.get(e)?)).flat_map(|(s, t)| [s, t]).collect();
+    // Each pair in one order, so that a line and the line back meet.
+    let pair = |(s, t): (Id, Id)| if s <= t { (s, t) } else { (t, s) };
+    let pairs: HashSet<(Id, Id)> =
+        edges.iter().filter_map(|&e| ends(view.get(e)?)).map(pair).collect();
+    let mut taken: HashSet<Id> = edges.iter().copied().collect();
     let mut result = edges.to_vec();
     for p in view.presentations() {
         let Some((s, t)) = ends(p) else { continue };
         let kept = p.style.auto_route && p.style.shared.is_separate() && s != t;
-        if kept && (nodes.contains(&s) || nodes.contains(&t)) && !result.contains(&p.id) {
+        if kept && pairs.contains(&pair((s, t))) && taken.insert(p.id) {
             result.push(p.id);
         }
     }
