@@ -1254,7 +1254,7 @@ pub fn arrange(
         if source == target {
             if let Some(r) = view.get(*source).and_then(|n| n.bounds()) {
                 let count = slots.entry(*source).or_default();
-                let corners = free_corners(view, *source, r);
+                let corners = scene::free_corners(view, *source, r);
                 let slot = *count / 4 * 4 + corners[*count % 4];
                 let at = (scene::self_loop_at(r, slot), scene::self_loop_anchors_at(r, slot));
                 *count += 1;
@@ -1299,6 +1299,36 @@ pub fn arrange(
     crate::autoroute::route_lines(tx, diagram, &lines)?;
     straighten_at_bars(tx, diagram, &bars, &lines)?;
     share_generalization_trees(tx, diagram, &lines, direction)?;
+    // The other lines at the nodes of a shared tree are routed again, now that the tree runs
+    // over its common line: the way a generalization took on its own is free again.
+    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let in_trees: HashSet<Id> = view
+        .presentations()
+        .iter()
+        .filter(|p| !p.style.shared.is_separate())
+        .filter_map(|p| match &p.shape {
+            Shape::Edge { source, target, .. } => Some([*source, *target]),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let again: Vec<Id> = lines
+        .iter()
+        .copied()
+        .filter(|&id| {
+            view.get(id).is_some_and(|p| match &p.shape {
+                Shape::Edge { source, target, .. } => {
+                    p.style.shared.is_separate()
+                        && p.style.auto_route
+                        && (in_trees.contains(source) || in_trees.contains(target))
+                }
+                _ => false,
+            })
+        })
+        .collect();
+    if !in_trees.is_empty() && !again.is_empty() {
+        crate::autoroute::route_lines(tx, diagram, &again)?;
+    }
     Ok(changed)
 }
 
@@ -1476,60 +1506,113 @@ fn actors_beside_boundary(
         if to_right { right.push(group) } else { left.push(group) }
     }
 
-    // Each side's column: the groups level with their use cases, one below the other.
+    // Each side's column: the groups level with their use cases, one below the other. In a
+    // group each level of specialization is a row below the one it specializes, those with
+    // use cases nearest the boundary, a general actor alone in its row over the middle of its
+    // specialized ones.
     let wanted = |m: usize| {
         let ys: Vec<f32> = cases[&m].iter().map(|(p, _)| p.y).collect();
         (!ys.is_empty()).then(|| ys.iter().sum::<f32>() / ys.len() as f32 - bounds[&m].height / 2.0)
     };
+    let general_of: HashMap<usize, usize> = generals
+        .iter()
+        .rev()
+        .filter(|(s, g)| actors.contains(s) && actors.contains(g))
+        .map(|&(s, g)| (s, g))
+        .collect();
+    let depth = |m: usize| {
+        let (mut depth, mut at) = (0, m);
+        while let Some(&g) = general_of.get(&at)
+            && depth < actors.len()
+        {
+            (depth, at) = (depth + 1, g);
+        }
+        depth
+    };
+    let row_height =
+        |row: &[usize]| row.iter().map(|m| bounds[m].height).fold(0.0, f32::max) + ACTOR_NAME_ROOM;
+    let row_wanted = |row: &[usize]| {
+        let ys: Vec<f32> = row.iter().filter_map(|&m| wanted(m)).collect();
+        (!ys.is_empty()).then(|| ys.iter().sum::<f32>() / ys.len() as f32)
+    };
     let mut placed: Vec<(usize, Rect)> = Vec::new();
     for (side, groups) in [(0, &left), (1, &right)] {
-        let mut stacks: Vec<Vec<(usize, f32)>> = groups
+        let outward = if side == 0 { -1.0 } else { 1.0 };
+        let edge = if side == 0 { system.x - LAYER_GAP } else { system.right() + LAYER_GAP };
+        // Each group as (actor, middle, top).
+        let mut stacks: Vec<Vec<(usize, f32, f32)>> = groups
             .iter()
             .map(|group| {
-                // Where the first one goes so that the others can reach their place.
+                let mut rows: Vec<Vec<usize>> = Vec::new();
+                for &m in group {
+                    let d = depth(m);
+                    if rows.len() <= d {
+                        rows.resize(d + 1, Vec::new());
+                    }
+                    rows[d].push(m);
+                }
+                rows.retain(|row| !row.is_empty());
+                for row in &mut rows {
+                    row.sort_by_key(|m| cases[m].is_empty());
+                }
+                // Where the first row goes so that the others can reach their place.
                 let mut offset = 0.0;
                 let mut first = None::<f32>;
-                for &m in group {
-                    if let Some(y) = wanted(m) {
+                for row in &rows {
+                    if let Some(y) = row_wanted(row) {
                         first = Some(first.map_or(y - offset, |f| f.min(y - offset)));
                     }
-                    offset += bounds[&m].height + ACTOR_NAME_ROOM + SPECIFIC_GAP;
+                    offset += row_height(row) + SPECIFIC_GAP;
                 }
                 let mut y = first.unwrap_or(bounds[&group[0]].y);
                 let mut stack = Vec::new();
-                for (k, &m) in group.iter().enumerate() {
+                let mut alone = HashSet::new();
+                for (k, row) in rows.iter().enumerate() {
                     if k > 0 {
-                        y = y.max(wanted(m).unwrap_or(y));
+                        y = y.max(row_wanted(row).unwrap_or(y));
                     }
-                    stack.push((m, y));
-                    y += bounds[&m].height + ACTOR_NAME_ROOM + SPECIFIC_GAP;
+                    if row.len() == 1 {
+                        alone.insert(row[0]);
+                    }
+                    // From the boundary outwards.
+                    let mut at = edge;
+                    for &m in row {
+                        let (l, r) = reach(m, bounds[&m].width);
+                        let (inner, outer) = if side == 0 { (r, l) } else { (l, r) };
+                        let middle = at + outward * inner;
+                        at = middle + outward * (outer + ACTOR_GAP);
+                        stack.push((m, middle, y));
+                    }
+                    y += row_height(row) + SPECIFIC_GAP;
+                }
+                // Bottom up, so that a general actor follows its specialized ones.
+                let mut middles: HashMap<usize, f32> =
+                    stack.iter().map(|&(m, x, _)| (m, x)).collect();
+                for k in (0..stack.len()).rev() {
+                    let m = stack[k].0;
+                    let below: Vec<f32> = stack
+                        .iter()
+                        .filter(|(s, _, _)| general_of.get(s) == Some(&m))
+                        .map(|(s, _, _)| middles[s])
+                        .collect();
+                    if alone.contains(&m) && !below.is_empty() {
+                        let middle = below.iter().sum::<f32>() / below.len() as f32;
+                        middles.insert(m, middle);
+                        stack[k].1 = middle;
+                    }
                 }
                 stack
             })
             .collect();
-        stacks.sort_by(|a, b| a[0].1.total_cmp(&b[0].1));
+        stacks.sort_by(|a, b| a[0].2.total_cmp(&b[0].2));
         let mut floor = f32::NEG_INFINITY;
-        let reaches: Vec<f32> = groups
-            .iter()
-            .flatten()
-            .map(|&m| {
-                let (l, r) = reach(m, bounds[&m].width);
-                if side == 0 { r } else { l }
-            })
-            .collect();
-        let widest = reaches.iter().copied().fold(0.0, f32::max);
-        let middle = if side == 0 {
-            system.x - LAYER_GAP - widest
-        } else {
-            system.right() + LAYER_GAP + widest
-        };
         for stack in &mut stacks {
-            let shift = (floor - stack[0].1).max(0.0);
-            for (m, y) in stack.iter_mut() {
+            let shift = (floor - stack[0].2).max(0.0);
+            for (m, middle, y) in stack.iter_mut() {
                 *y += shift;
                 let r = bounds[m];
-                floor = *y + r.height + ACTOR_NAME_ROOM + ACTOR_GAP;
-                placed.push((*m, Rect::new(middle - r.width / 2.0, *y, r.width, r.height)));
+                floor = floor.max(*y + r.height + ACTOR_NAME_ROOM + ACTOR_GAP);
+                placed.push((*m, Rect::new(*middle - r.width / 2.0, *y, r.width, r.height)));
             }
         }
     }
@@ -1554,40 +1637,6 @@ fn actors_beside_boundary(
         *r = r.translate(dx, dy);
     }
     true
-}
-
-/// The corners of `node` (drawn at `r`), numbered as the slots of [`scene::self_loop_at`],
-/// those beside the fewest lines to other nodes first: a line to a node above takes the top
-/// side, one to a node to the right the right side, and so on.
-fn free_corners(view: &View, node: Id, r: Rect) -> [usize; 4] {
-    // Lines on the top, right, bottom and left side.
-    let mut sides = [0usize; 4];
-    for p in view.presentations() {
-        let Shape::Edge { source, target, .. } = &p.shape else { continue };
-        let other = match (*source == node, *target == node) {
-            (true, false) => *target,
-            (false, true) => *source,
-            _ => continue,
-        };
-        let Some(o) = view.get(other).and_then(|n| n.bounds()) else { continue };
-        let c = o.center();
-        let side = if c.y < r.y {
-            0
-        } else if c.y > r.bottom() {
-            2
-        } else if c.x > r.center().x {
-            1
-        } else {
-            3
-        };
-        sides[side] += 1;
-    }
-    // Slot corners: top right, bottom right, bottom left, top left.
-    let beside =
-        [sides[0] + sides[1], sides[2] + sides[1], sides[2] + sides[3], sides[0] + sides[3]];
-    let mut corners = [0, 1, 2, 3];
-    corners.sort_by_key(|&c| beside[c]);
-    corners
 }
 
 /// Takes the pins of the actions that moved (`old` bounds by presentation) along to the same

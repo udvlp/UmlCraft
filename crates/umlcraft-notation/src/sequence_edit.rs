@@ -1000,22 +1000,41 @@ pub fn add_operand_space(tx: &mut Tx<'_>, fragment: Id) -> Result<()> {
 }
 
 /// Moves what starts at or below `at` on `diagram` down by `dy`: messages (with their labels),
-/// bars, frames, interaction uses, notes and free texts. Bars and frames that reach across
-/// `at` grow by `dy`, and the operand lines of such a frame below `at` go down with the rest.
+/// bars, frames, interaction uses, notes and free texts, and the heads of the lifelines that
+/// create messages among them make. Bars and frames that reach across `at` grow by `dy`, and
+/// the operand lines of such a frame below `at` go down with the rest.
 pub fn make_room(tx: &mut Tx<'_>, diagram: Id, at: f32, dy: f32) -> Result<()> {
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let below = |y: f32| y >= at - 0.01;
+    // Create messages that move take the heads they made along.
+    let made: HashSet<Id> = view
+        .presentations()
+        .iter()
+        .filter_map(|p| match &p.shape {
+            Shape::Message { target, y, .. } if below(*y) => {
+                let element = p.element.and_then(|e| model.get(e));
+                let create = element.is_some_and(|e| {
+                    matches!(e.kind(), ElementKind::Message(m) if m.sort == MessageSort::Create)
+                });
+                create.then_some(*target)
+            }
+            _ => None,
+        })
+        .collect();
     let mut changed: Vec<(Id, Shape)> = Vec::new();
     for p in view.presentations() {
         let mut shape = p.shape.clone();
         match &mut shape {
+            // The rest of its lifeline goes down along with what is on it.
+            Shape::Lifeline { head, .. } if made.contains(&p.id) => head.y += dy,
             Shape::Message { y, end_y, .. } if below(*y) => {
                 *y += dy;
                 *end_y = end_y.map(|e| e + dy);
             }
             Shape::Activation { top, height, .. } if below(*top) => *top += dy,
-            Shape::Activation { top, height, .. } if *top + *height > at => *height += dy,
+            // A bar that only reaches `at` grows later if a message there needs it to.
+            Shape::Activation { top, height, .. } if *top + *height > at + 1.0 => *height += dy,
             Shape::Fragment { bounds, .. } if below(bounds.y) => bounds.y += dy,
             Shape::Fragment { bounds, separators, .. } if bounds.bottom() > at => {
                 for s in separators.iter_mut().filter(|s| below(bounds.y + **s)) {
@@ -1023,7 +1042,7 @@ pub fn make_room(tx: &mut Tx<'_>, diagram: Id, at: f32, dy: f32) -> Result<()> {
                 }
                 bounds.height += dy;
             }
-            // Lifeline heads and the diagram's frame stay where they are.
+            // Other lifeline heads and the diagram's frame stay where they are.
             Shape::Node { bounds, .. } | Shape::Text { bounds, .. }
                 if below(bounds.y) && p.element != Some(diagram) =>
             {

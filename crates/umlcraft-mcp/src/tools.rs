@@ -223,6 +223,8 @@ pub fn list() -> Vec<Value> {
                    "description": "Objects: values of the attributes of their class, by \
                                    attribute name, e.g. {\"name\": \"\\\"Rex\\\"\", \"alter\": \
                                    \"3\"}; \"\" clears one." },
+        "empty_slots": flag("Objects: list the attributes they give no value as bare names; \
+                             true by default, false shows only the slots with a value."),
     });
     // The settings of sequence diagrams, which `create_diagram` and `update_element` take.
     let sequence = json!({
@@ -1408,6 +1410,7 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let classifier = uml::classifier(model, args)?;
     let slots = uml::slots(args)?;
     let mut trial = tool.element_kind();
+    let empty_slots = uml::empty_slots(&trial, args)?;
     uml::set_flags(&mut trial, None, is_abstract)?;
     if let Some(classifier) = classifier {
         uml::set_classifier(&mut trial, classifier)?;
@@ -1440,6 +1443,9 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
         }
         if let Some(slots) = &slots {
             uml::set_slots(tx, element, slots)?;
+        }
+        if let Some(shown) = empty_slots {
+            tx.update_presentation(diagram, node, |p| p.style.hide_empty_slots = !shown)?;
         }
         if place_pin {
             activity::place_pin(tx, diagram, node, measure)?;
@@ -1800,6 +1806,7 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         uml::set_classifier(&mut settings, classifier)?;
     }
     let slots = uml::slots(args)?;
+    let empty_slots = uml::empty_slots(&kind, args)?;
     // `{static}` and `{abstract}` in a member's text, or given as flags. Set after the text,
     // which changes the member on its own.
     let member = matches!(kind, ElementKind::Attribute(_) | ElementKind::Operation(_));
@@ -1907,6 +1914,11 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
             }
             if let Some(icon) = icon {
                 tx.update_presentation(diagram, presentation, |p| p.style.iconic = icon)?;
+            }
+            if let Some(shown) = empty_slots {
+                tx.update_presentation(diagram, presentation, |p| {
+                    p.style.hide_empty_slots = !shown;
+                })?;
             }
         }
         // A fragment turned into an alt gets its else, as in the app.
@@ -3452,6 +3464,43 @@ mod tests {
     }
 
     #[test]
+    fn objects_leave_out_slots_without_a_value_on_request() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let buch = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "class",
+                                                            "name": "Buch" }),
+        );
+        for text in ["- titel : String", "- ausgeliehen : boolean"] {
+            run(&mut host, "add_member", json!({ "owner": buch["element"], "text": text }));
+        }
+        let o = run(&mut host, "create_diagram", json!({ "kind": "object", "name": "Objekte" }));
+        let o = id(&o["diagram"]);
+        let args = json!({ "diagram": o, "tool": "object", "name": "a", "classifier": "Buch",
+                           "slots": { "titel": "\"Momo\"" }, "empty_slots": false });
+        let a = run(&mut host, "create_element", args);
+        let slots = |host: &mut Headless| -> Vec<String> {
+            let (doc, measure) = host.parts();
+            let scene = scene::build(doc.model(), o.parse().unwrap(), &Default::default(), measure);
+            scene
+                .nodes
+                .iter()
+                .flat_map(|n| n.rows.iter())
+                .filter(|r| r.role == scene::RowRole::Slot)
+                .map(|r| r.text.clone())
+                .collect()
+        };
+        assert_eq!(slots(&mut host), ["titel = \"Momo\""]);
+        run(&mut host, "update_element", json!({ "id": a["element"], "empty_slots": true }));
+        assert_eq!(slots(&mut host), ["titel = \"Momo\"", "ausgeliehen"]);
+        // Only objects have slots.
+        let wrong = json!({ "id": buch["element"], "empty_slots": false });
+        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+    }
+
+    #[test]
     fn ends_abstract_static_classifier_and_slots_are_set() {
         let mut host = Headless::new();
         let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
@@ -3579,6 +3628,7 @@ mod tests {
         associate(&mut host, &playlist, &knoten, "- ende");
         run(&mut host, "arrange_diagram", json!({ "diagram": d }));
         let (lines, _) = drawn_labels(&mut host, &d);
+        keep_to_own_lines(&lines, "");
         let mut roles = Vec::new();
         for (points, labels) in &lines {
             let target = points[points.len() - 1];
@@ -3587,7 +3637,7 @@ mod tests {
                 // Nearer the end it belongs to than the other one, and close to it.
                 let (to_target, to_source) =
                     (target.distance(r.center()), source.distance(r.center()));
-                assert!(to_target < 60.0, "{text} {r:?} {points:?}");
+                assert!(to_target < 80.0, "{text} {r:?} {points:?}");
                 if source != target {
                     assert!(to_target < to_source, "{text} {r:?} {points:?}");
                 }
@@ -3661,15 +3711,16 @@ mod tests {
     fn a_role_beside_a_generalization_keeps_to_its_target() {
         let mut host = Headless::new();
         let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
-        let class = |host: &mut Headless, name: &str| {
-            let args = json!({ "diagram": d, "tool": "class", "name": name });
+        let class = |host: &mut Headless, name: &str, is_abstract: bool| {
+            let args =
+                json!({ "diagram": d, "tool": "class", "name": name, "abstract": is_abstract });
             run(host, "create_element", args)
         };
-        let baustein = class(&mut host, "Baustein");
-        let schalter = class(&mut host, "Schalter");
-        let gatter = class(&mut host, "Gatter");
-        let und = class(&mut host, "Und");
-        let oder = class(&mut host, "Oder");
+        let baustein = class(&mut host, "Baustein", true);
+        let schalter = class(&mut host, "Schalter", false);
+        let gatter = class(&mut host, "Gatter", true);
+        let und = class(&mut host, "Und", false);
+        let oder = class(&mut host, "Oder", false);
         let inherit = |host: &mut Headless, from: &Value, to: &Value| {
             let args = json!({ "diagram": d, "tool": "generalization",
                                "source": from["element"], "target": to["element"] });
@@ -3686,16 +3737,124 @@ mod tests {
         run(&mut host, "connect", args);
         run(&mut host, "arrange_diagram", json!({ "diagram": d, "direction": "down" }));
         let (lines, _) = drawn_labels(&mut host, &d);
-        // The association's labels, wherever its line runs, near its end at Baustein.
+        keep_to_own_lines(&lines, "");
+        // Clear of the generalization trees: no stretch within a port's spacing of their lines
+        // (all lines here run straight across or down, so their gap is that of their bounds).
+        let (association, _) = lines.iter().find(|(_, l)| !l.is_empty()).expect("the association");
+        for (tree, _) in lines.iter().filter(|(_, l)| l.is_empty()) {
+            for (w, v) in association.windows(2).flat_map(|w| tree.windows(2).map(move |v| (w, v)))
+            {
+                let (a, b) = (Rect::from_corners(w[0], w[1]), Rect::from_corners(v[0], v[1]));
+                let dx = (a.x - b.right()).max(b.x - a.right()).max(0.0);
+                let dy = (a.y - b.bottom()).max(b.y - a.bottom()).max(0.0);
+                assert!(dx.hypot(dy) >= 20.0, "{w:?} {v:?}");
+            }
+        }
+        // The role at the association's end at Baustein, not beside Schalter.
         let (points, labels) = lines
             .iter()
             .find(|(_, labels)| labels.iter().any(|(t, _)| t == "# eingaenge"))
             .expect("the association's labels");
-        let (source, target) = (points[0], points[points.len() - 1]);
+        let target = points[points.len() - 1];
         for (text, r) in labels {
-            let c = r.center();
-            assert!(c.distance(target) < c.distance(source), "{text} {r:?} {points:?}");
-            assert!(c.distance(target) < 60.0, "{text} {r:?} {points:?}");
+            assert!(r.center().distance(target) < 80.0, "{text} {r:?} {points:?}");
+        }
+        let (_, role) = labels.iter().find(|(t, _)| t == "# eingaenge").unwrap();
+        let nearest =
+            Point::new(target.x.clamp(role.x, role.right()), target.y.clamp(role.y, role.bottom()));
+        assert!(nearest.distance(target) < 40.0, "{role:?} {points:?}");
+        // Its arrow clear of the triangle where the generalizations leave Baustein.
+        let (stem, _) = lines.iter().find(|(_, l)| l.is_empty()).expect("a generalization");
+        let triangle = stem[stem.len() - 1];
+        assert!(triangle.distance(target) > 30.0, "{triangle:?} {points:?}");
+        let (_, many) = labels.iter().find(|(t, _)| t == "*").unwrap();
+        assert!(!many.intersects(role), "{many:?} {role:?}");
+    }
+
+    /// Asserts that each label of `lines` (as from [`drawn_labels`]) reads as its own line's:
+    /// right beside it, or with its middle nearer it than any other line.
+    fn keep_to_own_lines(lines: &[DrawnLine], case: &str) {
+        let distance = |points: &[Point], p: Point| {
+            points
+                .windows(2)
+                .map(|w| umlcraft_notation::scene::distance_to_segment(p, w[0], w[1]))
+                .fold(f32::INFINITY, f32::min)
+        };
+        for (k, (points, labels)) in lines.iter().enumerate() {
+            for (text, r) in labels {
+                // Within a few units of its own line along a side.
+                let beside = points
+                    .windows(2)
+                    .any(|w| r.inflate(6.0).intersects(&Rect::from_corners(w[0], w[1])));
+                if beside {
+                    continue;
+                }
+                let own = distance(points, r.center());
+                for (j, (other, _)) in lines.iter().enumerate().filter(|&(j, _)| j != k) {
+                    let d = distance(other, r.center());
+                    assert!(own < d, "{case}: {text} {r:?} {own} to {points:?}, {d} to line {j}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn two_loops_keep_clear_of_incoming_lines() {
+        for arrange in [true, false] {
+            let mut host = Headless::new();
+            let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+            let class = |host: &mut Headless, name: &str, y: f32| {
+                let args = json!({ "diagram": d, "tool": "class", "name": name, "x": 100.0,
+                                   "y": y });
+                run(host, "create_element", args)
+            };
+            let (playlist, knoten) =
+                (class(&mut host, "Playlist", 40.0), class(&mut host, "Knoten", 220.0));
+            let associate = |host: &mut Headless, from: &Value, to: &Value, role: &str| {
+                let args = json!({ "diagram": d, "tool": "association", "source": from["element"],
+                                   "target": to["element"],
+                                   "target_end": { "role": role, "multiplicity": "0..1",
+                                                   "navigability": "navigable" } });
+                run(host, "connect", args)
+            };
+            associate(&mut host, &playlist, &knoten, "- kopf");
+            associate(&mut host, &playlist, &knoten, "- ende");
+            associate(&mut host, &knoten, &knoten, "- nachfolger");
+            associate(&mut host, &knoten, &knoten, "- vorgaenger");
+            if arrange {
+                run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+            }
+            let (lines, nodes) = drawn_labels(&mut host, &d);
+            let all: Vec<(&String, Rect)> =
+                lines.iter().flat_map(|(_, l)| l.iter().map(|(t, r)| (t, *r))).collect();
+            for (k, (text, r)) in all.iter().enumerate() {
+                // No label on another one, on a class or on a line.
+                for (other, o) in &all[k + 1..] {
+                    assert!(!r.intersects(o), "{arrange}: {text} {r:?} {other} {o:?}");
+                }
+                assert!(nodes.iter().all(|n| !n.intersects(r)), "{arrange}: {text} {r:?}");
+                for (points, _) in &lines {
+                    let crossed =
+                        points.windows(2).any(|w| r.intersects(&Rect::from_corners(w[0], w[1])));
+                    assert!(!crossed, "{arrange}: {text} {r:?} {points:?}");
+                }
+            }
+            // Each label beside its own line, near its target end.
+            keep_to_own_lines(&lines, if arrange { "arranged" } else { "as drawn" });
+            for (points, labels) in &lines {
+                let target = points[points.len() - 1];
+                for (text, r) in labels {
+                    let d = r.center().distance(target);
+                    assert!(d < 80.0, "{arrange}: {text} {r:?} {points:?}");
+                }
+            }
+            // The lines' ends apart from each other.
+            let ends: Vec<Point> = lines.iter().flat_map(|(p, _)| [p[0], p[p.len() - 1]]).collect();
+            for (k, a) in ends.iter().enumerate() {
+                for b in &ends[k + 1..] {
+                    assert!(a.distance(*b) > 5.0, "{arrange}: {a:?} {b:?}");
+                }
+            }
         }
     }
 
@@ -3768,6 +3927,53 @@ mod tests {
         assert!(associate(&mut host, &a, &b, true));
         assert!(associate(&mut host, &u, &v, true));
         host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn actors_specializing_one_actor_stand_side_by_side_below_it() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "use_case", "name": "U" }));
+        let d = d["diagram"].clone();
+        let node = |host: &mut Headless, tool: &str, name: &str, x: f32, y: f32| {
+            let args = json!({ "diagram": d, "tool": tool, "name": name, "x": x, "y": y });
+            run(host, "create_element", args)
+        };
+        node(&mut host, "systemBoundary", "Selbstlernzentrum", 200.0, 40.0);
+        let lend = node(&mut host, "useCase", "Gerät ausleihen", 230.0, 90.0);
+        let check = node(&mut host, "useCase", "Ausweis prüfen", 230.0, 170.0);
+        let reserve = node(&mut host, "useCase", "Gerät reservieren", 230.0, 250.0);
+        let manage = node(&mut host, "useCase", "Geräte verwalten", 230.0, 330.0);
+        let user = node(&mut host, "actor", "Nutzer", 40.0, 60.0);
+        let pupil = node(&mut host, "actor", "Schüler", 10.0, 200.0);
+        let teacher = node(&mut host, "actor", "Lehrkraft", 90.0, 200.0);
+        let guard = node(&mut host, "actor", "Aufsicht", 600.0, 340.0);
+        let connect = |host: &mut Headless, tool: &str, from: &Value, to: &Value| {
+            let args = json!({ "diagram": d, "tool": tool, "source": from["element"],
+                               "target": to["element"] });
+            run(host, "connect", args)
+        };
+        connect(&mut host, "generalization", &pupil, &user);
+        connect(&mut host, "generalization", &teacher, &user);
+        connect(&mut host, "association", &user, &lend);
+        connect(&mut host, "association", &teacher, &reserve);
+        connect(&mut host, "association", &guard, &manage);
+        connect(&mut host, "include", &lend, &check);
+        connect(&mut host, "extend", &reserve, &lend);
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+
+        let model = host.document().model();
+        let view = model.view(id(&d).parse().unwrap()).unwrap();
+        let rect = |v: &Value| view.get(id(&v["presentation"]).parse().unwrap()).unwrap().bounds();
+        let (user, pupil, teacher) =
+            (rect(&user).unwrap(), rect(&pupil).unwrap(), rect(&teacher).unwrap());
+        // Side by side, below Nutzer, each with a line of its own up to it.
+        assert!((pupil.y - teacher.y).abs() < 0.5, "{pupil:?} {teacher:?}");
+        assert!(!pupil.intersects(&teacher));
+        assert!(pupil.y > user.bottom() && teacher.y > user.bottom());
+        let (lo, hi) =
+            (pupil.center().x.min(teacher.center().x), pupil.center().x.max(teacher.center().x));
+        assert!(lo < user.center().x && user.center().x < hi, "{user:?} {pupil:?} {teacher:?}");
+        model.check().unwrap();
     }
 
     #[test]
@@ -3970,6 +4176,58 @@ mod tests {
             assert!(y("rechne") < outer.1 && y("summe") > outer.3, "{diagram}");
             host.document().model().check().unwrap();
         }
+    }
+
+    #[test]
+    fn a_created_head_follows_its_message_into_fragments() {
+        let mut host = Headless::new();
+        let args = json!({ "kind": "sequence", "name": "Ausleihen", "message_numbers": false,
+                           "frame": false });
+        let d = run(&mut host, "create_diagram", args)["diagram"].clone();
+        let lifeline = |host: &mut Headless, name: &str| {
+            let args = json!({ "diagram": d, "tool": "lifeline", "name": name });
+            run(host, "create_element", args)
+        };
+        let (main, t, g) = (
+            lifeline(&mut host, "main"),
+            lifeline(&mut host, "t : Theke"),
+            lifeline(&mut host, "g : Geraet"),
+        );
+        let send =
+            |host: &mut Headless, tool: &str, from: &Value, to: &Value, name: &str, y: f32| {
+                let m = json!({ "diagram": d, "tool": tool, "source": from["element"],
+                            "target": to["element"], "name": name, "y": y });
+                run(host, "connect", m)
+            };
+        send(&mut host, "message", &main, &t, "ausleihen(g, \"Eva\")", 120.0);
+        let free = send(&mut host, "message", &t, &g, "istFrei()", 150.0);
+        let yes = send(&mut host, "reply", &g, &t, "frei", 175.0);
+        let lend = send(&mut host, "message", &t, &g, "verleihen()", 220.0);
+        let back = send(&mut host, "reply", &t, &main, "true", 300.0);
+        let a = lifeline(&mut host, "a : Ausleihe");
+        let create = send(&mut host, "createMessage", &t, &a, "Ausleihe(g, \"Eva\")", 260.0);
+        let wrap = |host: &mut Headless, items: Value, operator: &str| {
+            let args = json!({ "diagram": d, "items": items, "operator": operator });
+            run(host, "wrap_in_fragment", args)
+        };
+        let opt = wrap(&mut host, json!([lend["element"], create["element"]]), "opt");
+        let lp = wrap(&mut host, json!([free["element"], yes["element"], opt["id"]]), "loop");
+
+        let model = host.document().model();
+        let view = model.view(id(&d).parse().unwrap()).unwrap();
+        let p = |v: &Value| view.get(id(&v["presentation"]).parse().unwrap()).unwrap();
+        let Shape::Lifeline { head, .. } = p(&a).shape else { panic!("no lifeline") };
+        let Shape::Message { y, .. } = p(&create).shape else { panic!("no message") };
+        // The message still ends at the middle of the head.
+        assert!((head.center().y - y).abs() < 1.0, "{head:?} {y}");
+        // The reply after the loop stays below both frames.
+        let Shape::Message { y: after, .. } = p(&back).shape else { panic!("no message") };
+        for f in [&opt, &lp] {
+            let frame = view.presentations_of(id(&f["id"]).parse().unwrap()).next().unwrap();
+            let bottom = frame.bounds().unwrap().bottom();
+            assert!(bottom < after, "{bottom} {after}");
+        }
+        model.check().unwrap();
     }
 
     #[test]

@@ -900,26 +900,75 @@ fn loop_corner(r: Rect, slot: usize) -> (Point, f32, f32) {
 }
 
 /// Waypoints of the loop in `slot` of a node: the corners in turn, so that the loops of a
-/// node with several do not lie on each other (see [`free_loop_slot`]).
+/// node with several do not lie on each other (see [`loop_slot_on`]). At the right corners
+/// a loop leaves the right side and comes back through the top or bottom; at the left ones it
+/// leaves the top or bottom and comes back through the left side, so that loops at two corners
+/// of a side end on different sides, with room for the texts at their ends.
 pub fn self_loop_at(r: Rect, slot: usize) -> Vec<Point> {
     let (c, sx, sy) = loop_corner(r, slot);
     let (out, inn) = loop_reach(slot);
-    vec![
+    let mut points = vec![
         Point::new(c.x + sx * out, c.y - sy * inn),
         Point::new(c.x + sx * out, c.y + sy * out),
         Point::new(c.x - sx * inn, c.y + sy * out),
-    ]
+    ];
+    if sx < 0.0 {
+        points.reverse();
+    }
+    points
 }
 
-/// The slot for one more loop of `r` beside `loops` (their waypoints): the first corner with
-/// the fewest loops, around those already there.
-pub fn free_loop_slot<'a>(r: Rect, loops: impl IntoIterator<Item = &'a [Point]>) -> usize {
+/// The corners of `node` (drawn at `r`), numbered as the slots of [`self_loop_at`], those
+/// beside the fewest lines to other nodes first: a line to a node above takes the top side,
+/// one to a node to the right the right side, and so on.
+pub fn free_corners(view: &View, node: Id, r: Rect) -> [usize; 4] {
+    // Lines on the top, right, bottom and left side.
+    let mut sides = [0usize; 4];
+    for p in view.presentations() {
+        let Shape::Edge { source, target, .. } = &p.shape else { continue };
+        let other = match (*source == node, *target == node) {
+            (true, false) => *target,
+            (false, true) => *source,
+            _ => continue,
+        };
+        let Some(o) = view.get(other).and_then(|n| n.bounds()) else { continue };
+        let c = o.center();
+        let side = if c.y < r.y {
+            0
+        } else if c.y > r.bottom() {
+            2
+        } else if c.x > r.center().x {
+            1
+        } else {
+            3
+        };
+        sides[side] += 1;
+    }
+    // Slot corners: top right, bottom right, bottom left, top left.
+    let beside =
+        [sides[0] + sides[1], sides[2] + sides[1], sides[2] + sides[3], sides[0] + sides[3]];
+    let mut corners = [0, 1, 2, 3];
+    corners.sort_by_key(|&c| beside[c]);
+    corners
+}
+
+/// The slot for one more loop of `node` (drawn at `r`) on `view`: among the corners with the
+/// fewest loops, the one beside the fewest lines to other nodes (see [`free_corners`]).
+pub fn loop_slot_on(view: &View, node: Id, r: Rect) -> usize {
     let mut taken = [0usize; 4];
-    for waypoints in loops {
-        taken[loop_corner_of(r, waypoints)] += 1;
+    for p in view.presentations() {
+        if let Shape::Edge { source, target, waypoints, .. } = &p.shape
+            && *source == node
+            && *target == node
+        {
+            taken[loop_corner_of(r, waypoints)] += 1;
+        }
     }
     let fewest = *taken.iter().min().expect("four corners");
-    let corner = taken.iter().position(|&t| t == fewest).expect("a corner with the fewest");
+    let corner = free_corners(view, node, r)
+        .into_iter()
+        .find(|&c| taken[c] == fewest)
+        .expect("a corner with the fewest");
     fewest * 4 + corner
 }
 
@@ -967,10 +1016,12 @@ pub fn self_loop_anchors_at(r: Rect, slot: usize) -> (Point, Point) {
     let (c, sx, sy) = loop_corner(r, slot);
     let (_, inn) = loop_reach(slot);
     let side = |s: f32| if s > 0.0 { 1.0 } else { 0.0 };
-    (
+    let (beside, across) = (
         Point::new(side(sx), fraction(c.y - sy * inn - r.y, r.height)),
         Point::new(fraction(c.x - sx * inn - r.x, r.width), side(sy)),
-    )
+    );
+    // As the waypoints of `self_loop_at` run.
+    if sx < 0.0 { (across, beside) } else { (beside, across) }
 }
 
 /// Size of the diagram font. Astah draws all class diagram texts in 12 px "Dialog" (Arial).

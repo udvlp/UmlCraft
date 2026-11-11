@@ -1387,15 +1387,7 @@ fn connect_as(
                 .ok_or_else(|| ModelError::Invalid(format!("no owner for {}", kind.type_name())))?;
             let waypoints = match view.get(source).and_then(|p| p.bounds()) {
                 Some(bounds) if self_loop => {
-                    let loops = view.presentations().iter().filter_map(|p| match &p.shape {
-                        Shape::Edge { source: s, target: t, waypoints, .. }
-                            if *s == source && *t == source =>
-                        {
-                            Some(waypoints.as_slice())
-                        }
-                        _ => None,
-                    });
-                    let slot = crate::scene::free_loop_slot(bounds, loops);
+                    let slot = crate::scene::loop_slot_on(view, source, bounds);
                     crate::scene::self_loop_at(bounds, slot)
                 }
                 _ => Vec::new(),

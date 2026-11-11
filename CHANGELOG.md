@@ -3,6 +3,26 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Loops beside other lines**: a new loop goes to a corner whose sides other lines leave
+  free, also when it is drawn rather than arranged. At the left corners a loop comes back
+  through the left side, so two loops at the bottom (or top) of a box end on different sides.
+  Their roles and multiplicities stand beside their own ends, a short one inside its loop.
+- **Lines beside a generalization tree**: arranging keeps other lines off the lines of a
+  generalization tree, neither crossing them nor running close beside them, and their ends
+  clear of the triangle. An association beside such a tree keeps its role and multiplicity on
+  its outer side, at its end, instead of next to another class.
+- **Specialized actors side by side**: arranging a use case diagram puts the actors that
+  specialize the same actor next to each other below it, each with its own line up to it.
+- **Created lifelines follow their message**: when a fragment put around messages moves them
+  down, the head of a lifeline a create message makes moves along, and the frames no longer
+  reach over the reply that follows.
+- **Message texts clear of bars**: a message text that would lie on the activation bar of a
+  lifeline its line crosses moves to where the line is free.
+- **AI clients** show only the slots of an object that have a value with
+  `empty_slots: false`.
+
 ## 0.21.0 – 2026-11-11
 
 - **The AppImage starts on more systems**: it brings the xkbcommon libraries along, which a

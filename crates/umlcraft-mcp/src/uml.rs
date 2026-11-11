@@ -67,6 +67,16 @@ pub fn flag(args: &Value, key: &str) -> Result<Option<bool>, String> {
     }
 }
 
+/// Whether an object shows the attributes it gives no value (`empty_slots` in `args`), checked
+/// against the element's `kind`.
+pub fn empty_slots(kind: &ElementKind, args: &Value) -> Result<Option<bool>, String> {
+    let shown = flag(args, "empty_slots")?;
+    if shown.is_some() && !matches!(kind, ElementKind::Instance(_)) {
+        return Err(format!("a {} has no `empty_slots`", kind.type_name()));
+    }
+    Ok(shown)
+}
+
 /// Sets the ends of an association or link from `source_end` and `target_end` in `args`:
 /// `role` (as the line shows it, `- items {ordered}`), `multiplicity`, `navigability` and
 /// `aggregation` (a diamond at that end, the whole).

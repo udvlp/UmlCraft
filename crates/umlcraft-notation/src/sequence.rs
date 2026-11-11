@@ -1011,6 +1011,27 @@ struct Label<'a> {
     returned: Option<&'a String>,
 }
 
+/// Where a message label `width` wide goes centered on its line from `span.0` to `span.1`:
+/// at `center`, or, where it would lie on a bar of a lifeline the line crosses (`bars`, from
+/// left to right side), in the middle of the widest stretch of the line those bars leave free.
+fn clear_of_bars(center: f32, width: f32, span: (f32, f32), mut bars: Vec<(f32, f32)>) -> f32 {
+    let half = width / 2.0;
+    if bars.iter().all(|&(l, r)| r <= center - half || l >= center + half) {
+        return center;
+    }
+    bars.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut free = Vec::new();
+    let mut from = span.0;
+    for (l, r) in bars {
+        free.push((from, l));
+        from = from.max(r);
+    }
+    free.push((from, span.1));
+    free.into_iter()
+        .max_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0)))
+        .map_or(center, |(l, r)| (l + r) / 2.0)
+}
+
 fn message_edge(
     model: &Model,
     m: &Msg,
@@ -1103,7 +1124,23 @@ fn message_edge(
         }
         None => {
             let (a, b) = (points[n - 2], points[n - 1]);
-            (b.y - LABEL_ABOVE, Some((a.x + b.x) / 2.0))
+            let top = b.y - LABEL_ABOVE;
+            let above = if stereotype.is_some() { STEREOTYPE_ABOVE } else { 0.0 };
+            let width = [Some(&text), stereotype.as_ref()]
+                .into_iter()
+                .flatten()
+                .map(|t| measure.width(t, FONT_SIZE, false))
+                .fold(0.0, f32::max);
+            let span = (a.x.min(b.x), a.x.max(b.x));
+            let bars: Vec<(f32, f32)> = lanes
+                .iter()
+                .filter(|(id, _)| **id != m.source && **id != m.target)
+                .filter(|(_, l)| span.0 < l.center() && l.center() < span.1)
+                .flat_map(|(_, l)| &l.bars)
+                .filter(|b| b.top < top + line_height(FONT_SIZE) && b.bottom > top - above)
+                .map(|b| (b.left, b.left + b.width))
+                .collect();
+            (top, Some(clear_of_bars((a.x + b.x) / 2.0, width, span, bars)))
         }
     };
     let left_at = m.label.map(|offset| from.center() + offset.x);
@@ -1251,6 +1288,15 @@ fn slots(model: &Model, diagram: Id, view: &View) -> Vec<Slot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labels_move_off_the_bars_their_line_crosses() {
+        // Clear of the bar, the label stays in the middle.
+        assert_eq!(clear_of_bars(300.0, 100.0, (100.0, 500.0), vec![(390.0, 400.0)]), 300.0);
+        // On it, the label goes into the wider stretch the bar leaves free.
+        assert_eq!(clear_of_bars(300.0, 100.0, (100.0, 500.0), vec![(280.0, 290.0)]), 395.0);
+        assert_eq!(clear_of_bars(300.0, 100.0, (100.0, 500.0), vec![(310.0, 320.0)]), 205.0);
+    }
 
     fn lane(x: f32, bars: &[(u128, f32, f32)]) -> LaneState {
         let bars = bars

@@ -172,7 +172,15 @@ impl Block {
                 let role = matches!(free.kind, LabelKind::Role { .. });
                 // A mirrored loop keeps its labels beside it, on the other sides.
                 let flip = crate::scene::mirrored_loop(&edge.points, edge.ends);
-                spots.extend(end_spots(&edge.points, source, role, flip, size));
+                // On a loop, the inside first after Astah's spot.
+                let [a, b] = edge.ends;
+                let inside = (a == b && edge.points.len() > 2).then(|| {
+                    let n = edge.points.len() as f32;
+                    let x = edge.points.iter().map(|p| p.x).sum::<f32>() / n;
+                    let y = edge.points.iter().map(|p| p.y).sum::<f32>() / n;
+                    Point::new(x, y)
+                });
+                spots.extend(end_spots(&edge.points, source, role, flip, inside, size));
             }
         }
         Self {
@@ -220,12 +228,20 @@ impl Block {
             let (p, q) = (e.points[0], e.points[k - 1]);
             Point::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0)
         };
-        let own = side(middle(edge));
+        // Which side of the end segment another line lies on: where it meets the node this end
+        // is at, as drawn (a shared generalization runs over its common line), or its middle
+        // where both meet the node at one point.
+        let node = if source { a } else { b };
+        let at_node = |e: &EdgeShape| {
+            let k = e.points.len();
+            let p = if e.ends[0] == node { e.points[0] } else { e.points[k - 1] };
+            if side(p).abs() > 0.5 { side(p) } else { side(middle(e)) }
+        };
         let others: Vec<f32> = edges
             .iter()
             .filter(|e| !std::ptr::eq(*e, edge) && e.points.len() >= 2)
             .filter(|e| ends(e).is_some_and(|[c, d]| (c == a && d == b) || (c == b && d == a)))
-            .map(|e| side(middle(e)) - own)
+            .map(at_node)
             .filter(|d| d.abs() > 0.5)
             .collect();
         // Only a line with others on one side has an outer side.
@@ -238,7 +254,7 @@ impl Block {
             .map(|i| {
                 let r = self.rect(i);
                 let center = Point::new(r.x + w / 2.0, r.y + h / 2.0);
-                if (side(center) - own).signum() == first.signum() { BETWEEN_COST } else { 0.0 }
+                if side(center).signum() == first.signum() { BETWEEN_COST } else { 0.0 }
             })
             .collect();
     }
@@ -258,12 +274,15 @@ impl Block {
 /// side Astah puts it first, then on the other: as far along the line as Astah or further, and
 /// as far across as Astah or far enough not to cross the line. Past the end segment the spots
 /// follow the line around its bend, beside the segment they reach, and also lie on the end
-/// segment's extension, which is clear where the line turns back (a loop).
+/// segment's extension, which is clear where the line turns back (a loop). With `inside`, the
+/// side of the end segment facing that point comes first: the inside of a loop, where a short
+/// text reads as its own.
 fn end_spots(
     points: &[Point],
     source: bool,
     role: bool,
     flip: bool,
+    inside: Option<Point>,
     (w, h): (f32, f32),
 ) -> Vec<Point> {
     let n = points.len();
@@ -278,6 +297,15 @@ fn end_spots(
     let u = ((next.x - tip.x) / len, (next.y - tip.y) / len);
     let (base, first_side) = if role { (27.0, 1.0) } else { (18.0, -1.0) };
     let first_side = if flip { -first_side } else { first_side };
+    // Left of the end segment as the line runs, from source to target (as `left` below).
+    let first_side = match inside {
+        Some(p) => {
+            let run = if source { u } else { (-u.0, -u.1) };
+            let toward = run.1 * (p.x - tip.x) - run.0 * (p.y - tip.y);
+            if toward.abs() > 0.5 { toward.signum() } else { first_side }
+        }
+        None => first_side,
+    };
     let (half_w, half_h) = (w / 2.0, h / 2.0);
     // Far enough from the end not to reach back over its node.
     let clear = half_w * u.0.abs() + half_h * u.1.abs() + GAP;
@@ -496,7 +524,7 @@ mod tests {
         assert_eq!((p, d, first), (Point::new(7.0, 20.0), (1.0, 0.0), false));
         let (w, h) = (40.0, 15.0);
         let (mut above, mut below) = (0, 0);
-        for spot in end_spots(&points, true, true, false, (w, h)) {
+        for spot in end_spots(&points, true, true, false, None, (w, h)) {
             let r = Rect::new(spot.x, spot.y, w, h);
             let crossed: f32 = points.windows(2).map(|s| inside_length(r, s[0], s[1])).sum();
             if spot.x > 0.0 && r.bottom() <= 20.0 {

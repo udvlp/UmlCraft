@@ -18,7 +18,8 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use umlcraft_model::{
-    DiagramKind, ElementKind, Id, LineShape, ModelError, Point, Rect, Result, Shape, Tx,
+    DiagramKind, ElementKind, Id, LineShape, Model, ModelError, Point, Rect, Result, Shape,
+    SharedStyle, Tx, View,
 };
 
 /// Distance a route keeps from the nodes it passes.
@@ -53,6 +54,9 @@ const TEXT_MARGIN: f32 = 4.0;
 /// Extra cost per unit of length of a stretch through such a text: routes may cross texts,
 /// but go around them where that is not much longer.
 const THROUGH_TEXT: f32 = 6.0;
+/// The same for a stretch along or across a line that stays, such as a shared generalization
+/// line: a route keeps off it where a way around is not far longer.
+const ALONG_LINE: f32 = 20.0;
 
 /// A line to route from box `source` to box `target` (indices into the boxes). With `facing`,
 /// boxes clear of each other above and below (or side by side) are joined through the sides
@@ -219,16 +223,19 @@ struct Grid {
     east: Vec<Vec<u32>>,
     /// The boxes each stretch from vertex `(i, j)` to `(i, j + 1)` runs through.
     south: Vec<Vec<u32>>,
-    /// Whether the stretch from vertex `(i, j)` to `(i + 1, j)` runs through a text.
-    text_east: Vec<bool>,
-    /// Whether the stretch from vertex `(i, j)` to `(i, j + 1)` runs through a text.
-    text_south: Vec<bool>,
-    /// Whether a vertex lies in a text (with its margin).
-    text_cells: Vec<bool>,
+    /// What the stretch from vertex `(i, j)` to `(i + 1, j)` costs extra per unit of length:
+    /// for running through a text or along a line that stays.
+    text_east: Vec<f32>,
+    /// The same for the stretch from vertex `(i, j)` to `(i, j + 1)`.
+    text_south: Vec<f32>,
+    /// What a vertex costs extra per unit of length for lying in a text (with its margin) or
+    /// beside a line that stays.
+    text_cells: Vec<f32>,
 }
 
 impl Grid {
-    fn new(boxes: &[Rect], texts: &[Rect], taken: &[Point], requests: &[Request]) -> Grid {
+    /// `texts`: what to keep off, each with its extra cost per unit of length through it.
+    fn new(boxes: &[Rect], texts: &[(Rect, f32)], taken: &[Point], requests: &[Request]) -> Grid {
         let mut xs = Vec::new();
         let mut ys = Vec::new();
         for r in boxes {
@@ -250,7 +257,7 @@ impl Grid {
                 ys.push(((y0 + y1) / 2.0, false));
             }
         }
-        for r in texts {
+        for (r, _) in texts {
             let p = r.inflate(TEXT_MARGIN);
             xs.extend([(p.x, false), (p.right(), false)]);
             ys.extend([(p.y, false), (p.bottom(), false)]);
@@ -267,9 +274,9 @@ impl Grid {
             cells: vec![Vec::new(); nx * ny],
             east: vec![Vec::new(); nx * ny],
             south: vec![Vec::new(); nx * ny],
-            text_east: vec![false; nx * ny],
-            text_south: vec![false; nx * ny],
-            text_cells: vec![false; nx * ny],
+            text_east: vec![0.0; nx * ny],
+            text_south: vec![0.0; nx * ny],
+            text_cells: vec![0.0; nx * ny],
             xs,
             ys,
             hug_x,
@@ -297,7 +304,7 @@ impl Grid {
                 }
             }
         }
-        for r in texts {
+        for &(r, cost) in texts {
             let p = r.inflate(TEXT_MARGIN);
             let (x0, x1) = (line_index(&grid.xs, p.x), line_index(&grid.xs, p.right()));
             let (y0, y1) = (line_index(&grid.ys, p.y), line_index(&grid.ys, p.bottom()));
@@ -305,13 +312,13 @@ impl Grid {
                 for i in x0..=x1 {
                     let k = j * nx + i;
                     if i < x1 && y0 < j && j < y1 {
-                        grid.text_east[k] = true;
+                        grid.text_east[k] = grid.text_east[k].max(cost);
                     }
                     if j < y1 && x0 < i && i < x1 {
-                        grid.text_south[k] = true;
+                        grid.text_south[k] = grid.text_south[k].max(cost);
                     }
                     if x0 < i && i < x1 && y0 < j && j < y1 {
-                        grid.text_cells[k] = true;
+                        grid.text_cells[k] = grid.text_cells[k].max(cost);
                     }
                 }
             }
@@ -332,8 +339,8 @@ impl Grid {
     }
 
     /// The vertex one step from `v` in direction `d`, the boxes that step runs through and
-    /// whether it runs through a text.
-    fn step(&self, v: usize, d: Dir) -> Option<(usize, &[u32], bool)> {
+    /// what it costs extra per unit of length (through a text or along a line).
+    fn step(&self, v: usize, d: Dir) -> Option<(usize, &[u32], f32)> {
         let (nx, ny) = (self.nx(), self.ys.len());
         let (i, j) = (v % nx, v / nx);
         match d {
@@ -373,16 +380,19 @@ impl PartialOrd for Entry {
 /// corners to the border of its target; consecutive points differ in x or in y only. `None`
 /// where there is no route: a box contains the other end, or the ends are shut in.
 pub fn route(boxes: &[Rect], requests: &[Request]) -> Vec<Option<Vec<Point>>> {
-    route_around(boxes, &[], &[], &[], requests)
+    route_around(boxes, &[], &[], &[], &[], requests)
 }
 
 /// Routes `requests` around `boxes` as [`route`] does, keeping off `texts` (drawn outside
 /// nodes) and the `loops` (lines from a box to itself, by box and waypoints) where a way
-/// around them is not much longer. The ends of the loops count as ports already taken, as do
-/// `taken`: where lines that stay as they are meet a box, by box and point on its border.
+/// around them is not much longer, and off the stretches of `lines` (that stay as they are)
+/// where a way around them is not far longer. The ends of the loops count as ports already
+/// taken, as do `taken`: where lines that stay as they are meet a box, by box and point on its
+/// border.
 pub fn route_around(
     boxes: &[Rect],
     texts: &[Rect],
+    lines: &[Rect],
     loops: &[(usize, Vec<Point>)],
     taken: &[(usize, Point)],
     requests: &[Request],
@@ -394,7 +404,8 @@ pub fn route_around(
         ports.entry((b, side)).or_default().push(side.along(port));
         beside.push(port);
     }
-    let mut texts = texts.to_vec();
+    let mut texts: Vec<(Rect, f32)> = texts.iter().map(|&r| (r, THROUGH_TEXT)).collect();
+    texts.extend(lines.iter().map(|&r| (r, ALONG_LINE)));
     for (b, waypoints) in loops {
         let (Some(&first), Some(&last)) = (waypoints.first(), waypoints.last()) else { continue };
         let r = boxes[*b];
@@ -402,7 +413,7 @@ pub fn route_around(
         for p in waypoints.iter().copied().chain([leaving(r, first).1, leaving(r, last).1]) {
             area = area.union(&Rect::from_corners(p, p));
         }
-        texts.push(area);
+        texts.push((area, THROUGH_TEXT));
         for p in [first, last] {
             let (side, port) = leaving(r, p);
             ports.entry((*b, side)).or_default().push(side.along(port));
@@ -523,7 +534,7 @@ fn shortest(
         .filter(|&(v, _, _, _)| !blocked(&grid.cells[v]))
         .collect();
     // Leaving or entering a node through a text costs as running through it.
-    let stub = |v: usize| MARGIN * if grid.text_cells[v] { 1.0 + THROUGH_TEXT } else { 1.0 };
+    let stub = |v: usize| MARGIN * (1.0 + grid.text_cells[v]);
     if exits.is_empty() {
         return if request.facing { anywhere() } else { None };
     }
@@ -594,11 +605,7 @@ fn shortest(
             let hugs =
                 if d.horizontal() { grid.hug_y[v / grid.nx()] } else { grid.hug_x[v % grid.nx()] };
             let shared = used.get(&(v.min(w), v.max(w))).copied().unwrap_or(0) as f32;
-            let step = length
-                * (1.0
-                    + if hugs { HUG } else { 0.0 }
-                    + SHARED * shared
-                    + if text { THROUGH_TEXT } else { 0.0 })
+            let step = length * (1.0 + if hugs { HUG } else { 0.0 } + SHARED * shared + text)
                 + if d == arrived { 0.0 } else { BEND };
             let next = w * 4 + d.index();
             let total = cost + step;
@@ -927,6 +934,7 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         })
         .collect();
     // Lines that stay as they are keep their ports: a line routed now takes others.
+    let (stems, tree_lines) = trees(model, view, &index, &boxes);
     let routing: HashSet<Id> = routed.iter().copied().collect();
     let taken: Vec<(usize, Point)> = view
         .presentations()
@@ -944,8 +952,9 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
             let (&b, anchor) = (index.get(&node)?, anchor?);
             Some((b, crate::route::anchor_point(boxes[b], Some(anchor))))
         })
+        .chain(stems)
         .collect();
-    let routes = route_around(&boxes, &texts, &loops, &taken, &requests);
+    let routes = route_around(&boxes, &texts, &tree_lines, &loops, &taken, &requests);
     let relative = |r: Rect, p: Point| {
         let fraction = |v: f32, start: f32, size: f32| {
             if size > 0.0 { ((v - start) / size).clamp(0.0, 1.0) } else { 0.5 }
@@ -967,6 +976,53 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         count += 1;
     }
     Ok(count)
+}
+
+/// The shared generalization trees of `view`: where they leave their general elements (box
+/// index and point, middle of the side the tree runs to) and a port's spacing to either side,
+/// which the triangle takes, and where they reach their specific ones: other lines keep their
+/// ends clear of these. Also the stretches of the trees' lines, widened so that other lines
+/// keep a port's spacing from them.
+fn trees(
+    model: &Model,
+    view: &View,
+    index: &HashMap<Id, usize>,
+    boxes: &[Rect],
+) -> (Vec<(usize, Point)>, Vec<Rect>) {
+    let rects: HashMap<Id, Rect> = index.iter().map(|(&id, &b)| (id, boxes[b])).collect();
+    let common = crate::shared::common_lines(model, view, &rects);
+    let mut stems = Vec::new();
+    let mut lines = Vec::new();
+    for p in view.presentations().iter().filter(|p| !p.style.shared.is_separate()) {
+        let Some((general, specific)) = crate::shared::ends(model, view, p) else { continue };
+        let (Some(&g), Some(&s)) = (index.get(&general), index.get(&specific)) else { continue };
+        let (r, q) = (boxes[g], boxes[s]);
+        let vertical = p.style.shared != SharedStyle::Horizontal;
+        // The middles of the sides the tree leaves and reaches.
+        let (stem, end, along) = if vertical {
+            let below = q.center().y > r.center().y;
+            let (y, z) = if below { (r.bottom(), q.y) } else { (r.y, q.bottom()) };
+            (Point::new(r.center().x, y), Point::new(q.center().x, z), (PORT_SPACING, 0.0))
+        } else {
+            let right = q.center().x > r.center().x;
+            let (x, z) = if right { (r.right(), q.x) } else { (r.x, q.right()) };
+            (Point::new(x, r.center().y), Point::new(z, q.center().y), (0.0, PORT_SPACING))
+        };
+        stems.extend([
+            (g, stem),
+            (g, stem.offset(-along.0, -along.1)),
+            (g, stem.offset(along.0, along.1)),
+            (s, end),
+        ]);
+        if let Some(&at) = common.get(&(general, p.style.shared)) {
+            let mut points = vec![end];
+            points.extend(crate::shared::waypoints(end, stem, at, p.style.shared));
+            points.push(stem);
+            let wide = 2.0 * PORT_SPACING - TEXT_MARGIN;
+            lines.extend(points.windows(2).map(|w| Rect::from_corners(w[0], w[1]).inflate(wide)));
+        }
+    }
+    (stems, lines)
 }
 
 /// The edges of `diagram` that the router keeps and that need a new route after an edit:
@@ -1179,7 +1235,7 @@ mod tests {
         let crosses = |points: &[Point]| points.windows(2).any(|w| segment_hits(w[0], w[1], area));
         let straight = route(&boxes, &requests);
         assert!(crosses(straight[0].as_ref().expect("routed")));
-        let around = route_around(&boxes, &[], &[(0, lp)], &[], &requests);
+        let around = route_around(&boxes, &[], &[], &[(0, lp)], &[], &requests);
         let points = around[0].as_ref().expect("routed");
         assert!(!crosses(points) && clear(points, &boxes, [0, 1]), "{points:?}");
     }
@@ -1192,7 +1248,7 @@ mod tests {
         let end = *alone[0].as_ref().expect("routed").last().unwrap();
         assert_eq!(end, Point::new(300.0, 50.0));
         // Another line, not routed now, meets the target's left side there.
-        let around = route_around(&boxes, &[], &[], &[(1, end)], &requests);
+        let around = route_around(&boxes, &[], &[], &[], &[(1, end)], &requests);
         let points = around[0].as_ref().expect("routed");
         assert_ne!(*points.last().unwrap(), end, "{points:?}");
         assert!(clear(points, &boxes, [0, 1]), "{points:?}");
