@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.21.1 – 2026-11-11
 
 - **Loops beside other lines**: a new loop goes to a corner whose sides other lines leave
   free, also when it is drawn rather than arranged. At the left corners a loop comes back
