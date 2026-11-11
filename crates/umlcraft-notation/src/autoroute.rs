@@ -228,7 +228,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn new(boxes: &[Rect], texts: &[Rect], requests: &[Request]) -> Grid {
+    fn new(boxes: &[Rect], texts: &[Rect], taken: &[Point], requests: &[Request]) -> Grid {
         let mut xs = Vec::new();
         let mut ys = Vec::new();
         for r in boxes {
@@ -254,6 +254,11 @@ impl Grid {
             let p = r.inflate(TEXT_MARGIN);
             xs.extend([(p.x, false), (p.right(), false)]);
             ys.extend([(p.y, false), (p.bottom(), false)]);
+        }
+        // Beside the ports of lines that stay, where a line routed now can have its own.
+        for p in taken {
+            xs.extend([(p.x - PORT_SPACING, false), (p.x + PORT_SPACING, false)]);
+            ys.extend([(p.y - PORT_SPACING, false), (p.y + PORT_SPACING, false)]);
         }
         let (xs, hug_x) = grid_lines(xs);
         let (ys, hug_y) = grid_lines(ys);
@@ -368,19 +373,27 @@ impl PartialOrd for Entry {
 /// corners to the border of its target; consecutive points differ in x or in y only. `None`
 /// where there is no route: a box contains the other end, or the ends are shut in.
 pub fn route(boxes: &[Rect], requests: &[Request]) -> Vec<Option<Vec<Point>>> {
-    route_around(boxes, &[], &[], requests)
+    route_around(boxes, &[], &[], &[], requests)
 }
 
 /// Routes `requests` around `boxes` as [`route`] does, keeping off `texts` (drawn outside
 /// nodes) and the `loops` (lines from a box to itself, by box and waypoints) where a way
-/// around them is not much longer; the ends of the loops count as ports already taken.
+/// around them is not much longer. The ends of the loops count as ports already taken, as do
+/// `taken`: where lines that stay as they are meet a box, by box and point on its border.
 pub fn route_around(
     boxes: &[Rect],
     texts: &[Rect],
     loops: &[(usize, Vec<Point>)],
+    taken: &[(usize, Point)],
     requests: &[Request],
 ) -> Vec<Option<Vec<Point>>> {
     let mut ports: Ports = HashMap::new();
+    let mut beside = Vec::new();
+    for &(b, p) in taken {
+        let (side, port) = on_side(boxes[b], p);
+        ports.entry((b, side)).or_default().push(side.along(port));
+        beside.push(port);
+    }
     let mut texts = texts.to_vec();
     for (b, waypoints) in loops {
         let (Some(&first), Some(&last)) = (waypoints.first(), waypoints.last()) else { continue };
@@ -395,7 +408,7 @@ pub fn route_around(
             ports.entry((*b, side)).or_default().push(side.along(port));
         }
     }
-    let grid = Grid::new(boxes, &texts, requests);
+    let grid = Grid::new(boxes, &texts, &beside, requests);
     let mut used: HashMap<(usize, usize), u32> = HashMap::new();
     let mut order: Vec<usize> = (0..requests.len()).collect();
     let span = |r: &Request| {
@@ -437,6 +450,21 @@ fn leaving(r: Rect, p: Point) -> (Side, Point) {
         _ if p.y < r.y => (Side::Top, Point::new(x, r.y)),
         _ => (Side::Bottom, Point::new(x, r.bottom())),
     }
+}
+
+/// The side of `r` nearest to `p`, a point on or near its border, and `p` moved onto it.
+fn on_side(r: Rect, p: Point) -> (Side, Point) {
+    let (x, y) = (p.x.clamp(r.x, r.right()), p.y.clamp(r.y, r.bottom()));
+    [
+        (Side::Left, (p.x - r.x).abs(), Point::new(r.x, y)),
+        (Side::Right, (p.x - r.right()).abs(), Point::new(r.right(), y)),
+        (Side::Top, (p.y - r.y).abs(), Point::new(x, r.y)),
+        (Side::Bottom, (p.y - r.bottom()).abs(), Point::new(x, r.bottom())),
+    ]
+    .into_iter()
+    .min_by(|a, b| a.1.total_cmp(&b.1))
+    .map(|(side, _, port)| (side, port))
+    .expect("four sides")
 }
 
 /// A route found on the grid: its points, the grid vertices it passes and the sides it leaves
@@ -898,7 +926,26 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
             _ => None,
         })
         .collect();
-    let routes = route_around(&boxes, &texts, &loops, &requests);
+    // Lines that stay as they are keep their ports: a line routed now takes others.
+    let routing: HashSet<Id> = routed.iter().copied().collect();
+    let taken: Vec<(usize, Point)> = view
+        .presentations()
+        .iter()
+        .filter(|p| !routing.contains(&p.id))
+        .flat_map(|p| match &p.shape {
+            Shape::Edge { source, target, source_anchor, target_anchor, .. }
+                if source != target =>
+            {
+                vec![(*source, *source_anchor), (*target, *target_anchor)]
+            }
+            _ => Vec::new(),
+        })
+        .filter_map(|(node, anchor)| {
+            let (&b, anchor) = (index.get(&node)?, anchor?);
+            Some((b, crate::route::anchor_point(boxes[b], Some(anchor))))
+        })
+        .collect();
+    let routes = route_around(&boxes, &texts, &loops, &taken, &requests);
     let relative = |r: Rect, p: Point| {
         let fraction = |v: f32, start: f32, size: f32| {
             if size > 0.0 { ((v - start) / size).clamp(0.0, 1.0) } else { 0.5 }
@@ -985,7 +1032,7 @@ pub fn follow(tx: &mut Tx<'_>, before: &HashMap<Id, Snapshot>) -> Result<usize> 
 /// `edges` and the lines the router keeps between the same two nodes as one of them, either
 /// way: routed together they run apart, which a line routed alone cannot know of. Lines that
 /// share only one node stay as they are, so that moving a node does not reroute every line
-/// of its neighbours.
+/// of its neighbours; the lines routed now keep off their ports.
 pub fn with_neighbours(model: &umlcraft_model::Model, diagram: Id, edges: &[Id]) -> Vec<Id> {
     let Some(view) = model.view(diagram) else { return edges.to_vec() };
     let ends = |p: &umlcraft_model::Presentation| match &p.shape {
@@ -1122,9 +1169,23 @@ mod tests {
         let crosses = |points: &[Point]| points.windows(2).any(|w| segment_hits(w[0], w[1], area));
         let straight = route(&boxes, &requests);
         assert!(crosses(straight[0].as_ref().expect("routed")));
-        let around = route_around(&boxes, &[], &[(0, lp)], &requests);
+        let around = route_around(&boxes, &[], &[(0, lp)], &[], &requests);
         let points = around[0].as_ref().expect("routed");
         assert!(!crosses(points) && clear(points, &boxes, [0, 1]), "{points:?}");
+    }
+
+    #[test]
+    fn a_line_keeps_off_the_port_of_a_line_that_stays() {
+        let boxes = [Rect::new(0.0, 0.0, 100.0, 100.0), Rect::new(300.0, 0.0, 100.0, 100.0)];
+        let requests = [Request { source: 0, target: 1, facing: false }];
+        let alone = route(&boxes, &requests);
+        let end = *alone[0].as_ref().expect("routed").last().unwrap();
+        assert_eq!(end, Point::new(300.0, 50.0));
+        // Another line, not routed now, meets the target's left side there.
+        let around = route_around(&boxes, &[], &[], &[(1, end)], &requests);
+        let points = around[0].as_ref().expect("routed");
+        assert_ne!(*points.last().unwrap(), end, "{points:?}");
+        assert!(clear(points, &boxes, [0, 1]), "{points:?}");
     }
 
     #[test]
