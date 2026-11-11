@@ -376,7 +376,26 @@ pub struct Diagram {
     pub children: Sequence,
 }
 
+/// How many levels deep `elements` nest, they themselves the first; 0 for none. Counted
+/// without recursion, so that it holds for trees of any depth.
+pub fn depth(elements: &[Element]) -> usize {
+    let mut deepest = 0;
+    let mut open: Vec<(&Element, usize)> = elements.iter().map(|e| (e, 1)).collect();
+    while let Some((e, level)) = open.pop() {
+        deepest = deepest.max(level);
+        for branch in &e.branches {
+            open.extend(branch.elements.iter().map(|c| (c, level + 1)));
+        }
+    }
+    deepest
+}
+
 impl Diagram {
+    /// How many levels deep the elements nest (see [`depth`]).
+    pub fn depth(&self) -> usize {
+        depth(&self.children.elements)
+    }
+
     pub fn text(&self) -> Lines {
         self.attrs.get("text").map(text::decode_lines_lossy).unwrap_or_default()
     }

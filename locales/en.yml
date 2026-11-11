@@ -870,6 +870,7 @@ error:
   reference_cycle: "%{a} would connect itself through other relationships."
   not_finite: A position or size is not a valid number.
   type_too_deep: "A type of %{a} is nested more than %{max} levels deep."
+  structogram_too_deep: "%{a} nests elements more than %{max} levels deep."
   invalid: The model is inconsistent here; the step was not taken.
   already_shown: The element is on this diagram already.
   other_interaction: The element belongs to another interaction and can only stand on its sequence diagram.

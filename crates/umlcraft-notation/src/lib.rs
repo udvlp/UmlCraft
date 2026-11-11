@@ -24,7 +24,6 @@ pub mod member;
 pub mod metrics;
 pub mod object;
 pub mod palette;
-pub mod refusal;
 pub mod route;
 pub mod scene;
 pub mod sequence;

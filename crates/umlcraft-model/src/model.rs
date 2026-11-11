@@ -814,5 +814,15 @@ impl Model {
 fn check_type_depth(id: Id, kind: &ElementKind) -> Result<()> {
     let mut deep = false;
     kind.visit_type_refs(&mut |t| deep |= t.depth() > crate::MAX_TYPE_DEPTH);
-    if deep { Err(ModelError::TypeTooDeep(id)) } else { Ok(()) }
+    if deep {
+        return Err(ModelError::TypeTooDeep(id));
+    }
+    // Structograms nest no deeper than a `.nsd` file may, so that what is saved as one can be
+    // opened again, and laying them out stays within the stack.
+    if let ElementKind::Structogram(p) = kind
+        && p.structogram.depth() > umlcraft_nsd::read::MAX_DEPTH
+    {
+        return Err(ModelError::StructogramTooDeep(id));
+    }
+    Ok(())
 }

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::refusal;
+use umlcraft_model::Refusal;
 
 use umlcraft_model::{
     AssociationEnd, ElementData, ElementKind, Id, Model, ModelError, Multiplicity,
@@ -223,11 +223,11 @@ fn parameter_text(model: &Model, name: &str, p: &ParameterProps, style: &Style) 
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ParseError(pub String);
+pub struct ParseError(pub Refusal);
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -415,7 +415,7 @@ fn check_name(name: &str, text: &str) -> Result<String, ParseError> {
         bare = rest.trim_end();
     }
     if bare.is_empty() || bare.contains(['(', ')', ':', '=', '[', ']']) {
-        return Err(ParseError(format!("{}{text:?}", refusal::MEMBER_NO_NAME)));
+        return Err(ParseError(Refusal::MemberNoName(text.to_owned())));
     }
     Ok(name.to_owned())
 }
@@ -438,9 +438,8 @@ pub fn parse_attribute(text: &str) -> Result<AttributeSpec, ParseError> {
         && !(find_top(head, ':').is_none() && head[open + 1..head.len() - 1].trim().is_empty())
     {
         let m = &head[open + 1..head.len() - 1];
-        multiplicity = Some(
-            m.parse().map_err(|_| ParseError(format!("{}{m:?}", refusal::MEMBER_MULTIPLICITY)))?,
-        );
+        multiplicity =
+            Some(m.parse().map_err(|_| ParseError(Refusal::MemberMultiplicity(m.to_owned())))?);
         head = head[..open].trim_end();
     }
     let (name, type_text) = split_top(head, ':');
@@ -554,7 +553,8 @@ fn operator_name_len(s: &str) -> Option<usize> {
 
 pub fn parse_operation(text: &str) -> Result<OperationSpec, ParseError> {
     let (visibility, rest) = split_visibility(text);
-    let missing = |c: char| ParseError(format!("{}{c}\" in {text:?}", refusal::MEMBER_MISSING));
+    let missing =
+        |c: char| ParseError(Refusal::MemberMissing { missing: c, text: text.to_owned() });
     let open = rest.find('(').ok_or_else(|| missing('('))?;
     if let Some(len) = operator_name_len(rest) {
         let name = rest[..len].trim_end().to_owned();
@@ -581,15 +581,16 @@ fn finish_operation(
     template_parameters: Vec<String>,
     rest: &str,
 ) -> Result<OperationSpec, ParseError> {
-    let close = matching_paren(rest, 0)
-        .ok_or_else(|| ParseError(format!("{})\" in {text:?}", refusal::MEMBER_MISSING)))?;
+    let close = matching_paren(rest, 0).ok_or_else(|| {
+        ParseError(Refusal::MemberMissing { missing: ')', text: text.to_owned() })
+    })?;
     let params_text = &rest[1..close];
     let tail = rest[close + 1..].trim();
     let return_type = match tail.strip_prefix(':') {
         Some(t) => non_empty(Some(t)),
         None if tail.is_empty() => None,
         None => {
-            return Err(ParseError(format!("{}{tail:?} after \")\"", refusal::MEMBER_UNEXPECTED)));
+            return Err(ParseError(Refusal::MemberUnexpected(tail.to_owned())));
         }
     };
     let mut parameters = Vec::new();
@@ -727,7 +728,7 @@ fn retype_text(
 
 /// Applies edited text to an attribute, operation or other element (which is just renamed).
 pub fn apply_member_text(tx: &mut Tx<'_>, id: Id, text: &str) -> Result<()> {
-    let invalid = |e: ParseError| ModelError::Invalid(e.to_string());
+    let invalid = |e: ParseError| ModelError::Refused(e.0);
     let kind = tx.model().element(id)?.kind().clone();
     match kind {
         ElementKind::Attribute(p) => {
@@ -861,7 +862,7 @@ pub fn apply_member_text(tx: &mut Tx<'_>, id: Id, text: &str) -> Result<()> {
         _ => {
             let name = text.trim();
             if name.is_empty() && !matches!(kind, ElementKind::Comment(_)) {
-                return Err(ModelError::Invalid(refusal::EMPTY_NAME.into()));
+                return Err(ModelError::Refused(Refusal::EmptyName));
             }
             tx.rename(id, name)
         }

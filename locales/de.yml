@@ -870,6 +870,7 @@ error:
   reference_cycle: "%{a} würde sich über andere Beziehungen mit sich selbst verbinden."
   not_finite: Eine Position oder Größe ist keine gültige Zahl.
   type_too_deep: "Ein Typ von %{a} ist tiefer als %{max} Ebenen verschachtelt."
+  structogram_too_deep: "%{a} verschachtelt Elemente tiefer als %{max} Ebenen."
   invalid: Das Modell ist an dieser Stelle widersprüchlich; der Schritt wurde nicht ausgeführt.
   already_shown: Das Element ist schon auf diesem Diagramm.
   other_interaction: Das Element gehört zu einer anderen Interaktion und kann nur auf deren Sequenzdiagramm stehen.

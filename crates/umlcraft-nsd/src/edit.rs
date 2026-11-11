@@ -18,6 +18,8 @@ pub enum EditError {
     NoBranches,
     #[error("the last branch of this kind cannot be removed")]
     LastBranch,
+    #[error("elements cannot be nested deeper than {}", crate::read::MAX_DEPTH)]
+    TooDeep,
 }
 
 type Result<T> = std::result::Result<T, EditError>;
@@ -81,10 +83,19 @@ pub fn insert(d: &mut Diagram, slot: &Slot, elements: Vec<Element>) -> Result<Se
     if slot.index > seq.elements.len() || elements.is_empty() {
         return Err(EditError::NoSuchPlace);
     }
+    if too_deep(slot, &elements) {
+        return Err(EditError::TooDeep);
+    }
     let n = elements.len();
     seq.elements.splice(slot.index..slot.index, elements);
     seq.fit_color();
     Ok(Selection::Elements(Span { seq: slot.seq.clone(), start: slot.index, end: slot.index + n }))
+}
+
+/// Whether `elements` put at `slot` would nest deeper than a file may (`read::MAX_DEPTH`): a
+/// file that UmlCraft wrote it reads again.
+fn too_deep(slot: &Slot, elements: &[Element]) -> bool {
+    slot.seq.len() / 2 + crate::model::depth(elements) > crate::read::MAX_DEPTH
 }
 
 /// Takes the elements of `span` out and returns them, selecting their neighbour.
@@ -114,6 +125,13 @@ pub fn move_span(d: &mut Diagram, span: &Span, slot: &Slot) -> Result<Selection>
         return Ok(Selection::Elements(span.clone()));
     }
     path::sequence(d, &slot.seq).ok_or(EditError::NoSuchPlace)?;
+    // Checked before they are taken out, so that a refused move leaves them where they are.
+    let moving = path::sequence(d, &span.seq)
+        .and_then(|s| s.elements.get(span.start..span.end))
+        .ok_or(EditError::NoSuchPlace)?;
+    if too_deep(slot, moving) {
+        return Err(EditError::TooDeep);
+    }
     let (taken, _) = remove(d, span)?;
     let target = shifted(slot, span);
     insert(d, &target, taken)
@@ -457,6 +475,28 @@ mod tests {
         check(&d);
         let bad = insert(&mut d, &Slot { seq: vec![1, 1], index: 5 }, vec![]);
         assert_eq!(bad, Err(EditError::NoSuchPlace));
+    }
+
+    #[test]
+    fn elements_nest_no_deeper_than_a_file_may() {
+        let mut d = sample();
+        // Alternatives, each in the first branch of the one before, down to the limit.
+        let mut seq = Vec::new();
+        for _ in 0..crate::read::MAX_DEPTH {
+            let alt = Element::alternative(&lines(&["c"]));
+            insert(&mut d, &Slot { seq: seq.clone(), index: 0 }, vec![alt]).unwrap();
+            seq.extend([0, 0]);
+        }
+        assert_eq!(d.depth(), crate::read::MAX_DEPTH);
+        let one_more = Element::instruction(&lines(&["x"]));
+        let deeper = insert(&mut d, &Slot { seq: seq.clone(), index: 0 }, vec![one_more]);
+        assert_eq!(deeper, Err(EditError::TooDeep));
+        // Moved there, too: the element moved stays where it was.
+        let before = d.clone();
+        let moved = move_span(&mut d, &span(&[], 1, 2), &Slot { seq, index: 0 });
+        assert_eq!(moved, Err(EditError::TooDeep));
+        assert_eq!(d, before);
+        read(&write(&d)).unwrap();
     }
 
     #[test]

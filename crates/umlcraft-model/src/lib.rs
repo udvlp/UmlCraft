@@ -38,7 +38,7 @@ pub use er::{
     ErDomainProps, ErEntityProps, ErIndex, ErIsAProps, ErKey, ErNotation, ErParticipationProps,
     ErRelationshipProps, ErSubtypingProps, ParseCardinalityError,
 };
-pub use error::{ModelError, Result};
+pub use error::{ModelError, Refusal, Result};
 pub use geometry::{Point, Rect, Size};
 pub use id::Id;
 pub use model::{Element, ElementRecord, Model, ModelRecords};

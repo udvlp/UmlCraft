@@ -601,7 +601,7 @@ pub fn add_message(
     let g = Geometry::read(model, diagram)?;
     let (from, to) = match (g.lane(source), g.lane(target)) {
         (Some(from), Some(to)) => (*from, *to),
-        _ => return Err(ModelError::Invalid(crate::refusal::MESSAGES_CONNECT_LIFELINES.into())),
+        _ => return Err(ModelError::Refused(umlcraft_model::Refusal::MessagesConnectLifelines)),
     };
     let call = matches!(sort, MessageSort::Synchronous | MessageSort::Asynchronous);
     let y = if call && gate == MessageGate::None && source != target {
@@ -613,11 +613,11 @@ pub fn add_message(
     if sort == MessageSort::Create
         && g.messages.iter().any(|m| m.sort == MessageSort::Create && m.target == to.id)
     {
-        return Err(ModelError::Invalid(crate::refusal::CREATED_ALREADY.into()));
+        return Err(ModelError::Refused(umlcraft_model::Refusal::CreatedAlready));
     }
     let (least, most) = g.room(from.id, to.id, sort);
     if least > most {
-        return Err(ModelError::Invalid(crate::refusal::NO_ROOM.into()));
+        return Err(ModelError::Refused(umlcraft_model::Refusal::NoRoom));
     }
     let y = y.clamp(least, most);
     let sender = |tx: &mut Tx<'_>, height: f32| sender_bar(tx, diagram, &g, from.id, y, height);
@@ -701,7 +701,7 @@ pub fn add_message(
     if let Shape::Message { y, .. } = presentation.shape
         && (y < least - 0.5 || y > most + 0.5)
     {
-        return Err(ModelError::Invalid(crate::refusal::NO_ROOM.into()));
+        return Err(ModelError::Refused(umlcraft_model::Refusal::NoRoom));
     }
     let id = tx.add_presentation(diagram, presentation)?;
     tidy(tx, diagram)?;

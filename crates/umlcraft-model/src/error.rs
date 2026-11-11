@@ -42,8 +42,76 @@ pub enum ModelError {
     NotFinite(Id),
     #[error("a type of {0} is nested more than {max} levels deep", max = crate::MAX_TYPE_DEPTH)]
     TypeTooDeep(Id),
+    #[error(
+        "structogram {0} nests elements more than {max} levels deep",
+        max = umlcraft_nsd::read::MAX_DEPTH
+    )]
+    StructogramTooDeep(Id),
+    #[error("{0}")]
+    Refused(Refusal),
     #[error("invalid model: {0}")]
     Invalid(String),
+}
+
+/// Why an edit the user asked for was refused, as opposed to a check of the model's own
+/// consistency (`ModelError::Invalid`). The texts are English for AI clients and logs; the app
+/// tells each in the user's language.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Refusal {
+    #[error("the element is already on this diagram")]
+    AlreadyShown,
+    /// A lifeline or fragment of another interaction dropped on a sequence diagram.
+    #[error("the element belongs to another interaction")]
+    OtherInteraction,
+    /// An element of this kind (its type name) on a diagram that does not show such.
+    #[error("a {0} cannot be shown on this diagram")]
+    CannotShow(&'static str),
+    /// A line drawn with `tool` between elements of these kinds.
+    #[error("{tool} cannot connect {from} to {to}")]
+    CannotConnect { tool: &'static str, from: &'static str, to: &'static str },
+    #[error("cannot paste a {0} here")]
+    CannotPaste(&'static str),
+    /// A connector from a part or port to itself.
+    #[error("a connector needs two different ends")]
+    ConnectorSameEnds,
+    /// A connector between parts of different classes.
+    #[error("no class holds both ends of the connector")]
+    ConnectorNoClass,
+    #[error("a connector cannot connect a {0}")]
+    ConnectorCannot(&'static str),
+    /// A second create message to one lifeline.
+    #[error("the lifeline is created already")]
+    CreatedAlready,
+    /// No height between the lifelines' ends where the message fits.
+    #[error("no room for the message on these lifelines")]
+    NoRoom,
+    /// A message drawn to something that is no lifeline.
+    #[error("messages connect lifelines")]
+    MessagesConnectLifelines,
+    /// Arranging an activity whose partitions lie one below the other.
+    #[error("partitions one below the other")]
+    PartitionsStacked,
+    #[error("sequence diagrams are not arranged")]
+    SequenceNotArranged,
+    #[error("the name must not be empty")]
+    EmptyName,
+    /// A bound class whose binding names no template.
+    #[error("a binding names a template and its arguments")]
+    BindingWithoutTemplate,
+    /// Converting an association that has an association class already.
+    #[error("the association has an association class")]
+    HasAssociationClass,
+    /// A member typed without a name; the text typed.
+    #[error("no valid name in {0:?}")]
+    MemberNoName(String),
+    #[error("invalid multiplicity {0:?}")]
+    MemberMultiplicity(String),
+    /// An unclosed bracket or quote in the text typed.
+    #[error("missing \"{missing}\" in {text:?}")]
+    MemberMissing { missing: char, text: String },
+    /// What follows the closing parenthesis of an operation.
+    #[error("unexpected {0:?} after \")\"")]
+    MemberUnexpected(String),
 }
 
 pub type Result<T, E = ModelError> = std::result::Result<T, E>;

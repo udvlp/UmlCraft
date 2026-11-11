@@ -2,7 +2,9 @@
 
 use rust_i18n::t;
 use umlcraft_format::FormatError;
-use umlcraft_model::{Id, Model, ModelError, ParseCardinalityError, ParseMultiplicityError};
+use umlcraft_model::{
+    Id, Model, ModelError, ParseCardinalityError, ParseMultiplicityError, Refusal,
+};
 use umlcraft_notation::composite;
 
 use crate::labels::display_name;
@@ -16,58 +18,51 @@ fn named(model: Option<&Model>, id: Id) -> String {
 }
 
 fn kind(type_name: &str) -> String {
-    t!(format!("kind.{type_name}")).to_string()
+    kind_in(type_name, &rust_i18n::locale())
 }
 
-/// Why an edit the user asked for was refused (`umlcraft_notation::refusal`), in the user's
-/// language; `None` for a text that is no refusal.
-fn refusal(detail: &str) -> Option<std::borrow::Cow<'static, str>> {
-    use umlcraft_notation::refusal as r;
-    let plain = [
-        (r::ALREADY_SHOWN, "error.already_shown"),
-        (r::OTHER_INTERACTION, "error.other_interaction"),
-        (r::CONNECTOR_SAME_ENDS, "error.connector_same_ends"),
-        (r::CONNECTOR_NO_CLASS, "error.connector_no_class"),
-        (r::CREATED_ALREADY, "error.created_already"),
-        (r::NO_ROOM, "error.no_room"),
-        (r::MESSAGES_CONNECT_LIFELINES, "error.messages_connect_lifelines"),
-        (r::PARTITIONS_STACKED, "error.partitions_stacked"),
-        (r::SEQUENCE_NOT_ARRANGED, "error.sequence_not_arranged"),
-        (r::EMPTY_NAME, "error.empty_name"),
-        (r::BINDING_WITHOUT_TEMPLATE, "error.binding_without_template"),
-        (r::HAS_ASSOCIATION_CLASS, "error.has_association_class"),
-    ];
-    if let Some((_, key)) = plain.iter().find(|(text, _)| *text == detail) {
-        return Some(t!(*key));
+fn kind_in(type_name: &str, locale: &str) -> String {
+    t!(format!("kind.{type_name}"), locale = locale).to_string()
+}
+
+/// Why an edit the user asked for was refused, in `locale`.
+fn refusal(refusal: &Refusal, locale: &str) -> String {
+    let kind = |type_name: &str| kind_in(type_name, locale);
+    match refusal {
+        Refusal::AlreadyShown => t!("error.already_shown", locale = locale),
+        Refusal::OtherInteraction => t!("error.other_interaction", locale = locale),
+        Refusal::CannotShow(what) => t!("error.cannot_show", locale = locale, what = kind(what)),
+        Refusal::CannotConnect { from, to, .. } => {
+            t!("error.cannot_connect", locale = locale, source = kind(from), target = kind(to))
+        }
+        Refusal::CannotPaste(what) => t!("error.cannot_paste", locale = locale, what = kind(what)),
+        Refusal::ConnectorSameEnds => t!("error.connector_same_ends", locale = locale),
+        Refusal::ConnectorNoClass => t!("error.connector_no_class", locale = locale),
+        Refusal::ConnectorCannot(what) => {
+            t!("error.connector_cannot", locale = locale, what = kind(what))
+        }
+        Refusal::CreatedAlready => t!("error.created_already", locale = locale),
+        Refusal::NoRoom => t!("error.no_room", locale = locale),
+        Refusal::MessagesConnectLifelines => {
+            t!("error.messages_connect_lifelines", locale = locale)
+        }
+        Refusal::PartitionsStacked => t!("error.partitions_stacked", locale = locale),
+        Refusal::SequenceNotArranged => t!("error.sequence_not_arranged", locale = locale),
+        Refusal::EmptyName => t!("error.empty_name", locale = locale),
+        Refusal::BindingWithoutTemplate => t!("error.binding_without_template", locale = locale),
+        Refusal::HasAssociationClass => t!("error.has_association_class", locale = locale),
+        Refusal::MemberNoName(text) => {
+            t!("error.member_no_name", locale = locale, text = format!("{text:?}"))
+        }
+        Refusal::MemberMultiplicity(text) => {
+            t!("error.member_multiplicity", locale = locale, text = format!("{text:?}"))
+        }
+        Refusal::MemberMissing { missing, .. } => {
+            t!("error.member_missing", locale = locale, missing = missing)
+        }
+        Refusal::MemberUnexpected(_) => t!("error.member_unexpected", locale = locale),
     }
-    if let Some(what) = detail.strip_prefix("a ").and_then(|d| d.strip_suffix(r::CANNOT_SHOW)) {
-        return Some(t!("error.cannot_show", what = kind(what)));
-    }
-    if let Some((_, ends)) = detail.split_once(r::CANNOT_CONNECT)
-        && let Some((source, target)) = ends.split_once(" to ")
-    {
-        return Some(t!("error.cannot_connect", source = kind(source), target = kind(target)));
-    }
-    if let Some(what) = detail.strip_prefix(r::CANNOT_PASTE).and_then(|d| d.strip_suffix(" here")) {
-        return Some(t!("error.cannot_paste", what = kind(what)));
-    }
-    if let Some(what) = detail.strip_prefix(r::CONNECTOR_CANNOT) {
-        return Some(t!("error.connector_cannot", what = kind(what)));
-    }
-    if let Some(text) = detail.strip_prefix(r::MEMBER_NO_NAME) {
-        return Some(t!("error.member_no_name", text = text));
-    }
-    if let Some(text) = detail.strip_prefix(r::MEMBER_MULTIPLICITY) {
-        return Some(t!("error.member_multiplicity", text = text));
-    }
-    if let Some(rest) = detail.strip_prefix(r::MEMBER_MISSING) {
-        let missing = rest.chars().next().unwrap_or(')');
-        return Some(t!("error.member_missing", missing = missing));
-    }
-    if detail.starts_with(r::MEMBER_UNEXPECTED) {
-        return Some(t!("error.member_unexpected"));
-    }
-    None
+    .to_string()
 }
 
 /// Why the model refused an edit, or why a file holds no valid model.
@@ -106,6 +101,10 @@ pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
         ModelError::TypeTooDeep(id) => {
             t!("error.type_too_deep", a = a(*id), max = umlcraft_model::MAX_TYPE_DEPTH)
         }
+        ModelError::StructogramTooDeep(id) => {
+            t!("error.structogram_too_deep", a = a(*id), max = umlcraft_nsd::read::MAX_DEPTH)
+        }
+        ModelError::Refused(r) => refusal(r, &rust_i18n::locale()).into(),
         ModelError::Invalid(detail) => match detail.as_str() {
             composite::PART_OUTSIDE => t!("error.part_outside"),
             composite::PORT_OUTSIDE => t!("error.port_outside"),
@@ -119,12 +118,12 @@ pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
             umlcraft_notation::er::ATTRIBUTE_OWNED => t!("error.er_attribute_owned"),
             umlcraft_notation::er::SECOND_WEAK => t!("error.er_second_weak"),
             umlcraft_notation::er::ASSOCIATIVE_IN_USE => t!("error.er_associative_in_use"),
-            detail => refusal(detail).unwrap_or_else(|| {
+            detail => {
                 // A check of the model's own consistency: what failed is for the log, in
                 // English; the user learns that the edit was not made.
                 eprintln!("umlcraft: model inconsistent: {detail}");
                 t!("error.invalid")
-            }),
+            }
         },
     }
     .to_string()
@@ -239,28 +238,36 @@ mod tests {
     #[test]
     fn refusals_are_told_in_the_users_language() {
         use umlcraft_notation::member::{parse_attribute, parse_operation};
-        use umlcraft_notation::refusal as r;
-        let parse = |e: umlcraft_notation::member::ParseError| ModelError::Invalid(e.to_string());
-        let errors = [
-            ModelError::Invalid(r::ALREADY_SHOWN.into()),
-            ModelError::Invalid(format!("a class{}", r::CANNOT_SHOW)),
-            ModelError::Invalid(format!("transition{}class to actor", r::CANNOT_CONNECT)),
-            ModelError::Invalid(format!("{}state here", r::CANNOT_PASTE)),
-            ModelError::Invalid(format!("{}class", r::CONNECTOR_CANNOT)),
-            ModelError::Invalid(r::NO_ROOM.into()),
-            parse(parse_attribute("x : int [a..b]").unwrap_err()),
-            parse(parse_attribute(": int").unwrap_err()),
-            parse(parse_operation("op(").unwrap_err()),
-            parse(parse_operation("op() int").unwrap_err()),
+        let refusals = [
+            Refusal::AlreadyShown,
+            Refusal::OtherInteraction,
+            Refusal::CannotShow("class"),
+            Refusal::CannotConnect { tool: "transition", from: "class", to: "actor" },
+            Refusal::CannotPaste("state"),
+            Refusal::ConnectorSameEnds,
+            Refusal::ConnectorNoClass,
+            Refusal::ConnectorCannot("class"),
+            Refusal::CreatedAlready,
+            Refusal::NoRoom,
+            Refusal::MessagesConnectLifelines,
+            Refusal::PartitionsStacked,
+            Refusal::SequenceNotArranged,
+            Refusal::EmptyName,
+            Refusal::BindingWithoutTemplate,
+            Refusal::HasAssociationClass,
+            parse_attribute("x : int [a..b]").unwrap_err().0,
+            parse_attribute(": int").unwrap_err().0,
+            parse_operation("op(").unwrap_err().0,
+            parse_operation("op() int").unwrap_err().0,
         ];
-        for err in errors {
+        // Each locale asked for by name: the locale of the process stays as it is for the
+        // tests that run alongside.
+        for r in &refusals {
             for locale in ["de", "en"] {
-                rust_i18n::set_locale(locale);
-                let text = model_error(None, &err);
-                assert!(!text.contains("error.") && !text.contains("kind."), "{err:?}: {text}");
+                let text = refusal(r, locale);
+                assert!(!text.contains("error.") && !text.contains("kind."), "{r:?}: {text}");
             }
         }
-        rust_i18n::set_locale("en");
         // What is no refusal is a check of the model; its English stays out of the message.
         let text = model_error(None, &ModelError::Invalid("the name index is out of date".into()));
         assert!(!text.contains("index"), "{text}");
