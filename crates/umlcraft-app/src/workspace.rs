@@ -974,11 +974,12 @@ impl Workspace {
                 let ElementKind::Message(p) = &mut d.kind else { return };
                 if p.sort == umlcraft_model::MessageSort::Reply {
                     p.return_value = text.to_owned();
-                } else if let Some((name, rest)) = text.split_once('(') {
-                    d.name = name.trim().to_owned();
-                    p.arguments = rest.strip_suffix(')').unwrap_or(rest).trim().to_owned();
                 } else {
-                    d.name = text.to_owned();
+                    let (name, arguments) = umlcraft_notation::sequence::split_call(text);
+                    d.name = name.to_owned();
+                    if let Some(arguments) = arguments {
+                        p.arguments = arguments.to_owned();
+                    }
                 }
             }),
             _ => member::apply_member_text(tx, element, text),

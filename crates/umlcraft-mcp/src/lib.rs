@@ -15,6 +15,7 @@ pub mod live;
 pub mod protocol;
 mod structogram;
 pub mod tools;
+pub mod uml;
 
 pub use host::{Access, Headless, Host};
 pub use tools::{Content, Reply};

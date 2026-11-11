@@ -139,6 +139,18 @@ pub fn interaction_use_text(model: &Model, id: Id) -> String {
     if p.arguments.trim().is_empty() { name.to_owned() } else { format!("{name}({})", p.arguments) }
 }
 
+/// A call written as `name(arguments)`: its name, and its arguments if it has parentheses.
+pub fn split_call(text: &str) -> (&str, Option<&str>) {
+    let text = text.trim();
+    match text.split_once('(') {
+        Some((name, rest)) => {
+            let rest = rest.trim_end();
+            (name.trim(), Some(rest.strip_suffix(')').unwrap_or(rest).trim()))
+        }
+        None => (text, None),
+    }
+}
+
 /// The label of a message: `name(arguments)` for calls, the return value for replies.
 pub fn message_text(model: &Model, message: Id) -> String {
     let (stereotype, text) = message_parts(model, message, &Style::default(), true);

@@ -22,6 +22,7 @@ use umlcraft_notation::{
 use crate::base64;
 use crate::host::{Access, Host, first_diagram, new_document};
 use crate::structogram;
+use crate::uml;
 
 /// Part of a tool's reply.
 #[derive(Clone, Debug, PartialEq)]
@@ -130,6 +131,16 @@ fn diagram_key(kind: DiagramKind) -> &'static str {
     DIAGRAM_KINDS.iter().find(|(_, k)| *k == kind).map_or("class", |(key, _)| key)
 }
 
+/// The kind of the diagram `id` as the tools name it: an object diagram is a class diagram
+/// whose palette starts with Object and Link.
+fn diagram_key_of(model: &Model, id: Id) -> &'static str {
+    match model.get(id).map(|e| e.kind()) {
+        Some(ElementKind::Diagram(p)) if p.objects => "object",
+        Some(ElementKind::Diagram(p)) => diagram_key(p.diagram),
+        _ => "class",
+    }
+}
+
 /// The tools with their descriptions and JSON schemas, as `tools/list` returns them.
 pub fn list() -> Vec<Value> {
     let id = |description: &str| json!({ "type": "string", "description": description });
@@ -146,7 +157,8 @@ pub fn list() -> Vec<Value> {
         tool["annotations"] = json!({ "readOnlyHint": true });
         tool
     };
-    let kinds: Vec<&str> = DIAGRAM_KINDS.iter().map(|(key, _)| *key).collect();
+    let mut kinds: Vec<&str> = DIAGRAM_KINDS.iter().map(|(key, _)| *key).collect();
+    kinds.insert(1, "object");
     // The settings of activity nodes, which both `create_element` and `update_element` take.
     let activity_node = json!({
         "object_type": text("Object nodes, pins, activity parameters: the type of the \
@@ -184,6 +196,45 @@ pub fn list() -> Vec<Value> {
         properties
     };
     let flag = |description: &str| json!({ "type": "boolean", "description": description });
+    // The ends of associations and links, which `connect` and `update_element` take.
+    let end = |which: &str| {
+        json!({ "type": "object",
+                "description": format!("Associations and links: the {which} end. `role` as the \
+                                        line shows it, with visibility and constraints \
+                                        (`- items {{ordered}}`); `multiplicity` (`0..1`, `*`; \
+                                        not for links); `navigability` (an arrow or a cross at \
+                                        this end); `aggregation` (a diamond at this end, the \
+                                        whole)."),
+                "properties": {
+                    "role": { "type": "string" },
+                    "multiplicity": { "type": "string" },
+                    "navigability": { "type": "string",
+                                      "enum": ["", "navigable", "non_navigable"] },
+                    "aggregation": { "type": "string", "enum": ["none", "shared", "composite"] },
+                } })
+    };
+    let ends = json!({ "source_end": end("source"), "target_end": end("target") });
+    // The settings of classes and objects, which `create_element` and `update_element` take.
+    let classes = json!({
+        "abstract": flag("Classes, interfaces, operations: abstract (the name in italics)."),
+        "classifier": text("Objects: the class they are an instance of (`rex : Hund`), by id \
+                            or name; \"\" for none."),
+        "slots": { "type": "object", "additionalProperties": { "type": "string" },
+                   "description": "Objects: values of the attributes of their class, by \
+                                   attribute name, e.g. {\"name\": \"\\\"Rex\\\"\", \"alter\": \
+                                   \"3\"}; \"\" clears one." },
+    });
+    // The settings of sequence diagrams, which `create_diagram` and `update_element` take.
+    let sequence = json!({
+        "message_numbers": flag("Sequence diagrams: number the messages (`1:`, `1.1:`); \
+                                 true by default."),
+        "flat_numbers": flag("Sequence diagrams: number the messages 1, 2, 3 from top to \
+                              bottom instead of 1, 1.1, 1.2 by the call they belong to."),
+        "return_values": flag("Sequence diagrams: show return values after the calls \
+                               (`submit() : ok`); true by default."),
+        "frame": flag("Sequence diagrams: draw the `sd` frame around the interaction; true \
+                       by default."),
+    });
     // The settings of ER elements, which `update_element` takes.
     let er = json!({
         "weak": flag("ER entities: weak, identified through an owner entity (double frame)."),
@@ -376,18 +427,24 @@ pub fn list() -> Vec<Value> {
         tool(
             "create_diagram",
             "Creates a diagram (sequence, activity and state machine diagrams inside a new \
-             interaction, activity or state machine of the same name) and shows it.",
-            json!({
-                "kind": { "type": "string", "enum": kinds },
-                "name": text("Its name."),
-                "owner": id("Package (or class) to put it in; the model's root if omitted."),
-                "notation": { "type": "string", "enum": ["chen", "ie", "idef1x"],
-                              "description": "ER diagrams: Chen (by default), IE with crow's \
-                                              feet, or IDEF1X. IE and IDEF1X have identifying, \
-                                              non-identifying, many-to-many and subtype lines \
-                                              drawn from parent to child, which copy the \
-                                              parent's key into the child." },
-            }),
+             interaction, activity or state machine of the same name) and shows it. An \
+             `object` diagram is a class diagram whose tools start with `object` and `link` \
+             (every class diagram has them).",
+            with(
+                json!({
+                    "kind": { "type": "string", "enum": kinds },
+                    "name": text("Its name."),
+                    "owner": id("Package (or class) to put it in; the model's root if omitted."),
+                    "notation": { "type": "string", "enum": ["chen", "ie", "idef1x"],
+                                  "description": "ER diagrams: Chen (by default), IE with \
+                                                  crow's feet, or IDEF1X. IE and IDEF1X have \
+                                                  identifying, non-identifying, many-to-many \
+                                                  and subtype lines drawn from parent to \
+                                                  child, which copy the parent's key into the \
+                                                  child." },
+                }),
+                &sequence,
+            ),
             &["kind", "name"],
         ),
         tool(
@@ -431,7 +488,7 @@ pub fn list() -> Vec<Value> {
                               given. Sequence diagrams: the lifeline a state invariant or \
                               termination goes on, with or without `y`."),
                 }),
-                &activity_node,
+                &with(activity_node.clone(), &classes),
             ),
             &["diagram", "tool"],
         ),
@@ -482,7 +539,12 @@ pub fn list() -> Vec<Value> {
                 "source": id("Element or presentation it starts at."),
                 "target": id("Element or presentation it ends at; not for found and lost messages and time constraints."),
                 "y": number("Sequence diagrams: the height of the message."),
-                "name": text("Its name, e.g. a message's or an association's; a transition's label `trigger [guard] / effect`."),
+                "name": text("Its name, e.g. a message's or an association's; a call's may be `name(arguments)`; a transition's label `trigger [guard] / effect`."),
+                "allow_invalid": flag("Draw an association UML does not allow, between two \
+                                       actors or two use cases, e.g. for an exercise in \
+                                       finding mistakes."),
+                "source_end": ends["source_end"],
+                "target_end": ends["target_end"],
             }),
             &["diagram", "tool", "source"],
         ),
@@ -498,8 +560,11 @@ pub fn list() -> Vec<Value> {
             json!({
                 "owner": id("The class, interface, enumeration or data type, the ER entity, or \
                              the state."),
-                "text": text("The member as it reads in the box."),
+                "text": text("The member as it reads in the box; `{static}` or \
+                              `{abstract}` in it make it static or abstract."),
                 "key": flag("ER columns: part of the primary key."),
+                "static": flag("Attributes and operations: static (underlined)."),
+                "abstract": flag("Operations: abstract (in italics)."),
             }),
             &["owner", "text"],
         ),
@@ -583,8 +648,11 @@ pub fn list() -> Vec<Value> {
              effect` of a transition or internal transition (as `text`); the constraints of an element (members show them after their text, \
              lines below their name); on every diagram showing it, the shared style of a \
              generalization (one triangle for all generalizations to its general element) \
-             and whether a class «boundary», «control» or «entity» is drawn as its icon; the \
-             settings of ER entities, attributes, relationships, IS-As and participations \
+             and whether a class «boundary», «control» or «entity» is drawn as its icon; \
+             whether a sequence diagram shows message numbers, return values and its frame; \
+             the ends of associations and links (role, multiplicity, navigability, \
+             aggregation); abstract classes and operations, static attributes and operations; \
+             an object's class and the values of its slots; the settings of ER entities, attributes, relationships, IS-As and participations \
              (weak, key, cardinality, …).",
             with(
                 json!({
@@ -625,7 +693,14 @@ pub fn list() -> Vec<Value> {
                               "description": "Classes whose first stereotype is boundary, control \
                                               or entity: drawn as the robustness icon." },
                 }),
-                &with(activity_node.clone(), &er),
+                &with(
+                    with(with(activity_node.clone(), &er), &sequence),
+                    &with(
+                        with(ends.clone(), &classes),
+                        &json!({ "static": flag("Attributes and operations: static \
+                                                 (underlined).") }),
+                    ),
+                ),
             ),
             &["id"],
         ),
@@ -1008,12 +1083,12 @@ fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
                 "operation": p.operation,
             }));
         }
-        if let Some(kind) = model.get(id).and_then(|e| e.kind().as_diagram()) {
+        if model.get(id).and_then(|e| e.kind().as_diagram()).is_some() {
             let owner = model.get(id).and_then(|e| e.owner());
             diagrams.push(json!({
                 "id": id,
                 "name": model.get(id).map_or("", |e| e.name()),
-                "kind": diagram_key(kind),
+                "kind": diagram_key_of(model, id),
                 "owner": owner,
             }));
         }
@@ -1189,7 +1264,7 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let mut reply = json!({
         "id": diagram,
         "name": model.get(diagram).map_or("", |e| e.name()),
-        "kind": diagram_key(kind),
+        "kind": diagram_key_of(model, diagram),
         "nodes": nodes,
         "lines": lines,
         "element_tools": keys(true),
@@ -1258,9 +1333,11 @@ fn render_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
 
 fn create_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let key = str_arg(args, "kind")?;
+    // An object diagram is a class diagram whose palette starts with Object and Link.
+    let objects = key == "object";
     let kind = DIAGRAM_KINDS
         .iter()
-        .find(|(k, _)| *k == key)
+        .find(|(k, _)| *k == key || (objects && *k == "class"))
         .map(|(_, kind)| *kind)
         .ok_or_else(|| format!("no diagram kind `{key}`"))?;
     let name = str_arg(args, "name")?.to_owned();
@@ -1269,8 +1346,24 @@ fn create_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     if notation.is_some() && kind != DiagramKind::EntityRelationship {
         return Err("only ER diagrams take `notation`".into());
     }
+    let mut settings = ElementKind::diagram(kind);
+    set_sequence_diagram(&mut settings, args)?;
     let diagram = change_measured(host, "create_diagram", |tx, measure| {
-        let diagram = edit::create_diagram(tx, owner, kind, &name)?;
+        let diagram = if objects {
+            edit::create_object_diagram(tx, owner, &name)?
+        } else {
+            edit::create_diagram(tx, owner, kind, &name)?
+        };
+        if let ElementKind::Diagram(wanted) = &settings {
+            tx.update(diagram, |d| {
+                if let ElementKind::Diagram(p) = &mut d.kind {
+                    p.hide_message_numbers = wanted.hide_message_numbers;
+                    p.flat_message_numbers = wanted.flat_message_numbers;
+                    p.hide_return_values = wanted.hide_return_values;
+                    p.hide_frame = wanted.hide_frame;
+                }
+            })?;
+        }
         if let Some(notation) = notation {
             er::set_notation(tx, diagram, notation, measure)?;
         }
@@ -1311,6 +1404,14 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     if settings {
         set_activity_node(model, diagram, &mut tool.element_kind(), args)?;
     }
+    let is_abstract = uml::flag(args, "abstract")?;
+    let classifier = uml::classifier(model, args)?;
+    let slots = uml::slots(args)?;
+    let mut trial = tool.element_kind();
+    uml::set_flags(&mut trial, None, is_abstract)?;
+    if let Some(classifier) = classifier {
+        uml::set_classifier(&mut trial, classifier)?;
+    }
     // A pin put on an action looks for room once its texts are known.
     let place_pin = matches!(tool, NodeTool::InputPin | NodeTool::OutputPin)
         && opt_id(args, "on")?.is_some()
@@ -1327,6 +1428,18 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
             set_activity_node(tx.model(), element, &mut kind, args)
                 .map_err(umlcraft_model::ModelError::Invalid)?;
             tx.update(element, |data| data.kind = kind)?;
+        }
+        if is_abstract.is_some() || classifier.is_some() {
+            // Checked above.
+            tx.update(element, |data| {
+                drop(uml::set_flags(&mut data.kind, None, is_abstract));
+                if let Some(classifier) = classifier {
+                    drop(uml::set_classifier(&mut data.kind, classifier));
+                }
+            })?;
+        }
+        if let Some(slots) = &slots {
+            uml::set_slots(tx, element, slots)?;
         }
         if place_pin {
             activity::place_pin(tx, diagram, node, measure)?;
@@ -1420,6 +1533,18 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
     let tool = edge_tool(host.document().model(), diagram, kind, str_arg(args, "tool")?)?;
     let name = opt_str(args, "name").map(str::to_owned);
+    let anyway = args.get("allow_invalid").and_then(Value::as_bool).unwrap_or(false);
+    let with_ends = uml::END_KEYS.iter().any(|k| args.get(k).is_some());
+    if with_ends {
+        let mut trial = match tool {
+            EdgeTool::Link => ElementKind::link(Id::generate(), Id::generate()),
+            EdgeTool::Association | EdgeTool::AssociationClass => {
+                ElementKind::association(Id::generate(), Id::generate())
+            }
+            _ => return Err(format!("a {} has no ends to set", tool.key())),
+        };
+        uml::set_ends(&mut trial, args)?;
+    }
     let model = host.document().model();
     let source = on_diagram(model, diagram, id_arg(args, "source")?)?;
     // Found and lost messages are drawn from their lifeline to itself.
@@ -1439,6 +1564,8 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     let edge = change(host, "connect", |tx| {
         let edge = if tool.message_sort().is_some() {
             palette::connect_message(tx, diagram, tool, source, target, slot)?
+        } else if anyway {
+            palette::connect_anyway(tx, diagram, tool, source, target)?
         } else {
             palette::connect(tx, diagram, tool, source, target)?
         };
@@ -1446,6 +1573,11 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
             autoroute::route_new_lines(tx, diagram, &[edge])?;
         }
         let element = tx.model().view(diagram).and_then(|v| v.get(edge)).and_then(|p| p.element);
+        // A reply starts where its bar ends; one given a height goes there, as dragged, and
+        // its bar goes on to it.
+        if let (EdgeTool::Reply, Some(y), Some(reply)) = (tool, opt_num(args, "y"), element) {
+            sequence_edit::move_item(tx, diagram, reply, y)?;
+        }
         // An association class's name is its class's.
         let class = match element.and_then(|e| tx.model().get(e)).map(|e| e.kind()) {
             Some(ElementKind::Association(a)) if tool == EdgeTool::AssociationClass => a.class,
@@ -1454,6 +1586,10 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
         let transition = element.filter(|&e| {
             matches!(tx.model().get(e).map(|e| e.kind()), Some(ElementKind::Transition(_)))
         });
+        let call = element.filter(|&e| {
+            matches!(tx.model().get(e).map(|e| e.kind()),
+                Some(ElementKind::Message(p)) if p.sort != MessageSort::Reply)
+        });
         if let (Some(name), Some(element)) = (&name, transition) {
             // A transition's name is its label: trigger, guard and effect, as UML has them.
             tx.update(element, |d| {
@@ -1461,8 +1597,14 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
                     p.set_label(name);
                 }
             })?;
+        } else if let (Some(name), Some(element)) = (&name, call) {
+            set_call(tx, element, name)?;
         } else if let (Some(name), Some(element)) = (&name, class.or(element)) {
             tx.rename(element, name.clone())?;
+        }
+        if let Some(element) = element.filter(|_| with_ends) {
+            // Checked above.
+            tx.update(element, |d| drop(uml::set_ends(&mut d.kind, args)))?;
         }
         Ok(edge)
     })?;
@@ -1475,11 +1617,34 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     })))
 }
 
+/// Names the call `message` as written: `rechne(a, 2)` is the name `rechne` with the arguments
+/// `a, 2`, so that the parentheses are not drawn twice.
+fn set_call(tx: &mut Tx<'_>, message: Id, text: &str) -> Result<(), ModelError> {
+    let (name, arguments) = umlcraft_notation::sequence::split_call(text);
+    tx.rename(message, name.to_owned())?;
+    if let Some(arguments) = arguments {
+        tx.update(message, |d| {
+            if let ElementKind::Message(p) = &mut d.kind {
+                p.arguments = arguments.to_owned();
+            }
+        })?;
+    }
+    Ok(())
+}
+
 fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     let owner = id_arg(args, "owner")?;
     let text = str_arg(args, "text")?.trim().to_owned();
     let model = host.document().model();
     let owner_kind = model.get(owner).ok_or_else(|| format!("no element {owner}"))?.kind();
+    let is_class_member = !matches!(
+        owner_kind,
+        ElementKind::State(_) | ElementKind::ErEntity(_) | ElementKind::ErRelationship(_)
+    );
+    let (text, written_static, written_abstract) =
+        if is_class_member { uml::member_flags(&text) } else { (text, false, false) };
+    let is_static = uml::flag(args, "static")?.or(written_static.then_some(true));
+    let is_abstract = uml::flag(args, "abstract")?.or(written_abstract.then_some(true));
     if let ElementKind::State(props) = owner_kind {
         let props = props.clone();
         return add_state_member(host, owner, props, &text);
@@ -1502,10 +1667,15 @@ fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     if !owner_kind.can_own(&data.kind) {
         return Err(format!("a {} cannot own a {}", owner_kind.type_name(), data.kind.type_name()));
     }
+    uml::set_flags(&mut data.kind.clone(), is_static, is_abstract)?;
     let member = change(host, "add_member", |tx| {
         let member = tx.create(owner, data)?;
         if !literal && !column {
             member::apply_member_text(tx, member, &text)?;
+        }
+        if is_static.is_some() || is_abstract.is_some() {
+            // Checked above.
+            tx.update(member, |d| drop(uml::set_flags(&mut d.kind, is_static, is_abstract)))?;
         }
         Ok(member)
     })?;
@@ -1624,6 +1794,30 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let shown = model.shown_on(id);
     let mut settings = kind.clone();
     set_properties(model, &mut settings, args)?;
+    set_sequence_diagram(&mut settings, args)?;
+    uml::set_ends(&mut settings, args)?;
+    if let Some(classifier) = uml::classifier(model, args)? {
+        uml::set_classifier(&mut settings, classifier)?;
+    }
+    let slots = uml::slots(args)?;
+    // `{static}` and `{abstract}` in a member's text, or given as flags. Set after the text,
+    // which changes the member on its own.
+    let member = matches!(kind, ElementKind::Attribute(_) | ElementKind::Operation(_));
+    let (text, written_static, written_abstract) = match text {
+        Some(text) if member => {
+            let (text, s, a) = uml::member_flags(&text);
+            (Some(text), s, a)
+        }
+        text => (text, false, false),
+    };
+    let is_static = uml::flag(args, "static")?.or(written_static.then_some(true));
+    let is_abstract = uml::flag(args, "abstract")?.or(written_abstract.then_some(true));
+    let flags_later = member && text.is_some();
+    if flags_later {
+        uml::set_flags(&mut kind.clone(), is_static, is_abstract)?;
+    } else {
+        uml::set_flags(&mut settings, is_static, is_abstract)?;
+    }
     set_activity_node(model, id, &mut settings, args)?;
     set_submachine(model, id, &mut settings, args)?;
     set_state_activities(&mut settings, args)?;
@@ -1635,6 +1829,17 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         }
     }
     set_er(&mut settings, args)?;
+    // A call named `rechne(a)` is named `rechne` with the arguments `a`, unless they are given.
+    let name = match (&mut settings, name) {
+        (ElementKind::Message(p), Some(name)) if p.sort != MessageSort::Reply => {
+            let (call, arguments) = umlcraft_notation::sequence::split_call(&name);
+            if let Some(arguments) = arguments.filter(|_| args.get("arguments").is_none()) {
+                p.arguments = arguments.to_owned();
+            }
+            Some(call.to_owned())
+        }
+        (_, name) => name,
+    };
     if let ElementKind::ErParticipation(p) = &kind
         && args.get("cardinality_here").is_some()
         && umlcraft_notation::er::participations(model, p.relationship).count() == 2
@@ -1688,6 +1893,13 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
                 }
                 data.kind = settings;
             })?;
+        }
+        if flags_later && (is_static.is_some() || is_abstract.is_some()) {
+            // Checked above.
+            tx.update(id, |d| drop(uml::set_flags(&mut d.kind, is_static, is_abstract)))?;
+        }
+        if let Some(slots) = &slots {
+            uml::set_slots(tx, id, slots)?;
         }
         for &(diagram, presentation) in &shown {
             if let Some(style) = shared {
@@ -2075,6 +2287,35 @@ fn set_submachine(
 
 /// Writes the settings of `args` that belong to the element's kind into `kind`: a guard, a
 /// message's sort, arguments, return value and operation, a fragment's operator.
+/// The settings of a sequence diagram in `args`: what it numbers, shows and frames.
+fn set_sequence_diagram(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
+    let keys = ["message_numbers", "flat_numbers", "return_values", "frame"];
+    let Some(key) = keys.into_iter().find(|k| args.get(k).is_some()) else { return Ok(()) };
+    let p = match kind {
+        ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => p,
+        _ => return Err(format!("only sequence diagrams take `{key}`")),
+    };
+    let flag = |key: &str| -> Result<Option<bool>, String> {
+        match args.get(key) {
+            None => Ok(None),
+            Some(v) => v.as_bool().map(Some).ok_or_else(|| format!("`{key}` is true or false")),
+        }
+    };
+    if let Some(on) = flag("message_numbers")? {
+        p.hide_message_numbers = !on;
+    }
+    if let Some(on) = flag("flat_numbers")? {
+        p.flat_message_numbers = on;
+    }
+    if let Some(on) = flag("return_values")? {
+        p.hide_return_values = !on;
+    }
+    if let Some(on) = flag("frame")? {
+        p.hide_frame = !on;
+    }
+    Ok(())
+}
+
 fn set_properties(model: &Model, kind: &mut ElementKind, args: &Value) -> Result<(), String> {
     let type_name = kind.type_name();
     let refuse = |key: &str| format!("a {type_name} has no `{key}`");
@@ -3208,6 +3449,502 @@ mod tests {
         let bottom = bounds["y"].as_f64().unwrap() + bounds["height"].as_f64().unwrap();
         let done = diagram["lines"].as_array().unwrap().iter().find(|l| l["name"] == "done");
         assert!(bottom < done.unwrap()["y"].as_f64().unwrap(), "{bottom}");
+    }
+
+    #[test]
+    fn ends_abstract_static_classifier_and_slots_are_set() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let node = |host: &mut Headless, args: Value| {
+            let mut args = args;
+            args["diagram"] = json!(d);
+            run(host, "create_element", args)
+        };
+        let lager = node(&mut host, json!({ "tool": "class", "name": "Lager", "abstract": true }));
+        let geraet = node(&mut host, json!({ "tool": "class", "name": "Geraet" }));
+        let args = json!({ "diagram": d, "tool": "association", "source": lager["element"],
+                           "target": geraet["element"],
+                           "source_end": { "aggregation": "composite" },
+                           "target_end": { "role": "- geraete {ordered}", "multiplicity": "*",
+                                           "navigability": "navigable" } });
+        let line = run(&mut host, "connect", args);
+        let kind = |host: &Headless, v: &Value| {
+            host.document().model().get(id(v).parse().unwrap()).unwrap().kind().clone()
+        };
+        let ElementKind::Association(p) = kind(&host, &line["element"]) else { panic!() };
+        assert_eq!(p.ends[0].aggregation, umlcraft_model::Aggregation::Composite);
+        let end = &p.ends[1];
+        assert_eq!((end.role.as_str(), end.visibility), ("geraete", Visibility::Private));
+        assert_eq!(end.constraints, ["ordered"]);
+        assert_eq!(end.multiplicity.map(|m| m.to_string()), Some("*".into()));
+        assert_eq!(end.navigability, umlcraft_model::Navigability::Navigable);
+        let ElementKind::Class(c) = kind(&host, &lager["element"]) else { panic!() };
+        assert!(c.is_abstract);
+        let bad = json!({ "id": line["element"], "target_end": { "multiplicity": "viele" } });
+        assert!(call(&mut host, &Access::default(), "update_element", &bad).is_error);
+
+        // Static members, written so or flagged.
+        let add = |host: &mut Headless, text: &str| {
+            run(host, "add_member", json!({ "owner": geraet["element"], "text": text }))
+        };
+        let anzahl = add(&mut host, "- anzahl : int {static}");
+        assert_eq!(anzahl["text"], "- anzahl : int");
+        let ElementKind::Attribute(a) = kind(&host, &anzahl["id"]) else { panic!() };
+        assert!(a.is_static);
+        let get = add(&mut host, "+ getAnzahl() : int");
+        run(&mut host, "update_element", json!({ "id": get["id"], "static": true }));
+        let ElementKind::Operation(o) = kind(&host, &get["id"]) else { panic!() };
+        assert!(o.is_static);
+
+        // An object of a class, with values for its attributes.
+        let hund = node(&mut host, json!({ "tool": "class", "name": "Hund" }));
+        run(
+            &mut host,
+            "add_member",
+            json!({ "owner": hund["element"], "text": "- name : String" }),
+        );
+        let rex = node(
+            &mut host,
+            json!({ "tool": "object", "name": "rex", "classifier": "Hund",
+                    "slots": { "name": "\"Rex\"" } }),
+        );
+        let ElementKind::Instance(i) = kind(&host, &rex["element"]) else { panic!() };
+        assert_eq!(i.classifier, Some(id(&hund["element"]).parse().unwrap()));
+        let model = host.document().model();
+        let slots = umlcraft_notation::object::slots(model, id(&rex["element"]).parse().unwrap());
+        assert_eq!(slots.iter().map(|s| s.1.as_str()).collect::<Vec<_>>(), ["\"Rex\""]);
+        let wrong = json!({ "id": rex["element"], "slots": { "alter": "3" } });
+        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+        host.document().model().check().unwrap();
+    }
+
+    /// A line's points and its labels with their rectangles.
+    type DrawnLine = (Vec<Point>, Vec<(String, Rect)>);
+
+    /// The labels of each line of diagram `d` as drawn, with their rectangles, and the lines'
+    /// points and the nodes.
+    fn drawn_labels(host: &mut Headless, d: &str) -> (Vec<DrawnLine>, Vec<Rect>) {
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let lines = scene
+            .edges
+            .iter()
+            .map(|e| {
+                let labels = e
+                    .labels
+                    .iter()
+                    .map(|l| {
+                        let w = scene::label_width(&l.text, measure);
+                        (l.text.clone(), Rect::new(l.anchor.x, l.anchor.y, w, scene::LABEL_HEIGHT))
+                    })
+                    .collect();
+                (e.points.clone(), labels)
+            })
+            .collect();
+        (lines, scene.nodes.iter().map(|n| n.rect).collect())
+    }
+
+    #[test]
+    fn roles_keep_to_their_own_ends() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let class = |host: &mut Headless, name: &str, members: &[&str]| {
+            let c =
+                run(host, "create_element", json!({ "diagram": d, "tool": "class", "name": name }));
+            for member in members {
+                run(host, "add_member", json!({ "owner": c["element"], "text": member }));
+            }
+            c
+        };
+        // The doubly linked list of #21.
+        let operations = [
+            "+ Playlist()",
+            "+ hintenAnfuegen(lied : Lied)",
+            "+ ausgeben()",
+            "+ rueckwaertsAusgeben()",
+            "+ loeschen(titel : String) : boolean",
+        ];
+        let playlist = class(&mut host, "Playlist", &operations);
+        let knoten = class(&mut host, "Knoten", &["+ Knoten(inhalt : Lied)"]);
+        let associate = |host: &mut Headless, s: &Value, t: &Value, role: &str| {
+            let args = json!({ "diagram": d, "tool": "association", "source": s["element"],
+                               "target": t["element"],
+                               "target_end": { "role": role, "multiplicity": "0..1",
+                                               "navigability": "navigable" } });
+            run(host, "connect", args);
+        };
+        associate(&mut host, &knoten, &knoten, "- nachfolger");
+        associate(&mut host, &knoten, &knoten, "- vorgaenger");
+        associate(&mut host, &playlist, &knoten, "- kopf");
+        associate(&mut host, &playlist, &knoten, "- ende");
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        let (lines, _) = drawn_labels(&mut host, &d);
+        let mut roles = Vec::new();
+        for (points, labels) in &lines {
+            let target = points[points.len() - 1];
+            let source = points[0];
+            for (text, r) in labels.iter().filter(|(t, _)| t.starts_with('-')) {
+                // Nearer the end it belongs to than the other one, and close to it.
+                let (to_target, to_source) =
+                    (target.distance(r.center()), source.distance(r.center()));
+                assert!(to_target < 60.0, "{text} {r:?} {points:?}");
+                if source != target {
+                    assert!(to_target < to_source, "{text} {r:?} {points:?}");
+                }
+                roles.push(*r);
+            }
+        }
+        assert_eq!(roles.len(), 4);
+        for (i, a) in roles.iter().enumerate() {
+            assert!(roles[i + 1..].iter().all(|b| !a.intersects(b)), "{roles:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_role_fits_between_classes_laid_out_left_to_right() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let class = |host: &mut Headless, name: &str| {
+            let args = json!({ "diagram": d, "tool": "class", "name": name, "abstract": true });
+            run(host, "create_element", args)
+        };
+        let (gatter, baustein) = (class(&mut host, "Gatter"), class(&mut host, "Baustein"));
+        let args = json!({ "diagram": d, "tool": "association", "source": gatter["element"],
+                           "target": baustein["element"],
+                           "target_end": { "role": "# eingaenge", "multiplicity": "*",
+                                           "navigability": "navigable" } });
+        run(&mut host, "connect", args);
+        run(&mut host, "arrange_diagram", json!({ "diagram": d, "direction": "right" }));
+        let (lines, nodes) = drawn_labels(&mut host, &d);
+        let (points, labels) = &lines[0];
+        for (text, r) in labels {
+            assert!(nodes.iter().all(|n| !n.intersects(r)), "{text} {r:?} {nodes:?}");
+            let crossed = points.windows(2).any(|w| r.intersects(&Rect::from_corners(w[0], w[1])));
+            assert!(!crossed, "{text} {r:?} {points:?}");
+        }
+    }
+
+    #[test]
+    fn object_diagrams_are_made_and_named_so() {
+        let mut host = Headless::new();
+        let args = json!({ "kind": "object", "name": "Snapshot" });
+        let d = run(&mut host, "create_diagram", args)["diagram"].clone();
+        let document = run(&mut host, "get_document", json!({}));
+        let shown = document["diagrams"].as_array().unwrap().iter().find(|x| x["id"] == d);
+        assert_eq!(shown.unwrap()["kind"], "object");
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        assert_eq!(diagram["kind"], "object");
+        assert_eq!(diagram["element_tools"][0], "object");
+    }
+
+    #[test]
+    fn links_between_objects_run_straight_after_arranging() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let class = json!({ "diagram": d, "tool": "class", "name": "Hund" });
+        let hund = run(&mut host, "create_element", class);
+        for text in ["- name : String", "- alter : int"] {
+            run(&mut host, "add_member", json!({ "owner": hund["element"], "text": text }));
+        }
+        // One object shows two slots, the others none: their boxes differ in height.
+        let object = |host: &mut Headless, name: &str, slots: Value| {
+            let args = json!({ "diagram": d, "tool": "object", "name": name,
+                               "classifier": "Hund", "slots": slots });
+            run(host, "create_element", args)
+        };
+        let rex = object(&mut host, "rex", json!({ "name": "\"Rex\"", "alter": "3" }));
+        let p1 = object(&mut host, "p1", json!({}));
+        let p2 = object(&mut host, "p2", json!({}));
+        for (s, t) in [(&rex, &p1), (&p1, &p2)] {
+            let args = json!({ "diagram": d, "tool": "link", "source": s["element"],
+                               "target": t["element"] });
+            run(&mut host, "connect", args);
+        }
+        for direction in ["right", "down"] {
+            let args = json!({ "diagram": d, "direction": direction });
+            run(&mut host, "arrange_diagram", args);
+            let (doc, measure) = host.parts();
+            let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+            for e in &scene.edges {
+                assert_eq!(e.points.len(), 2, "{direction}: {:?}", e.points);
+            }
+        }
+    }
+
+    #[test]
+    fn actors_and_use_cases_are_not_associated_among_themselves() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "use_case", "name": "U" }));
+        let d = d["diagram"].clone();
+        let node = |host: &mut Headless, tool: &str, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": tool, "name": name }))
+        };
+        let (a, b) = (node(&mut host, "actor", "A"), node(&mut host, "actor", "B"));
+        let (u, v) = (node(&mut host, "useCase", "U"), node(&mut host, "useCase", "V"));
+        let associate = |host: &mut Headless, x: &Value, y: &Value, anyway: bool| {
+            let args = json!({ "diagram": d, "tool": "association", "source": x["element"],
+                               "target": y["element"], "allow_invalid": anyway });
+            !call(host, &Access::default(), "connect", &args).is_error
+        };
+        assert!(associate(&mut host, &a, &u, false));
+        assert!(!associate(&mut host, &a, &b, false));
+        assert!(!associate(&mut host, &u, &v, false));
+        // For an exercise in finding mistakes.
+        assert!(associate(&mut host, &a, &b, true));
+        assert!(associate(&mut host, &u, &v, true));
+        host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn actors_stand_on_both_sides_of_the_boundary_with_straight_lines() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "use_case", "name": "U" }));
+        let d = d["diagram"].clone();
+        // Use cases inside the boundary, actors below it.
+        let node = |host: &mut Headless, tool: &str, name: &str, x: f32, y: f32| {
+            let args = json!({ "diagram": d, "tool": tool, "name": name, "x": x, "y": y });
+            run(host, "create_element", args)
+        };
+        let boundary = node(&mut host, "systemBoundary", "Selbstlernzentrum", 100.0, 100.0);
+        let lend = node(&mut host, "useCase", "Gerät ausleihen", 130.0, 150.0);
+        let back = node(&mut host, "useCase", "Gerät zurückgeben", 130.0, 230.0);
+        let check = node(&mut host, "useCase", "Ausweis prüfen", 130.0, 310.0);
+        let reserve = node(&mut host, "useCase", "Gerät vormerken", 130.0, 390.0);
+        let user = node(&mut host, "actor", "Nutzer", 100.0, 600.0);
+        let teacher = node(&mut host, "actor", "Lehrkraft", 200.0, 600.0);
+        let librarian = node(&mut host, "actor", "Bibliothekarin", 300.0, 600.0);
+        let connect = |host: &mut Headless, tool: &str, from: &Value, to: &Value| {
+            let args = json!({ "diagram": d, "tool": tool, "source": from["element"],
+                               "target": to["element"] });
+            run(host, "connect", args)
+        };
+        let lines = [
+            connect(&mut host, "generalization", &teacher, &user),
+            connect(&mut host, "association", &user, &lend),
+            connect(&mut host, "association", &user, &back),
+            connect(&mut host, "association", &teacher, &reserve),
+            connect(&mut host, "association", &librarian, &lend),
+        ];
+        connect(&mut host, "include", &lend, &check);
+        connect(&mut host, "extend", &reserve, &lend);
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+
+        let model = host.document().model();
+        let view = model.view(id(&d).parse().unwrap()).unwrap();
+        let rect = |v: &Value| view.get(id(&v["presentation"]).parse().unwrap()).unwrap().bounds();
+        let frame = rect(&boundary).unwrap();
+        let (user, teacher, librarian) =
+            (rect(&user).unwrap(), rect(&teacher).unwrap(), rect(&librarian).unwrap());
+        for case in [&lend, &back, &check, &reserve] {
+            assert!(frame.contains_rect(&rect(case).unwrap()), "{:?} {frame:?}", rect(case));
+        }
+        // The use cases one below the other, those of Nutzer next to each other, so that the
+        // lines from the left don't cross.
+        let middle = |v: &Value| rect(v).unwrap().center();
+        assert!(
+            [&back, &check, &reserve].iter().all(|v| (middle(v).x - middle(&lend).x).abs() < 0.5)
+        );
+        let order = |v: &Value| middle(v).y;
+        assert!(order(&lend) < order(&back) && order(&back) < order(&reserve));
+        // Nutzer and Lehrkraft on one side, Lehrkraft below; Bibliothekarin on the other.
+        let left = |r: Rect| r.right() <= frame.x;
+        let right = |r: Rect| r.x >= frame.right();
+        assert!(left(user) || right(user), "{user:?} {frame:?}");
+        assert_eq!(left(user), left(teacher));
+        assert!((user.center().x - teacher.center().x).abs() < 0.5);
+        assert!(teacher.y > user.bottom());
+        assert!(if left(user) { right(librarian) } else { left(librarian) }, "{librarian:?}");
+        // Straight lines.
+        for line in &lines {
+            let p = view.get(id(&line["presentation"]).parse().unwrap()).unwrap();
+            let Shape::Edge { waypoints, .. } = &p.shape else { panic!() };
+            assert!(waypoints.is_empty());
+            assert_eq!(p.style.line_shape, umlcraft_model::LineShape::Line);
+        }
+        model.check().unwrap();
+    }
+
+    #[test]
+    fn arranging_keeps_generalizations_chosen_separate() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let class = |host: &mut Headless, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": "class", "name": name }))
+        };
+        let (b, s, g) = (
+            class(&mut host, "Baustein"),
+            class(&mut host, "Schalter"),
+            class(&mut host, "Gatter"),
+        );
+        let inherit = |host: &mut Headless, from: &Value| {
+            let args = json!({ "diagram": d, "tool": "generalization",
+                               "source": from["element"], "target": b["element"] });
+            run(host, "connect", args)
+        };
+        let lines = [inherit(&mut host, &s), inherit(&mut host, &g)];
+        let styles = |host: &Headless| -> Vec<SharedStyle> {
+            let view = host.document().model().view(d.parse().unwrap()).unwrap();
+            let style =
+                |l: &Value| view.get(id(&l["presentation"]).parse().unwrap()).unwrap().style.shared;
+            lines.iter().map(style).collect()
+        };
+        // Arranged as they come, they share a triangle.
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        assert_eq!(styles(&host), [SharedStyle::Vertical; 2]);
+        // Chosen separate, they stay so.
+        for line in &lines {
+            let args = json!({ "id": line["element"], "shared_style": "separate" });
+            run(&mut host, "update_element", args);
+        }
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        run(&mut host, "arrange_diagram", json!({ "diagram": d, "direction": "right" }));
+        assert_eq!(styles(&host), [SharedStyle::Separate; 2]);
+    }
+
+    #[test]
+    fn a_reply_goes_where_y_says() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "sequence", "name": "Calc" }));
+        let d = d["diagram"].clone();
+        let lifeline = |host: &mut Headless, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": "lifeline", "name": name }))
+        };
+        let (a, b, c) =
+            (lifeline(&mut host, "a"), lifeline(&mut host, "b"), lifeline(&mut host, "c"));
+        let send = |host: &mut Headless, tool: &str, from: &Value, to: &Value, name: &str, y| {
+            let m = json!({ "diagram": d, "tool": tool, "source": from["element"],
+                            "target": to["element"], "name": name, "y": y });
+            run(host, "connect", m)
+        };
+        send(&mut host, "message", &a, &b, "rechne", 100);
+        send(&mut host, "message", &b, &c, "hole", 140);
+        send(&mut host, "reply", &c, &b, "x", 170);
+        send(&mut host, "reply", &b, &a, "summe", 300);
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let y = |name: &str| {
+            let lines = diagram["lines"].as_array().unwrap();
+            lines.iter().find(|l| l["name"] == name).unwrap()["y"].as_f64().unwrap()
+        };
+        assert_eq!((y("x"), y("summe")), (170.0, 300.0), "{diagram}");
+        // b's bar runs down to the reply it gives; a waits for it.
+        let bottom = |lifeline: &Value| {
+            diagram["bars"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|bar| bar["lifeline"] == lifeline["element"])
+                .map(|bar| bar["bottom"].as_f64().unwrap())
+                .fold(0.0, f64::max)
+        };
+        assert!((bottom(&b) - 300.0).abs() < 0.5, "{}", bottom(&b));
+        assert!(bottom(&a) >= 300.0, "{}", bottom(&a));
+        host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn nested_fragments_are_inset_and_keep_to_their_messages() {
+        // The inner fragment made first and wrapped, or the outer one first.
+        for outer_first in [false, true] {
+            let mut host = Headless::new();
+            let d = run(&mut host, "create_diagram", json!({ "kind": "sequence", "name": "C" }));
+            let d = d["diagram"].clone();
+            let lifeline = |host: &mut Headless, name: &str| {
+                let args = json!({ "diagram": d, "tool": "lifeline", "name": name });
+                run(host, "create_element", args)
+            };
+            let (a, b, c) =
+                (lifeline(&mut host, "a"), lifeline(&mut host, "b"), lifeline(&mut host, "c"));
+            let send = |host: &mut Headless, tool: &str, from: &Value, to: &Value, name: &str| {
+                let m = json!({ "diagram": d, "tool": tool, "source": from["element"],
+                                "target": to["element"], "name": name });
+                run(host, "connect", m)
+            };
+            send(&mut host, "message", &a, &b, "rechne");
+            let hole = send(&mut host, "message", &b, &c, "hole");
+            let x = send(&mut host, "reply", &c, &b, "x");
+            send(&mut host, "reply", &b, &a, "summe");
+            let wrap = |host: &mut Headless, items: Value, operator: &str| {
+                let args = json!({ "diagram": d, "items": items, "operator": operator });
+                run(host, "wrap_in_fragment", args)
+            };
+            let messages = json!([hole["element"], x["element"]]);
+            let (opt, lp) = if outer_first {
+                let lp = wrap(&mut host, messages.clone(), "loop");
+                (wrap(&mut host, messages, "opt"), lp)
+            } else {
+                let opt = wrap(&mut host, messages, "opt");
+                let lp = wrap(&mut host, json!([opt["id"]]), "loop");
+                (opt, lp)
+            };
+            let diagram = run(&mut host, "get_diagram", json!({ "diagram": d }));
+            let frame = |f: &Value| {
+                let nodes = diagram["nodes"].as_array().unwrap();
+                let b = &nodes.iter().find(|n| n["element"] == f["id"]).unwrap()["bounds"];
+                let n = |k: &str| b[k].as_f64().unwrap();
+                (n("x"), n("y"), n("x") + n("width"), n("y") + n("height"))
+            };
+            let y = |name: &str| {
+                let lines = diagram["lines"].as_array().unwrap();
+                lines.iter().find(|l| l["name"] == name).unwrap()["y"].as_f64().unwrap()
+            };
+            let (inner, outer) = (frame(&opt), frame(&lp));
+            // The loop goes around the opt with room on every side, its label above the opt's.
+            assert!(outer.0 < inner.0 - 5.0 && outer.2 > inner.2 + 5.0, "{outer:?} {inner:?}");
+            assert!(outer.1 < inner.1 - 15.0 && outer.3 > inner.3 + 5.0, "{outer:?} {inner:?}");
+            // The call before and the reply after stay outside.
+            assert!(y("rechne") < outer.1 && y("summe") > outer.3, "{diagram}");
+            host.document().model().check().unwrap();
+        }
+    }
+
+    #[test]
+    fn sequence_diagrams_go_without_numbers_and_frame() {
+        let mut host = Headless::new();
+        let args = json!({ "kind": "sequence", "name": "Calc", "message_numbers": false,
+                           "frame": false });
+        let d = id(&run(&mut host, "create_diagram", args)["diagram"]);
+        let props = |host: &Headless| match host.document().model().get(d.parse().unwrap()) {
+            Some(e) => match e.kind() {
+                ElementKind::Diagram(p) => *p,
+                _ => panic!("no diagram"),
+            },
+            None => panic!("gone"),
+        };
+        let p = props(&host);
+        assert!(p.hide_message_numbers && p.hide_frame && !p.hide_return_values);
+        let args = json!({ "id": d, "message_numbers": true, "return_values": false });
+        run(&mut host, "update_element", args);
+        let p = props(&host);
+        assert!(!p.hide_message_numbers && p.hide_frame && p.hide_return_values);
+        let class = json!({ "kind": "class", "name": "C", "frame": false });
+        assert!(call(&mut host, &Access::default(), "create_diagram", &class).is_error);
+    }
+
+    #[test]
+    fn a_call_named_with_parentheses_takes_them_as_arguments() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "sequence", "name": "Calc" }));
+        let d = d["diagram"].clone();
+        let lifeline = |host: &mut Headless, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": "lifeline", "name": name }))
+        };
+        let (a, b) = (lifeline(&mut host, "a"), lifeline(&mut host, "b"));
+        let send = |host: &mut Headless, name: &str| {
+            let m = json!({ "diagram": d, "tool": "message", "source": a["element"],
+                            "target": b["element"], "name": name });
+            run(host, "connect", m)
+        };
+        let label = |host: &Headless, m: &Value| {
+            let id = parse_id(m["element"].as_str().unwrap()).unwrap();
+            umlcraft_notation::sequence::message_text(host.document().model(), id)
+        };
+        let rechne = send(&mut host, "rechne()");
+        assert_eq!(label(&host, &rechne), "rechne()");
+        let leihe = send(&mut host, r#"ausleihen(g, "Ada")"#);
+        assert_eq!(label(&host, &leihe), r#"ausleihen(g, "Ada")"#);
+        let update = json!({ "id": rechne["element"], "name": "summe(a, b)" });
+        run(&mut host, "update_element", update);
+        assert_eq!(label(&host, &rechne), "summe(a, b)");
     }
 
     #[test]

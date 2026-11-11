@@ -101,8 +101,29 @@ pub fn common_lines(
 
 /// Gives all generalizations that end where `edge` ends the shared `style` (or separate lines
 /// again): Astah's "Shared Style" for the generalizations to one element. Their common line goes
-/// where Astah puts it; separate lines lose their waypoints.
+/// where Astah puts it; separate lines lose their waypoints. The style counts as chosen:
+/// arranging the diagram keeps separate lines apart.
 pub fn set_style(tx: &mut Tx<'_>, diagram: Id, edge: Id, style: SharedStyle) -> Result<()> {
+    apply_style(tx, diagram, edge, style, true)
+}
+
+/// [`set_style`] as arranging the diagram gives it, not chosen.
+pub(crate) fn arrange_style(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    edge: Id,
+    style: SharedStyle,
+) -> Result<()> {
+    apply_style(tx, diagram, edge, style, false)
+}
+
+fn apply_style(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    edge: Id,
+    style: SharedStyle,
+    chosen: bool,
+) -> Result<()> {
     let model = tx.model();
     let view = model.view(diagram).ok_or(umlcraft_model::ModelError::NotADiagram(diagram))?;
     let presentation = view.get(edge).ok_or(umlcraft_model::ModelError::NotFound(edge))?;
@@ -133,6 +154,7 @@ pub fn set_style(tx: &mut Tx<'_>, diagram: Id, edge: Id, style: SharedStyle) -> 
     for (e, points) in plans {
         tx.update_presentation(diagram, e, |p| {
             p.style.shared = style;
+            p.style.shared_chosen = chosen;
             p.style.auto_route = false;
             p.style.line_shape = umlcraft_model::LineShape::Line;
             if let Shape::Edge { waypoints, source_anchor, target_anchor, .. } = &mut p.shape {

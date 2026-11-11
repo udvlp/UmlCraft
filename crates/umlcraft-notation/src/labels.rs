@@ -54,6 +54,9 @@ const LABEL_COST: f32 = 2.0;
 /// What moving costs: per spot further down the list, and per pixel away from Astah's spot.
 const RANK_COST: f32 = 0.6;
 const DISTANCE_COST: f32 = 0.03;
+/// What a role or multiplicity pays for standing between its line and another line between the
+/// same two nodes, where it would read as that line's.
+const BETWEEN_COST: f32 = 30.0;
 
 /// Moves the free labels of `edges` to where they cover least of `nodes`, the lines and the
 /// other labels.
@@ -61,7 +64,9 @@ pub fn place(nodes: &[NodeShape], edges: &mut [EdgeShape], measure: &dyn TextMea
     let mut blocks = Vec::new();
     for (e, edge) in edges.iter().enumerate() {
         for (f, free) in edge.free_labels.iter().enumerate() {
-            blocks.push(Block::new(edge, e, f, free, measure));
+            let mut block = Block::new(edge, e, f, free, measure);
+            block.keep_outside(edge, free, edges);
+            blocks.push(block);
         }
     }
     if blocks.is_empty() {
@@ -88,6 +93,7 @@ pub fn place(nodes: &[NodeShape], edges: &mut [EdgeShape], measure: &dyn TextMea
                     + overlaps(r, &others) * LABEL_COST
                     + i as f32 * RANK_COST
                     + moved * DISTANCE_COST
+                    + block.penalty.get(i).copied().unwrap_or(0.0)
             };
             let best = (0..block.spots.len())
                 .map(|i| (i, score(i)))
@@ -124,6 +130,8 @@ struct Block {
     offset: Point,
     /// Top left corners to choose from; the first is where Astah puts the label.
     spots: Vec<Point>,
+    /// What each spot costs besides what it covers; none if empty.
+    penalty: Vec<f32>,
     chosen: usize,
 }
 
@@ -162,10 +170,77 @@ impl Block {
             }
             LabelKind::Role { source } | LabelKind::Multiplicity { source } => {
                 let role = matches!(free.kind, LabelKind::Role { .. });
-                spots.extend(end_spots(&edge.points, source, role, size));
+                // A mirrored loop keeps its labels beside it, on the other sides.
+                let flip = crate::scene::mirrored_loop(&edge.points, edge.ends);
+                spots.extend(end_spots(&edge.points, source, role, flip, size));
             }
         }
-        Self { edge: index, free: free_index, width, height, offset, spots, chosen: 0 }
+        Self {
+            edge: index,
+            free: free_index,
+            width,
+            height,
+            offset,
+            spots,
+            penalty: Vec::new(),
+            chosen: 0,
+        }
+    }
+
+    /// For a role or multiplicity of a line beside another line between the same two nodes:
+    /// makes the spots between the two cost more, so that the label goes to the outer side,
+    /// where it reads as its own line's.
+    fn keep_outside(&mut self, edge: &EdgeShape, free: &FreeLabel, edges: &[EdgeShape]) {
+        let (LabelKind::Role { source } | LabelKind::Multiplicity { source }) = free.kind else {
+            return;
+        };
+        let ends = |e: &EdgeShape| {
+            let [a, b] = e.ends;
+            if a == b { None } else { Some([a, b]) }
+        };
+        let Some([a, b]) = ends(edge) else { return };
+        let n = edge.points.len();
+        if n < 2 {
+            return;
+        }
+        let (tip, next) = if source {
+            (edge.points[0], edge.points[1])
+        } else {
+            (edge.points[n - 1], edge.points[n - 2])
+        };
+        let len = tip.distance(next);
+        if len < 1e-3 {
+            return;
+        }
+        // Across the end segment.
+        let normal = ((next.y - tip.y) / len, -(next.x - tip.x) / len);
+        let side = |p: Point| (p.x - tip.x) * normal.0 + (p.y - tip.y) * normal.1;
+        let middle = |e: &EdgeShape| {
+            let k = e.points.len();
+            let (p, q) = (e.points[0], e.points[k - 1]);
+            Point::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0)
+        };
+        let own = side(middle(edge));
+        let others: Vec<f32> = edges
+            .iter()
+            .filter(|e| !std::ptr::eq(*e, edge) && e.points.len() >= 2)
+            .filter(|e| ends(e).is_some_and(|[c, d]| (c == a && d == b) || (c == b && d == a)))
+            .map(|e| side(middle(e)) - own)
+            .filter(|d| d.abs() > 0.5)
+            .collect();
+        // Only a line with others on one side has an outer side.
+        let Some(&first) = others.first() else { return };
+        if others.iter().any(|d| d.signum() != first.signum()) {
+            return;
+        }
+        let (w, h) = (self.width, self.height);
+        self.penalty = (0..self.spots.len())
+            .map(|i| {
+                let r = self.rect(i);
+                let center = Point::new(r.x + w / 2.0, r.y + h / 2.0);
+                if (side(center) - own).signum() == first.signum() { BETWEEN_COST } else { 0.0 }
+            })
+            .collect();
     }
 
     fn rect(&self, spot: usize) -> Rect {
@@ -184,7 +259,13 @@ impl Block {
 /// as far across as Astah or far enough not to cross the line. Past the end segment the spots
 /// follow the line around its bend, beside the segment they reach, and also lie on the end
 /// segment's extension, which is clear where the line turns back (a loop).
-fn end_spots(points: &[Point], source: bool, role: bool, (w, h): (f32, f32)) -> Vec<Point> {
+fn end_spots(
+    points: &[Point],
+    source: bool,
+    role: bool,
+    flip: bool,
+    (w, h): (f32, f32),
+) -> Vec<Point> {
     let n = points.len();
     let (tip, next) = if source { (points[0], points[1]) } else { (points[n - 1], points[n - 2]) };
     let len = tip.distance(next);
@@ -196,6 +277,7 @@ fn end_spots(points: &[Point], source: bool, role: bool, (w, h): (f32, f32)) -> 
         if source { points.to_vec() } else { points.iter().rev().copied().collect() };
     let u = ((next.x - tip.x) / len, (next.y - tip.y) / len);
     let (base, first_side) = if role { (27.0, 1.0) } else { (18.0, -1.0) };
+    let first_side = if flip { -first_side } else { first_side };
     let (half_w, half_h) = (w / 2.0, h / 2.0);
     // Far enough from the end not to reach back over its node.
     let clear = half_w * u.0.abs() + half_h * u.1.abs() + GAP;
@@ -414,7 +496,7 @@ mod tests {
         assert_eq!((p, d, first), (Point::new(7.0, 20.0), (1.0, 0.0), false));
         let (w, h) = (40.0, 15.0);
         let (mut above, mut below) = (0, 0);
-        for spot in end_spots(&points, true, true, (w, h)) {
+        for spot in end_spots(&points, true, true, false, (w, h)) {
             let r = Rect::new(spot.x, spot.y, w, h);
             let crossed: f32 = points.windows(2).map(|s| inside_length(r, s[0], s[1])).sum();
             if spot.x > 0.0 && r.bottom() <= 20.0 {

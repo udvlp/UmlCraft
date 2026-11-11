@@ -412,6 +412,10 @@ pub struct Style {
     /// waypoints keep where that common line is.
     #[serde(default, skip_serializing_if = "SharedStyle::is_separate")]
     pub shared: SharedStyle,
+    /// Generalizations: `shared` was chosen rather than given by arranging the diagram, which
+    /// then keeps lines chosen separate apart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared_chosen: bool,
     /// Classifier boxes: which parameter directions the operations show.
     #[serde(default, skip_serializing_if = "ParameterDirections::is_default")]
     pub parameter_directions: ParameterDirections,

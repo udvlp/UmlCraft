@@ -3437,6 +3437,16 @@ pub fn fitted_box(
         let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
         return Some((r.size(), texts.join("\n")));
     }
+    // An object grows for its name and slots as it is drawn, so that lines leave it where it
+    // is drawn; sized by hand, it never shrinks below the size it was given.
+    if let ElementKind::Instance(i) = element.kind()
+        && i.instance == InstanceKind::Object
+        && !p.style.iconic
+    {
+        let (r, _, rows) = layout_object(model, element, i.classifier, &p.style, bounds, measure);
+        let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+        return Some((r.size(), texts.join("\n")));
+    }
     if !p.style.auto_size || p.style.iconic || !is_boxed_classifier(element.kind()) {
         return None;
     }
@@ -4218,6 +4228,7 @@ fn edge_for(
         ends;
     let (source_tip, source_from) = (pts[0], pts[1]);
     let (target_tip, target_from) = (pts[n - 1], pts[n - 2]);
+    let flip = mirrored_loop(pts, edge.ends);
     let place = |text: Option<String>, offset: Option<Point>, end: End, role, underline| {
         text.map(|text| {
             let node_tip = node_tips[usize::from(!end.source)];
@@ -4228,8 +4239,8 @@ fn edge_for(
             EdgeLabel { underline, ..label }
         })
     };
-    let source = End { tip: source_tip, next: source_from, source: true };
-    let target = End { tip: target_tip, next: target_from, source: false };
+    let source = End { tip: source_tip, next: source_from, source: true, flip };
+    let target = End { tip: target_tip, next: target_from, source: false, flip };
     let labels = [
         (source_role, placed.source_role, source, true, source_static),
         (source_mult, placed.source_multiplicity, source, false, false),
@@ -4326,13 +4337,25 @@ fn join_label(name: Option<String>, text: String) -> Option<String> {
     })
 }
 
-/// One end of a drawn line: where it meets the node, the next point along it, and whether it is
-/// the end the line starts at.
+/// One end of a drawn line: where it meets the node, the next point along it, whether it is
+/// the end the line starts at, and whether its labels go to the other sides ([`mirrored_loop`]).
 #[derive(Clone, Copy)]
 struct End {
     tip: Point,
     next: Point,
     source: bool,
+    flip: bool,
+}
+
+/// Whether the line `points` from a node to itself (`ends`) turns the other way than a loop at
+/// the top right corner (out, up, back, down): its roles and multiplicities then go to the
+/// other sides, so that they keep beside the loop as at that corner, not away from it.
+pub(crate) fn mirrored_loop(points: &[Point], ends: [Rect; 2]) -> bool {
+    if ends[0] != ends[1] || points.len() < 3 {
+        return false;
+    }
+    let (a, b, c) = (points[0], points[1], points[2]);
+    (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) > 0.0
 }
 
 /// The width of the box Astah gives a label: the text's whole-pixel width or its exact one,
@@ -4348,11 +4371,11 @@ pub fn label_width(text: &str, measure: &dyn TextMeasure) -> f32 {
 fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> EdgeLabel {
     const ROLE: (f32, f32) = (27.0, 18.0);
     const MULTIPLICITY: (f32, f32) = (18.0, -18.0);
-    let End { tip, next, source } = end;
+    let End { tip, next, source, flip } = end;
     let len = tip.distance(next).max(1e-6);
     let (ux, uy) = ((next.x - tip.x) / len, (next.y - tip.y) / len);
     let (tx, ty) = if source { (ux, uy) } else { (-ux, -uy) };
-    let (lx, ly) = (ty, -tx);
+    let (lx, ly) = if flip { (-ty, tx) } else { (ty, -tx) };
     let (along, left) = if role { ROLE } else { MULTIPLICITY };
     let center = Point::new(tip.x + along * ux + left * lx, tip.y + along * uy + left * ly);
     let width = label_width(&text, measure);
@@ -4628,9 +4651,10 @@ pub fn end_label_at(
     }
     let e = scene.edge(edge_at(scene, p, tolerance)?).filter(|e| e.association)?;
     let n = e.points.len();
+    let flip = mirrored_loop(&e.points, e.ends);
     let ends = [
-        End { tip: e.points[0], next: e.points[1], source: true },
-        End { tip: e.points[n - 1], next: e.points[n - 2], source: false },
+        End { tip: e.points[0], next: e.points[1], source: true, flip },
+        End { tip: e.points[n - 1], next: e.points[n - 2], source: false, flip },
     ];
     let end = (0..2).find(|&i| ends[i].tip.distance(p) <= REACH)?;
     if let Some(l) = e.end_labels.iter().find(|l| l.end == end && !l.multiplicity) {
@@ -5730,8 +5754,8 @@ mod tests {
         // A line Astah drew from (456.68, 335.15) to (720, 325.93) and where it put the labels
         // (top left corners), with their widths.
         let (from, to) = (Point::new(456.68, 335.15), Point::new(720.0, 325.93));
-        let source = End { tip: from, next: to, source: true };
-        let target = End { tip: to, next: from, source: false };
+        let source = End { tip: from, next: to, source: true, flip: false };
+        let target = End { tip: to, next: from, source: false, flip: false };
         let cases = [
             (source, true, 28.0, Point::new(469.03, 308.67)),
             (source, false, 10.0, Point::new(470.30, 344.96)),

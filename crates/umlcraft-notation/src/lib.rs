@@ -10,6 +10,7 @@
 //! - [`draw`] turns a scene's figures into drawing primitives; [`svg`] writes them as an image.
 
 pub mod activity;
+pub mod arial;
 pub mod autoroute;
 pub mod clipboard;
 pub mod composite;

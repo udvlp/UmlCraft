@@ -794,7 +794,14 @@ impl EdgeTool {
             Self::CreateMessage | Self::DestroyMessage => {
                 !same && matches!((source, target), (K::Lifeline(_), K::Lifeline(_)))
             }
-            Self::Association => source.is_classifier() && target.is_classifier(),
+            // UML has actors associated with use cases, classes and components, not with each
+            // other; use cases relate to each other by include, extend and generalization.
+            Self::Association => {
+                source.is_classifier()
+                    && target.is_classifier()
+                    && !matches!((source, target), (K::Actor(_), K::Actor(_)))
+                    && !matches!((source, target), (K::UseCase(_), K::UseCase(_)))
+            }
             // Astah draws association classes between classes and interfaces.
             Self::AssociationClass => is_class_like(source) && is_class_like(target),
             Self::Link => matches!((source, target), (K::Instance(_), K::Instance(_))),
@@ -1310,6 +1317,30 @@ pub fn create_node(
 /// Connects two presentations of `diagram` with `tool`. Creates the relationship element in the
 /// namespace of the source element and returns the new edge presentation.
 pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target: Id) -> Result<Id> {
+    connect_as(tx, diagram, tool, source, target, true)
+}
+
+/// [`connect`], also where UML does not allow the line but the model can hold it: an
+/// association between two actors or two use cases, as drawn for an exercise in finding
+/// mistakes.
+pub fn connect_anyway(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    tool: EdgeTool,
+    source: Id,
+    target: Id,
+) -> Result<Id> {
+    connect_as(tx, diagram, tool, source, target, false)
+}
+
+fn connect_as(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    tool: EdgeTool,
+    source: Id,
+    target: Id,
+    uml: bool,
+) -> Result<Id> {
     if tool.message_sort().is_some() {
         return connect_message(tx, diagram, tool, source, target, None);
     }
@@ -1342,7 +1373,9 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
         tool,
         EdgeTool::Association | EdgeTool::AssociationClass | EdgeTool::Link | EdgeTool::Transition
     );
-    if (self_loop && !may_loop) || !tool.accepts(sk, tk, s == t) {
+    let holds = tool == EdgeTool::Association && sk.is_classifier() && tk.is_classifier();
+    let accepted = tool.accepts(sk, tk, s == t) || (!uml && holds);
+    if (self_loop && !may_loop) || !accepted {
         let (tool, from, to) = (tool.key(), sk.type_name(), tk.type_name());
         return Err(ModelError::Refused(umlcraft_model::Refusal::CannotConnect { tool, from, to }));
     }
@@ -1796,9 +1829,71 @@ pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(I
             _ => None,
         })
     };
-    let floor = model.children(owner)[..first].iter().rev().find_map(|&c| bottom_of(c));
-    let lowest = top - sequence::TAB_HEIGHT - 10.0;
-    let y = floor.map_or(lowest - label, |f| (lowest - label).max(f + 10.0)).min(lowest);
+    // The top of an item, and how much room it needs above it: a message's label.
+    let top_of = |item: Id| {
+        view.presentations_of(item).find_map(|p| match p.shape {
+            Shape::Message { y, .. } => Some((y, sequence::LABEL_ABOVE)),
+            Shape::Fragment { bounds, .. } | Shape::Node { bounds, .. } => Some((bounds.y, 0.0)),
+            _ => None,
+        })
+    };
+    // Of the items of the sequence: not lifelines, notes and the like.
+    let in_sequence = |c: &&Id| {
+        model.get(**c).is_some_and(|e| {
+            matches!(
+                e.kind(),
+                ElementKind::Message(_)
+                    | ElementKind::CombinedFragment(_)
+                    | ElementKind::InteractionUse(_)
+            )
+        })
+    };
+    let children = model.children(owner);
+    // In an operand, the first item keeps below the fragment's tab or the operand's line, as
+    // a frame wrapped around another one does.
+    let operand_top = || {
+        let fragment = model.get(owner)?.owner()?;
+        let operands: Vec<Id> = model
+            .children(fragment)
+            .iter()
+            .copied()
+            .filter(|&o| {
+                matches!(model.get(o).map(|e| e.kind()), Some(ElementKind::InteractionOperand(_)))
+            })
+            .collect();
+        let k = operands.iter().position(|&o| o == owner)?;
+        view.presentations_of(fragment).find_map(|p| match &p.shape {
+            Shape::Fragment { bounds, .. } if k == 0 => Some(bounds.y + sequence::TAB_HEIGHT),
+            Shape::Fragment { bounds, separators, .. } => {
+                separators.get(k - 1).map(|s| bounds.y + s)
+            }
+            _ => None,
+        })
+    };
+    let floor = children[..first]
+        .iter()
+        .rev()
+        .filter(in_sequence)
+        .find_map(|&c| bottom_of(c))
+        .or_else(operand_top);
+    let ceiling = children[last + 1..].iter().filter(in_sequence).find_map(|&c| top_of(c));
+    // Where the item before leaves no room for the frame's tab, the items and what follows
+    // them go down; so does what follows where the frame would reach into it.
+    let (mut top, mut bottom) = (top, bottom);
+    let wanted = top - sequence::TAB_HEIGHT - 10.0 - label;
+    if let Some(floor) = floor.filter(|&f| f + 10.0 > wanted) {
+        let dy = floor + 10.0 - wanted;
+        sequence_edit::make_room(tx, diagram, top - 0.5, dy)?;
+        (top, bottom) = (top + dy, bottom + dy);
+    }
+    let shift = floor.map_or(0.0, |f| (f + 10.0 - wanted).max(0.0));
+    if let Some((next, room)) = ceiling {
+        let (next, least) = (next + shift, bottom + 30.0 + room);
+        if next < least {
+            sequence_edit::make_room(tx, diagram, next - 0.5, least - next)?;
+        }
+    }
+    let y = top - sequence::TAB_HEIGHT - 10.0 - label;
     let slot = Slot { y, owner, index: first };
     let (fragment, node) =
         create_fragment(tx, diagram, NodeTool::CombinedFragment, Some(slot), lifelines, None)?;
@@ -1979,7 +2074,11 @@ mod tests {
         );
         assert_eq!(
             connections(&use_cases, &use_case, &use_case, false),
-            [E::Association, E::Generalization, E::Include, E::Extend, E::Dependency]
+            [E::Generalization, E::Include, E::Extend, E::Dependency]
+        );
+        assert_eq!(
+            connections(&use_cases, &actor, &actor, false),
+            [E::Generalization, E::Dependency]
         );
         let lifeline = ElementKind::Lifeline(Default::default());
         let sequence = props(DiagramKind::Sequence);

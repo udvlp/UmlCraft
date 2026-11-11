@@ -34,6 +34,36 @@ today.
 - **No package along with a new diagram**: a diagram made at the top of the model goes right
   into it instead of into a new package of its own name. Packages are made on purpose, in
   the model tree or with the Package tool; a diagram made in one stays there.
+- **Use case diagrams arranged as in textbooks**: the use cases of a system boundary stand
+  one below the other, those of one actor next to each other; the actors stand left and
+  right of the boundary, level with their use cases, a specialized actor below its general
+  one, and their lines run straight.
+- **Arranging from left to right** leaves room for long roles and multiplicities between the
+  boxes, and puts boxes without lines in one row instead of a column.
+- **Arranging keeps generalizations apart** that were chosen to be drawn separately instead
+  of joining them into a shared tree again.
+- **Roles keep to their own line**: on a loop the role and multiplicity of each end stay
+  beside that end, and on lines that run side by side between the same two boxes they go to
+  the outer side.
+- **Objects** are as large as they are drawn, so that links between them stay straight after
+  arranging.
+- **Messages with arguments**: typing `name(a, b)` for a message takes what is in the
+  parentheses as its arguments instead of as part of its name.
+- **Replies** moved below the end of their activation make it longer instead of stopping at
+  its end.
+- **Combined fragments** put around messages keep clear of the messages above and below
+  them, and a fragment inside another one stands inset from its edges.
+- **Associations between two actors or two use cases** are no longer offered.
+- **AI clients**:
+  - make object diagrams, and see them as such instead of as class diagrams;
+  - set the role, multiplicity, navigability and aggregation of association ends,
+    `abstract` and `static`, the class of an object and the values of its slots;
+  - turn message numbers, return values and the frame of sequence diagrams on and off;
+  - put a reply where `y` says;
+  - draw a line the palette would not offer with `allow_invalid`, for exercises in finding
+    mistakes;
+  - measure texts like Arial without the app, so that arranged diagrams look the same with
+    and without it.
 
 ## 0.20.0 – 2026-11-07
 

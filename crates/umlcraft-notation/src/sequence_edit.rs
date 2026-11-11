@@ -65,6 +65,8 @@ const FRAGMENT_MARGIN: f32 = 10.0;
 const OPERAND_HEIGHT: f32 = 50.0;
 /// Space a fragment keeps below what lies in it.
 const FRAGMENT_PADDING: f32 = 10.0;
+/// How far a fragment reaches beyond the left and right of a fragment drawn in it.
+const FRAGMENT_INSET: f32 = 10.0;
 
 #[derive(Clone, Copy)]
 struct Lane {
@@ -1296,8 +1298,17 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     if let Some(bar) = left {
         shrink_bar(tx, diagram, bar)?;
     }
-    if let Some(bar) = returned {
-        end_at_reply(tx, diagram, bar, m.id)?;
+    // Moved down beyond it, the reply makes the bar it leaves go on to it.
+    match returned {
+        Some(bar) if m.y + dy > bar.bottom + 0.01 => {
+            tx.update_presentation(diagram, bar.id, |p| {
+                if let Shape::Activation { height, .. } = &mut p.shape {
+                    *height = m.y + dy - bar.top;
+                }
+            })?;
+        }
+        Some(bar) => end_at_reply(tx, diagram, bar, m.id)?,
+        None => {}
     }
     // Moved off its sender's bar, a message gets a bar there, as `add_message` gives it: the
     // one ending just above goes on, else a new one starts. Replies leave the bar they end and
@@ -1702,8 +1713,22 @@ fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                 .fold(r.bottom(), |n, b| n.max(b + FRAGMENT_PADDING));
             // The last operand keeps room below its line, e.g. when the frame is made smaller.
             let need = f.separators.last().map_or(need, |s| need.max(s + NEXT / 2.0));
-            if need > r.bottom() + 0.01 {
-                grown.push((f.id, need - r.y));
+            // Around the frames inside, with room on either side, so that nested fragments
+            // show as such.
+            let (mut left, mut right) = (r.x, r.right());
+            // As in `sync_order`, a frame dragged in may reach beyond the sides.
+            let held = |o: &&Frame| {
+                o.id != f.id
+                    && inside(r.x, o.rect.y)
+                    && r.x - FRAGMENT_INSET - 0.5 <= o.rect.x
+                    && o.rect.right() <= r.right() + FRAGMENT_INSET + 0.5
+            };
+            for o in g.frames.iter().filter(held) {
+                left = left.min(o.rect.x - FRAGMENT_INSET);
+                right = right.max(o.rect.right() + FRAGMENT_INSET);
+            }
+            if need > r.bottom() + 0.01 || left < r.x - 0.01 || right > r.right() + 0.01 {
+                grown.push((f.id, Rect::new(left, r.y, right - left, need.max(r.bottom()) - r.y)));
             }
             // A bar stays in its operand too: the line below goes down to clear it, as long as
             // the next operand keeps room for what lies in it and for a message's label.
@@ -1741,10 +1766,10 @@ fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
         if grown.is_empty() && moved.is_empty() {
             return Ok(());
         }
-        for (id, height) in grown {
+        for (id, rect) in grown {
             tx.update_presentation(diagram, id, |p| {
                 if let Shape::Fragment { bounds, .. } = &mut p.shape {
-                    bounds.height = height;
+                    *bounds = rect;
                 }
             })?;
         }
@@ -1906,6 +1931,9 @@ pub fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     }
     let mut wanted: HashMap<Id, Vec<(f32, Id)>> = HashMap::new();
     for &Item { element, y, left, right, own } in &items {
+        // A frame dragged into another one may still reach as far beyond its sides as an
+        // outer frame reaches beyond an inner one.
+        let reach = if own.is_some() { FRAGMENT_INSET } else { 0.0 } + 0.5;
         let around = g
             .frames
             .iter()
@@ -1913,8 +1941,8 @@ pub fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             .filter(|f| {
                 f.rect.y + 0.5 < y
                     && y < f.rect.bottom()
-                    && f.rect.x <= left + 0.5
-                    && right <= f.rect.right() + 0.5
+                    && f.rect.x <= left + reach
+                    && right <= f.rect.right() + reach
             })
             .filter(|f| {
                 matches!(
@@ -3236,6 +3264,9 @@ mod tests {
         let moved = bounds(&doc, outer_node).translate(0.0, dy);
         doc.edit("move", |tx| tx.set_bounds(d, outer_node, moved).and(super::tidy(tx, d))).unwrap();
         assert!(doc.model().is_ancestor(inner, outer));
+        // The frame it went into grows around it, beyond its sides.
+        let (now_outer, now_inner) = (bounds(&doc, inner_node), bounds(&doc, outer_node));
+        assert!(now_outer.x < now_inner.x && now_outer.right() > now_inner.right());
         assert!(
             super::violations(doc.model(), d).is_empty(),
             "{:?}",

@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use umlcraft_model::{DiagramKind, Document, Id, Model};
+use umlcraft_notation::arial::ArialMeasure;
 use umlcraft_notation::edit;
-use umlcraft_notation::scene::{ApproxMeasure, TextMeasure};
+use umlcraft_notation::scene::TextMeasure;
 
 /// The project the tools read and edit, and what the user is looking at.
 pub trait Host {
@@ -152,12 +153,12 @@ fn strip_verbatim(path: PathBuf) -> PathBuf {
 }
 
 /// A project of the MCP server's own, when the app is not running: in memory, opened from and
-/// saved to files the [`Access`] allows. Texts are measured by estimate.
+/// saved to files the [`Access`] allows. Texts are measured in Arial, the diagram font.
 pub struct Headless {
     doc: Document,
     path: Option<PathBuf>,
     active: Option<Id>,
-    measure: ApproxMeasure,
+    measure: ArialMeasure,
 }
 
 impl Headless {
@@ -168,7 +169,7 @@ impl Headless {
 
     pub fn with(doc: Document, path: Option<PathBuf>) -> Self {
         let active = first_diagram(doc.model());
-        Self { doc, path, active, measure: ApproxMeasure }
+        Self { doc, path, active, measure: ArialMeasure }
     }
 
     /// Whether anything happened to the project yet: an edit, or a file opened.
