@@ -186,9 +186,12 @@ fn claude_code(exe: &Path, server_args: &[String], dry_run: bool) -> Result<bool
     }
     let run = |args: &[&str]| Command::new(claude).args(args).output().map_err(|e| e.to_string());
     let mut output = run(&add)?;
-    // An older entry makes `add` fail. It is removed only then, so that a working entry stays
-    // when nothing replaces it.
-    if !output.status.success() {
+    // An older entry makes `add` fail. It is removed only then, when it is there, so that a
+    // working entry stays when `add` fails for another reason.
+    let exists = || {
+        run(&["mcp", "get", "umlcraft"]).is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
+    };
+    if !output.status.success() && exists() {
         let _ = run(&["mcp", "remove", "--scope", "user", "umlcraft"]);
         output = run(&add)?;
     }
