@@ -22,6 +22,8 @@ today.
   lifeline its line crosses moves to where the line is free.
 - **AI clients** show only the slots of an object that have a value with
   `empty_slots: false`.
+- **The AppImage** is named after its architecture, `UmlCraft-0.21.1-x86_64.AppImage`. The
+  release also carries it under its former name, so that older versions still update.
 
 ## 0.21.0 – 2026-11-11
 

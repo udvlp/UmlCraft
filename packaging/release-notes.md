@@ -7,7 +7,7 @@
 | macOS 11 or later (Apple Silicon and Intel) | `UmlCraft-*-macos-universal.dmg`: drag UmlCraft into Applications |
 | Debian, Ubuntu (x64) | `UmlCraft-*-linux-x64.deb`: `sudo apt install ./UmlCraft-*-linux-x64.deb` |
 | Fedora, openSUSE (x64) | `UmlCraft-*-linux-x64.rpm`: `sudo dnf install ./UmlCraft-*-linux-x64.rpm` or `sudo zypper install ./UmlCraft-*-linux-x64.rpm` |
-| Linux (x64), any distribution | `UmlCraft-*-linux-x64.AppImage`: make it executable and start it |
+| Linux (x64), any distribution | `UmlCraft-*-x86_64.AppImage`: make it executable and start it (`UmlCraft-*-linux-x64.AppImage` is the same file under its former name, for updating older versions) |
 | Linux (x64), Flatpak | `UmlCraft-*-linux-x64.flatpak`: `flatpak install --user ./UmlCraft-*-linux-x64.flatpak` |
 | Linux (x64), Snap | `UmlCraft-*-linux-x64.snap`: `sudo snap install --dangerous ./UmlCraft-*-linux-x64.snap` |
 | Linux (x64, glibc 2.35 or later) | `UmlCraft-*-linux-x64.tar.gz`: unpack and start `umlcraft` |

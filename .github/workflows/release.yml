@@ -300,10 +300,14 @@ jobs:
               -t "dist/UmlCraft-$VERSION-linux-x64.$format"
           done
 
+      # Named as the AppImage catalog asks, after the architecture only. The copy under the old
+      # name serves the update of 0.21.0 and older, which looks for it; drop it once few run
+      # those any more.
       - name: Package AppImage
         run: |
           bash packaging/linux/appimage.sh dist/binary/umlcraft \
-            "dist/UmlCraft-$VERSION-linux-x64.AppImage"
+            "dist/UmlCraft-$VERSION-x86_64.AppImage"
+          cp "dist/UmlCraft-$VERSION-x86_64.AppImage" "dist/UmlCraft-$VERSION-linux-x64.AppImage"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

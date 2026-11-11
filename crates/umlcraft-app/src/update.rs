@@ -163,7 +163,7 @@ impl Install {
     pub fn asset(&self, version: &str) -> String {
         match self {
             Install::WindowsSetup { .. } => format!("UmlCraft-{version}-windows-x64-setup.exe"),
-            Install::AppImage(_) => format!("UmlCraft-{version}-linux-x64.AppImage"),
+            Install::AppImage(_) => format!("UmlCraft-{version}-x86_64.AppImage"),
             Install::MacApp(_) => format!("UmlCraft-{version}-macos-universal.dmg"),
         }
     }
@@ -442,7 +442,7 @@ mod tests {
         let setup = Install::WindowsSetup { all_users: false };
         assert_eq!(setup.asset("0.16.0"), "UmlCraft-0.16.0-windows-x64-setup.exe");
         let appimage = Install::AppImage("/home/u/UmlCraft.AppImage".into());
-        assert_eq!(appimage.asset("0.16.0"), "UmlCraft-0.16.0-linux-x64.AppImage");
+        assert_eq!(appimage.asset("0.16.0"), "UmlCraft-0.16.0-x86_64.AppImage");
         let mac = Install::MacApp("/Applications/UmlCraft.app".into());
         assert_eq!(mac.asset("0.16.0"), "UmlCraft-0.16.0-macos-universal.dmg");
         assert_eq!(
@@ -459,7 +459,7 @@ mod tests {
         let setup = "UmlCraft-0.16.0-windows-x64-setup.exe";
         assert_eq!(checksum_of(sums, setup).as_deref(), Some("def456"));
         assert_eq!(checksum_of(sums, "UmlCraft-0.16.0-windows-x64.zip").as_deref(), Some("abc123"));
-        assert_eq!(checksum_of(sums, "UmlCraft-0.16.0-linux-x64.AppImage"), None);
+        assert_eq!(checksum_of(sums, "UmlCraft-0.16.0-x86_64.AppImage"), None);
         assert_eq!(&hex(&Sha256::digest(b"abc"))[..8], "ba7816bf");
     }
 

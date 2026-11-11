@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the AppImage, e.g. `appimage.sh umlcraft dist/UmlCraft-0.5.0-linux-x64.AppImage`.
+# Builds the AppImage, e.g. `appimage.sh umlcraft dist/UmlCraft-0.5.0-x86_64.AppImage`.
 # Needs rsvg-convert, patchelf, appimagetool on the PATH, its runtime file in APPIMAGE_RUNTIME
 # and the libraries listed in `bundled` below installed.
 #
