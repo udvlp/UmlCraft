@@ -11,8 +11,9 @@ today.
   folder that does not exist yet is refused on Linux and macOS too, and folders given to
   `--allow-path` are made absolute, so that they mean the same wherever the client starts the
   server. `--connect PORT` takes the token from the app's announcement; `--token` is gone,
-  as other users of the computer could read it on the command line. The app answers at most
-  16 connections at once and reads no longer request before the token than 64 KiB.
+  as other users of the computer could read it on the command line. A connection has five
+  seconds and 64 KiB to show the token, and at most 16 may wait for that at once; those that
+  showed it stay as long as their client runs, however many.
 - **`mcp setup` keeps the clients' settings**: a configuration it cannot read or that is no
   JSON object is left as it is instead of being replaced, it is written in one go, and an
   existing Claude Code entry is replaced only when the new one could not be added.

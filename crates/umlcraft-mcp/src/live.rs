@@ -80,24 +80,22 @@ impl LiveServer {
         });
         write_private(&file, announcement.to_string().as_bytes())?;
         let handler: Arc<dyn Fn(Request) + Send + Sync> = Arc::new(handler);
-        let open = Arc::new(AtomicUsize::new(0));
+        let waiting = Arc::new(AtomicUsize::new(0));
         std::thread::Builder::new().name("umlcraft-live".into()).spawn(move || {
             for stream in listener.incoming().flatten() {
-                // Any program of the computer may connect, also before it shows a token.
-                if open.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                // Any program of the computer may connect; only those that have not shown the
+                // token yet count, and only for `FIRST_WAIT`, so that none can keep the CLI
+                // out by holding connections.
+                if waiting.load(Ordering::SeqCst) >= MAX_WAITING {
                     continue;
                 }
-                open.fetch_add(1, Ordering::SeqCst);
-                let (handler, token, count) = (handler.clone(), token.clone(), open.clone());
-                let spawned = std::thread::Builder::new()
+                waiting.fetch_add(1, Ordering::SeqCst);
+                let unknown = Waiting(Some(waiting.clone()));
+                let (handler, token) = (handler.clone(), token.clone());
+                // A thread that cannot start drops `unknown` along with its closure.
+                let _ = std::thread::Builder::new()
                     .name("umlcraft-live-connection".into())
-                    .spawn(move || {
-                        serve(stream, &token, &*handler);
-                        count.fetch_sub(1, Ordering::SeqCst);
-                    });
-                if spawned.is_err() {
-                    open.fetch_sub(1, Ordering::SeqCst);
-                }
+                    .spawn(move || serve(stream, &token, &*handler, unknown));
             }
         })?;
         Ok(Self { file, port })
@@ -158,8 +156,28 @@ fn write_private(file: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
     options.open(file)?.write_all(bytes)
 }
 
-/// How many connections the app serves at once; more are closed right away.
-const MAX_CONNECTIONS: usize = 16;
+/// How many connections may wait to show the token at once; more are closed right away.
+const MAX_WAITING: usize = 16;
+/// How long a connection may take to show the token: the CLI sends it right after connecting.
+const FIRST_WAIT: Duration = Duration::from_secs(5);
+
+/// A connection counted among those that have not shown the token yet, until it shows it
+/// ([`Waiting::admit`]) or closes.
+struct Waiting(Option<Arc<AtomicUsize>>);
+
+impl Waiting {
+    fn admit(&mut self) {
+        if let Some(count) = self.0.take() {
+            count.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.admit();
+    }
+}
 /// The longest request before the token was shown: the CLI's first is a short `_ping`.
 const FIRST_LINE: u64 = 64 * 1024;
 /// The longest request after it, room for a large structogram.
@@ -177,7 +195,15 @@ fn read_line(reader: &mut impl BufRead, limit: u64) -> Option<String> {
 }
 
 /// Answers the requests of one connection.
-fn serve(stream: TcpStream, token: &str, handler: &(dyn Fn(Request) + Send + Sync)) {
+fn serve(
+    stream: TcpStream,
+    token: &str,
+    handler: &(dyn Fn(Request) + Send + Sync),
+    mut unknown: Waiting,
+) {
+    if stream.set_read_timeout(Some(FIRST_WAIT)).is_err() {
+        return;
+    }
     let Ok(mut writer) = stream.try_clone() else { return };
     let mut reader = BufReader::new(stream);
     let mut limit = FIRST_LINE;
@@ -187,7 +213,14 @@ fn serve(stream: TcpStream, token: &str, handler: &(dyn Fn(Request) + Send + Syn
             let _ = writeln!(writer, "{}", Reply::error("wrong token").to_json());
             return;
         }
-        limit = LINE;
+        if limit == FIRST_LINE {
+            // Known now: it may stay as long as the CLI runs, idle between calls.
+            if reader.get_ref().set_read_timeout(None).is_err() {
+                return;
+            }
+            unknown.admit();
+            limit = LINE;
+        }
         let name = request["name"].as_str().unwrap_or_default().to_owned();
         let reply = if name == "_ping" {
             Reply::text(format!("UmlCraft {}", env!("CARGO_PKG_VERSION")))
@@ -305,6 +338,17 @@ mod tests {
         let reply = client.call("echo", &json!({ "x": 7 }), &Access::default()).unwrap();
         assert_eq!(reply, Reply::text("echo 7"));
         assert!(LiveClient::connect(server.port(), "guess").is_err());
+
+        // Clients that showed the token stay connected without taking room from new ones.
+        let known: Vec<LiveClient> = (0..MAX_WAITING + 4)
+            .map(|_| LiveClient::connect(server.port(), token).unwrap())
+            .collect();
+        let mut last = LiveClient::connect(server.port(), token).unwrap();
+        assert_eq!(
+            last.call("echo", &json!({ "x": 8 }), &Access::default()).unwrap(),
+            Reply::text("echo 8")
+        );
+        drop(known);
 
         drop(server);
         assert!(!file.exists());
