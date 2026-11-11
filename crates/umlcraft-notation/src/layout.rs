@@ -1178,6 +1178,8 @@ pub fn arrange(
     let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let mut loops = Vec::new();
     let mut lines = Vec::new();
+    // The loops of a node go to its corners in turn.
+    let mut slots: HashMap<Id, usize> = HashMap::new();
     for p in view.presentations() {
         let Shape::Edge { source, target, .. } = &p.shape else { continue };
         let touched = changed.contains(source) || changed.contains(target) || scope.is_none();
@@ -1186,7 +1188,10 @@ pub fn arrange(
         }
         if source == target {
             if let Some(r) = view.get(*source).and_then(|n| n.bounds()) {
-                loops.push((p.id, scene::self_loop(r), scene::self_loop_anchors(r)));
+                let slot = slots.entry(*source).or_default();
+                let at = (scene::self_loop_at(r, *slot), scene::self_loop_anchors_at(r, *slot));
+                *slot += 1;
+                loops.push((p.id, at.0, at.1));
             }
         } else {
             lines.push(p.id);

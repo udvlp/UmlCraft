@@ -1132,9 +1132,12 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
         element,
         Rect::from_origin_size(origin, default_size_for(&kind)),
     )?;
+    let mut loops = 0;
     for (relationship, source, target) in edges {
         let waypoints = if source == target {
-            crate::scene::self_loop(Rect::from_origin_size(origin, default_size_for(&kind)))
+            loops += 1;
+            let r = Rect::from_origin_size(origin, default_size_for(&kind));
+            crate::scene::self_loop_at(r, loops - 1)
         } else {
             Vec::new()
         };
@@ -1350,7 +1353,18 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, tool: EdgeTool, source: Id, target:
             let owner = owner_for(model, start, &kind)
                 .ok_or_else(|| ModelError::Invalid(format!("no owner for {}", kind.type_name())))?;
             let waypoints = match view.get(source).and_then(|p| p.bounds()) {
-                Some(bounds) if self_loop => crate::scene::self_loop(bounds),
+                Some(bounds) if self_loop => {
+                    let loops = view.presentations().iter().filter_map(|p| match &p.shape {
+                        Shape::Edge { source: s, target: t, waypoints, .. }
+                            if *s == source && *t == source =>
+                        {
+                            Some(waypoints.as_slice())
+                        }
+                        _ => None,
+                    });
+                    let slot = crate::scene::free_loop_slot(bounds, loops);
+                    crate::scene::self_loop_at(bounds, slot)
+                }
                 _ => Vec::new(),
             };
             let element = tx.create(owner, ElementData::new("", kind))?;

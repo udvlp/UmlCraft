@@ -28,6 +28,9 @@ today.
   English instead of in English after a German introduction.
 - **Lines between the same states** are routed together, but moving a node no longer
   reroutes the lines of its neighbours to other nodes.
+- **Several loops on one node**: a second association or transition from a node to itself
+  goes to the next corner, clockwise from the top right one, instead of on top of the first;
+  arranging the diagram puts loops that lie on each other apart.
 - **No package along with a new diagram**: a diagram made at the top of the model goes right
   into it instead of into a new package of its own name. Packages are made on purpose, in
   the model tree or with the Package tool; a diagram made in one stays there.

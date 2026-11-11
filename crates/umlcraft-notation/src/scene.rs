@@ -878,11 +878,67 @@ pub fn drag_handle(edge: &EdgeShape, handle: EdgeHandle, to: Point) -> Route {
 
 /// Waypoints of a loop at the top right corner, for edges from a node to itself.
 pub fn self_loop(r: Rect) -> Vec<Point> {
+    self_loop_at(r, 0)
+}
+
+/// How far a loop in `slot` reaches out from its corner, and how far in its ends sit: the
+/// loops of the next round go around those of the round before.
+fn loop_reach(slot: usize) -> (f32, f32) {
+    let round = (slot / 4) as f32;
+    (30.0 + 20.0 * round, 20.0 + 20.0 * round)
+}
+
+/// The corner of a loop in `slot`, the corners in turn clockwise from the top right one: its
+/// point and which way is outwards (`1.0` right or down, `-1.0` left or up).
+fn loop_corner(r: Rect, slot: usize) -> (Point, f32, f32) {
+    match slot % 4 {
+        0 => (Point::new(r.right(), r.y), 1.0, -1.0),
+        1 => (Point::new(r.right(), r.bottom()), 1.0, 1.0),
+        2 => (Point::new(r.x, r.bottom()), -1.0, 1.0),
+        _ => (Point::new(r.x, r.y), -1.0, -1.0),
+    }
+}
+
+/// Waypoints of the loop in `slot` of a node: the corners in turn, so that the loops of a
+/// node with several do not lie on each other (see [`free_loop_slot`]).
+pub fn self_loop_at(r: Rect, slot: usize) -> Vec<Point> {
+    let (c, sx, sy) = loop_corner(r, slot);
+    let (out, inn) = loop_reach(slot);
     vec![
-        Point::new(r.right() + 30.0, r.y + 20.0),
-        Point::new(r.right() + 30.0, r.y - 30.0),
-        Point::new(r.right() - 20.0, r.y - 30.0),
+        Point::new(c.x + sx * out, c.y - sy * inn),
+        Point::new(c.x + sx * out, c.y + sy * out),
+        Point::new(c.x - sx * inn, c.y + sy * out),
     ]
+}
+
+/// The slot for one more loop of `r` beside `loops` (their waypoints): the first corner with
+/// the fewest loops, around those already there.
+pub fn free_loop_slot<'a>(r: Rect, loops: impl IntoIterator<Item = &'a [Point]>) -> usize {
+    let mut taken = [0usize; 4];
+    for waypoints in loops {
+        taken[loop_corner_of(r, waypoints)] += 1;
+    }
+    let fewest = *taken.iter().min().expect("four corners");
+    let corner = taken.iter().position(|&t| t == fewest).expect("a corner with the fewest");
+    fewest * 4 + corner
+}
+
+/// The corner of `r` a loop with `waypoints` keeps to, numbered as the slots of
+/// [`self_loop_at`]: the one on the side of their middle. Without waypoints it is drawn as
+/// [`self_loop`], at the top right one.
+pub fn loop_corner_of(r: Rect, waypoints: &[Point]) -> usize {
+    if waypoints.is_empty() {
+        return 0;
+    }
+    let n = waypoints.len() as f32;
+    let x = waypoints.iter().map(|w| w.x).sum::<f32>() / n;
+    let y = waypoints.iter().map(|w| w.y).sum::<f32>() / n;
+    match (x >= r.center().x, y >= r.center().y) {
+        (true, false) => 0,
+        (true, true) => 1,
+        (false, true) => 2,
+        (false, false) => 3,
+    }
 }
 
 /// The anchor (relative to `r`) straight across from a loop's bend `w` on the nearest side of
@@ -902,8 +958,19 @@ fn loop_anchor(r: Rect, w: Point) -> Point {
 /// The anchors (relative to `r`) at the ends of [`self_loop`]'s waypoints, on the border, so
 /// that the loop keeps to the corner however the line is drawn.
 pub fn self_loop_anchors(r: Rect) -> (Point, Point) {
+    self_loop_anchors_at(r, 0)
+}
+
+/// The anchors (relative to `r`) at the ends of [`self_loop_at`]'s waypoints for `slot`.
+pub fn self_loop_anchors_at(r: Rect, slot: usize) -> (Point, Point) {
     let fraction = |v: f32, size: f32| if size > 0.0 { (v / size).clamp(0.0, 1.0) } else { 0.5 };
-    (Point::new(1.0, fraction(20.0, r.height)), Point::new(fraction(r.width - 20.0, r.width), 0.0))
+    let (c, sx, sy) = loop_corner(r, slot);
+    let (_, inn) = loop_reach(slot);
+    let side = |s: f32| if s > 0.0 { 1.0 } else { 0.0 };
+    (
+        Point::new(side(sx), fraction(c.y - sy * inn - r.y, r.height)),
+        Point::new(fraction(c.x - sx * inn - r.x, r.width), side(sy)),
+    )
 }
 
 /// Size of the diagram font. Astah draws all class diagram texts in 12 px "Dialog" (Arial).

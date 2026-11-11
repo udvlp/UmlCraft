@@ -3812,6 +3812,45 @@ mod tests {
     }
 
     #[test]
+    fn loops_of_one_node_keep_to_different_corners() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let args = json!({ "diagram": d, "tool": "class", "name": "Node", "x": 100, "y": 100 });
+        let class = run(&mut host, "create_element", args);
+        let lines: Vec<Value> = (0..2)
+            .map(|_| {
+                let args = json!({ "diagram": d, "tool": "association",
+                                   "source": class["element"], "target": class["element"] });
+                run(&mut host, "connect", args)
+            })
+            .collect();
+        let at_corners = |host: &Headless| {
+            let view = host.document().model().view(d.parse().unwrap()).unwrap();
+            let r =
+                view.get(id(&class["presentation"]).parse().unwrap()).unwrap().bounds().unwrap();
+            for (slot, line) in lines.iter().enumerate() {
+                let Shape::Edge { waypoints, source_anchor, target_anchor, .. } =
+                    &view.get(id(&line["presentation"]).parse().unwrap()).unwrap().shape
+                else {
+                    panic!("not a line")
+                };
+                assert_eq!(waypoints, &scene::self_loop_at(r, slot), "{slot} {r:?}");
+                let (from, to) = scene::self_loop_anchors_at(r, slot);
+                if source_anchor.is_some() {
+                    assert_eq!((*source_anchor, *target_anchor), (Some(from), Some(to)));
+                }
+            }
+            r
+        };
+        let first = at_corners(&host);
+        // The class grows for an attribute: each loop stays at its corner.
+        run(&mut host, "add_member", json!({ "owner": class["element"], "text": "- value : int" }));
+        assert!(at_corners(&host).height > first.height);
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        at_corners(&host);
+    }
+
+    #[test]
     fn states_take_activities_and_internal_transitions() {
         let mut host = Headless::new();
         let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "TU" }));

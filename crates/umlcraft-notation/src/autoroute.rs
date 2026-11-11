@@ -1055,7 +1055,10 @@ pub fn with_neighbours(model: &umlcraft_model::Model, diagram: Id, edges: &[Id])
     result
 }
 
-/// Loops from a node to itself keep to the node's top right corner: where the node moved or
+/// How many rounds of loops around one corner [`follow_loops`] looks for.
+const LOOP_ROUNDS: usize = 8;
+
+/// Loops from a node to itself keep to their corner of the node: where the node moved or
 /// changed size and the edit left its loop as it was, the loop moves as far as that corner,
 /// and ends placed at the corner stay there.
 fn follow_loops(tx: &mut Tx<'_>, diagram: Id, before: &Snapshot) -> Result<()> {
@@ -1080,14 +1083,21 @@ fn follow_loops(tx: &mut Tx<'_>, diagram: Id, before: &Snapshot) -> Result<()> {
         if old == new {
             continue;
         }
-        let (dx, dy) = (new.right() - old.right(), new.y - old.y);
+        let corner = crate::scene::loop_corner_of(old, waypoints);
+        let dx = if matches!(corner, 0 | 1) { new.right() - old.right() } else { new.x - old.x };
+        let dy = if matches!(corner, 1 | 2) { new.bottom() - old.bottom() } else { new.y - old.y };
         let points = waypoints.iter().map(|w| w.offset(dx, dy)).collect();
-        let (from, to) = crate::scene::self_loop_anchors(old);
-        let anchors = if close(*source_anchor, from) && close(*target_anchor, to) {
-            let (from, to) = crate::scene::self_loop_anchors(new);
-            (Some(from), Some(to))
-        } else {
-            (*source_anchor, *target_anchor)
+        // Ends placed at the corner, by a loop of any round there, stay at it.
+        let placed = (0..LOOP_ROUNDS).map(|round| round * 4 + corner).find(|&slot| {
+            let (from, to) = crate::scene::self_loop_anchors_at(old, slot);
+            close(*source_anchor, from) && close(*target_anchor, to)
+        });
+        let anchors = match placed {
+            Some(slot) => {
+                let (from, to) = crate::scene::self_loop_anchors_at(new, slot);
+                (Some(from), Some(to))
+            }
+            None => (*source_anchor, *target_anchor),
         };
         changes.push((p.id, points, anchors));
     }

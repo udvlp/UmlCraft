@@ -236,15 +236,23 @@ pub fn grow_owners(tx: &mut Tx<'_>, diagram: Id, presentations: &[Id]) -> Result
         let Some(view) = model.view(diagram) else { break };
         let Some(p) = view.get(id) else { continue };
         let (Some(element), Some(mut inner)) = (p.element, p.bounds()) else { continue };
-        // A loop from the vertex to itself stays inside too, with room above it for its label.
-        // Its waypoints may not have followed the move yet (`autoroute::follow` moves them
-        // afterwards), so it is taken where it ends up: at the vertex's top right corner.
-        let looped = view.presentations().iter().any(|q| {
-            matches!(&q.shape, Shape::Edge { source, target, .. } if *source == id && *target == id)
-        });
-        if looped {
-            for w in scene::self_loop(inner) {
+        // The loops from the vertex to itself stay inside too, with room above them for their
+        // labels. Their waypoints may not have followed the move yet (`autoroute::follow`
+        // moves them afterwards), so they are taken where they end up: at the vertex's
+        // corners in turn.
+        let loops = view
+            .presentations()
+            .iter()
+            .filter(|q| {
+                matches!(&q.shape, Shape::Edge { source, target, .. }
+                    if *source == id && *target == id)
+            })
+            .count();
+        let vertex = inner;
+        for slot in 0..loops {
+            for w in scene::self_loop_at(vertex, slot) {
                 inner = inner.union(&Rect::new(w.x, w.y - scene::LABEL_HEIGHT, 0.0, 0.0));
+                inner = inner.union(&Rect::new(w.x, w.y, 0.0, 0.0));
             }
         }
         let mut grown = Vec::new();
