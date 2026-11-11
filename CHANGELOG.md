@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.21.0 – 2026-11-11
 
 - **The AppImage starts on more systems**: it brings the xkbcommon libraries along, which a
   desktop without them (e.g. Wayland only) lacked.
