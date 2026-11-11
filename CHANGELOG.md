@@ -5,6 +5,8 @@ today.
 
 ## Unreleased
 
+- **The AppImage starts on more systems**: it brings the xkbcommon libraries along, which a
+  desktop without them (e.g. Wayland only) lacked.
 - **New diagram** lists the diagram kinds and the structogram in alphabetical order of their
   names in the language shown, without a separator before the structogram.
 - **AI clients keep to their folders**: a path that leaves an allowed folder with `..` after a

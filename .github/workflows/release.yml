@@ -279,7 +279,9 @@ jobs:
             "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_amd64.deb"
           echo "$NFPM_SHA256  nfpm.deb" | sha256sum -c
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ./nfpm.deb librsvg2-bin
+          # patchelf and the xkbcommon libraries for the AppImage, which bundles them.
+          sudo apt-get install -y --no-install-recommends ./nfpm.deb librsvg2-bin patchelf \
+            libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1
           curl -sSfL -o appimagetool \
             "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
           echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c

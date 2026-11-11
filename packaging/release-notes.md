@@ -21,8 +21,8 @@ The builds are not signed yet:
 - **macOS:** Gatekeeper says the app is damaged or from an unidentified developer. After copying
   it to Applications, run `xattr -dr com.apple.quarantine /Applications/UmlCraft.app` once.
 - **Linux:** the `.deb` and `.rpm` bring the libraries UmlCraft needs, Flatpak and Snap bring
-  their own. The AppImage and the `.tar.gz` need Vulkan, xkbcommon, Wayland or X11 and
-  Fontconfig, e.g. on Debian/Ubuntu
+  their own. The AppImage brings xkbcommon and needs Vulkan, Wayland or X11 and Fontconfig,
+  which every graphical desktop has. The `.tar.gz` needs xkbcommon too, e.g. on Debian/Ubuntu
   `sudo apt install libvulkan1 libxkbcommon-x11-0 libwayland-client0 libfontconfig1`.
   The Snap is not in the Snap Store yet, hence `--dangerous`; Flatpak and Snap do not update
   themselves.
