@@ -467,11 +467,25 @@ impl Tx<'_> {
         Ok(())
     }
 
-    /// Moves or resizes a node or free text; for a lifeline, its head.
+    /// Moves or resizes a node or free text; for a lifeline, its head. The lines between a
+    /// node's regions are measured from its left (or top) edge: where that edge moves while the
+    /// node changes size, resized or grown that way, they stay where they are on the diagram.
     pub fn set_bounds(&mut self, diagram: Id, id: Id, bounds: Rect) -> Result<()> {
         self.update_presentation(diagram, id, |p| match &mut p.shape {
-            Shape::Node { bounds: b, .. }
-            | Shape::Lifeline { head: b, .. }
+            Shape::Node { bounds: b, regions, .. } => {
+                if let Some(regions) = regions {
+                    let (shift, resized) = if regions.vertical {
+                        (b.x - bounds.x, b.width != bounds.width)
+                    } else {
+                        (b.y - bounds.y, b.height != bounds.height)
+                    };
+                    if resized && shift != 0.0 {
+                        regions.separators.iter_mut().for_each(|s| *s += shift);
+                    }
+                }
+                *b = bounds;
+            }
+            Shape::Lifeline { head: b, .. }
             | Shape::Fragment { bounds: b, .. }
             | Shape::Text { bounds: b, .. } => *b = bounds,
             _ => {}

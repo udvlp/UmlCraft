@@ -261,21 +261,12 @@ pub fn grow_owners(tx: &mut Tx<'_>, diagram: Id, presentations: &[Id]) -> Result
                 break;
             }
             let r = outer.union(&inner.inflate(GROW_MARGIN));
-            // The lines between regions keep their place among the contents: they are
-            // measured from the top (or left) edge, which moves when the state grows that way.
-            let regions = view.get(q).and_then(|q| q.regions()).map(|layout| {
-                let shift = if layout.vertical { outer.x - r.x } else { outer.y - r.y };
-                let separators = layout.separators.iter().map(|s| s + shift).collect();
-                Regions { separators, ..layout.clone() }
-            });
-            grown.push((q, r, regions));
+            grown.push((q, r));
             inner = r;
         }
-        for (q, r, regions) in grown {
+        // Lines between regions stay in place (`Tx::set_bounds`).
+        for (q, r) in grown {
             tx.set_bounds(diagram, q, r)?;
-            if let Some(regions) = regions {
-                set_layout(tx, diagram, q, regions)?;
-            }
         }
     }
     Ok(())
@@ -652,6 +643,16 @@ mod tests {
         assert!(bounds(&doc, node).x < state.x, "the state grew to the left");
         assert_eq!(line_x(&doc), before);
         assert_eq!(doc.model().get(empty).unwrap().owner(), Some(regions_of(doc.model(), open)[0]));
+
+        // Resized at its left edge, the state keeps the line where it is; moved, it takes it
+        // along.
+        let state = bounds(&doc, node);
+        let wider = Rect::new(state.x - 40.0, state.y, state.width + 40.0, state.height);
+        doc.edit("resize", |tx| tx.set_bounds(diagram, node, wider)).unwrap();
+        assert_eq!(line_x(&doc), before);
+        let moved = wider.translate(25.0, 0.0);
+        doc.edit("move", |tx| tx.set_bounds(diagram, node, moved)).unwrap();
+        assert_eq!(line_x(&doc), before + 25.0);
     }
 
     #[test]
