@@ -3625,6 +3625,81 @@ mod tests {
     }
 
     #[test]
+    fn labels_of_both_ends_fit_between_classes_laid_out_left_to_right() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let class = |host: &mut Headless, name: &str, member: &str| {
+            let args = json!({ "diagram": d, "tool": "class", "name": name });
+            let c = run(host, "create_element", args);
+            run(host, "add_member", json!({ "owner": c["element"], "text": member }));
+            c
+        };
+        let leser = class(&mut host, "Leser", "- name : String");
+        let buch = class(&mut host, "Buch", "- titel : String");
+        let end = |role: &str| {
+            json!({ "role": role, "multiplicity": "0..1",
+                                       "navigability": "navigable" })
+        };
+        let args = json!({ "diagram": d, "tool": "association", "source": leser["element"],
+                           "target": buch["element"], "source_end": end("- leser"),
+                           "target_end": end("- buch") });
+        run(&mut host, "connect", args);
+        run(&mut host, "arrange_diagram", json!({ "diagram": d, "direction": "right" }));
+        let (lines, nodes) = drawn_labels(&mut host, &d);
+        let (points, labels) = &lines[0];
+        for (k, (text, r)) in labels.iter().enumerate() {
+            assert!(nodes.iter().all(|n| !n.intersects(r)), "{text} {r:?} {nodes:?}");
+            let crossed = points.windows(2).any(|w| r.intersects(&Rect::from_corners(w[0], w[1])));
+            assert!(!crossed, "{text} {r:?} {points:?}");
+            for (other, o) in &labels[k + 1..] {
+                assert!(!r.intersects(o), "{text} {r:?} {other} {o:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_role_beside_a_generalization_keeps_to_its_target() {
+        let mut host = Headless::new();
+        let d = id(&run(&mut host, "get_document", json!({}))["diagrams"][0]["id"]);
+        let class = |host: &mut Headless, name: &str| {
+            let args = json!({ "diagram": d, "tool": "class", "name": name });
+            run(host, "create_element", args)
+        };
+        let baustein = class(&mut host, "Baustein");
+        let schalter = class(&mut host, "Schalter");
+        let gatter = class(&mut host, "Gatter");
+        let und = class(&mut host, "Und");
+        let oder = class(&mut host, "Oder");
+        let inherit = |host: &mut Headless, from: &Value, to: &Value| {
+            let args = json!({ "diagram": d, "tool": "generalization",
+                               "source": from["element"], "target": to["element"] });
+            run(host, "connect", args)
+        };
+        inherit(&mut host, &schalter, &baustein);
+        inherit(&mut host, &gatter, &baustein);
+        inherit(&mut host, &und, &gatter);
+        inherit(&mut host, &oder, &gatter);
+        let args = json!({ "diagram": d, "tool": "association", "source": gatter["element"],
+                           "target": baustein["element"],
+                           "target_end": { "role": "# eingaenge", "multiplicity": "*",
+                                           "navigability": "navigable" } });
+        run(&mut host, "connect", args);
+        run(&mut host, "arrange_diagram", json!({ "diagram": d, "direction": "down" }));
+        let (lines, _) = drawn_labels(&mut host, &d);
+        // The association's labels, wherever its line runs, near its end at Baustein.
+        let (points, labels) = lines
+            .iter()
+            .find(|(_, labels)| labels.iter().any(|(t, _)| t == "# eingaenge"))
+            .expect("the association's labels");
+        let (source, target) = (points[0], points[points.len() - 1]);
+        for (text, r) in labels {
+            let c = r.center();
+            assert!(c.distance(target) < c.distance(source), "{text} {r:?} {points:?}");
+            assert!(c.distance(target) < 60.0, "{text} {r:?} {points:?}");
+        }
+    }
+
+    #[test]
     fn object_diagrams_are_made_and_named_so() {
         let mut host = Headless::new();
         let args = json!({ "kind": "object", "name": "Snapshot" });
