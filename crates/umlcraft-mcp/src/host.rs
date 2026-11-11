@@ -95,19 +95,16 @@ impl Access {
 /// `allowed/new/../../x` counts as the `x` beside `allowed` that writing it reaches.
 pub(crate) fn absolute(path: &Path) -> PathBuf {
     let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut resolved = resolve(&path);
-    // Each round takes back the `..` that the folders left after the existing part hold; the
-    // existing part is canonical, so going up from it is going up on the disk.
-    for _ in 0..8 {
-        let dotted = resolved
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir));
-        if !dotted {
-            break;
-        }
-        resolved = resolve(&lexical(&resolved));
+    let resolved = resolve(&path);
+    let dotted = resolved
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir));
+    if !dotted {
+        return resolved;
     }
-    resolved
+    // The `..` left lie after the existing part, which is canonical: going up from it is going
+    // up on the disk, so taking them back leaves none, and the rest only needs resolving again.
+    resolve(&lexical(&resolved))
 }
 
 /// `path` with `.` dropped and each `..` taking back the component before it.
