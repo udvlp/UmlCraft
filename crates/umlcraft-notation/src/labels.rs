@@ -54,8 +54,8 @@ const LABEL_COST: f32 = 2.0;
 /// What moving costs: per spot further down the list, and per pixel away from Astah's spot.
 const RANK_COST: f32 = 0.6;
 const DISTANCE_COST: f32 = 0.03;
-/// What a role or multiplicity pays for standing between its line and another line between the
-/// same two nodes, where it would read as that line's.
+/// What a label pays for standing between its line and another line between the same two
+/// nodes, where it would read as that line's.
 const BETWEEN_COST: f32 = 30.0;
 
 /// Moves the free labels of `edges` to where they cover least of `nodes`, the lines and the
@@ -195,13 +195,11 @@ impl Block {
         }
     }
 
-    /// For a role or multiplicity of a line beside another line between the same two nodes:
-    /// makes the spots between the two cost more, so that the label goes to the outer side,
-    /// where it reads as its own line's.
+    /// For a label of a line beside another line between the same two nodes: makes the spots
+    /// between the two cost more, so that the label goes to the outer side, where it reads as
+    /// its own line's. A role or multiplicity looks at its end segment, a name or keyword at the
+    /// middle segment.
     fn keep_outside(&mut self, edge: &EdgeShape, free: &FreeLabel, edges: &[EdgeShape]) {
-        let (LabelKind::Role { source } | LabelKind::Multiplicity { source }) = free.kind else {
-            return;
-        };
         let ends = |e: &EdgeShape| {
             let [a, b] = e.ends;
             if a == b { None } else { Some([a, b]) }
@@ -211,10 +209,20 @@ impl Block {
         if n < 2 {
             return;
         }
-        let (tip, next) = if source {
-            (edge.points[0], edge.points[1])
-        } else {
-            (edge.points[n - 1], edge.points[n - 2])
+        let middle_segment = |e: &EdgeShape| route::middle_segment(&e.points, e.shape.is_curve());
+        // The segment the label belongs to and, for a role or multiplicity, the node its end
+        // is at.
+        let (tip, next, end) = match free.kind {
+            LabelKind::Role { source } | LabelKind::Multiplicity { source } if source => {
+                (edge.points[0], edge.points[1], Some(a))
+            }
+            LabelKind::Role { .. } | LabelKind::Multiplicity { .. } => {
+                (edge.points[n - 1], edge.points[n - 2], Some(b))
+            }
+            LabelKind::Name | LabelKind::Keyword => {
+                let (p, q) = middle_segment(edge);
+                (p, q, None)
+            }
         };
         let len = tip.distance(next);
         if len < 1e-3 {
@@ -228,14 +236,19 @@ impl Block {
             let (p, q) = (e.points[0], e.points[k - 1]);
             Point::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0)
         };
-        // Which side of the end segment another line lies on: where it meets the node this end
-        // is at, as drawn (a shared generalization runs over its common line), or its middle
-        // where both meet the node at one point.
-        let node = if source { a } else { b };
-        let at_node = |e: &EdgeShape| {
-            let k = e.points.len();
-            let p = if e.ends[0] == node { e.points[0] } else { e.points[k - 1] };
-            if side(p).abs() > 0.5 { side(p) } else { side(middle(e)) }
+        // Which side of the segment another line lies on. At an end: where it meets the node
+        // this end is at, as drawn (a shared generalization runs over its common line), or its
+        // middle where both meet the node at one point. For a name: its middle segment.
+        let at_node = |e: &EdgeShape| match end {
+            Some(node) => {
+                let k = e.points.len();
+                let p = if e.ends[0] == node { e.points[0] } else { e.points[k - 1] };
+                if side(p).abs() > 0.5 { side(p) } else { side(middle(e)) }
+            }
+            None => {
+                let (p, q) = middle_segment(e);
+                side(Point::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0))
+            }
         };
         let others: Vec<f32> = edges
             .iter()

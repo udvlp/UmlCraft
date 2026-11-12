@@ -4988,6 +4988,51 @@ mod tests {
     }
 
     #[test]
+    fn names_of_opposite_transitions_stand_outside_their_lines() {
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "S" }));
+        let d = id(&d["diagram"]);
+        let make = |host: &mut Headless, name: &str| {
+            run(host, "create_element", json!({ "diagram": d, "tool": "state", "name": name }))
+        };
+        let (a, b) = (make(&mut host, "A"), make(&mut host, "B"));
+        let connect = |host: &mut Headless, s: &Value, t: &Value, name: &str| {
+            let args = json!({ "diagram": d, "tool": "transition", "source": s["element"],
+                               "target": t["element"], "name": name });
+            id(&run(host, "connect", args)["presentation"])
+        };
+        let there = connect(&mut host, &a, &b, "A to B");
+        let back = connect(&mut host, &b, &a, "B to A");
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        // Where the label's middle lies across the line's middle segment, and where the other
+        // line does.
+        let across = |e: &str, p: Point| {
+            let edge = scene.edge(e.parse().unwrap()).unwrap();
+            let (s, t) = umlcraft_notation::route::middle_segment(&edge.points, false);
+            let len = s.distance(t);
+            ((t.x - s.x) * (p.y - s.y) - (t.y - s.y) * (p.x - s.x)) / len
+        };
+        let label_middle = |e: &str| {
+            let edge = scene.edge(e.parse().unwrap()).unwrap();
+            let label = &edge.labels[0];
+            let width = scene::label_width(&label.text, measure);
+            label.anchor.offset(width / 2.0, scene::LABEL_HEIGHT / 2.0)
+        };
+        let line_middle = |e: &str| {
+            let edge = scene.edge(e.parse().unwrap()).unwrap();
+            let (s, t) = umlcraft_notation::route::middle_segment(&edge.points, false);
+            Point::new((s.x + t.x) / 2.0, (s.y + t.y) / 2.0)
+        };
+        for (own, other) in [(&there, &back), (&back, &there)] {
+            let label = across(own, label_middle(own));
+            let line = across(own, line_middle(other));
+            assert!(label * line < 0.0, "{own}: label {label}, other line {line}");
+        }
+    }
+
+    #[test]
     fn states_grow_around_their_substates() {
         let mut host = Headless::new();
         let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "TU" }));

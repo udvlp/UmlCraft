@@ -14,6 +14,9 @@ today.
   message to self stands right of the activation it leaves instead of across it.
 - **Replies to self**: a reply placed close below a call to self leaves the activation that
   call started at its full height, so it reads as returning from there into the outer one.
+- **Names of parallel lines**: where two lines run side by side between the same two
+  elements, such as opposite transitions, each name stands on the outer side of its own line
+  instead of between the two, where it read as the other line's.
 
 ## 0.21.1 – 2026-11-11
 
