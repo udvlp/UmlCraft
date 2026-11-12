@@ -12,6 +12,8 @@ today.
 - **Fragments below loops to self**: putting the messages after a message to self into a
   fragment keeps the frame below its loop and the activation it starts. The text of a long
   message to self stands right of the activation it leaves instead of across it.
+- **Replies to self**: a reply placed close below a call to self leaves the activation that
+  call started at its full height, so it reads as returning from there into the outer one.
 
 ## 0.21.1 – 2026-11-11
 

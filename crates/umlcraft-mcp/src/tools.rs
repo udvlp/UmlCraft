@@ -4392,6 +4392,37 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_to_self_leaves_the_bar_its_call_started() {
+        let mut host = Headless::new();
+        let steps: Vec<Step> = vec![
+            ("message", 0, 1, "call", 100.0),
+            ("message", 1, 1, "suchen(8)", 140.0),
+            ("reply", 1, 1, "g", 170.0),
+            ("message", 1, 2, "x", 230.0),
+            ("reply", 1, 0, "r", 300.0),
+        ];
+        let (d, messages) = sequence_script(&mut host, &steps);
+        // The inner bar keeps the height a call gives it, and the reply leaves at its end.
+        let (_, arrived) = message_y(&host, &d, &messages[1]);
+        let (g, _) = message_y(&host, &d, &messages[2]);
+        let inner = bars_of(&host, &d, 1).into_iter().find(|&(top, _)| (top - arrived).abs() < 0.5);
+        let (top, bottom) = inner.expect("a bar for the call to self");
+        assert!(bottom - top >= sequence_edit::RECEIVER_BAR - 0.01, "{top} {bottom}");
+        assert!((g - bottom).abs() < 0.5, "{g} {bottom}");
+        // From the inner bar's side back into the outer one.
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let points = |text: &str| {
+            let e = scene.edges.iter().find(|e| e.labels.iter().any(|l| l.text == text)).unwrap();
+            e.points.clone()
+        };
+        let (call, reply) = (points("1.1: suchen(8)"), points("g"));
+        assert!((reply[0].x - call[3].x).abs() < 0.5, "{reply:?} {call:?}");
+        assert!((reply[3].x - call[0].x).abs() < 0.5, "{reply:?} {call:?}");
+        host.document().model().check().unwrap();
+    }
+
+    #[test]
     fn sequence_diagrams_go_without_numbers_and_frame() {
         let mut host = Headless::new();
         let args = json!({ "kind": "sequence", "name": "Calc", "message_numbers": false,

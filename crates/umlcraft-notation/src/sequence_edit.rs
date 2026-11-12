@@ -1255,6 +1255,21 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     let Some(m) = g.messages.iter().find(|m| m.element == Some(element)).copied() else {
         return Ok(());
     };
+    // A reply leaves the bar a call started no sooner than that bar's least height, as
+    // `shrink_bar` keeps it: shorter, a reply to self would leave from the bar's corner.
+    let y = match g.bar_at(m.source, m.y) {
+        Some(bar)
+            if m.sort == MessageSort::Reply
+                && g.messages.iter().any(|c| {
+                    c.sort != MessageSort::Reply
+                        && c.target == bar.lane
+                        && (bar.top - c.end()).abs() < 0.5
+                }) =>
+        {
+            y.max(bar.top + RECEIVER_BAR)
+        }
+        _ => y,
+    };
     // The bar the message starts and, from the inside out, what lies within it.
     let mut bars: HashSet<Id> = HashSet::new();
     let mut messages: HashSet<Id> = HashSet::from([m.id]);
