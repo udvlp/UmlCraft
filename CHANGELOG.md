@@ -3,6 +3,16 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Calls drawn further down**: a message an AI client draws at a given height from a
+  lifeline that was called and has not answered yet belongs to that call, however far below
+  it lies: it is numbered within it and starts no second activation, and a fragment around it
+  leaves the reply outside.
+- **Fragments below loops to self**: putting the messages after a message to self into a
+  fragment keeps the frame below its loop and the activation it starts. The text of a long
+  message to self stands right of the activation it leaves instead of across it.
+
 ## 0.21.1 – 2026-11-11
 
 - **Loops beside other lines**: a new loop goes to a corner whose sides other lines leave

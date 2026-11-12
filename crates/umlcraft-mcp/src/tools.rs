@@ -1569,6 +1569,16 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     };
     let edge = change(host, "connect", |tx| {
         let edge = if tool.message_sort().is_some() {
+            // What a lifeline sends after it was called belongs to that call until it answers,
+            // however far below the call it is drawn: a client gives the heights in the order
+            // of the interaction, not to start new activations.
+            let sends = !matches!(tool, EdgeTool::Reply | EdgeTool::FoundMessage);
+            if let Some(slot) = slot.filter(|_| sends) {
+                let model = tx.model();
+                let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+                let lane = palette::lifeline_of(model, view, source);
+                sequence_edit::continue_open_bar(tx, diagram, lane, slot.y)?;
+            }
             palette::connect_message(tx, diagram, tool, source, target, slot)?
         } else if anyway {
             palette::connect_anyway(tx, diagram, tool, source, target)?
@@ -3569,6 +3579,8 @@ mod tests {
 
     /// A line's points and its labels with their rectangles.
     type DrawnLine = (Vec<Point>, Vec<(String, Rect)>);
+    /// A message a test draws: tool, source and target (by index), name, height.
+    type Step = (&'static str, usize, usize, &'static str, f32);
 
     /// The labels of each line of diagram `d` as drawn, with their rectangles, and the lines'
     /// points and the nodes.
@@ -4228,6 +4240,155 @@ mod tests {
             assert!(bottom < after, "{bottom} {after}");
         }
         model.check().unwrap();
+    }
+
+    /// A sequence diagram of the lifelines p, t and g with the messages `steps` (tool, source
+    /// and target by index, name, height), as a client draws it. Returns the diagram and the
+    /// messages' replies.
+    fn sequence_script(host: &mut Headless, steps: &[Step]) -> (String, Vec<Value>) {
+        let d = run(host, "create_diagram", json!({ "kind": "sequence", "name": "S" }));
+        let d = id(&d["diagram"]);
+        let lifelines: Vec<Value> = ["p", "t", "g"]
+            .iter()
+            .map(|n| {
+                let args = json!({ "diagram": d, "tool": "lifeline", "name": n });
+                run(host, "create_element", args)
+            })
+            .collect();
+        let messages = steps
+            .iter()
+            .map(|&(tool, from, to, name, y)| {
+                let args = json!({ "diagram": d, "tool": tool, "name": name, "y": y,
+                                   "source": lifelines[from]["element"],
+                                   "target": lifelines[to]["element"] });
+                run(host, "connect", args)
+            })
+            .collect();
+        (d, messages)
+    }
+
+    /// The bars of `lifeline` (by its index among p, t, g) on `d`, as (top, bottom).
+    fn bars_of(host: &Headless, d: &str, lifeline: usize) -> Vec<(f32, f32)> {
+        let model = host.document().model();
+        let view = model.view(d.parse().unwrap()).unwrap();
+        let lanes: Vec<Id> = view
+            .presentations()
+            .iter()
+            .filter(|p| matches!(p.shape, Shape::Lifeline { .. }))
+            .map(|p| p.id)
+            .collect();
+        view.presentations()
+            .iter()
+            .filter_map(|p| match p.shape {
+                Shape::Activation { lifeline: l, top, height, .. } if l == lanes[lifeline] => {
+                    Some((top, top + height))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The height of the message presentation `m` (a reply of `connect`), and its end.
+    fn message_y(host: &Headless, d: &str, m: &Value) -> (f32, f32) {
+        let model = host.document().model();
+        let view = model.view(d.parse().unwrap()).unwrap();
+        match view.get(id(&m["presentation"]).parse().unwrap()).unwrap().shape {
+            Shape::Message { y, end_y, .. } => (y, end_y.unwrap_or(y)),
+            _ => panic!("no message"),
+        }
+    }
+
+    /// The bounds of the fragment `f` (a reply of `wrap_in_fragment`) on `d`.
+    fn frame_of(host: &Headless, d: &str, f: &Value) -> Rect {
+        let model = host.document().model();
+        let view = model.view(d.parse().unwrap()).unwrap();
+        view.presentations_of(id(&f["id"]).parse().unwrap()).next().unwrap().bounds().unwrap()
+    }
+
+    #[test]
+    fn a_call_drawn_further_down_belongs_to_the_activation_above() {
+        let cases: [&[Step]; 2] = [
+            &[("message", 0, 1, "call", 100.0), ("message", 1, 2, "x", 180.0)],
+            &[
+                ("message", 0, 1, "call", 100.0),
+                ("message", 1, 2, "q", 130.0),
+                ("reply", 2, 1, "q", 160.0),
+                ("message", 1, 2, "x", 230.0),
+            ],
+        ];
+        for (k, steps) in cases.iter().enumerate() {
+            let mut host = Headless::new();
+            let mut steps = steps.to_vec();
+            steps.push(("reply", 1, 0, "r", 300.0));
+            let (d, messages) = sequence_script(&mut host, &steps);
+            let x = &messages[messages.len() - 2];
+            let r = &messages[messages.len() - 1];
+            // One bar on t, from the call down to its reply: `x` is sent within it.
+            let bars = bars_of(&host, &d, 1);
+            let (rx, _) = message_y(&host, &d, r);
+            assert_eq!(bars.len(), 1, "{k}: {bars:?}");
+            assert!(bars[0].0 <= 100.5 && bars[0].1 >= rx - 0.5, "{k}: {bars:?} {rx}");
+            assert!((rx - 300.0).abs() < 0.5, "{k}: {rx}");
+            // A fragment around `x` leaves the reply outside.
+            let args = json!({ "diagram": d, "items": [x["element"]], "operator": "alt" });
+            let alt = run(&mut host, "wrap_in_fragment", args);
+            let frame = frame_of(&host, &d, &alt);
+            let (rx, _) = message_y(&host, &d, r);
+            assert!(frame.bottom() < rx, "{k}: {frame:?} {rx}");
+            assert_eq!(bars_of(&host, &d, 1).len(), 1, "{k}");
+            host.document().model().check().unwrap();
+        }
+    }
+
+    #[test]
+    fn fragments_keep_below_loops_to_self() {
+        let cases: [&[Step]; 2] = [
+            &[
+                ("message", 0, 1, "call", 100.0),
+                ("message", 1, 1, "suchen(8)", 140.0),
+                ("reply", 1, 1, "g", 170.0),
+                ("message", 1, 2, "x", 230.0),
+            ],
+            &[
+                ("message", 0, 1, "call", 100.0),
+                ("message", 1, 1, "ok = auszahlen(300)", 140.0),
+                ("message", 1, 2, "x", 200.0),
+            ],
+        ];
+        for (k, steps) in cases.iter().enumerate() {
+            let mut host = Headless::new();
+            let mut steps = steps.to_vec();
+            steps.push(("reply", 1, 0, "r", 300.0));
+            let (d, messages) = sequence_script(&mut host, &steps);
+            let x = &messages[messages.len() - 2];
+            let args = json!({ "diagram": d, "items": [x["element"]], "operator": "alt" });
+            let alt = run(&mut host, "wrap_in_fragment", args);
+            let frame = frame_of(&host, &d, &alt);
+            // Below the lowest loop to self and the bars on t above the frame.
+            let lowest = messages[1..messages.len() - 2]
+                .iter()
+                .map(|m| message_y(&host, &d, m))
+                .map(|(y, end)| end.max(y + umlcraft_notation::sequence::SELF_DROP))
+                .fold(f32::MIN, f32::max);
+            let inner = bars_of(&host, &d, 1)
+                .into_iter()
+                .filter(|&(top, _)| top > 100.5 && top < frame.y)
+                .map(|(_, bottom)| bottom)
+                .fold(f32::MIN, f32::max);
+            assert!(frame.y > lowest && frame.y > inner, "{k}: {frame:?} {lowest} {inner}");
+            // The bar the loop leaves runs beside its label, not through it.
+            let (doc, measure) = host.parts();
+            let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+            let edge = scene
+                .edges
+                .iter()
+                .find(|e| e.labels.iter().any(|l| l.text.contains(steps[1].3)))
+                .unwrap();
+            let label = edge.labels.iter().find(|l| l.text.contains(steps[1].3)).unwrap();
+            let width = scene::label_width(&label.text, measure);
+            assert!(label.anchor.x - width / 2.0 >= edge.points[0].x, "{k}: {label:?} {edge:?}");
+            host.document().model().check().unwrap();
+        }
     }
 
     #[test]

@@ -45,6 +45,8 @@ pub const LABEL_ABOVE: f32 = 21.05;
 const STEREOTYPE_ABOVE: f32 = 16.55;
 /// The label of a message to self is centered this far right of the loop.
 const SELF_LABEL: f32 = 7.45;
+/// The least room between the bar a message to self leaves and the left end of its label.
+const SELF_GAP: f32 = 4.0;
 /// Height of a frame's tab: one line of text and 10.
 pub const TAB_HEIGHT: f32 = 25.093_75;
 /// Texts in a tab start this far from the frame's left edge.
@@ -1117,20 +1119,23 @@ fn message_edge(
     };
     let mut labels = Vec::new();
     let n = points.len();
+    let width = [Some(&text), stereotype.as_ref()]
+        .into_iter()
+        .flatten()
+        .map(|t| measure.width(t, FONT_SIZE, false))
+        .fold(0.0, f32::max);
     let (label_top, center) = match m.label {
         Some(offset) => (y0 + offset.y, None),
+        // Over the loop, but a long text no further left than where the loop leaves its bar:
+        // the bar would run through it.
         None if m.source == m.target && m.gate == MessageGate::None => {
-            (y0 - LABEL_ABOVE, Some(points[1].x + SELF_LABEL))
+            let center = (points[1].x + SELF_LABEL).max(points[0].x + SELF_GAP + width / 2.0);
+            (y0 - LABEL_ABOVE, Some(center))
         }
         None => {
             let (a, b) = (points[n - 2], points[n - 1]);
             let top = b.y - LABEL_ABOVE;
             let above = if stereotype.is_some() { STEREOTYPE_ABOVE } else { 0.0 };
-            let width = [Some(&text), stereotype.as_ref()]
-                .into_iter()
-                .flatten()
-                .map(|t| measure.width(t, FONT_SIZE, false))
-                .fold(0.0, f32::max);
             let span = (a.x.min(b.x), a.x.max(b.x));
             let bars: Vec<(f32, f32)> = lanes
                 .iter()

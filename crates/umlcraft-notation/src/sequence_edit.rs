@@ -108,11 +108,23 @@ struct Msg {
     y: f32,
     end_y: Option<f32>,
     sort: MessageSort,
+    /// Found or lost: drawn to or from a gate beside the lifeline.
+    gate: bool,
 }
 
 impl Msg {
     fn end(&self) -> f32 {
         self.end_y.unwrap_or(self.y)
+    }
+
+    /// Where the drawn line ends lowest: a message to self without an end of its own (a reply)
+    /// still loops down by [`SELF_DROP`].
+    fn drawn_end(&self) -> f32 {
+        if self.source == self.target && self.end_y.is_none() && !self.gate {
+            self.y + SELF_DROP
+        } else {
+            self.end()
+        }
     }
 }
 
@@ -216,7 +228,7 @@ impl Geometry {
                 Shape::Activation { lifeline, top, height, .. } => {
                     g.bars.push(Bar { id: p.id, lane: *lifeline, top: *top, bottom: top + height })
                 }
-                Shape::Message { source, target, y, end_y, .. } => {
+                Shape::Message { source, target, y, end_y, gate_x, .. } => {
                     let sort = p
                         .element
                         .and_then(|e| model.get(e))
@@ -233,6 +245,7 @@ impl Geometry {
                         y: *y,
                         end_y: *end_y,
                         sort,
+                        gate: gate_x.is_some(),
                     });
                 }
                 Shape::Fragment { bounds, separators, .. } => {
@@ -477,7 +490,7 @@ pub fn extent(model: &Model, diagram: Id, items: &[Id]) -> (f32, f32, Vec<Id>) {
     for &item in items {
         if let Some(m) = g.messages.iter().find(|m| m.element == Some(item)) {
             top = top.min(m.y);
-            bottom = bottom.max(m.end());
+            bottom = bottom.max(m.drawn_end());
             // The bar a call starts belongs to it.
             if let Some(bar) =
                 g.bars.iter().find(|b| b.lane == m.target && (b.top - m.end()).abs() < 0.5)
@@ -501,6 +514,20 @@ pub fn extent(model: &Model, diagram: Id, items: &[Id]) -> (f32, f32, Vec<Id>) {
         return (next_y(model, diagram), next_y(model, diagram), lanes);
     }
     (top, bottom, lanes)
+}
+
+/// How far down the message `item` reaches on `diagram`: its line, and for a message to self
+/// the loop and the bar it starts, which stand below its line.
+pub fn message_bottom(model: &Model, diagram: Id, item: Id) -> Option<f32> {
+    let g = Geometry::read(model, diagram).ok()?;
+    let m = g.messages.iter().find(|m| m.element == Some(item))?;
+    let bar = g
+        .bars
+        .iter()
+        .filter(|_| m.source == m.target)
+        .find(|b| b.lane == m.target && (b.top - m.end()).abs() < 0.5)
+        .map_or(f32::MIN, |b| b.bottom);
+    Some(m.y.max(m.drawn_end()).max(bar))
 }
 
 /// Where something new goes when no place is given: below everything.

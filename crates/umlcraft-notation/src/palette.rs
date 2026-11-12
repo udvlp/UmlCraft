@@ -1816,7 +1816,7 @@ pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(I
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let bottom_of = |item: Id| {
         view.presentations_of(item).find_map(|p| match p.shape {
-            Shape::Message { y, end_y, .. } => Some(y.max(end_y.unwrap_or(y))),
+            Shape::Message { .. } => sequence_edit::message_bottom(model, diagram, item),
             Shape::Fragment { bounds, .. } | Shape::Node { bounds, .. } => Some(bounds.bottom()),
             _ => None,
         })
