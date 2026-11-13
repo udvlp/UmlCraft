@@ -10,6 +10,7 @@ use umlcraft_model::{
 use umlcraft_notation::autoroute;
 use umlcraft_notation::clipboard::{self, Clip};
 use umlcraft_notation::edit;
+use umlcraft_notation::er_layout;
 use umlcraft_notation::layout;
 use umlcraft_notation::member;
 use umlcraft_notation::object;
@@ -486,6 +487,16 @@ impl Workspace {
         self.report(result);
     }
 
+    /// The stored bounds of those of `presentations` that are nodes on `diagram`.
+    fn bounds_of(
+        &self,
+        diagram: Id,
+        presentations: impl IntoIterator<Item = Id>,
+    ) -> Vec<(Id, Rect)> {
+        let Some(view) = self.doc.model().view(diagram) else { return Vec::new() };
+        presentations.into_iter().filter_map(|p| Some((p, view.get(p)?.bounds()?))).collect()
+    }
+
     /// Moves the given nodes of the active diagram by (`dx`, `dy`) as one undo step.
     pub fn move_nodes(&mut self, presentations: &[Id], dx: f32, dy: f32) {
         let Some(diagram) = self.active_diagram else { return };
@@ -539,11 +550,14 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
+        let before = self.bounds_of(diagram, nodes.iter().map(|&(p, _)| p));
         let label = t!("edit.move").to_string();
         let result = self.edit(label, |tx| {
             nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
             lines.iter().try_for_each(|&l| tx.move_line(diagram, l, dx, dy))?;
             edges.into_iter().try_for_each(|(e, w)| tx.set_waypoints(diagram, e, w))?;
+            // Lines spread beside another line between the same two nodes keep their place.
+            er_layout::follow_nodes(tx, diagram, &before)?;
             if sequence {
                 umlcraft_notation::sequence_edit::tidy(tx, diagram)?;
             }
@@ -1136,10 +1150,12 @@ impl Workspace {
             }
             _ => Vec::new(),
         };
+        let before = self.bounds_of(diagram, [presentation]);
         let result = self.edit(label, |tx| {
             tx.set_bounds(diagram, presentation, bounds)?;
             // A box sized by hand keeps that size, as in Astah.
             tx.update_presentation(diagram, presentation, |p| p.style.auto_size = false)?;
+            er_layout::follow_nodes(tx, diagram, &before)?;
             // A fragment grown over messages takes them in.
             if kind == Some(umlcraft_model::DiagramKind::Sequence) {
                 umlcraft_notation::sequence_edit::tidy(tx, diagram)?;
@@ -1186,9 +1202,11 @@ impl Workspace {
             }
         }
         let moved: Vec<Id> = moves.iter().map(|&(p, _)| p).collect();
+        let before = self.bounds_of(diagram, moved.iter().copied());
         let label = t!("edit.align").to_string();
         let result = self.edit(label, |tx| {
             moves.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
+            er_layout::follow_nodes(tx, diagram, &before)?;
             match kind {
                 Some(DiagramKind::Sequence) => umlcraft_notation::sequence_edit::tidy(tx, diagram),
                 Some(DiagramKind::StateMachine) => {

@@ -3,6 +3,12 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Recursive relationships follow their nodes**: when the relationship or the entity of a
+  recursive relationship is moved or resized, its two lines keep running apart beside the
+  straight way between them instead of bending back to where they were drawn.
+
 ## 0.21.2 – 2026-11-13
 
 - **Calls drawn further down**: a message an AI client draws at a given height from a

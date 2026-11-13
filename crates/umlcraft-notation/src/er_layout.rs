@@ -23,7 +23,8 @@
 use std::collections::HashMap;
 
 use umlcraft_model::{
-    CardinalityMax, ElementKind, Id, Model, ModelError, Point, Rect, Result, Shape, Size, Tx,
+    CardinalityMax, DiagramKind, ElementKind, Id, Model, ModelError, Point, Rect, Result, Shape,
+    Size, Tx,
 };
 
 use crate::layout::{Direction, Edge, layered};
@@ -276,6 +277,74 @@ pub fn spread_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<()
         }
     }
     Ok(())
+}
+
+/// After nodes moved or changed size, a line spread apart beside another line between the same
+/// two nodes (one bend and no fixed ends, as [`spread_new_lines`] and Arrange leave it) keeps
+/// its place beside the other when only one of its ends moved: its bend keeps how far along the
+/// way between the two middles it lies and how far beside it. `before` holds the bounds the
+/// changed nodes had; lines between two of them keep their bends as the caller left them.
+pub fn follow_nodes(tx: &mut Tx<'_>, diagram: Id, before: &[(Id, Rect)]) -> Result<()> {
+    let model = tx.model();
+    if model.get(diagram).and_then(|d| d.kind().as_diagram())
+        != Some(DiagramKind::EntityRelationship)
+    {
+        return Ok(());
+    }
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let old: HashMap<Id, Rect> = before.iter().copied().collect();
+    let bounds = |id: Id| match view.get(id).map(|p| &p.shape) {
+        Some(&Shape::Node { bounds, .. }) => Some(bounds),
+        _ => None,
+    };
+    let pair = |s: Id, t: Id| if s < t { (s, t) } else { (t, s) };
+    let mut joins: HashMap<(Id, Id), usize> = HashMap::new();
+    for p in view.presentations() {
+        if let Shape::Edge { source, target, .. } = p.shape {
+            *joins.entry(pair(source, target)).or_default() += 1;
+        }
+    }
+    let mut bends = Vec::new();
+    for p in view.presentations() {
+        let Shape::Edge { source: s, target: t, waypoints, source_anchor, target_anchor, .. } =
+            &p.shape
+        else {
+            continue;
+        };
+        let (s, t) = (*s, *t);
+        let spread = waypoints.len() == 1 && source_anchor.is_none() && target_anchor.is_none();
+        let parallel = joins.get(&pair(s, t)).is_some_and(|&n| n > 1);
+        if s == t || !spread || !parallel || old.contains_key(&s) == old.contains_key(&t) {
+            continue;
+        }
+        let (Some(now_s), Some(now_t)) = (bounds(s), bounds(t)) else { continue };
+        let was_s = old.get(&s).copied().unwrap_or(now_s);
+        let was_t = old.get(&t).copied().unwrap_or(now_t);
+        let was = (was_s.center(), was_t.center());
+        if let Some(w) = follow(waypoints[0], was, (now_s.center(), now_t.center())) {
+            bends.push((p.id, w));
+        }
+    }
+    for (line, w) in bends {
+        tx.set_waypoints(diagram, line, vec![w])?;
+    }
+    Ok(())
+}
+
+/// Where `w`, a point near the way from `a` to `b`, goes when that way runs from `a2` to `b2`:
+/// as far along it in proportion and as far beside it in pixels.
+fn follow(w: Point, (a, b): (Point, Point), (a2, b2): (Point, Point)) -> Option<Point> {
+    let unit = |p: Point, q: Point| {
+        let len = (q.x - p.x).hypot(q.y - p.y);
+        (len > 0.0).then(|| ((q.x - p.x) / len, (q.y - p.y) / len, len))
+    };
+    let ((ux, uy, len), (ux2, uy2, len2)) = (unit(a, b)?, unit(a2, b2)?);
+    let along = ((w.x - a.x) * ux + (w.y - a.y) * uy) / len * len2;
+    let beside = (w.x - a.x) * -uy + (w.y - a.y) * ux;
+    Some(Point::new(
+        (a2.x + ux2 * along - uy2 * beside).round(),
+        (a2.y + uy2 * along + ux2 * beside).round(),
+    ))
 }
 
 /// Writes the places of the nodes and the routes of the lines.

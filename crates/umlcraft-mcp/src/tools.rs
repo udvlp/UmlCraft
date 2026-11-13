@@ -16,7 +16,8 @@ use umlcraft_model::{
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview, TextMeasure};
 use umlcraft_notation::{
-    activity, autoroute, composite, edit, er, layout, member, sequence_edit, state_edit, svg,
+    activity, autoroute, composite, edit, er, er_layout, layout, member, sequence_edit, state_edit,
+    svg,
 };
 
 use crate::base64;
@@ -2599,12 +2600,19 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
             .filter(|&p| p != node)
             .collect()
     };
+    let view = host.document().model().view(diagram);
+    let before: Vec<(Id, Rect)> = std::iter::once(node)
+        .chain(contents.iter().copied())
+        .filter_map(|p| Some((p, view?.get(p)?.bounds()?)))
+        .collect();
     change(host, "move_node", |tx| {
         if let (Some(item), Some(slot)) = (item, slot) {
             palette::move_to_slot(tx, item, slot)?;
         }
         tx.set_bounds(diagram, node, Rect::new(x, y, width, height))?;
         move_along(tx, diagram, node, &contents, dx, dy)?;
+        // Lines spread beside another line between the same two nodes keep their place by it.
+        er_layout::follow_nodes(tx, diagram, &before)?;
         if sequence {
             sequence_edit::tidy(tx, diagram)?;
         }
@@ -5666,6 +5674,48 @@ mod tests {
                 let width = scene::label_width(&label.text, measure);
                 let at = label.anchor.offset(width / 2.0, scene::LABEL_HEIGHT / 2.0);
                 assert!(distance(at, own) < distance(at, other), "{} at {at:?}", label.text);
+            }
+        }
+    }
+
+    #[test]
+    fn spread_lines_follow_a_moved_node() {
+        let mut host = Headless::new();
+        // Drawn where it ends up, and drawn elsewhere and moved there (#41).
+        let (placed, _, placed_lines) = recursive_relationship(&mut host);
+        let d = run(
+            &mut host,
+            "create_diagram",
+            json!({ "kind": "entity_relationship", "name": "moved" }),
+        );
+        let d = id(&d["diagram"]);
+        let user = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "erEntity", "name": "User", "x": 20, "y": 100 }),
+        );
+        let refers = run(
+            &mut host,
+            "create_element",
+            json!({ "diagram": d, "tool": "erRelationship", "name": "refers", "x": 600, "y": 300 }),
+        );
+        let lines = [(); 2].map(|_| {
+            let args = json!({ "diagram": d, "tool": "erLine", "source": refers["element"],
+                               "target": user["element"] });
+            id(&run(&mut host, "connect", args)["presentation"])
+        });
+        let args = json!({ "diagram": d, "node": refers["presentation"], "x": 260, "y": 95 });
+        run(&mut host, "move_node", args);
+        let (doc, measure) = host.parts();
+        let points = |d: &String, line: &String| {
+            let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+            scene.edge(line.parse().unwrap()).unwrap().points.clone()
+        };
+        for (moved, placed_line) in lines.iter().zip(&placed_lines) {
+            let (got, want) = (points(&d, moved), points(&placed, placed_line));
+            assert_eq!(got.len(), want.len(), "{got:?} vs {want:?}");
+            for (g, w) in got.iter().zip(&want) {
+                assert!(g.distance(*w) < 1.5, "{got:?} vs {want:?}");
             }
         }
     }
