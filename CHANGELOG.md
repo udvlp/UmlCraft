@@ -8,6 +8,9 @@ today.
 - **Recursive relationships follow their nodes**: when the relationship or the entity of a
   recursive relationship is moved or resized, its two lines keep running apart beside the
   straight way between them instead of bending back to where they were drawn.
+- **Aligned states behave as dragged ones**: a state aligned into another one makes it grow
+  around it, and lines that now cross a state's border lose their bends. A state an AI client
+  resizes lets go of the substates that no longer lie in it, as in the app.
 
 ## 0.21.2 – 2026-11-13
 

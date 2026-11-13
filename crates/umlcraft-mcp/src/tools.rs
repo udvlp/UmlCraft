@@ -16,8 +16,7 @@ use umlcraft_model::{
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Preview, TextMeasure};
 use umlcraft_notation::{
-    activity, autoroute, composite, edit, er, er_layout, layout, member, sequence_edit, state_edit,
-    svg,
+    activity, autoroute, composite, edit, er, layout, member, sequence_edit, state_edit, svg,
 };
 
 use crate::base64;
@@ -2586,8 +2585,6 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
     let (dx, dy) = (x - bounds.x, y - bounds.y);
     let model = host.document().model();
     let sequence = is_sequence(model, diagram);
-    let states =
-        model.get(diagram).and_then(|e| e.kind().as_diagram()) == Some(DiagramKind::StateMachine);
     // As when dragged: what lies in a container (substates, the nodes of a package or swimlane)
     // moves along, and so do the bends of lines between what moves.
     let contents: Vec<Id> = if sequence || (dx == 0.0 && dy == 0.0) {
@@ -2601,73 +2598,22 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
             .collect()
     };
     let view = host.document().model().view(diagram);
-    let before: Vec<(Id, Rect)> = std::iter::once(node)
-        .chain(contents.iter().copied())
-        .filter_map(|p| Some((p, view?.get(p)?.bounds()?)))
+    let nodes: Vec<(Id, Rect)> = std::iter::once((node, Rect::new(x, y, width, height)))
+        .chain(
+            contents.iter().filter_map(|&p| Some((p, view?.get(p)?.bounds()?.translate(dx, dy)))),
+        )
         .collect();
     change(host, "move_node", |tx| {
         if let (Some(item), Some(slot)) = (item, slot) {
             palette::move_to_slot(tx, item, slot)?;
         }
-        tx.set_bounds(diagram, node, Rect::new(x, y, width, height))?;
-        move_along(tx, diagram, node, &contents, dx, dy)?;
-        // Lines spread beside another line between the same two nodes keep their place by it.
-        er_layout::follow_nodes(tx, diagram, &before)?;
-        if sequence {
-            sequence_edit::tidy(tx, diagram)?;
-        }
-        // A state moved into another one (or out of it) becomes its substate.
-        if states {
-            let moved: Vec<Id> = std::iter::once(node).chain(contents.iter().copied()).collect();
-            state_edit::after_move(tx, diagram, &moved)?;
-        }
-        Ok(())
+        // Lines between what moves keep their shape; a state moved into another one (or out of
+        // it) becomes its substate.
+        edit::set_node_bounds(tx, diagram, &nodes)
     })?;
     Ok(Reply::json(
         json!({ "presentation": node, "x": x, "y": y, "width": width, "height": height }),
     ))
-}
-
-/// Moves the `contents` of `node`, which has moved by (`dx`, `dy`), along with it, and the
-/// bends of lines between any two of them.
-fn move_along(
-    tx: &mut Tx<'_>,
-    diagram: Id,
-    node: Id,
-    contents: &[Id],
-    dx: f32,
-    dy: f32,
-) -> Result<(), ModelError> {
-    if contents.is_empty() {
-        return Ok(());
-    }
-    let model = tx.model();
-    let Some(view) = model.view(diagram) else { return Ok(()) };
-    let moved: std::collections::HashSet<Id> =
-        std::iter::once(node).chain(contents.iter().copied()).collect();
-    let nodes: Vec<(Id, Rect)> = contents
-        .iter()
-        .filter_map(|&p| Some((p, view.get(p)?.bounds()?.translate(dx, dy))))
-        .collect();
-    let edges: Vec<(Id, Vec<Point>)> = view
-        .presentations()
-        .iter()
-        .filter_map(|p| match &p.shape {
-            Shape::Edge { source, target, waypoints, .. }
-                if !waypoints.is_empty() && moved.contains(source) && moved.contains(target) =>
-            {
-                Some((p.id, waypoints.iter().map(|w| w.offset(dx, dy)).collect()))
-            }
-            _ => None,
-        })
-        .collect();
-    for (p, b) in nodes {
-        tx.set_bounds(diagram, p, b)?;
-    }
-    for (e, w) in edges {
-        tx.set_waypoints(diagram, e, w)?;
-    }
-    Ok(())
 }
 
 fn arrange_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
@@ -5079,9 +5025,16 @@ mod tests {
         // So does the loop at E's top right corner, with room for its label.
         let corner = scene::self_loop(bounds(&host, &e))[1];
         assert!(bounds(&host, &u).contains(corner.offset(0.0, -scene::LABEL_HEIGHT)));
-        // Shrunk below its substates, U grows around them again when the diagram is arranged.
-        resize(&mut host, &u, 120.0, 80.0);
+        // Shrunk below its substates, yet around their middles so that they stay in it, U grows
+        // around them again when the diagram is arranged.
+        let (r, de, ee) = (bounds(&host, &u), bounds(&host, &dd), bounds(&host, &e));
+        let width = de.center().x.max(ee.center().x) - r.x + 10.0;
+        let height = de.center().y.max(ee.center().y) - r.y + 10.0;
+        resize(&mut host, &u, width, height);
         assert!(!bounds(&host, &u).contains_rect(&bounds(&host, &e)));
+        let model = host.document().model();
+        let owner = model.get(id(&e["element"]).parse().unwrap()).unwrap().owner();
+        assert_eq!(owner, Some(id(&u["element"]).parse().unwrap()));
         run(&mut host, "arrange_diagram", json!({ "diagram": d }));
         for inner in [&dd, &e] {
             assert!(

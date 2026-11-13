@@ -6,12 +6,12 @@
 use std::collections::HashMap;
 
 use umlcraft_model::{
-    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Point, Rect, Result,
-    Size, Tx,
+    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Point, Presentation,
+    Rect, Result, Shape, Size, Tx,
 };
 
 use crate::scene::{self, TextMeasure};
-use crate::{autoroute, composite, sequence_edit};
+use crate::{autoroute, composite, er_layout, sequence_edit, state_edit};
 
 /// An automatically sized box: where it is, its bounds, the size its content needs, and the
 /// content.
@@ -121,6 +121,79 @@ pub fn apply<R>(
         }
     }
     result
+}
+
+/// Gives the nodes `nodes` of `diagram` their new bounds, as dragging, resizing or aligning
+/// them does, for the app and the MCP server alike, and what follows on the diagram:
+///
+/// - Lines between two nodes whose corner moved by the same distance keep their shape: their
+///   bends move along. Loops from a node to itself follow in [`apply`].
+/// - On ER diagrams, a line spread beside another between the same two nodes keeps its place by
+///   it when only one of them moved ([`er_layout::follow_nodes`]).
+/// - Sequence diagrams are tidied.
+/// - On state machine diagrams, moved vertices go into the state drawn around them
+///   ([`state_edit::after_move`]). A state that changed size, and what lies in it, only change
+///   their owner ([`state_edit::reparent_vertices`]): a state shrunk over a substate is not
+///   grown back around it.
+pub fn set_node_bounds(tx: &mut Tx<'_>, diagram: Id, nodes: &[(Id, Rect)]) -> Result<()> {
+    let model = tx.model();
+    let Some(view) = model.view(diagram) else { return Ok(()) };
+    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let before: Vec<(Id, Rect)> =
+        nodes.iter().filter_map(|&(p, _)| Some((p, view.get(p)?.bounds()?))).collect();
+    let old: HashMap<Id, Rect> = before.iter().copied().collect();
+    let shift: HashMap<Id, (f32, f32)> = nodes
+        .iter()
+        .filter_map(|&(p, b)| old.get(&p).map(|o| (p, (b.x - o.x, b.y - o.y))))
+        .collect();
+    let bends: Vec<(Id, Vec<Point>)> = view
+        .presentations()
+        .iter()
+        .filter_map(|p| match &p.shape {
+            Shape::Edge { source, target, waypoints, .. }
+                if source != target && !waypoints.is_empty() =>
+            {
+                let (dx, dy) = *shift.get(source)?;
+                (shift.get(target) == Some(&(dx, dy)) && (dx, dy) != (0.0, 0.0))
+                    .then(|| (p.id, waypoints.iter().map(|w| w.offset(dx, dy)).collect()))
+            }
+            _ => None,
+        })
+        .collect();
+    // States that changed size, with what lies in them.
+    let resized: Vec<Id> = match kind {
+        Some(DiagramKind::StateMachine) => {
+            let states: Vec<Id> = nodes
+                .iter()
+                .filter(|&&(p, b)| old.get(&p).is_some_and(|o| o.size() != b.size()))
+                .filter_map(|&(p, _)| view.get(p)?.element)
+                .collect();
+            let inside = |p: &Presentation| {
+                p.element.is_some_and(|e| states.iter().any(|&s| s == e || model.is_ancestor(s, e)))
+            };
+            view.presentations().iter().filter(|p| inside(p)).map(|p| p.id).collect()
+        }
+        _ => Vec::new(),
+    };
+    for &(p, b) in nodes {
+        tx.set_bounds(diagram, p, b)?;
+    }
+    for (edge, points) in bends {
+        tx.set_waypoints(diagram, edge, points)?;
+    }
+    er_layout::follow_nodes(tx, diagram, &before)?;
+    match kind {
+        Some(DiagramKind::Sequence) => sequence_edit::tidy(tx, diagram),
+        Some(DiagramKind::StateMachine) => {
+            let moved: Vec<Id> =
+                nodes.iter().map(|&(p, _)| p).filter(|p| !resized.contains(p)).collect();
+            if !moved.is_empty() {
+                state_edit::after_move(tx, diagram, &moved)?;
+            }
+            state_edit::reparent_vertices(tx, diagram, &resized)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The behavior a diagram of `kind` belongs to, if any: sequence diagrams show an interaction,

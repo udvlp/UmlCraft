@@ -10,7 +10,6 @@ use umlcraft_model::{
 use umlcraft_notation::autoroute;
 use umlcraft_notation::clipboard::{self, Clip};
 use umlcraft_notation::edit;
-use umlcraft_notation::er_layout;
 use umlcraft_notation::layout;
 use umlcraft_notation::member;
 use umlcraft_notation::object;
@@ -487,16 +486,6 @@ impl Workspace {
         self.report(result);
     }
 
-    /// The stored bounds of those of `presentations` that are nodes on `diagram`.
-    fn bounds_of(
-        &self,
-        diagram: Id,
-        presentations: impl IntoIterator<Item = Id>,
-    ) -> Vec<(Id, Rect)> {
-        let Some(view) = self.doc.model().view(diagram) else { return Vec::new() };
-        presentations.into_iter().filter_map(|p| Some((p, view.get(p)?.bounds()?))).collect()
-    }
-
     /// Moves the given nodes of the active diagram by (`dx`, `dy`) as one undo step.
     pub fn move_nodes(&mut self, presentations: &[Id], dx: f32, dy: f32) {
         let Some(diagram) = self.active_diagram else { return };
@@ -522,50 +511,15 @@ impl Workspace {
             .filter(|p| matches!(p.shape, Shape::Line { .. }))
             .map(|p| p.id)
             .collect();
-        let diagram_kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
-        let sequence = diagram_kind == Some(umlcraft_model::DiagramKind::Sequence);
-        let states = diagram_kind == Some(umlcraft_model::DiagramKind::StateMachine);
         if (nodes.is_empty() && lines.is_empty()) || (dx == 0.0 && dy == 0.0) {
             return;
         }
-        // Edges between two moved nodes keep their shape: their waypoints move along.
-        let moved: HashSet<Id> = nodes.iter().map(|&(p, _)| p).collect();
-        let edges: Vec<(Id, Vec<Point>)> = self
-            .doc
-            .model()
-            .view(diagram)
-            .map(|v| {
-                v.presentations()
-                    .iter()
-                    .filter_map(|p| match &p.shape {
-                        Shape::Edge { source, target, waypoints, .. }
-                            if !waypoints.is_empty()
-                                && moved.contains(source)
-                                && moved.contains(target) =>
-                        {
-                            Some((p.id, waypoints.iter().map(|w| w.offset(dx, dy)).collect()))
-                        }
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let before = self.bounds_of(diagram, nodes.iter().map(|&(p, _)| p));
         let label = t!("edit.move").to_string();
         let result = self.edit(label, |tx| {
-            nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
             lines.iter().try_for_each(|&l| tx.move_line(diagram, l, dx, dy))?;
-            edges.into_iter().try_for_each(|(e, w)| tx.set_waypoints(diagram, e, w))?;
-            // Lines spread beside another line between the same two nodes keep their place.
-            er_layout::follow_nodes(tx, diagram, &before)?;
-            if sequence {
-                umlcraft_notation::sequence_edit::tidy(tx, diagram)?;
-            }
-            // A state dropped into another one (or out of it) becomes its substate.
-            if states {
-                state_edit::after_move(tx, diagram, presentations)?;
-            }
-            Ok(())
+            // Lines between moved nodes keep their shape; a state dropped into another one (or
+            // out of it) becomes its substate.
+            edit::set_node_bounds(tx, diagram, &nodes)
         });
         self.report(result);
     }
@@ -576,35 +530,20 @@ impl Workspace {
     pub fn move_groups(&mut self, groups: &[(Vec<Id>, f32)]) {
         let Some(diagram) = self.active_diagram else { return };
         let Some(view) = self.doc.model().view(diagram) else { return };
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-        for (members, dx) in groups.iter().filter(|(_, dx)| *dx != 0.0) {
-            let group: HashSet<Id> = members.iter().copied().collect();
-            for p in members.iter().filter_map(|&p| view.get(p)) {
-                if let Some(b) = p.bounds() {
-                    nodes.push((p.id, b.translate(*dx, 0.0)));
-                }
-            }
-            for p in view.presentations() {
-                if let Shape::Edge { source, target, waypoints, .. } = &p.shape
-                    && !waypoints.is_empty()
-                    && group.contains(source)
-                    && group.contains(target)
-                {
-                    edges.push((p.id, waypoints.iter().map(|w| w.offset(*dx, 0.0)).collect()));
-                }
-            }
-        }
+        let nodes: Vec<(Id, Rect)> = groups
+            .iter()
+            .filter(|(_, dx)| *dx != 0.0)
+            .flat_map(|(members, dx)| {
+                members
+                    .iter()
+                    .filter_map(move |&p| Some((p, view.get(p)?.bounds()?.translate(*dx, 0.0))))
+            })
+            .collect();
         if nodes.is_empty() {
             return;
         }
         let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| {
-            nodes.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
-            edges
-                .into_iter()
-                .try_for_each(|(e, w): (Id, Vec<Point>)| tx.set_waypoints(diagram, e, w))
-        });
+        let result = self.edit(label, |tx| edit::set_node_bounds(tx, diagram, &nodes));
         self.report(result);
     }
 
@@ -1136,31 +1075,12 @@ impl Workspace {
     pub fn set_bounds(&mut self, presentation: Id, bounds: Rect) {
         let Some(diagram) = self.active_diagram else { return };
         let label = t!("edit.resize").to_string();
-        let model = self.doc.model();
-        let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
-        // A state resized may now lie in another state, and its substates outside it.
-        let substates: Vec<Id> = match (kind, model.view(diagram)) {
-            (Some(umlcraft_model::DiagramKind::StateMachine), Some(view)) => {
-                let state = view.get(presentation).and_then(|p| p.element);
-                let inside = |p: &&Presentation| {
-                    state.zip(p.element).is_some_and(|(s, e)| model.is_ancestor(s, e))
-                };
-                let inner = view.presentations().iter().filter(inside).map(|p| p.id);
-                std::iter::once(presentation).chain(inner).collect()
-            }
-            _ => Vec::new(),
-        };
-        let before = self.bounds_of(diagram, [presentation]);
         let result = self.edit(label, |tx| {
-            tx.set_bounds(diagram, presentation, bounds)?;
             // A box sized by hand keeps that size, as in Astah.
             tx.update_presentation(diagram, presentation, |p| p.style.auto_size = false)?;
-            er_layout::follow_nodes(tx, diagram, &before)?;
-            // A fragment grown over messages takes them in.
-            if kind == Some(umlcraft_model::DiagramKind::Sequence) {
-                umlcraft_notation::sequence_edit::tidy(tx, diagram)?;
-            }
-            state_edit::reparent_vertices(tx, diagram, &substates)
+            // A fragment grown over messages takes them in; a state resized may now lie in
+            // another state, and its substates outside it.
+            edit::set_node_bounds(tx, diagram, &[(presentation, bounds)])
         });
         self.report(result);
     }
@@ -1178,7 +1098,6 @@ impl Workspace {
             nodes.iter().map(|&(p, r)| drawn.node(p).map_or(r, |n| n.rect)).collect();
         let aligned = scene::align(&rects, alignment);
         let model = self.doc.model();
-        let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
         let Some(view) = model.view(diagram) else { return };
         // As when they are dragged: lifelines only move sideways, and containers take what is
         // drawn inside them along.
@@ -1201,20 +1120,8 @@ impl Workspace {
                 }
             }
         }
-        let moved: Vec<Id> = moves.iter().map(|&(p, _)| p).collect();
-        let before = self.bounds_of(diagram, moved.iter().copied());
         let label = t!("edit.align").to_string();
-        let result = self.edit(label, |tx| {
-            moves.iter().try_for_each(|&(p, b)| tx.set_bounds(diagram, p, b))?;
-            er_layout::follow_nodes(tx, diagram, &before)?;
-            match kind {
-                Some(DiagramKind::Sequence) => umlcraft_notation::sequence_edit::tidy(tx, diagram),
-                Some(DiagramKind::StateMachine) => {
-                    state_edit::reparent_vertices(tx, diagram, &moved)
-                }
-                _ => Ok(()),
-            }
-        });
+        let result = self.edit(label, |tx| edit::set_node_bounds(tx, diagram, &moves));
         self.report(result);
     }
 
