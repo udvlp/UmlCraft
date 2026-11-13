@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.21.1"
+version = "0.21.2"
 edition = "2024"
 # Named in the About dialog; the copyright holders behind "The UmlCraft authors" in LICENSE-MIT.
 authors = ["Ulf Haueisen", "Steven Gast"]

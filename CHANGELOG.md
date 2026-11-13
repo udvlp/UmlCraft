@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.21.2 – 2026-11-13
 
 - **Calls drawn further down**: a message an AI client draws at a given height from a
   lifeline that was called and has not answered yet belongs to that call, however far below
