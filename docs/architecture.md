@@ -217,7 +217,7 @@ that a diff shows which element changed.
   down. All its lines are routed afterwards. The other kinds but sequence diagrams use the
   same layers: flows and transitions point from layer to layer (cycles give way at the edges
   met last going out from the initial node), include and extend from the base use case to
-  the other. State machines and use case diagrams run left to right unless told otherwise
+  the other. State machines, use case and ER diagrams run left to right unless told otherwise
   (`default_direction`). An orthogonal state lays out each region on its own and stacks them
   as its `Regions` say, with new separators. Use case diagrams put actors beside the system
   boundary (secondary actors, whose end alone is navigable, after it) and level with their
@@ -931,21 +931,28 @@ diagrams from SQL dumps and writes them back as SQL.
   entities), rectangle with a rhombus (associative), ellipse (dashed when derived, a second
   one inside when multivalued, the name underlined for a key and dotted for a partial key),
   rhombus (a second one inside when identifying), triangle (`Outline::Triangle`) with "IS-A"
-  and `d` or `o`. Names wrap and the box grows to fit them. A total participation and the
+  and `d` or `o`. A line whose end lies on the box of such a figure but outside it, as routed
+  lines' ends do, goes on straight to the figure's outline (`Outline::reach_in`). Names wrap and the box grows to fit them. A total participation and the
   supertype line of a total IS-A are double lines (`EdgeShape::double`,
   `draw::double_line`); a participation shows its cardinality and role at the entity, placed
   and dragged like an association's multiplicity and role.
 - **Layout** (`er_layout`), for "Arrange" and the SQL import. Entities, relationships and
   IS-As form the core graph; a relationship goes below the entity on its "one" side (the line
   whose cardinality has the maximum 1, which is the referenced table after an import) and
-  above the others, an IS-A below its supertype. Each core node reserves room for its
+  above the others, an IS-A below its supertype; run to the right (the default for Arrange,
+  the SQL import runs down), "below" is "right of", and the middles of these nodes rather
+  than their tops go on the grid, so that the line from an entity 40 high to a relationship
+  50 high runs straight. Each core node reserves room for its
   attributes, the boxes go to `layout::layered`, and a second round reserves the room on the
   sides that turned out to be free of lines. Attributes then go around their owner, keys
   first: rows of four above and below, columns of three at the sides, 30 px away, the free
   sides first and further out ring by ring; one that would cover a node, a line or a label
   slides along its side, moves out or takes the nearest free place around its owner, and
   when a label moved onto an attribute, the attributes are placed again. Lines are straight;
-  several lines between the same two nodes get a waypoint each. A line that would run
+  several lines between the same two nodes get a waypoint each, as does a line drawn
+  between two nodes another line already joins (`spread_new_lines`, from
+  `autoroute::route_new_lines`), such as the second participation of a recursive
+  relationship. A line that would run
   through another entity, relationship or IS-A (one that skips a layer passes a node there)
   goes around it (`detour`): one bend beside the middle of a side of the node or two along
   that side, halfway into the gap to the next node (at least 20 px, at most 30); of the eight

@@ -730,8 +730,8 @@ pub fn list() -> Vec<Value> {
              specifics, wholes above their parts, flows and transitions from step to step, \
              actors beside the system boundary; partitions stay columns and regions keep what \
              they hold) and routes its lines; with `nodes` only those, where they are, pushing \
-             others aside. Without a direction, state machines and use case diagrams run to \
-             the right and the others down.",
+             others aside. Without a direction, state machines, use case and ER diagrams run \
+             to the right and the others down.",
             json!({
                 "diagram": id("The diagram."),
                 "direction": { "type": "string", "enum": ["down", "right"] },
@@ -5612,5 +5612,126 @@ mod tests {
         let sql = out["sql"].as_str().unwrap();
         assert!(sql.contains("status enum('open','paid'),"), "{sql}");
         assert!(sql.contains("no int NOT NULL AUTO_INCREMENT"), "{sql}");
+    }
+
+    /// An ER diagram with the entity `User` and the relationship `refers`, joined twice: a
+    /// recursive relationship. Returns the diagram, the relationship's presentation and the
+    /// two participations' presentations.
+    fn recursive_relationship(host: &mut Headless) -> (String, String, [String; 2]) {
+        let d = run(host, "create_diagram", json!({ "kind": "entity_relationship", "name": "R" }));
+        let d = id(&d["diagram"]);
+        let user = run(
+            host,
+            "create_element",
+            json!({ "diagram": d, "tool": "erEntity", "name": "User", "x": 20, "y": 100 }),
+        );
+        let refers = run(
+            host,
+            "create_element",
+            json!({ "diagram": d, "tool": "erRelationship", "name": "refers", "x": 260, "y": 95 }),
+        );
+        let mut join = |cardinality: &str, role: &str| {
+            let args = json!({ "diagram": d, "tool": "erLine", "source": refers["element"],
+                               "target": user["element"] });
+            let line = run(host, "connect", args);
+            let args = json!({ "id": line["element"], "cardinality": cardinality, "role": role });
+            run(host, "update_element", args);
+            id(&line["presentation"])
+        };
+        let lines = [join("[0,1]", "referrer"), join("[0,n]", "referred")];
+        (d, id(&refers["presentation"]), lines)
+    }
+
+    #[test]
+    fn participations_of_a_recursive_relationship_run_apart() {
+        let mut host = Headless::new();
+        let (d, _, lines) = recursive_relationship(&mut host);
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let edge = |e: &String| scene.edge(e.parse().unwrap()).unwrap();
+        let distance = |p: Point, e: &String| {
+            edge(e)
+                .points
+                .windows(2)
+                .map(|w| scene::distance_to_segment(p, w[0], w[1]))
+                .fold(f32::INFINITY, f32::min)
+        };
+        // The middle of each line keeps well away from the other line.
+        for (own, other) in [(&lines[0], &lines[1]), (&lines[1], &lines[0])] {
+            let (s, t) = umlcraft_notation::route::middle_segment(&edge(own).points, false);
+            let middle = Point::new((s.x + t.x) / 2.0, (s.y + t.y) / 2.0);
+            assert!(distance(middle, other) > 20.0, "{:?}", edge(own).points);
+            // Its cardinality and role stand nearer to it than to the other line.
+            for label in &edge(own).labels {
+                let width = scene::label_width(&label.text, measure);
+                let at = label.anchor.offset(width / 2.0, scene::LABEL_HEIGHT / 2.0);
+                assert!(distance(at, own) < distance(at, other), "{} at {at:?}", label.text);
+            }
+        }
+    }
+
+    #[test]
+    fn routed_lines_end_on_the_rhombus() {
+        let mut host = Headless::new();
+        let (d, refers, lines) = recursive_relationship(&mut host);
+        run(&mut host, "route_lines", json!({ "diagram": d }));
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let rhombus = scene.node(refers.parse().unwrap()).unwrap().rect;
+        let c = rhombus.center();
+        for line in &lines {
+            let points = &scene.edge(line.parse().unwrap()).unwrap().points;
+            let end = [points[0], points[points.len() - 1]]
+                .into_iter()
+                .min_by(|a, b| a.distance(c).total_cmp(&b.distance(c)))
+                .unwrap();
+            // On the outline: |dx| / (w / 2) + |dy| / (h / 2) = 1.
+            let on = (end.x - c.x).abs() / (rhombus.width / 2.0)
+                + (end.y - c.y).abs() / (rhombus.height / 2.0);
+            assert!((on - 1.0).abs() < 0.02, "{end:?} on {rhombus:?}: {on}");
+        }
+    }
+
+    #[test]
+    fn er_diagrams_arrange_to_the_right_by_default_and_down_when_asked() {
+        let mut host = Headless::new();
+        let d = run(
+            &mut host,
+            "create_diagram",
+            json!({ "kind": "entity_relationship", "name": "arrange" }),
+        );
+        let d = id(&d["diagram"]);
+        let mut make = |tool: &str, name: &str| {
+            run(&mut host, "create_element", json!({ "diagram": d, "tool": tool, "name": name }))
+        };
+        let person = make("erEntity", "Person");
+        let vaccine = make("erEntity", "Vaccine");
+        let gets = make("erRelationship", "gets");
+        for (s, t) in [(&person, &gets), (&gets, &vaccine)] {
+            let args = json!({ "diagram": d, "tool": "erLine", "source": s["element"],
+                               "target": t["element"] });
+            run(&mut host, "connect", args);
+        }
+        let centers = |host: &mut Headless| {
+            let (doc, measure) = host.parts();
+            let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+            [&person, &gets, &vaccine]
+                .map(|n| scene.node(id(&n["presentation"]).parse().unwrap()).unwrap().rect.center())
+        };
+        for direction in [None, Some("right"), Some("down")] {
+            let mut args = json!({ "diagram": d });
+            if let Some(direction) = direction {
+                args["direction"] = json!(direction);
+            }
+            run(&mut host, "arrange_diagram", args);
+            let [p, g, v] = centers(&mut host);
+            if direction == Some("down") {
+                assert!(p.y < g.y && g.y < v.y, "{direction:?}: {p:?} {g:?} {v:?}");
+                assert!((p.x - g.x).abs() < 1.0 && (g.x - v.x).abs() < 1.0);
+            } else {
+                assert!(p.x < g.x && g.x < v.x, "{direction:?}: {p:?} {g:?} {v:?}");
+                assert!((p.y - g.y).abs() < 1.0 && (g.y - v.y).abs() < 1.0, "{p:?} {g:?} {v:?}");
+            }
+        }
     }
 }

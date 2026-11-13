@@ -517,10 +517,13 @@ fn discovery(n: usize, edges: &[(usize, usize, bool, bool)], starts: &[usize]) -
 }
 
 /// The direction [`arrange`] lays out a kind of diagram in unless told otherwise: state
-/// machines and use case diagrams from left to right, the others from the top down.
+/// machines, use case and ER diagrams from left to right, the others from the top down.
 pub fn default_direction(kind: DiagramKind) -> Direction {
     match kind {
-        DiagramKind::StateMachine | DiagramKind::UseCase => Direction::Right,
+        // ER diagrams in Chen are drawn from left to right in school: entity, relationship, entity.
+        DiagramKind::StateMachine | DiagramKind::UseCase | DiagramKind::EntityRelationship => {
+            Direction::Right
+        }
         _ => Direction::Down,
     }
 }
@@ -543,7 +546,7 @@ pub fn arrange(
     }
     // Attributes go around what they describe; always the whole diagram.
     if kind == DiagramKind::EntityRelationship {
-        return crate::er_layout::arrange(tx, diagram, measure);
+        return crate::er_layout::arrange(tx, diagram, direction, measure);
     }
     // The pins of each action are laid out along its sides first, clear of each other's
     // texts, the action growing where it must, so that the room they take is known: a pin

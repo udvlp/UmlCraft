@@ -832,18 +832,17 @@ fn nudge(
 }
 
 /// Routes lines just drawn or brought along, like [`route_lines`], except on use case and ER diagrams,
-/// whose lines are drawn straight, and on composite structure diagrams, whose connectors start
-/// at ports half inside a class; Route lines still routes them on request.
+/// whose lines are drawn straight (on ER diagrams spread apart where they join the same two
+/// nodes as another line), and on composite structure diagrams, whose connectors start at
+/// ports half inside a class; Route lines still routes them on request.
 pub fn route_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> {
-    if matches!(
-        tx.model().element(diagram)?.kind().as_diagram(),
-        Some(
-            DiagramKind::UseCase
-                | DiagramKind::CompositeStructure
-                | DiagramKind::EntityRelationship
-        )
-    ) {
-        return Ok(0);
+    match tx.model().element(diagram)?.kind().as_diagram() {
+        Some(DiagramKind::EntityRelationship) => {
+            crate::er_layout::spread_new_lines(tx, diagram, edges)?;
+            return Ok(0);
+        }
+        Some(DiagramKind::UseCase | DiagramKind::CompositeStructure) => return Ok(0),
+        _ => {}
     }
     let edges = with_neighbours(tx.model(), diagram, edges);
     route_lines(tx, diagram, &edges)

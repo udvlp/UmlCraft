@@ -24,6 +24,7 @@ use umlcraft_model::{
     ErRelationshipProps, Id, Rect, Result, Tx,
 };
 use umlcraft_notation::er_layout;
+use umlcraft_notation::layout::Direction;
 use umlcraft_notation::palette::default_size_for;
 use umlcraft_notation::scene::TextMeasure;
 
@@ -119,7 +120,8 @@ pub fn import(
     if options.notation != ErNotation::Chen {
         umlcraft_notation::er::set_notation(tx, result.diagram, options.notation, measure)?;
     }
-    er_layout::arrange(tx, result.diagram, measure)?;
+    // Tables as in IE and IDEF1X: the referenced ones above those that refer to them.
+    er_layout::arrange(tx, result.diagram, Direction::Down, measure)?;
     Ok(result)
 }
 

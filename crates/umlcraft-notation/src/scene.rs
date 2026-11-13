@@ -546,6 +546,41 @@ impl Outline {
         }
         at(lo)
     }
+
+    /// Where a line that comes from `from` and ends at `at`, inside `rect` but outside the
+    /// outline (an anchor on the box of a rhombus, as routed lines have), meets the outline when
+    /// it goes on straight; `at` where it never does or already lies on the outline.
+    pub fn reach_in(self, rect: Rect, from: Point, at: Point) -> Point {
+        const STEPS: usize = 64;
+        let on_box = at.x >= rect.x - 0.5
+            && at.x <= rect.right() + 0.5
+            && at.y >= rect.y - 0.5
+            && at.y <= rect.bottom() + 0.5;
+        if self == Self::Rect || !on_box || self.contains(rect, at) {
+            return at;
+        }
+        let len = from.distance(at);
+        if len == 0.0 {
+            return at;
+        }
+        let (dx, dy) = ((at.x - from.x) / len, (at.y - from.y) / len);
+        let step = (rect.width + rect.height) / STEPS as f32;
+        let along = |t: f32| Point::new(at.x + dx * t, at.y + dy * t);
+        let Some(k) = (1..=STEPS).find(|&k| self.contains(rect, along(k as f32 * step))) else {
+            return at;
+        };
+        // The outline lies between the last step outside and the first inside: bisect.
+        let (mut lo, mut hi) = ((k - 1) as f32 * step, k as f32 * step);
+        for _ in 0..24 {
+            let mid = (lo + hi) / 2.0;
+            if self.contains(rect, along(mid)) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        along(hi)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3980,6 +4015,12 @@ fn edge_for(
     let mut points = Vec::with_capacity(waypoints.len() + 2);
     let first_toward = waypoints.first().copied().unwrap_or(end);
     let last_from = waypoints.last().copied().unwrap_or(start);
+    // An end on the box of a rhombus, an ellipse or a triangle but outside the figure goes on
+    // to the figure's outline instead of stopping short of it.
+    let (start, end) = (
+        source_outline.reach_in(source, first_toward, start),
+        target_outline.reach_in(target, last_from, end),
+    );
     points.push(source_outline.border_point(source, start, first_toward));
     points.extend_from_slice(waypoints);
     points.push(target_outline.border_point(target, end, last_from));

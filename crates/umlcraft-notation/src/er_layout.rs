@@ -2,7 +2,8 @@
 //!
 //! 1. Entities, relationships and IS-As are the core graph. Each relationship goes into the
 //!    layer below the entity on its "one" side (the line with `[x,1]`, look-across: the
-//!    referenced table) and above the others; an IS-A below its supertype.
+//!    referenced table) and above the others; an IS-A below its supertype. Run to the right,
+//!    "below" is "right of" and "above" is "left of".
 //! 2. Each core node reserves room for its attributes around it; the boxes go to the layered
 //!    layout. A second round reserves the room on the sides that turned out to be free of
 //!    lines.
@@ -15,8 +16,9 @@
 //!    that skips a layer passes a node there) goes around it with one or two bends beside
 //!    it; a self-reference goes round the first corner of its node where it and its labels
 //!    keep clear of the others.
-//! 5. Nodes take the size their name needs and lie on the 10 px grid; the whole starts at
-//!    (20, 20). Notes and free texts stay where they are.
+//! 5. Nodes take the size their name needs and lie on the 10 px grid (run to the right,
+//!    entities, relationships and IS-As with their middles); the whole starts at (20, 20).
+//!    Notes and free texts stay where they are.
 
 use std::collections::HashMap;
 
@@ -133,15 +135,21 @@ struct Graph {
     edges: Vec<Edge>,
 }
 
-/// Arranges the whole ER diagram `diagram`. Returns the nodes that moved or changed size.
-pub fn arrange(tx: &mut Tx<'_>, diagram: Id, measure: &dyn TextMeasure) -> Result<Vec<Id>> {
+/// Arranges the whole ER diagram `diagram`, its layers running `direction`. Returns the nodes
+/// that moved or changed size.
+pub fn arrange(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    direction: Direction,
+    measure: &dyn TextMeasure,
+) -> Result<Vec<Id>> {
     let scene = scene::build(tx.model(), diagram, &Preview::default(), measure);
     let Some(mut g) = Graph::of(tx.model(), diagram, &scene)? else { return Ok(Vec::new()) };
     let before: Vec<Rect> = g.nodes.iter().map(|n| n.bounds).collect();
-    let first = place(&g, &vec![[false; 4]; g.core.len()]);
+    let first = place(&g, &vec![[false; 4]; g.core.len()], direction);
     apply(&mut g, &first);
     let used = used_sides(&g);
-    let second = place(&g, &used);
+    let second = place(&g, &used, direction);
     apply(&mut g, &second);
     detour(&mut g);
     // Where the lines run and their labels lie follow from the scene of the placed core.
@@ -186,6 +194,86 @@ pub fn arrange_attributes(tx: &mut Tx<'_>, diagram: Id, measure: &dyn TextMeasur
             break;
         }
         labels.extend(moved);
+    }
+    Ok(())
+}
+
+/// Lines just drawn between two nodes that another line already joins, such as the two
+/// participations of a recursive relationship, are spread apart as Arrange spreads them: each
+/// gets a waypoint beside the middle instead of lying on top of the other. When all of them
+/// are straight they go evenly around the middle; otherwise each straight one takes the free
+/// place nearest the middle, the others staying as they are.
+pub fn spread_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<()> {
+    for &edge in edges {
+        let model = tx.model();
+        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let Some(&Shape::Edge { source, target, .. }) = view.get(edge).map(|p| &p.shape) else {
+            continue;
+        };
+        let bounds = |id: Id| match view.get(id).map(|p| &p.shape) {
+            Some(&Shape::Node { bounds, .. }) => Some(bounds),
+            _ => None,
+        };
+        let (Some(a), Some(b)) = (bounds(source), bounds(target)) else { continue };
+        let (ca, cb) = (a.center(), b.center());
+        let (dx, dy) = (cb.x - ca.x, cb.y - ca.y);
+        let len = dx.hypot(dy);
+        if source == target || len == 0.0 {
+            continue;
+        }
+        let (nx, ny) = (-dy / len, dx / len);
+        let mid = Point::new((ca.x + cb.x) / 2.0, (ca.y + cb.y) / 2.0);
+        // The straight lines between the two nodes, and how far beside the middle the others
+        // run (a routed line without bends counts as running through it).
+        let mut straight = Vec::new();
+        let mut taken = Vec::new();
+        for p in view.presentations() {
+            let Shape::Edge {
+                source: s, target: t, waypoints, source_anchor, target_anchor, ..
+            } = &p.shape
+            else {
+                continue;
+            };
+            if (*s, *t) != (source, target) && (*s, *t) != (target, source) {
+                continue;
+            }
+            if !waypoints.is_empty() {
+                let n = waypoints.len() as f32;
+                let (sx, sy) = waypoints.iter().fold((0.0, 0.0), |(x, y), w| (x + w.x, y + w.y));
+                taken.push((sx / n - mid.x) * nx + (sy / n - mid.y) * ny);
+            } else if source_anchor.is_some() || target_anchor.is_some() {
+                taken.push(0.0);
+            } else {
+                straight.push(p.id);
+            }
+        }
+        if straight.is_empty() || straight.len() + taken.len() < 2 {
+            continue;
+        }
+        let offsets: Vec<f32> = if taken.is_empty() {
+            let m = straight.len() as f32;
+            (0..straight.len()).map(|k| (k as f32 - (m - 1.0) / 2.0) * PARALLEL_SPREAD).collect()
+        } else {
+            let mut offsets = Vec::new();
+            for _ in &straight {
+                let free = (0..)
+                    .map(|k: i32| (k + 1) / 2 * if k % 2 == 1 { 1 } else { -1 })
+                    .map(|k| k as f32 * PARALLEL_SPREAD)
+                    .find(|o| taken.iter().all(|t| (o - t).abs() >= PARALLEL_SPREAD / 2.0))
+                    .unwrap_or(0.0);
+                taken.push(free);
+                offsets.push(free);
+            }
+            offsets
+        };
+        for (line, off) in straight.into_iter().zip(offsets) {
+            let waypoints = if off == 0.0 {
+                Vec::new()
+            } else {
+                vec![Point::new((mid.x + nx * off).round(), (mid.y + ny * off).round())]
+            };
+            tx.set_route(diagram, line, waypoints, (None, None))?;
+        }
     }
     Ok(())
 }
@@ -368,8 +456,8 @@ fn sizes_of(g: &Graph, list: &[usize]) -> Vec<(f32, f32)> {
     list.iter().map(|&a| (g.nodes[a].bounds.width, g.nodes[a].bounds.height)).collect()
 }
 
-/// The top left corners of the core nodes, on the grid.
-fn place(g: &Graph, used: &[Used]) -> Vec<Point> {
+/// The top left corners of the core nodes, on the grid, their layers running `direction`.
+fn place(g: &Graph, used: &[Used], direction: Direction) -> Vec<Point> {
     let mut sizes = Vec::with_capacity(g.core.len());
     let mut offsets = Vec::with_capacity(g.core.len());
     for (c, &i) in g.core.iter().enumerate() {
@@ -389,11 +477,20 @@ fn place(g: &Graph, used: &[Used]) -> Vec<Point> {
         sizes.push(Size::new(x1 - x0 + 2.0 * slack, y1 - y0 + 2.0 * slack));
         offsets.push(Point::new(-x0 + slack - b.width / 2.0, -y0 + slack - b.height / 2.0));
     }
-    let corners = layered(&sizes, &g.edges, Direction::Down);
+    let corners = layered(&sizes, &g.edges, direction);
+    // Run to the right, the middles go on the grid across the layers rather than the tops, so
+    // that the line from an entity (40 high) to a relationship beside it (50 high) runs straight.
     corners
         .iter()
         .zip(&offsets)
-        .map(|(p, o)| Point::new(snap(p.x + o.x), snap(p.y + o.y)))
+        .zip(&g.core)
+        .map(|((p, o), &i)| {
+            let (x, y, b) = (p.x + o.x, p.y + o.y, g.nodes[i].bounds);
+            match direction {
+                Direction::Down => Point::new(snap(x), snap(y)),
+                Direction::Right => Point::new(snap(x), snap(y + b.height / 2.0) - b.height / 2.0),
+            }
+        })
         .collect()
 }
 
@@ -1163,7 +1260,7 @@ mod tests {
         }
 
         fn arrange(&mut self) {
-            self.edit(|tx, _, diagram| arrange(tx, diagram, &ApproxMeasure));
+            self.edit(|tx, _, diagram| arrange(tx, diagram, Direction::Down, &ApproxMeasure));
         }
 
         fn bounds(&self, node: Id) -> Rect {

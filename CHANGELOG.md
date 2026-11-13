@@ -17,6 +17,16 @@ today.
 - **Names of parallel lines**: where two lines run side by side between the same two
   elements, such as opposite transitions, each name stands on the outer side of its own line
   instead of between the two, where it read as the other line's.
+- **ER diagrams arrange from left to right**: Arrange lays out ER diagrams from left to right
+  unless told otherwise, entity, relationship, entity, as drawn at school; AI clients that ask
+  for `"direction": "down"` get the former layout, and the SQL import keeps it. Arranged to
+  the right, the lines between entities and relationships run straight.
+- **Recursive relationships**: the second line between a relationship and the same entity
+  is drawn beside the first instead of on top of it, so each role stays next to its own
+  cardinality.
+- **Routed lines reach the rhombus**: a line routed at right angles ends on the outline of a
+  relationship rhombus (or of an attribute's ellipse or an IS-A's triangle) instead of
+  stopping at the box around it.
 
 ## 0.21.1 – 2026-11-11
 
