@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.21.5 – 2026-11-14
 
 - **Multiplicities and cardinalities beside their own line**: a cardinality on a short line
   between rhombus and entity stays beside that line instead of moving below the entity. Where
@@ -30,9 +30,6 @@ today.
 - **Complete arrowheads under message names**: the background of a message name no longer
   covers a corner of the arrowhead, and the whole tab of a combined fragment is opaque, so no
   activation bar shows inside it.
-
-## 0.21.4 – 2026-11-14
-
 - **The same look with and without the app**: a session of an AI client without the app draws
   diagrams as the app's settings say: the visibility of members in a column of its own with a
   minus as wide as the plus, «abstract» above the name, `{readOnly}`. The new tool
