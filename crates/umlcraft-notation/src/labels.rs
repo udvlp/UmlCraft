@@ -57,6 +57,9 @@ const DISTANCE_COST: f32 = 0.03;
 /// What a label pays for standing between its line and another line between the same two
 /// nodes, where it would read as that line's.
 const BETWEEN_COST: f32 = 30.0;
+/// What a name pays for standing closer to another line than to its own, where it would read
+/// as that line's.
+const NEARER_OTHER_COST: f32 = 30.0;
 
 /// Moves the free labels of `edges` to where they cover least of `nodes`, the lines and the
 /// other labels.
@@ -66,6 +69,9 @@ pub fn place(nodes: &[NodeShape], edges: &mut [EdgeShape], measure: &dyn TextMea
         for (f, free) in edge.free_labels.iter().enumerate() {
             let mut block = Block::new(edge, e, f, free, measure);
             block.keep_outside(edge, free, edges);
+            if free.kind == LabelKind::Name {
+                block.keep_near_own(e, edges);
+            }
             blocks.push(block);
         }
     }
@@ -272,6 +278,39 @@ impl Block {
             .collect();
     }
 
+    /// For a name: makes the spots closer to another line than to its own line (edge `own`)
+    /// cost more, so that the name reads as its own line's.
+    fn keep_near_own(&mut self, own: usize, edges: &[EdgeShape]) {
+        let path = edges[own].path();
+        if path.len() < 2 {
+            return;
+        }
+        let distance = |r: Rect, points: &[Point]| {
+            points
+                .windows(2)
+                .map(|w| rect_segment_distance(r, w[0], w[1]))
+                .fold(f32::INFINITY, f32::min)
+        };
+        let others: Vec<Vec<Point>> = edges
+            .iter()
+            .enumerate()
+            .filter(|&(e, _)| e != own)
+            .map(|(_, e)| e.path().into_owned())
+            .filter(|p| p.len() >= 2)
+            .collect();
+        if others.is_empty() {
+            return;
+        }
+        self.penalty.resize(self.spots.len(), 0.0);
+        for i in 0..self.spots.len() {
+            let r = self.rect(i);
+            let mine = distance(r, &path);
+            if others.iter().any(|p| distance(r, p) < mine - 0.5) {
+                self.penalty[i] += NEARER_OTHER_COST;
+            }
+        }
+    }
+
     fn rect(&self, spot: usize) -> Rect {
         let p = self.spots[spot];
         Rect::new(p.x + self.offset.x, p.y + self.offset.y, self.width, self.height)
@@ -363,6 +402,39 @@ fn along_from_end(path: &[Point], length: f32) -> (Point, (f32, f32), bool) {
         first = false;
     }
     (path[0], (1.0, 0.0), true)
+}
+
+/// How far the segment `a`–`b` passes from `r`: none where it touches it.
+fn rect_segment_distance(r: Rect, a: Point, b: Point) -> f32 {
+    let point_rect = |p: Point| {
+        let dx = (r.x - p.x).max(p.x - r.right()).max(0.0);
+        let dy = (r.y - p.y).max(p.y - r.bottom()).max(0.0);
+        (dx * dx + dy * dy).sqrt()
+    };
+    let point_segment = |p: Point| {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let length = dx * dx + dy * dy;
+        let t = if length > 0.0 {
+            (((p.x - a.x) * dx + (p.y - a.y) * dy) / length).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        p.distance(Point::new(a.x + t * dx, a.y + t * dy))
+    };
+    if inside_length(r, a, b) > 0.0 {
+        return 0.0;
+    }
+    let corners = [
+        Point::new(r.x, r.y),
+        Point::new(r.right(), r.y),
+        Point::new(r.x, r.bottom()),
+        Point::new(r.right(), r.bottom()),
+    ];
+    corners
+        .into_iter()
+        .map(point_segment)
+        .chain([point_rect(a), point_rect(b)])
+        .fold(f32::INFINITY, f32::min)
 }
 
 /// The point `length` along `path` and the direction of the segment it lies on.

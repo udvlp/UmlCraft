@@ -380,7 +380,7 @@ impl PartialOrd for Entry {
 /// corners to the border of its target; consecutive points differ in x or in y only. `None`
 /// where there is no route: a box contains the other end, or the ends are shut in.
 pub fn route(boxes: &[Rect], requests: &[Request]) -> Vec<Option<Vec<Point>>> {
-    route_around(boxes, &[], &[], &[], &[], requests)
+    route_around(boxes, &[], &[], &[], &[], requests, &[])
 }
 
 /// Routes `requests` around `boxes` as [`route`] does, keeping off `texts` (drawn outside
@@ -388,7 +388,8 @@ pub fn route(boxes: &[Rect], requests: &[Request]) -> Vec<Option<Vec<Point>>> {
 /// around them is not much longer, and off the stretches of `lines` (that stay as they are)
 /// where a way around them is not far longer. The ends of the loops count as ports already
 /// taken, as do `taken`: where lines that stay as they are meet a box, by box and point on its
-/// border.
+/// border. `rooms` gives for each request the room its name label takes across its middle
+/// stretch (none where missing): lines spread apart at a port leave that much between them.
 pub fn route_around(
     boxes: &[Rect],
     texts: &[Rect],
@@ -396,6 +397,7 @@ pub fn route_around(
     loops: &[(usize, Vec<Point>)],
     taken: &[(usize, Point)],
     requests: &[Request],
+    rooms: &[f32],
 ) -> Vec<Option<Vec<Point>>> {
     let mut ports: Ports = HashMap::new();
     let mut beside = Vec::new();
@@ -446,8 +448,8 @@ pub fn route_around(
             sides[i] = Some(ends);
         }
     }
-    nudge(&mut routes, &sides, boxes, requests, true);
-    nudge(&mut routes, &sides, boxes, requests, false);
+    nudge(&mut routes, &sides, boxes, requests, rooms, true);
+    nudge(&mut routes, &sides, boxes, requests, rooms, false);
     routes
 }
 
@@ -694,7 +696,8 @@ fn straighten(points: Vec<Point>) -> Vec<Point> {
 }
 
 /// A stretch of a route: segment `k` of route `line`, at `level` (its y if horizontal, its x
-/// if vertical) from `from` to `to` along it.
+/// if vertical) from `from` to `to` along it, and the room its line's label takes across it
+/// (none but on the middle stretch).
 #[derive(Clone, Copy, Debug)]
 struct Segment {
     line: usize,
@@ -702,6 +705,7 @@ struct Segment {
     level: f32,
     from: f32,
     to: f32,
+    room: f32,
 }
 
 /// Spreads apart horizontal (or vertical) segments that lie on top of each other.
@@ -710,6 +714,7 @@ fn nudge(
     sides: &[Option<(Side, Side)>],
     boxes: &[Rect],
     requests: &[Request],
+    rooms: &[f32],
     horizontal: bool,
 ) {
     // Along and across the segments.
@@ -722,7 +727,9 @@ fn nudge(
             let (a, b) = (points[k], points[k + 1]);
             if (across(a) - across(b)).abs() < SAME && (along(a) - along(b)).abs() >= SAME {
                 let (from, to) = (along(a).min(along(b)), along(a).max(along(b)));
-                segments.push(Segment { line, k, level: across(a), from, to });
+                let middle = k + 1 == points.len() / 2;
+                let room = if middle { rooms.get(line).copied().unwrap_or(0.0) } else { 0.0 };
+                segments.push(Segment { line, k, level: across(a), from, to, room });
             }
         }
     }
@@ -743,8 +750,9 @@ fn nudge(
     for s in segments {
         let port = at_port(&s);
         let close = |(group, ports): &(Vec<Segment>, bool)| {
-            let gap = if port && *ports { PORT_SPACING } else { SPACING };
             group.iter().any(|g| {
+                let gap =
+                    if port && *ports { PORT_SPACING.max(s.room).max(g.room) } else { SPACING };
                 s.level - g.level < gap - SAME && s.from < g.to - 1.0 && s.to > g.from + 1.0
             })
         };
@@ -794,38 +802,87 @@ fn nudge(
                 high = high.min(r_low - MARGIN / 2.0);
             }
         }
-        let n = group.len() as f32;
-        let mut spacing = if ports { PORT_SPACING } else { SPACING };
-        let mut start = level - (n - 1.0) * spacing / 2.0;
-        if high - low >= (n - 1.0) * spacing {
-            start = start.clamp(low, high - (n - 1.0) * spacing);
+        // At ports, a label on its line's middle stretch needs its room between the lines.
+        let mut gaps: Vec<f32> = group
+            .windows(2)
+            .map(|w| if ports { PORT_SPACING.max(w[0].room).max(w[1].room) } else { SPACING })
+            .collect();
+        let total: f32 = gaps.iter().sum();
+        let mut start = level - total / 2.0;
+        if high - low >= total {
+            start = start.clamp(low, high - total);
         } else if high > low {
-            spacing = (high - low) / (n - 1.0);
+            let scale = (high - low) / total;
+            gaps.iter_mut().for_each(|g| *g *= scale);
             start = low;
         }
-        for (i, s) in group.iter().enumerate() {
-            let mut target = start + i as f32 * spacing;
-            let points = routes[s.line].as_mut().expect("grouped routes exist");
-            let last = points.len() - 2;
-            // A stretch that starts or ends at a port moves the port along its side.
-            let (Some((left, entered)), request) = (sides[s.line], requests[s.line]) else {
-                continue;
-            };
-            for (at_end, side, rect) in [
-                (s.k == 0, left, boxes[request.source]),
-                (s.k == last, entered, boxes[request.target]),
-            ] {
-                if at_end && matches!(side, Side::Left | Side::Right) == horizontal {
-                    let (lo, hi) =
-                        if horizontal { (rect.y, rect.bottom()) } else { (rect.x, rect.right()) };
-                    // Sides too short for the inset, like a fork's, keep the port in the middle.
-                    target = if hi - lo > 2.0 * PORT_INSET {
-                        target.clamp(lo + PORT_INSET, hi - PORT_INSET)
-                    } else {
-                        (lo + hi) / 2.0
-                    };
+        let offsets: Vec<f32> = std::iter::once(0.0)
+            .chain(gaps.iter().scan(0.0, |at, g| {
+                *at += g;
+                Some(*at)
+            }))
+            .collect();
+        // A stretch that starts or ends at a port moves the port along its side, so it stays
+        // within that side.
+        let bounds: Vec<(f32, f32)> = group
+            .iter()
+            .map(|s| {
+                // Clear of the boxes it passes, on the side it passes them.
+                let (mut lo, mut hi) = (f32::NEG_INFINITY, f32::INFINITY);
+                for r in boxes {
+                    let (r_from, r_to) =
+                        if horizontal { (r.x, r.right()) } else { (r.y, r.bottom()) };
+                    let (r_low, r_high) =
+                        if horizontal { (r.y, r.bottom()) } else { (r.x, r.right()) };
+                    if r_to <= s.from + SAME || r_from >= s.to - SAME {
+                        continue;
+                    }
+                    if r_high <= s.level + SAME {
+                        lo = lo.max(r_high + MARGIN / 2.0);
+                    } else if r_low >= s.level - SAME {
+                        hi = hi.min(r_low - MARGIN / 2.0);
+                    }
                 }
-            }
+                let Some((left, entered)) = sides[s.line] else { return (lo, hi) };
+                let request = requests[s.line];
+                let last = routes[s.line].as_ref().map_or(0, |p| p.len().saturating_sub(2));
+                for (at_end, side, rect) in [
+                    (s.k == 0, left, boxes[request.source]),
+                    (s.k == last, entered, boxes[request.target]),
+                ] {
+                    if at_end && matches!(side, Side::Left | Side::Right) == horizontal {
+                        let (a, b) = if horizontal {
+                            (rect.y, rect.bottom())
+                        } else {
+                            (rect.x, rect.right())
+                        };
+                        // Sides too short for the inset, like a fork's, keep the port in the
+                        // middle.
+                        let (a, b) = if b - a > 2.0 * PORT_INSET {
+                            (a + PORT_INSET, b - PORT_INSET)
+                        } else {
+                            ((a + b) / 2.0, (a + b) / 2.0)
+                        };
+                        (lo, hi) = (lo.max(a), hi.min(b));
+                    }
+                }
+                if lo > hi { ((lo + hi) / 2.0, (lo + hi) / 2.0) } else { (lo, hi) }
+            })
+            .collect();
+        // Each as close to its place as the others' spacing and its bounds allow: pushed down
+        // past the one before, then up below the one after.
+        let mut at: Vec<f32> = offsets.iter().map(|o| start + o).collect();
+        for i in 0..at.len() {
+            let after = if i > 0 { at[i - 1] + gaps[i - 1] } else { f32::NEG_INFINITY };
+            at[i] = at[i].max(bounds[i].0).max(after);
+        }
+        for i in (0..at.len()).rev() {
+            let before = if i + 1 < at.len() { at[i + 1] - gaps[i] } else { f32::INFINITY };
+            at[i] = at[i].min(bounds[i].1).min(before).clamp(bounds[i].0, bounds[i].1);
+        }
+        for (i, s) in group.iter().enumerate() {
+            let target = at[i];
+            let points = routes[s.line].as_mut().expect("grouped routes exist");
             for p in [s.k, s.k + 1] {
                 if horizontal {
                     points[p].y = target;
@@ -835,6 +892,19 @@ fn nudge(
             }
         }
     }
+}
+
+/// The room a transition's label takes across its line where it stands beside it, with the
+/// distance it keeps from its own line (4) and, further, from the next (10), so that it reads
+/// as its own line's: `trigger [guard] / effect`, the guard and effect on a second row when
+/// there is a trigger (as [`crate::scene`] draws it). Lines of other kinds take none here.
+fn label_room(kind: &ElementKind) -> f32 {
+    let ElementKind::Transition(t) = kind else { return 0.0 };
+    if t.label().trim().is_empty() {
+        return 0.0;
+    }
+    let rows = if t.trigger.trim().is_empty() || t.guard.trim().is_empty() { 1.0 } else { 2.0 };
+    rows * crate::scene::LABEL_HEIGHT + 14.0
 }
 
 /// Routes lines just drawn or brought along, like [`route_lines`], except on use case and ER diagrams,
@@ -879,6 +949,7 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         boxes.push(rect);
     }
     let mut requests = Vec::new();
+    let mut rooms = Vec::new();
     let mut routed = Vec::new();
     for &edge in edges {
         let Some(p) = view.get(edge) else { continue };
@@ -890,10 +961,12 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         if let (Some(&s), Some(&t)) = (index.get(source), index.get(target))
             && s != t
         {
-            let facing = p.element.and_then(|e| model.get(e)).is_some_and(|e| {
+            let element = p.element.and_then(|e| model.get(e));
+            let facing = element.is_some_and(|e| {
                 matches!(e.kind(), ElementKind::Generalization(_) | ElementKind::Realization(_))
             });
             requests.push(Request { source: s, target: t, facing });
+            rooms.push(element.map_or(0.0, |e| label_room(e.kind())));
             routed.push(edge);
         }
     }
@@ -959,7 +1032,7 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         })
         .chain(stems)
         .collect();
-    let routes = route_around(&boxes, &texts, &tree_lines, &loops, &taken, &requests);
+    let routes = route_around(&boxes, &texts, &tree_lines, &loops, &taken, &requests, &rooms);
     let relative = |r: Rect, p: Point| {
         let fraction = |v: f32, start: f32, size: f32| {
             if size > 0.0 { ((v - start) / size).clamp(0.0, 1.0) } else { 0.5 }
@@ -1240,7 +1313,7 @@ mod tests {
         let crosses = |points: &[Point]| points.windows(2).any(|w| segment_hits(w[0], w[1], area));
         let straight = route(&boxes, &requests);
         assert!(crosses(straight[0].as_ref().expect("routed")));
-        let around = route_around(&boxes, &[], &[], &[(0, lp)], &[], &requests);
+        let around = route_around(&boxes, &[], &[], &[(0, lp)], &[], &requests, &[]);
         let points = around[0].as_ref().expect("routed");
         assert!(!crosses(points) && clear(points, &boxes, [0, 1]), "{points:?}");
     }
@@ -1253,7 +1326,7 @@ mod tests {
         let end = *alone[0].as_ref().expect("routed").last().unwrap();
         assert_eq!(end, Point::new(300.0, 50.0));
         // Another line, not routed now, meets the target's left side there.
-        let around = route_around(&boxes, &[], &[], &[], &[(1, end)], &requests);
+        let around = route_around(&boxes, &[], &[], &[], &[(1, end)], &requests, &[]);
         let points = around[0].as_ref().expect("routed");
         assert_ne!(*points.last().unwrap(), end, "{points:?}");
         assert!(clear(points, &boxes, [0, 1]), "{points:?}");

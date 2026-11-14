@@ -19,7 +19,11 @@ today.
 - **Room for transition labels**: arranging a state machine diagram leaves enough room between
   the states for the labels of their transitions, a guard on its own line included, so that no
   label lies on a state or on another line. The label of an initial transition starts after
-  the dot.
+  the dot. A state whose side more labelled lines reach than it has room for grows taller, and
+  routed transitions that leave or enter a node side by side keep as far apart as their labels
+  need.
+- **Names stay with their lines**: a line's name no longer moves to a spot closer to another
+  line than to its own, where it read as the other line's.
 - **Regions for AI clients**: `update_element` divides a state into regions
   (`"regions": 2`, with `"side_by_side": true` next to each other), and `get_diagram` lists
   each region with its bounds, so that substates can be created in one.
@@ -28,9 +32,10 @@ today.
   activities, internal transitions or substates as its name alone, centered, without the line
   below it.
 - **Lines spread apart around nodes**: where routed lines that run side by side are spread
-  apart, a line no longer joins lines it only meets at a bend of its own, and the spread keeps
-  clear of every node beside the lines, so that a line no longer runs through a state that
-  lies between its ends.
+  apart, a line no longer joins lines it only meets at a bend of its own, and each line keeps
+  clear of the nodes it passes and its ends stay on their sides, so that a line no longer runs
+  through a state that lies between its ends and two lines no longer end up on top of each
+  other.
 - **Fragments around create messages**: a fragment around a create message keeps the messages
   that follow below its frame, as for any other message.
 - **Use cases go into the system boundary**: a use case an AI client creates without a place

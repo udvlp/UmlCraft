@@ -532,12 +532,92 @@ pub fn default_direction(kind: DiagramKind) -> Direction {
 /// nodes (and what they hold), and routes the lines of what moved. A scope keeps its place
 /// (the top left of what it covered); nodes in the way of what it grew into are moved right
 /// or down. Returns the nodes that moved.
+///
+/// On state machine diagrams a state whose left or right side the routed lines crowd so that
+/// their labels find no room between them grows to give them room, and the diagram is laid out
+/// once more.
 pub fn arrange(
     tx: &mut Tx<'_>,
     diagram: Id,
     scope: Option<&[Id]>,
     direction: Direction,
     measure: &dyn TextMeasure,
+) -> Result<Vec<Id>> {
+    let mut changed = arrange_grown(tx, diagram, scope, direction, measure, &HashMap::new())?;
+    let kind = tx.model().element(diagram)?.kind().as_diagram();
+    if kind == Some(DiagramKind::StateMachine) {
+        let grow = crowded_sides(tx.model(), diagram, measure);
+        if !grow.is_empty() {
+            for id in arrange_grown(tx, diagram, scope, direction, measure, &grow)? {
+                if !changed.contains(&id) {
+                    changed.push(id);
+                }
+            }
+        }
+    }
+    Ok(changed)
+}
+
+/// Room a label of a line takes across it at a node's side, besides its own height: the
+/// distance it keeps from its own line and from the next (as the router spreads them).
+const SIDE_LABEL_ROOM: f32 = 14.0;
+
+/// How much higher the states of a state machine diagram must be for the labels of the
+/// transitions that end at their left or right side, as routed: the labels of the lines there
+/// stand above or below them, so the side takes all of them, each with `SIDE_LABEL_ROOM`, and
+/// the router's margin at either end.
+fn crowded_sides(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> HashMap<Id, f32> {
+    let Some(view) = model.view(diagram) else { return HashMap::new() };
+    let scene = scene::build(model, diagram, &scene::Preview::default(), measure);
+    let states: Vec<(Id, Rect)> = scene
+        .nodes
+        .iter()
+        .filter(|n| {
+            let element = view.get(n.id).and_then(|p| p.element).and_then(|e| model.get(e));
+            element.is_some_and(|e| matches!(e.kind(), ElementKind::State(_)))
+        })
+        .map(|n| (n.id, n.rect))
+        .collect();
+    let mut sides: HashMap<(Id, bool), f32> = HashMap::new();
+    for edge in &scene.edges {
+        let transition = view.get(edge.id).and_then(|p| p.element).and_then(|e| model.get(e));
+        if !transition.is_some_and(|e| matches!(e.kind(), ElementKind::Transition(_))) {
+            continue;
+        }
+        let n = edge.points.len();
+        if n < 2 || edge.labels.is_empty() {
+            continue;
+        }
+        let height = edge.labels.len() as f32 * scene::LABEL_HEIGHT + SIDE_LABEL_ROOM;
+        for (tip, rect) in [(edge.points[0], edge.ends[0]), (edge.points[n - 1], edge.ends[1])] {
+            let Some(&(id, _)) = states.iter().find(|(_, r)| *r == rect) else { continue };
+            let left = (tip.x - rect.x).abs() < 0.5;
+            let right = (tip.x - rect.right()).abs() < 0.5;
+            if (left || right) && tip.y > rect.y && tip.y < rect.bottom() {
+                *sides.entry((id, left)).or_default() += height;
+            }
+        }
+    }
+    let mut grow: HashMap<Id, f32> = HashMap::new();
+    for ((id, _), needed) in sides {
+        let Some(&(_, rect)) = states.iter().find(|(s, _)| *s == id) else { continue };
+        let more = needed + 2.0 * crate::autoroute::MARGIN - rect.height;
+        if more > 0.5 {
+            let g = grow.entry(id).or_default();
+            *g = g.max(more);
+        }
+    }
+    grow
+}
+
+/// [`arrange`], with the nodes in `grow` that much higher than they need to be.
+fn arrange_grown(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    scope: Option<&[Id]>,
+    direction: Direction,
+    measure: &dyn TextMeasure,
+    grow: &HashMap<Id, f32>,
 ) -> Result<Vec<Id>> {
     let kind =
         tx.model().element(diagram)?.kind().as_diagram().ok_or(ModelError::NotADiagram(diagram))?;
@@ -606,9 +686,10 @@ pub fn arrange(
             let name = element.map_or(0.0, |e| measure.width(e.name(), scene::FONT_SIZE, true));
             Size::new(name.max(24.0), 24.0 + scene::line_height(scene::FONT_SIZE))
         } else {
-            scene::fitted_size(model, p, measure)
+            let size = scene::fitted_size(model, p, measure)
                 .or_else(|| scene::drawn_size(model, p, measure))
-                .unwrap_or(bounds.size())
+                .unwrap_or(bounds.size());
+            Size::new(size.width, size.height + grow.get(&p.id).copied().unwrap_or(0.0))
         };
         let name_width = element.map_or(0.0, |e| measure.width(e.name(), scene::FONT_SIZE, true));
         let container = kind.is_some_and(crate::palette::is_container);
