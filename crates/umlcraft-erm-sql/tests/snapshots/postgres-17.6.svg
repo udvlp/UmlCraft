@@ -246,7 +246,7 @@
 <polyline points="743.81,716.13 695.85,880" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="709.41" y="860.91" font-size="12">[0,n]</text>
 <polyline points="478.48,256.18 662.91,120" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="597.6" y="136.79" font-size="12">[1,1]</text>
+<text x="638" y="154.04" font-size="12">[1,1]</text>
 <polyline points="467.02,296.6 690,640 690,880" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="621" y="839.45" font-size="12">[0,n]</text>
 <polyline points="712.77,250.94 693.02,120" fill="none" stroke="#000000" stroke-width="1"/>

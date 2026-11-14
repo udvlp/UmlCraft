@@ -274,7 +274,8 @@ impl Block {
         };
         // At an end, only lines that reach the node about as this one does: a line that meets
         // it from another side (a loop over the top) leaves the room beside this line its own.
-        let beside = |e: &EdgeShape| match end {
+        // How much another line runs this one's way where it meets the node: 1 alongside it.
+        let alongside = |e: &EdgeShape| match end {
             Some(node) => {
                 let k = e.points.len();
                 let (p, q) = if e.ends[0] == node {
@@ -283,12 +284,15 @@ impl Block {
                     (e.points[k - 1], e.points[k - 2])
                 };
                 let d = q.distance(p);
-                d > 1e-3
-                    && ((q.x - p.x) * (next.x - tip.x) + (q.y - p.y) * (next.y - tip.y)) / (d * len)
-                        > 0.3
+                if d > 1e-3 {
+                    ((q.x - p.x) * (next.x - tip.x) + (q.y - p.y) * (next.y - tip.y)) / (d * len)
+                } else {
+                    0.0
+                }
             }
-            None => true,
+            None => 1.0,
         };
+        let beside = |e: &EdgeShape| alongside(e) > 0.3;
         // A line without labels (an attribute's) leaves no doubt whose a label is, nor does a
         // line at another side of the node.
         let near = |e: &EdgeShape| match end {
@@ -299,16 +303,21 @@ impl Block {
             }
             _ => false,
         };
-        let others: Vec<f32> = edges
+        let same_pair =
+            |e: &EdgeShape| ends(e).is_some_and(|[c, d]| (c == a && d == b) || (c == b && d == a));
+        let beside_this: Vec<&EdgeShape> = edges
             .iter()
             .filter(|e| !std::ptr::eq(*e, edge) && e.points.len() >= 2)
-            .filter(|e| {
-                ends(e).is_some_and(|[c, d]| (c == a && d == b) || (c == b && d == a)) || near(e)
-            })
+            .filter(|e| same_pair(e) || near(e))
             .filter(|e| beside(e))
-            .map(at_node)
-            .filter(|d| d.abs() > 0.5)
+            .filter(|e| at_node(e).abs() > 0.5)
             .collect();
+        // A line from elsewhere that runs off at an angle soon leaves room enough between the
+        // two: only one that runs about alongside sends the label to the outer side.
+        if !beside_this.iter().any(|e| same_pair(e) || alongside(e) > 0.7) {
+            return;
+        }
+        let others: Vec<f32> = beside_this.into_iter().map(at_node).collect();
         // Only a line with others on one side has an outer side.
         let Some(&first) = others.first() else { return };
         if others.iter().any(|d| d.signum() != first.signum()) {
@@ -452,7 +461,7 @@ fn end_spots(
     // Where the line bends before the label fits beside its end segment as far along as Astah
     // puts it, right at the end comes first: beside the segment that meets the node, not past
     // the bend.
-    let short = n > 2 && base + half_along > len;
+    let short = n > 2 && base + half_along + 2.0 * GAP > len;
     let nearer = short.then_some(clear + GAP - base);
     let mut spots = Vec::new();
     for wider in WIDER {

@@ -6690,6 +6690,23 @@ mod tests {
                 "{name:?} at {crossed}"
             );
         }
+        // Nor right at a bar on that lifeline: in the middle of the room beside it (#74).
+        let mut host = Headless::new();
+        let mut calls = lifelines(&["h:Bahnhof", "ben:Spieler", "ada:Spieler"]);
+        calls.push(message("message", 1, 2, "bezahlen(100)", Some(100.0)));
+        calls.push(message("message", 1, 3, "erhalten(100)", Some(130.0)));
+        let r = build(&mut host, json!(calls));
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let (_, measure) = host.parts();
+        let edge = scene.edge(id(&r[5]["presentation"]).parse().unwrap()).unwrap();
+        let name = labels::label_rect(&edge.labels[0], measure);
+        let bars = scene.nodes.iter().filter(|n| matches!(n.figure, Figure::Activation));
+        for bar in bars.map(|n| n.rect).filter(|b| b.y < name.bottom() && b.bottom() > name.y) {
+            assert!(
+                name.right() + 4.0 <= bar.x || bar.right() + 4.0 <= name.x,
+                "{name:?} at {bar:?}"
+            );
+        }
         // A name about as long as its line ends before the arrowhead; a longer one goes up
         // (#71).
         let top_of = |text: &str| {
@@ -6997,23 +7014,72 @@ mod tests {
                   "cardinality": "[0,n]", "role": "Anfragender" } },
             ]),
         );
-        // Out of the top of the rhombus, left above the entity and down into its top (#65).
-        let (doc, _) = host.parts();
+        // Out of the top of the rhombus, left above the entity and down into its top, for
+        // several heights of the stretch above the entity (#65, #72).
         let d: Id = id(&r[0]["diagram"]).parse().unwrap();
         let line: Id = id(&r[3]["presentation"]).parse().unwrap();
         let top = (Some(Point::new(0.5, 0.0)), Some(Point::new(0.5, 0.0)));
-        let over = vec![Point::new(281.37, -30.0), Point::new(50.0, -30.0)];
-        doc.edit("route", |tx| tx.set_route(d, line, over, top)).unwrap();
-        let scene = drawn(&mut host, &r[0]["diagram"]);
-        let edge = scene.edge(line).unwrap();
-        let (_, measure) = host.parts();
-        // Both beside the last segment, below the stretch that leads away, one on either side.
-        let rects: Vec<Rect> = edge.labels.iter().map(|l| labels::label_rect(l, measure)).collect();
-        assert_eq!(rects.len(), 2);
-        for (label, r) in edge.labels.iter().zip(&rects) {
-            assert!(r.y > -30.0 && r.bottom() <= 0.0, "{} at {r:?}", label.text);
+        for k in [25.0, 30.0, 34.5, 35.0, 35.5, 36.0, 42.0, 60.0] {
+            let (doc, _) = host.parts();
+            let over = vec![Point::new(281.37, -k), Point::new(50.0, -k)];
+            doc.edit("route", |tx| tx.set_route(d, line, over, top)).unwrap();
+            let scene = drawn(&mut host, &r[0]["diagram"]);
+            let edge = scene.edge(line).unwrap();
+            let (_, measure) = host.parts();
+            // Both beside the last segment, below the stretch that leads away, one on either
+            // side.
+            let rects: Vec<Rect> =
+                edge.labels.iter().map(|l| labels::label_rect(l, measure)).collect();
+            assert_eq!(rects.len(), 2);
+            for (label, r) in edge.labels.iter().zip(&rects) {
+                assert!(r.y > -k - 2.0 && r.bottom() <= 0.0, "{k}: {} at {r:?}", label.text);
+            }
+            assert!(
+                rects.iter().any(|r| r.right() < 50.0) && rects.iter().any(|r| r.x > 50.0),
+                "{k}: {rects:?}"
+            );
         }
-        assert!(rects.iter().any(|r| r.right() < 50.0) && rects.iter().any(|r| r.x > 50.0));
+    }
+
+    #[test]
+    fn a_line_running_off_at_an_angle_leaves_a_cardinality_between() {
+        let mut host = Headless::new();
+        let relationship = |name: &str, x: f64, y: f64| {
+            json!({ "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                "tool": "erRelationship", "name": name, "x": x, "y": y } })
+        };
+        let line = |from: usize, text: &str| {
+            [
+                json!({ "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                    "tool": "erLine", "source": format!("${from}.element"),
+                    "target": "$1.element" } }),
+                json!({ "tool": "update_element", "arguments": {
+                    "id": format!("${}.element", from + 1), "cardinality": text } }),
+            ]
+        };
+        let mut calls = vec![
+            json!({ "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+                "name": "er" } }),
+            json!({ "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                "tool": "erEntity", "name": "Kurse", "x": 300, "y": 100 } }),
+            relationship("leitet", 170.0, 95.0),
+        ];
+        calls.extend(line(2, "[1,1]"));
+        calls.push(relationship("findet statt", 170.0, 220.0));
+        calls.extend(line(5, "[0,n]"));
+        calls.push(relationship("belegt", 310.0, 220.0));
+        calls.extend(line(8, "[1,m]"));
+        let r = build(&mut host, json!(calls));
+        // The `[0,n]` of the diagonal stays right of it, toward the vertical line, rather than
+        // go under the `[1,1]` at the corner (#73).
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let (_, measure) = host.parts();
+        let label = |k: usize| {
+            let edge = scene.edge(id(&r[k]["presentation"]).parse().unwrap()).unwrap();
+            labels::label_rect(&edge.labels[0], measure)
+        };
+        let (one, many) = (label(3), label(6));
+        assert!(many.x > one.right(), "{many:?} under {one:?}");
     }
 
     #[test]

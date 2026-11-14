@@ -58,7 +58,8 @@ const ROW_18: f32 = 18.0 - 12.06;
 const LABEL_TO_ROW: f32 = 13.0 - 12.06;
 /// Room a guard keeps from the lifelines and bars beside it.
 const GUARD_GAP: f32 = 4.0;
-/// Room a message label keeps from a lifeline its line crosses, where it fits between two.
+/// Room a message label keeps from a lifeline its line crosses and from a bar on it, where it
+/// fits between two.
 const LINE_GAP: f32 = 4.0;
 /// What the arrowhead of a message takes of its line, with a little room: a label keeps off
 /// it, or is lifted by [`HEAD_LIFT`] where the line is too short for that.
@@ -1103,8 +1104,8 @@ fn clear_of_bars(center: f32, width: f32, span: (f32, f32), mut bars: Vec<(f32, 
 
 /// Where a message label `width` wide goes on its line from `span.0` to `span.1` to keep off
 /// `taken` (stretches of the line, from left to right side): at `center` where it is clear
-/// there, else as near to it as it fits between them, toward `source` if both ways are as far.
-/// None where it fits nowhere.
+/// there, else in the middle of the free stretch nearest to it that it fits into, toward
+/// `source` if two are as near. None where it fits nowhere.
 fn between(
     center: f32,
     width: f32,
@@ -1126,11 +1127,12 @@ fn between(
     free.push((from, span.1));
     free.into_iter()
         .filter(|&(l, r)| r - l >= width)
-        .map(|(l, r)| center.clamp(l + half, r - half))
-        .min_by(|a, b| {
+        .map(|(l, r)| (center.clamp(l + half, r - half), (l + r) / 2.0))
+        .min_by(|(a, _), (b, _)| {
             let off = |x: &f32| ((x - center).abs() * 2.0).round();
             off(a).total_cmp(&off(b)).then((a - source).abs().total_cmp(&(b - source).abs()))
         })
+        .map(|(_, middle)| middle)
 }
 
 fn message_edge(
@@ -1254,8 +1256,8 @@ fn message_edge(
                 .filter(|&x| span.0 < x && x < span.1)
                 .map(|x| (x - LINE_GAP, x + LINE_GAP));
             let head = if b.x >= a.x { (b.x - HEAD_ROOM, b.x) } else { (b.x, b.x + HEAD_ROOM) };
-            let taken: Vec<(f32, f32)> =
-                bars.iter().copied().chain(crossed).chain([head]).collect();
+            let beside_bars = bars.iter().map(|&(l, r)| (l - LINE_GAP, r + LINE_GAP));
+            let taken: Vec<(f32, f32)> = beside_bars.chain(crossed).chain([head]).collect();
             let middle = (a.x + b.x) / 2.0;
             match between(middle, width + 2.0, span, a.x, taken) {
                 Some(center) => (top, Some(center)),

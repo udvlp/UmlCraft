@@ -3,6 +3,17 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## 0.21.6 – 2026-11-14
+
+- **Message names in the room between lifelines**: a message name moved off a lifeline its
+  arrow crosses stands in the middle of the room beside it, clear of an activation bar on that
+  lifeline too.
+- **Cardinalities at lines that run apart**: a cardinality stays between its line and a line
+  that leaves the same side of the node at an angle, instead of moving under the cardinality of
+  a third line at the corner.
+- **Roles of loops**: the role of a line that bends shortly before its node stands at the node
+  for every length of the last stretch.
+
 ## 0.21.5 – 2026-11-14
 
 - **Multiplicities and cardinalities beside their own line**: a cardinality on a short line
