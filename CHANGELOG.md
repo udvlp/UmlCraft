@@ -3,6 +3,50 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Multiplicities and cardinalities beside their own line**: a cardinality on a short line
+  between rhombus and entity stays beside that line instead of moving below the entity. Where
+  two lines meet a class close together, their multiplicities go to the outer sides, not
+  between the lines or beyond the other line, where they read as that line's; no label has
+  another line running through it. A second line between the same rhombus and
+  entity that arrives from another side, such as a loop over the top, leaves the labels of the
+  first right at their line. Labels keep off the tips of a rhombus.
+- **Lines clear of compartment separators**: routed lines leave and enter classes and objects
+  a little above or below a compartment separator, never at its height, where they looked like
+  the separator running on. Where two boxes overlap only narrowly, a straight line runs
+  through the overlap instead of bending around.
+- **Complete arrowheads under message names**: the background of a message name no longer
+  covers a corner of the arrowhead, and the whole tab of a combined fragment is opaque, so no
+  activation bar shows inside it.
+
+## 0.21.4 – 2026-11-14
+
+- **The same look with and without the app**: a session of an AI client without the app draws
+  diagrams as the app's settings say: the visibility of members in a column of its own with a
+  minus as wide as the plus, «abstract» above the name, `{readOnly}`. The new tool
+  `set_display` sets these, in the app as its settings, and `get_document` reports them.
+- **Lifeline heads fit their names**: the head of a lifeline grows to both sides for a long
+  name such as `e:EchoClientVerbindung`, as a class box grows for its contents; it keeps at
+  least its usual width.
+- **Lifelines end together**: a message drawn below the end of the lifelines lengthens all of
+  them to the same height, not only the two it connects.
+- **Readable message names**: message names, return values and the labels of combined
+  fragments stand on the background, so that lifelines and activation bars passing beneath no
+  longer run through them.
+- **Signals**: an asynchronous message named without parentheses, such as `START`, shows none,
+  and the next one may follow closely at the height it was drawn at; the bars of the ones
+  before end in time. AI clients turn the parentheses of any message off with
+  `"arguments": null`.
+- **Replies below fragments**: a reply an AI client draws without a height goes below a
+  fragment that the bar it ends only reaches into, instead of into it.
+- **Roles keep their distance**: a long role at the end of a short line keeps a gap to the class
+  it names instead of touching it, and two roles or multiplicities at one class no longer stand
+  side by side without a gap. Roles and cardinalities of ER lines keep off the rhombus and the
+  entity when these are moved close together.
+- **No bend right before an arrowhead**: routed lines no longer bend just before the arrowhead,
+  triangle or diamond at their end, where the bend ran into it.
+
 ## 0.21.3 – 2026-11-14
 
 - **`ja` and `nein` in German structograms**: an alternative in a structogram with German

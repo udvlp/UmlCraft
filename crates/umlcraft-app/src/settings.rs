@@ -43,16 +43,9 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Where they are stored; a headless MCP session reads how diagrams are drawn from there.
     fn file() -> Option<PathBuf> {
-        let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-        let base = if cfg!(windows) {
-            var("APPDATA")
-        } else if cfg!(target_os = "macos") {
-            var("HOME").map(|h| h.join("Library").join("Application Support"))
-        } else {
-            var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| h.join(".config")))
-        }?;
-        Some(base.join("UmlCraft").join("settings.json"))
+        umlcraft_mcp::host::settings_file()
     }
 
     /// Loads the settings; a missing or broken file gives the defaults.

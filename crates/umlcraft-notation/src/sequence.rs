@@ -835,6 +835,26 @@ fn lifeline_rows(
     (line_top, vec![row])
 }
 
+/// Room a lifeline's head keeps on either side of its name.
+const HEAD_PADDING: f32 = 10.0;
+
+/// The width the head box of `lifeline` needs for its name, [`HEAD_WIDTH`] at least, and the
+/// text it shows; `None` for a lifeline drawn as an icon.
+pub(crate) fn fitted_head(
+    model: &Model,
+    lifeline: Id,
+    style: &Style,
+    head: Rect,
+    measure: &dyn TextMeasure,
+) -> Option<(f32, String)> {
+    if style.iconic {
+        return None;
+    }
+    let (_, rows) = lifeline_rows(model, lifeline, style, head, HeadIcon::Box, measure);
+    let row = rows.into_iter().next()?;
+    Some(((row.rect.width + 2.0 * HEAD_PADDING).max(HEAD_WIDTH), row.text))
+}
+
 fn plain_row(text: String, element: Id) -> Row {
     Row {
         text,

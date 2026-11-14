@@ -92,7 +92,15 @@ pub fn apply<R>(
         for b in fitted_boxes(tx.model(), measure) {
             let unchanged = before.get(&b.presentation) == Some(&b.content);
             if !unchanged && !close(b.bounds.size(), b.size) {
-                let rect = Rect::from_origin_size(b.bounds.origin(), b.size);
+                // A lifeline's head grows to both sides, so that its line stays where it is.
+                let lifeline = tx
+                    .model()
+                    .view(b.diagram)
+                    .and_then(|v| v.get(b.presentation))
+                    .is_some_and(|p| matches!(p.shape, Shape::Lifeline { .. }));
+                let x =
+                    if lifeline { b.bounds.center().x - b.size.width / 2.0 } else { b.bounds.x };
+                let rect = Rect::from_origin_size(Point::new(x, b.bounds.y), b.size);
                 tx.set_bounds(b.diagram, b.presentation, rect)?;
                 let kind = tx.model().get(b.diagram).and_then(|d| d.kind().as_diagram());
                 if kind == Some(DiagramKind::Sequence) && !sequences.contains(&b.diagram) {

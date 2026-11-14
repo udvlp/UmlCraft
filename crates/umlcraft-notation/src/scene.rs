@@ -62,6 +62,87 @@ impl TextMeasure for ApproxMeasure {
     }
 }
 
+/// How diagrams are drawn beyond what they store: the user's settings in the app, the
+/// server's own in a headless MCP session. All off, diagrams look as in Astah.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Display {
+    /// Members show their visibility in UmlCraft's own column, a minus as wide as a plus.
+    pub visibility_column: bool,
+    /// Abstract classes show «abstract» above their name instead of `{abstract}` below it.
+    pub abstract_stereotype: bool,
+    /// Read-only attributes end in `{readOnly}`.
+    pub read_only_constraint: bool,
+}
+
+impl Display {
+    /// What `measure` draws by.
+    pub fn of(measure: &dyn TextMeasure) -> Self {
+        Self {
+            visibility_column: measure.visibility_column(),
+            abstract_stereotype: measure.abstract_stereotype(),
+            read_only_constraint: measure.read_only_constraint(),
+        }
+    }
+}
+
+impl<T: TextMeasure + ?Sized> TextMeasure for Box<T> {
+    fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        (**self).width(text, font_size, bold)
+    }
+
+    fn rounded_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        (**self).rounded_width(text, font_size, bold)
+    }
+
+    fn astah_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        (**self).astah_width(text, font_size, bold)
+    }
+
+    fn visibility_column(&self) -> bool {
+        (**self).visibility_column()
+    }
+
+    fn abstract_stereotype(&self) -> bool {
+        (**self).abstract_stereotype()
+    }
+
+    fn read_only_constraint(&self) -> bool {
+        (**self).read_only_constraint()
+    }
+}
+
+/// `measure` drawing as `display` says.
+pub struct Displayed<M> {
+    pub measure: M,
+    pub display: Display,
+}
+
+impl<M: TextMeasure> TextMeasure for Displayed<M> {
+    fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        self.measure.width(text, font_size, bold)
+    }
+
+    fn rounded_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        self.measure.rounded_width(text, font_size, bold)
+    }
+
+    fn astah_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+        self.measure.astah_width(text, font_size, bold)
+    }
+
+    fn visibility_column(&self) -> bool {
+        self.display.visibility_column
+    }
+
+    fn abstract_stereotype(&self) -> bool {
+        self.display.abstract_stereotype
+    }
+
+    fn read_only_constraint(&self) -> bool {
+        self.display.read_only_constraint
+    }
+}
+
 pub struct Scene {
     pub nodes: Vec<NodeShape>,
     pub edges: Vec<EdgeShape>,
@@ -480,8 +561,13 @@ impl Figure {
         }
     }
 
+    /// The heights of the lines across the figure between its compartments.
+    pub(crate) fn dividers(&self) -> &[f32] {
+        self.compartments().map_or(&[], |(separators, _)| separators)
+    }
+
     /// The figure's outline, where edges end.
-    fn outline(&self) -> Outline {
+    pub(crate) fn outline(&self) -> Outline {
         match self {
             Self::Initial
             | Self::ActivityFinal
@@ -3582,6 +3668,12 @@ pub fn fitted_box(
         let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
         return Some((r.size(), texts.join("\n")));
     }
+    // The head of a lifeline grows for its name; it never shrinks below the size it was given.
+    if matches!(element.kind(), ElementKind::Lifeline(_)) {
+        let (width, text) =
+            crate::sequence::fitted_head(model, element.id(), &p.style, bounds, measure)?;
+        return Some((Size::new(width.max(bounds.width), bounds.height), text));
+    }
     // An object grows for its name and slots as it is drawn, so that lines leave it where it
     // is drawn; sized by hand, it never shrinks below the size it was given.
     if let ElementKind::Instance(i) = element.kind()
@@ -4515,10 +4607,15 @@ pub fn label_width(text: &str, measure: &dyn TextMeasure) -> f32 {
     measure.astah_width(text, FONT_SIZE, false).max(10.0)
 }
 
+/// How far the roles and multiplicities at an end keep from the node there, at least.
+pub const END_LABEL_GAP: f32 = 6.0;
+
 /// Places a role name (`role`) or multiplicity at an end of the line as Astah does: the
 /// label's center lies 27 (roles) or 18 (multiplicities) along the line from its end and 18
 /// across it, roles to the left of the direction the line runs in (from source to target),
-/// multiplicities to the right. The text starts at the left of the label.
+/// multiplicities to the right. A label so wide that it would come closer than
+/// [`END_LABEL_GAP`] to the node, along the line, lies further along, where Astah lets it
+/// touch the node. The text starts at the left of the label.
 fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> EdgeLabel {
     const ROLE: (f32, f32) = (27.0, 18.0);
     const MULTIPLICITY: (f32, f32) = (18.0, -18.0);
@@ -4528,8 +4625,11 @@ fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> E
     let (tx, ty) = if source { (ux, uy) } else { (-ux, -uy) };
     let (lx, ly) = if flip { (-ty, tx) } else { (ty, -tx) };
     let (along, left) = if role { ROLE } else { MULTIPLICITY };
-    let center = Point::new(tip.x + along * ux + left * lx, tip.y + along * uy + left * ly);
     let width = label_width(&text, measure);
+    // Half the label's extent along the line.
+    let half = (ux.abs() * width + uy.abs() * LABEL_HEIGHT) / 2.0;
+    let along = along.max(END_LABEL_GAP + half);
+    let center = Point::new(tip.x + along * ux + left * lx, tip.y + along * uy + left * ly);
     let anchor = center.offset(-width / 2.0, -LABEL_HEIGHT / 2.0);
     EdgeLabel {
         text,

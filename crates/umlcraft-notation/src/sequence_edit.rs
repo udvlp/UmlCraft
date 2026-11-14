@@ -621,6 +621,48 @@ fn sender_bar(
     }
 }
 
+/// The shortest bar an asynchronous message keeps when the next one follows closely.
+const MIN_SIGNAL_BAR: f32 = 10.0;
+
+/// Lets the bars that asynchronous messages from `from` started on `to`, and that hold nothing
+/// else, end [`MESSAGE_GAP`] above a further message between the two drawn at `y`, where they
+/// keep [`MIN_SIGNAL_BAR`]: a signal waits for no answer, so the next one may follow closely,
+/// at the height it is drawn at, instead of below the bar.
+fn shorten_signal_bars(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    g: &Geometry,
+    from: Id,
+    to: Id,
+    y: f32,
+) -> Result<()> {
+    let end = y - MESSAGE_GAP;
+    for bar in g.bars.iter().filter(|b| b.lane == to && b.top < y && y < b.bottom + MESSAGE_GAP) {
+        let signal = g.messages.iter().any(|m| {
+            m.source == from
+                && m.target == to
+                && m.sort == MessageSort::Asynchronous
+                && (bar.top - m.end()).abs() < 0.5
+        });
+        let holds_more = g.messages.iter().any(|m| {
+            (m.source == to || m.target == to) && m.y > bar.top + 0.5 && m.y < bar.bottom + 0.5
+        });
+        let nested = g
+            .bars
+            .iter()
+            .any(|b| b.lane == to && b.id != bar.id && b.top > bar.top - 0.5 && b.top < bar.bottom);
+        if signal && !holds_more && !nested && end - bar.top >= MIN_SIGNAL_BAR {
+            let top = bar.top;
+            tx.update_presentation(diagram, bar.id, |p| {
+                if let Shape::Activation { height, .. } = &mut p.shape {
+                    *height = end - top;
+                }
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Draws `message` from lane `source` to lane `target` (the same one for messages to self and
 /// for found and lost messages) at height `y`, with the bars Astah gives it.
 pub fn add_message(
@@ -642,6 +684,12 @@ pub fn add_message(
         _ => return Err(ModelError::Refused(umlcraft_model::Refusal::MessagesConnectLifelines)),
     };
     let call = matches!(sort, MessageSort::Synchronous | MessageSort::Asynchronous);
+    let g = if sort == MessageSort::Asynchronous && gate == MessageGate::None && source != target {
+        shorten_signal_bars(tx, diagram, &g, from.id, to.id, y)?;
+        Geometry::read(tx.model(), diagram)?
+    } else {
+        g
+    };
     let y = if call && gate == MessageGate::None && source != target {
         g.clear_of_calls(from.id, to.id, y)
     } else {
@@ -1245,6 +1293,30 @@ pub fn set_lifeline_end(tx: &mut Tx<'_>, diagram: Id, presentation: Id, bottom: 
         }
     })?;
     tidy(tx, diagram)
+}
+
+/// Moves the reply `item`, drawn where the bar it ends stops, below the frames of fragments it
+/// is not part of that reach further down across it: a reply given no place goes below what
+/// came before, not into a fragment that only its bar reaches into.
+pub fn reply_below_frames(tx: &mut Tx<'_>, diagram: Id, item: Id) -> Result<()> {
+    let g = Geometry::read(tx.model(), diagram)?;
+    let Some(m) = g.messages.iter().find(|m| m.element == Some(item)) else { return Ok(()) };
+    let center = |lane: Id| g.lanes.iter().find(|l| l.id == lane).map(|l| l.center());
+    let (Some(a), Some(b)) = (center(m.source), center(m.target)) else { return Ok(()) };
+    let (left, right) = (a.min(b), a.max(b));
+    let model = tx.model();
+    let below = g
+        .frames
+        .iter()
+        .filter(|f| f.rect.y < m.y && f.rect.bottom() > m.y)
+        .filter(|f| f.rect.x < right && f.rect.right() > left)
+        .filter(|f| !model.is_ancestor(f.element, item))
+        .map(|f| f.rect.bottom())
+        .reduce(f32::max);
+    match below {
+        Some(bottom) => move_item(tx, diagram, item, bottom + NEXT),
+        None => Ok(()),
+    }
 }
 
 /// Moves a message, together with the bar it starts and everything sent from it, or a
@@ -1879,6 +1951,7 @@ fn fit_lifelines(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             })?;
         }
     }
+    let mut grown = Vec::new();
     for lane in g.lanes.iter().filter(|l| !l.destroyed || !destroying(l.id)) {
         let bars = g.bars.iter().filter(|b| b.lane == lane.id).map(|b| b.bottom);
         let messages = g
@@ -1912,7 +1985,14 @@ fn fit_lifelines(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
         let Some(last) = last else { continue };
         let need = last + LIFELINE_MARGIN;
         if need > lane.bottom() + 0.01 {
-            let length = need - lane.line_top();
+            grown.push((lane.id, need));
+        }
+    }
+    // A lifeline that grows takes the others that run on along, so that they end together.
+    let Some(bottom) = grown.iter().map(|&(_, need)| need).reduce(f32::max) else { return Ok(()) };
+    for lane in g.lanes.iter().filter(|l| !l.destroyed && g.termination(l.id).is_none()) {
+        if bottom > lane.bottom() + 0.01 {
+            let length = bottom - lane.line_top();
             tx.update_presentation(diagram, lane.id, |p| {
                 if let Shape::Lifeline { length: l, .. } = &mut p.shape {
                     *l = length;

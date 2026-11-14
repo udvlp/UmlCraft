@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use umlcraft_mcp::live::{LiveServer, Request};
 use umlcraft_mcp::{Content, Host, Reply};
 use umlcraft_model::{Document, Id};
-use umlcraft_notation::scene::TextMeasure;
+use umlcraft_notation::scene::{ApproxMeasure, Display, Displayed, TextMeasure};
 
 use crate::workspace::Workspace;
 
@@ -108,6 +108,8 @@ pub struct Effects {
     pub saved: Option<PathBuf>,
     /// What to select in a structogram; its editor holds the selection.
     pub structogram_selection: Option<(Id, umlcraft_nsd::Selection)>,
+    /// How diagrams are to be drawn from now on, the user's settings.
+    pub display: Option<Display>,
 }
 
 /// The open project as the tools see it.
@@ -174,5 +176,13 @@ impl Host for AppHost<'_> {
 
     fn sample(&self) -> Result<Document, String> {
         Ok(crate::demo::velo(&*self.ws.measure))
+    }
+
+    /// Draws as `display` says at once, for the rest of a batch; the main view then makes it
+    /// the user's setting, as the settings dialog does.
+    fn set_display(&mut self, display: Display) {
+        let measure = std::mem::replace(&mut self.ws.measure, Box::new(ApproxMeasure));
+        self.ws.measure = Box::new(Displayed { measure, display });
+        self.effects.display = Some(display);
     }
 }

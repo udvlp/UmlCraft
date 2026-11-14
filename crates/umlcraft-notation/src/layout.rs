@@ -1910,8 +1910,8 @@ fn end_label_margins(
     widest
         .into_iter()
         .filter_map(|(node, width)| {
-            // A label keeps 4 from its node and its line's other end keeps as much.
-            let side = (width + 2.0 * 4.0 - LAYER_GAP / 2.0).max(0.0);
+            // A label keeps its gap from its node and as much from the other end's labels.
+            let side = (width + 2.0 * scene::END_LABEL_GAP - LAYER_GAP / 2.0).max(0.0);
             (side > 0.01).then_some((node, [side, 0.0, side, 0.0]))
         })
         .collect()

@@ -1150,7 +1150,7 @@ and stdout, one message per line (`umlcraft_mcp::protocol::serve`: `initialize`,
 
 ### Tools and hosts
 
-`umlcraft_mcp::tools` lists 32 tools and runs them against a `Host`, which hands out the
+`umlcraft_mcp::tools` lists 37 tools and runs them against a `Host`, which hands out the
 `Document`, a `TextMeasure`, the path and, in the app, the active diagram and the selection:
 
 - reading: `get_document`, `list_elements`, `get_element`, `get_structogram`, `get_diagram`,
@@ -1162,7 +1162,15 @@ and stdout, one message per line (`umlcraft_mcp::protocol::serve`: `initialize`,
   `add_operand`, `update_element`, `move_node`, `arrange_diagram`, `route_lines`,
   `delete_element`, `remove_from_diagram`, `batch`, `undo`, `redo`;
 - the project: `open_diagram`, `new_document`, `open_file`, `save_file`, `export_image`,
-  `export_sql` (an ER diagram as `CREATE TABLE` statements, in the reply or to a file).
+  `export_sql` (an ER diagram as `CREATE TABLE` statements, in the reply or to a file);
+- how diagrams are drawn beyond what the project stores: `set_display` (the visibility
+  column, «abstract», `{readOnly}`; `get_document` reports them). The flags are a
+  `scene::Display`, which a `TextMeasure` answers for. In the app they are the user's
+  settings: `AppHost::set_display` wraps the workspace's measure in `scene::Displayed` for
+  the rest of the call and leaves them in `Effects`, from which the main view saves them as
+  the settings dialog does. A headless session keeps its own, starting from the app's
+  settings file (`host::app_display`, the same file the app's `Settings` uses), so that
+  diagrams made with and without the app look the same.
 
 Every editing tool is one undo step made the way the app makes it:
 `umlcraft_notation::edit::apply` fits auto-sized boxes and lets routed lines follow, the same

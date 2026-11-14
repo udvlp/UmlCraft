@@ -9,7 +9,8 @@ use umlcraft_model::{Point, Rect};
 use crate::draw::{end_marker_bounds, label_area, text_left};
 use crate::route;
 use crate::scene::{
-    EdgeLabel, EdgeShape, FONT_SIZE, LABEL_HEIGHT, NodeShape, TextMeasure, label_width, name_arrow,
+    EdgeLabel, EdgeShape, FONT_SIZE, LABEL_HEIGHT, NodeShape, Outline, TextMeasure, label_width,
+    name_arrow,
 };
 
 /// Which label of a line a free label is.
@@ -41,12 +42,19 @@ pub struct FreeLabel {
 
 /// Room between a label and the line it moves away from.
 const GAP: f32 = 4.0;
+/// Room a label keeps from nodes where it can.
+const NODE_ROOM: f32 = 3.0;
+/// Half the size of the square around each tip of a rhombus that labels keep out of.
+const TIP: f32 = 4.0;
 /// How far from its line a name may go, closest first: further off where nodes crowd it.
 const OFF: [f32; 3] = [GAP, 20.0, 36.0];
 /// Where along its line a name may go, as a share of the line's length, the middle first.
 const ALONG: [f32; 7] = [0.5, 0.38, 0.62, 0.26, 0.74, 0.14, 0.86];
 /// How much further from its end than Astah a role or multiplicity may go.
 const FURTHER: [f32; 4] = [0.0, 14.0, 28.0, 44.0];
+/// How much further from its line a role or multiplicity may go, after the spots beside it:
+/// beside a short line between crowded nodes, the spots along it lie on the nodes.
+const WIDER: [f32; 3] = [0.0, 16.0, 32.0];
 /// What covering costs, per pixel of line crossed or per row-high pixel of area covered.
 const LINE_COST: f32 = 1.0;
 const NODE_COST: f32 = 1.5;
@@ -57,6 +65,12 @@ const DISTANCE_COST: f32 = 0.03;
 /// What a label pays for standing between its line and another line between the same two
 /// nodes, where it would read as that line's.
 const BETWEEN_COST: f32 = 30.0;
+/// How close to the end of a line another line from elsewhere meets the same side of the node
+/// for the room between them to count as between, for a role or multiplicity.
+const NEAR_END: f32 = 50.0;
+/// What a label pays for standing on the far side of another line from its own, where it would
+/// read as that line's.
+const ACROSS_OTHER_COST: f32 = 30.0;
 /// What a name pays for standing closer to another line than to its own, where it would read
 /// as that line's.
 const NEARER_OTHER_COST: f32 = 30.0;
@@ -72,6 +86,7 @@ pub fn place(nodes: &[NodeShape], edges: &mut [EdgeShape], measure: &dyn TextMea
             if free.kind == LabelKind::Name {
                 block.keep_near_own(e, edges);
             }
+            block.keep_this_side(e, edges);
             blocks.push(block);
         }
     }
@@ -96,7 +111,7 @@ pub fn place(nodes: &[NodeShape], edges: &mut [EdgeShape], measure: &dyn TextMea
                 let r = block.rect(i);
                 let moved = block.spots[i].distance(block.spots[0]);
                 nearby[k].cost(r)
-                    + overlaps(r, &others) * LABEL_COST
+                    + overlaps(spaced(r), &others) * LABEL_COST
                     + i as f32 * RANK_COST
                     + moved * DISTANCE_COST
                     + block.penalty.get(i).copied().unwrap_or(0.0)
@@ -204,7 +219,8 @@ impl Block {
     /// For a label of a line beside another line between the same two nodes: makes the spots
     /// between the two cost more, so that the label goes to the outer side, where it reads as
     /// its own line's. A role or multiplicity looks at its end segment, a name or keyword at the
-    /// middle segment.
+    /// middle segment. At an end, a labelled line from elsewhere that meets the node close by
+    /// and from about the same direction counts as well.
     fn keep_outside(&mut self, edge: &EdgeShape, free: &FreeLabel, edges: &[EdgeShape]) {
         let ends = |e: &EdgeShape| {
             let [a, b] = e.ends;
@@ -256,10 +272,39 @@ impl Block {
                 side(Point::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0))
             }
         };
+        // At an end, only lines that reach the node about as this one does: a line that meets
+        // it from another side (a loop over the top) leaves the room beside this line its own.
+        let beside = |e: &EdgeShape| match end {
+            Some(node) => {
+                let k = e.points.len();
+                let (p, q) = if e.ends[0] == node {
+                    (e.points[0], e.points[1])
+                } else {
+                    (e.points[k - 1], e.points[k - 2])
+                };
+                let d = q.distance(p);
+                d > 1e-3
+                    && ((q.x - p.x) * (next.x - tip.x) + (q.y - p.y) * (next.y - tip.y)) / (d * len)
+                        > 0.3
+            }
+            None => true,
+        };
+        // A line without labels (an attribute's) leaves no doubt whose a label is.
+        let near = |e: &EdgeShape| match end {
+            Some(node) if e.ends.contains(&node) && !e.labels.is_empty() => {
+                let k = e.points.len();
+                let p = if e.ends[0] == node { e.points[0] } else { e.points[k - 1] };
+                p.distance(tip) <= NEAR_END
+            }
+            _ => false,
+        };
         let others: Vec<f32> = edges
             .iter()
             .filter(|e| !std::ptr::eq(*e, edge) && e.points.len() >= 2)
-            .filter(|e| ends(e).is_some_and(|[c, d]| (c == a && d == b) || (c == b && d == a)))
+            .filter(|e| {
+                ends(e).is_some_and(|[c, d]| (c == a && d == b) || (c == b && d == a)) || near(e)
+            })
+            .filter(|e| beside(e))
             .map(at_node)
             .filter(|d| d.abs() > 0.5)
             .collect();
@@ -307,6 +352,47 @@ impl Block {
             let mine = distance(r, &path);
             if others.iter().any(|p| distance(r, p) < mine - 0.5) {
                 self.penalty[i] += NEARER_OTHER_COST;
+            }
+        }
+    }
+
+    /// Makes the spots from which the way to their own line (edge `own`) crosses another line
+    /// cost more: a multiplicity beyond the neighbouring line reads as that line's. The way from
+    /// any corner counts, so that a label another line runs through pays as well.
+    fn keep_this_side(&mut self, own: usize, edges: &[EdgeShape]) {
+        let path = edges[own].path();
+        if path.len() < 2 {
+            return;
+        }
+        let others: Vec<(Point, Point)> = edges
+            .iter()
+            .enumerate()
+            .filter(|&(e, _)| e != own)
+            .flat_map(|(_, e)| e.path().windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>())
+            .collect();
+        if others.is_empty() {
+            return;
+        }
+        self.penalty.resize(self.spots.len(), 0.0);
+        for i in 0..self.spots.len() {
+            let r = self.rect(i);
+            let corners = [
+                r.origin(),
+                Point::new(r.right(), r.y),
+                Point::new(r.x, r.bottom()),
+                Point::new(r.right(), r.bottom()),
+            ];
+            let across = corners.into_iter().any(|corner| {
+                let near = path
+                    .windows(2)
+                    .map(|w| closest_on_segment(corner, w[0], w[1]))
+                    .min_by(|a, b| corner.distance(*a).total_cmp(&corner.distance(*b)));
+                near.is_some_and(|near| {
+                    others.iter().any(|&(a, b)| segments_cross(corner, near, a, b))
+                })
+            });
+            if across {
+                self.penalty[i] += ACROSS_OTHER_COST;
             }
         }
     }
@@ -362,22 +448,26 @@ fn end_spots(
     // Far enough from the end not to reach back over its node.
     let clear = half_w * u.0.abs() + half_h * u.1.abs() + GAP;
     let mut spots = Vec::new();
-    for side in [first_side, -first_side] {
-        for extra in FURTHER {
-            let along = (base + extra).max(clear);
-            let (p, d, first) = along_from_end(&path, along);
-            let extended = Point::new(tip.x + u.0 * along, tip.y + u.1 * along);
-            let beyond = (!first).then_some((extended, u, true));
-            for (p, d, first) in std::iter::once((p, d, first)).chain(beyond) {
-                // To the left of the direction the line runs in, from source to target.
-                let run = if source { d } else { (-d.0, -d.1) };
-                let left = (run.1, -run.0);
-                let mut across = half_w * left.0.abs() + half_h * left.1.abs() + GAP;
-                if first {
-                    across = across.max(18.0);
+    for wider in WIDER {
+        for side in [first_side, -first_side] {
+            for extra in FURTHER {
+                let along = (base + extra).max(clear);
+                let (p, d, first) = along_from_end(&path, along);
+                let extended = Point::new(tip.x + u.0 * along, tip.y + u.1 * along);
+                let beyond = (!first).then_some((extended, u, true));
+                for (p, d, first) in std::iter::once((p, d, first)).chain(beyond) {
+                    // To the left of the direction the line runs in, from source to target.
+                    let run = if source { d } else { (-d.0, -d.1) };
+                    let left = (run.1, -run.0);
+                    let mut across = half_w * left.0.abs() + half_h * left.1.abs() + GAP;
+                    if first {
+                        across = across.max(18.0);
+                    }
+                    let across = across + wider;
+                    let center =
+                        Point::new(p.x + side * across * left.0, p.y + side * across * left.1);
+                    spots.push(center.offset(-half_w, -half_h));
                 }
-                let center = Point::new(p.x + side * across * left.0, p.y + side * across * left.1);
-                spots.push(center.offset(-half_w, -half_h));
             }
         }
     }
@@ -498,7 +588,26 @@ impl Obstacles {
                 obstacles.segments.extend((0..4).map(|i| (corners[i], corners[(i + 1) % 4])));
                 obstacles.boxes.extend(node.rows.iter().map(|row| row.rect));
             } else {
-                obstacles.boxes.push(node.extent());
+                match node.figure.outline() {
+                    // A rhombus or an ellipse covers less than its box: a label may stand at
+                    // its tip, beside a short line ending there.
+                    outline @ (Outline::Diamond | Outline::Ellipse) => {
+                        obstacles.boxes.extend(strips(r, outline));
+                        obstacles.boxes.extend(node.outside());
+                        // Nor on a tip, where a text reads as running into it.
+                        if outline == Outline::Diamond {
+                            let c = r.center();
+                            let tips =
+                                [(c.x, r.y), (r.right(), c.y), (c.x, r.bottom()), (r.x, c.y)];
+                            obstacles.boxes.extend(
+                                tips.into_iter().map(|(x, y)| {
+                                    Rect::new(x - TIP, y - TIP, 2.0 * TIP, 2.0 * TIP)
+                                }),
+                            );
+                        }
+                    }
+                    _ => obstacles.boxes.push(node.extent()),
+                }
             }
         }
         for edge in edges {
@@ -537,16 +646,70 @@ impl Obstacles {
 
     /// What a label at `r` covers, weighed.
     fn cost(&self, r: Rect) -> f32 {
+        let labels = overlaps(spaced(r), &self.labels);
+        // A label keeps a little room from the nodes, so that it does not touch their outline.
+        let boxes = overlaps(r.inflate(NODE_ROOM), &self.boxes);
         let r = r.inflate(1.0);
         let lines: f32 = self.segments.iter().map(|&(a, b)| inside_length(r, a, b)).sum();
-        overlaps(r, &self.boxes) * NODE_COST
-            + overlaps(r, &self.labels) * LABEL_COST
-            + lines * LINE_COST
+        boxes * NODE_COST + labels * LABEL_COST + lines * LINE_COST
     }
 }
 
+/// The point of the segment `a`–`b` closest to `p`.
+fn closest_on_segment(p: Point, a: Point, b: Point) -> Point {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let length = dx * dx + dy * dy;
+    let t = if length > 0.0 {
+        (((p.x - a.x) * dx + (p.y - a.y) * dy) / length).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    Point::new(a.x + t * dx, a.y + t * dy)
+}
+
+/// Whether the segments `p`–`q` and `a`–`b` cross, each strictly between its ends.
+fn segments_cross(p: Point, q: Point, a: Point, b: Point) -> bool {
+    let cross =
+        |o: Point, u: Point, v: Point| (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x);
+    let (d1, d2) = (cross(a, b, p), cross(a, b, q));
+    let (d3, d4) = (cross(p, q, a), cross(p, q, b));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
+/// A rhombus or ellipse filling `r` as horizontal strips, each as wide as the shape is at its
+/// widest within it.
+fn strips(r: Rect, outline: Outline) -> Vec<Rect> {
+    const STRIPS: usize = 8;
+    let (c, half_h) = (r.center(), r.height / 2.0);
+    let h = r.height / STRIPS as f32;
+    (0..STRIPS)
+        .map(|k| {
+            let (top, bottom) = (r.y + k as f32 * h, r.y + (k + 1) as f32 * h);
+            // How far from the middle the strip comes closest to it, as a share of half the
+            // height.
+            let near = if top <= c.y && c.y <= bottom {
+                0.0
+            } else {
+                (top - c.y).abs().min((bottom - c.y).abs()) / half_h.max(1e-3)
+            };
+            let share = match outline {
+                Outline::Ellipse => (1.0 - near * near).max(0.0).sqrt(),
+                _ => (1.0 - near).max(0.0),
+            };
+            let half_w = r.width / 2.0 * share;
+            Rect::new(c.x - half_w, top, 2.0 * half_w, h)
+        })
+        .collect()
+}
+
+/// The room a label keeps from other labels: [`GAP`] to either side, so that two texts on one
+/// row do not run into one (`- gatter- eingaenge`), and 1 above and below.
+fn spaced(r: Rect) -> Rect {
+    Rect::new(r.x - GAP, r.y - 1.0, r.width + 2.0 * GAP, r.height + 2.0)
+}
+
 /// Where a label is drawn.
-pub(crate) fn label_rect(label: &EdgeLabel, measure: &dyn TextMeasure) -> Rect {
+pub fn label_rect(label: &EdgeLabel, measure: &dyn TextMeasure) -> Rect {
     let width = measure.width(&label.text, FONT_SIZE, false);
     let left = text_left(label_area(label), width, label.align);
     Rect::new(left, label.anchor.y, width, LABEL_HEIGHT)
@@ -628,5 +791,24 @@ mod tests {
         let at = beside(Point::new(100.0, 50.0), up, GAP, (40.0, 15.0));
         assert_eq!(up, (1.0, 0.0));
         assert_eq!(at, Point::new(104.0, 42.5));
+    }
+
+    #[test]
+    fn labels_keep_a_gap_to_labels_on_their_row_and_to_nodes() {
+        // `- gatter` ending where `- eingaenge` starts reads as one text (#52): touching costs,
+        // a gap of a few pixels does not.
+        let other = Rect::new(0.0, 0.0, 40.0, LABEL_HEIGHT);
+        let obstacles = Obstacles { labels: vec![other], ..Obstacles::default() };
+        let touching = Rect::new(40.0, 0.0, 60.0, LABEL_HEIGHT);
+        let apart = Rect::new(40.0 + GAP + 1.0, 0.0, 60.0, LABEL_HEIGHT);
+        assert!(obstacles.cost(touching) > 0.0);
+        assert_eq!(obstacles.cost(apart), 0.0);
+        // A row below, it may start right there.
+        assert_eq!(obstacles.cost(Rect::new(40.0, LABEL_HEIGHT + 1.5, 60.0, LABEL_HEIGHT)), 0.0);
+        // Nodes: touching their outline costs, as covering them does (#57).
+        let node = Rect::new(100.0, 0.0, 80.0, 50.0);
+        let obstacles = Obstacles { boxes: vec![node], ..Obstacles::default() };
+        assert!(obstacles.cost(Rect::new(40.0, 10.0, 60.0, LABEL_HEIGHT)) > 0.0);
+        assert_eq!(obstacles.cost(Rect::new(30.0, 10.0, 60.0, LABEL_HEIGHT)), 0.0);
     }
 }

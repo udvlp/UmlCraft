@@ -29,8 +29,10 @@ pub struct Auto {
 }
 
 impl Auto {
+    /// Without the app, the project of the server's own is drawn as the app's settings say.
     pub fn new(access: Access) -> Self {
-        Self { access, headless: Headless::new(), live: None, mode: Mode::Undecided, connect: None }
+        let headless = Headless::new().drawn_as(crate::host::app_display());
+        Self { access, headless, live: None, mode: Mode::Undecided, connect: None }
     }
 
     /// Never the app: works on `headless` alone (`--headless`, `--in`).

@@ -94,6 +94,8 @@ fn parse(args: &[&str], setup: bool) -> Result<Options, String> {
 
 fn serve(args: &[&str]) -> Result<(), String> {
     let mut options = parse(args, false)?;
+    // Diagrams drawn as in the app, whose settings say how.
+    let display = umlcraft_mcp::host::app_display();
     let mut backend = if let Some(path) = &options.input {
         let doc = umlcraft_mcp::host::open(path)?;
         // The user named the project, so its folder may be used too.
@@ -102,9 +104,9 @@ fn serve(args: &[&str]) -> Result<(), String> {
         {
             options.access.folders.push(folder);
         }
-        Auto::headless(options.access, Headless::with(doc, Some(path.clone())))
+        Auto::headless(options.access, Headless::with(doc, Some(path.clone())).drawn_as(display))
     } else if options.headless {
-        Auto::headless(options.access, Headless::new())
+        Auto::headless(options.access, Headless::new().drawn_as(display))
     } else if let Some(port) = options.port {
         Auto::connect(options.access, port)
     } else {

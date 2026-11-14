@@ -1209,6 +1209,46 @@ pub fn text_left(area: Rect, width: f32, align: LabelAlign) -> f32 {
     }
 }
 
+/// The background behind a text of `width` at `size` in the line box `area`, aligned by
+/// `align`: from just above its letters to just below them, so that lifelines and bars passing
+/// beneath stay out of it while the message line below it stays in sight.
+pub fn backdrop(area: Rect, width: f32, size: f32, align: LabelAlign) -> Primitive {
+    let x = text_left(area, width, align);
+    let base = area.y + baseline(size);
+    let top = base - 0.8 * size;
+    let rect = Rect::new(x - 1.0, top, width + 2.0, base + 0.25 * size - top);
+    Primitive::Frame {
+        rect,
+        width: 0.0,
+        radius: 0.0,
+        fill: Paint::Background,
+        border: Paint::None,
+        style: LineStyle::Solid,
+    }
+}
+
+/// Whether the rows of `node` stand on a [`backdrop`], drawn after all nodes: the operator and
+/// guards of a combined fragment, which lifelines and bars run beneath.
+pub fn rows_on_backdrop(node: &NodeShape) -> bool {
+    matches!(node.figure, Figure::Fragment { filled: false, .. })
+}
+
+/// The tab of a combined fragment filled with the background and outlined, to be drawn over
+/// the lifelines and bars that pass beneath it, before its rows.
+pub fn tab_backdrop(node: &NodeShape) -> Option<Primitive> {
+    let Figure::Fragment { tab, filled: false, .. } = node.figure else { return None };
+    Some(Primitive::Polygon {
+        points: vec![
+            tab.origin(),
+            Point::new(tab.right(), tab.y),
+            Point::new(tab.right(), tab.bottom() - TAB_CUT),
+            Point::new(tab.right() - TAB_CUT, tab.bottom()),
+            Point::new(tab.x, tab.bottom()),
+        ],
+        fill: Paint::Background,
+    })
+}
+
 /// `r` made smaller by `by` on each side.
 fn inset(r: Rect, by: f32) -> Rect {
     Rect::new(r.x + by, r.y + by, (r.width - 2.0 * by).max(0.0), (r.height - 2.0 * by).max(0.0))

@@ -65,15 +65,15 @@
 <text x="843.4" y="849.51" font-size="12">id</text>
 <ellipse cx="930" cy="885" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="906.5" y="889.51" font-size="12">nummer</text>
-<ellipse cx="610" cy="875" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
-<text x="593.5" y="879.51" font-size="12">preis</text>
-<ellipse cx="669.5" cy="955" rx="49.5" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
-<text x="636.5" y="959.51" font-size="12">start_zeit</text>
-<ellipse cx="610.16" cy="835" rx="40.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
-<text x="583.76" y="839.51" font-size="12">end_zeit</text>
-<ellipse cx="844.83" cy="805" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="0"/>
-<polyline points="889.66,805 889.49,806.31 888.98,807.6 888.13,808.88 886.96,810.13 885.46,811.34 883.66,812.5 881.55,813.6 879.17,814.64 876.53,815.61 873.65,816.49 870.54,817.29 867.25,817.99 863.78,818.59 860.16,819.1 856.43,819.49 852.62,819.77 848.74,819.94 844.83,820 840.92,819.94 837.05,819.77 833.23,819.49 829.5,819.1 825.88,818.59 822.42,817.99 819.12,817.29 816.01,816.49 813.13,815.61 810.49,814.64 808.11,813.6 806.01,812.5 804.2,811.34 802.7,810.13 801.53,808.88 800.68,807.6 800.17,806.31 800,805 800.17,803.69 800.68,802.4 801.53,801.12 802.7,799.87 804.2,798.66 806.01,797.5 808.11,796.4 810.49,795.36 813.13,794.39 816.01,793.51 819.12,792.71 822.42,792.01 825.88,791.41 829.5,790.9 833.23,790.51 837.05,790.23 840.92,790.06 844.83,790 848.74,790.06 852.62,790.23 856.43,790.51 860.16,790.9 863.78,791.41 867.25,792.01 870.54,792.71 873.65,793.51 876.53,794.39 879.17,795.36 881.55,796.4 883.66,797.5 885.46,798.66 886.96,799.87 888.13,801.12 888.98,802.4 889.49,803.69 889.66,805" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="5 5"/>
-<text x="814.83" y="809.51" font-size="12">dauer_min</text>
+<ellipse cx="790" cy="955" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="773.5" y="959.51" font-size="12">preis</text>
+<ellipse cx="579.5" cy="865" rx="49.5" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="546.5" y="869.51" font-size="12">start_zeit</text>
+<ellipse cx="600.16" cy="825" rx="40.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<text x="573.76" y="829.51" font-size="12">end_zeit</text>
+<ellipse cx="634.83" cy="965" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="0"/>
+<polyline points="679.66,965 679.49,966.31 678.98,967.6 678.13,968.88 676.96,970.13 675.46,971.34 673.66,972.5 671.55,973.6 669.17,974.64 666.53,975.61 663.65,976.49 660.54,977.29 657.25,977.99 653.78,978.59 650.16,979.1 646.43,979.49 642.62,979.77 638.74,979.94 634.83,980 630.92,979.94 627.05,979.77 623.23,979.49 619.5,979.1 615.88,978.59 612.42,977.99 609.12,977.29 606.01,976.49 603.13,975.61 600.49,974.64 598.11,973.6 596.01,972.5 594.2,971.34 592.7,970.13 591.53,968.88 590.68,967.6 590.17,966.31 590,965 590.17,963.69 590.68,962.4 591.53,961.12 592.7,959.87 594.2,958.66 596.01,957.5 598.11,956.4 600.49,955.36 603.13,954.39 606.01,953.51 609.12,952.71 612.42,952.01 615.88,951.41 619.5,950.9 623.23,950.51 627.05,950.23 630.92,950.06 634.83,950 638.74,950.06 642.62,950.23 646.43,950.51 650.16,950.9 653.78,951.41 657.25,952.01 660.54,952.71 663.65,953.51 666.53,954.39 669.17,955.36 671.55,956.4 673.66,957.5 675.46,958.66 676.96,959.87 678.13,961.12 678.98,962.4 679.49,963.69 679.66,965" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="5 5"/>
+<text x="604.83" y="969.51" font-size="12">dauer_min</text>
 <polygon points="660,640 700,665 660,690 620,665" fill="#ffffff" stroke="#000000"/>
 <text x="650.1" y="669.51" font-size="12">hat</text>
 <polygon points="790,640 830,665 790,690 750,665" fill="#ffffff" stroke="#000000"/>
@@ -196,7 +196,7 @@
 <polyline points="1050,500.07 1082.05,506.53" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="1031.57,510 1112.47,561.26" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="1126.51,259.76 1400.75,120" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="1376.39" y="149.66" font-size="12">[0,1]</text>
+<text x="1347.47" y="123.75" font-size="12">[0,1]</text>
 <polyline points="1086.8,296.8 1008.99,470" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="979.66" y="449.96" font-size="12">[0,n]</text>
 <polyline points="1118.5,1420.36 1111.06,1280" fill="none" stroke="#000000" stroke-width="1"/>
@@ -206,7 +206,7 @@
 <polyline points="1181.8,1437.26 1242.05,1429.74" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="1181.8,1452.74 1242.05,1460.26" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="249.24,1054.46 680,898.14" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="652.72" y="926.66" font-size="12">[0,n]</text>
+<text x="626.4" y="936.21" font-size="12">[0,n]</text>
 <polyline points="206.28,1083.07 85.41,1240" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="63.97" y="1216.34" font-size="12">[0,m]</text>
 <polyline points="234.49,1082.88 344.02,1220" fill="none" stroke="#000000" stroke-width="1"/>
@@ -217,28 +217,28 @@
 <polyline points="1150,1638.75 1191.72,1654.39" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="780,865.42 818.43,854.21" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="780,881.25 890.09,884" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="680,877.92 649.76,876.66" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="713.87,900 681.25,940.43" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="680,861.22 638.49,845.64" fill="none" stroke="#000000" stroke-width="1"/>
-<polyline points="760.62,860 824.39,818.35" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="746,900 778.51,940.63" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="680,875.02 626.52,869.69" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="682.79,860 626.72,836.25" fill="none" stroke="#000000" stroke-width="1"/>
+<polyline points="707.61,900 650.56,950.95" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="642.51,650.93 454.86,500" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="486.88" y="518.53" font-size="12">[1,1]</text>
 <polyline points="666.76,685.77 723.49,860" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="680.47" y="855.16" font-size="12">[0,n]</text>
+<text x="660.92" y="846.8" font-size="12">[0,n]</text>
 <polyline points="782.16,644.9 717.8,480" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="728.45" y="494.18" font-size="12">[0,1]</text>
+<text x="733.54" y="507.22" font-size="12">[0,1]</text>
 <polyline points="784.06,686.29 735.58,860" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="748.8" y="840.52" font-size="12">[0,n]</text>
+<text x="745.03" y="854.01" font-size="12">[0,n]</text>
 <polyline points="488.48,256.18 672.91,120" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="652.63" y="150.63" font-size="12">[1,1]</text>
+<text x="607.6" y="136.79" font-size="12">[1,1]</text>
 <polyline points="470.46,298.19 590,670 716.67,860" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="656.42" y="839.34" font-size="12">[0,n]</text>
+<text x="647.54" y="826.02" font-size="12">[0,n]</text>
 <polyline points="722.77,250.94 703.02,120" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="712.49" y="153.9" font-size="12">[1,1]</text>
 <polyline points="714.92,297.02 630,460 730,670 730,860" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="693" y="819.45" font-size="12">[0,n]</text>
+<text x="750" y="833.45" font-size="12">[0,n]</text>
 <polyline points="732.92,1030.19 730.39,900" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="732.23" y="923.1" font-size="12">[0,n]</text>
+<text x="693.87" y="937.85" font-size="12">[0,n]</text>
 <polyline points="726.92,1077.45 685.77,1220" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="653.18" y="1202.07" font-size="12">[0,m]</text>
 <polyline points="215.4,80 144.89,46.74" fill="none" stroke="#000000" stroke-width="1"/>
@@ -264,7 +264,7 @@
 <text x="756.86" y="138.54" font-size="12">[1,1]</text>
 <polyline points="903.81,293.84 734.28,441.51" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="901.19,290.83 731.65,438.49" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="718.21" y="420.06" font-size="12">[0,n]</text>
+<text x="722.29" y="416.51" font-size="12">[0,n]</text>
 <polyline points="1396.92,80 1325.13,46.67" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="1424.62,80 1401.09,49.41" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="1452.36,80 1471.13,49.62" fill="none" stroke="#000000" stroke-width="1"/>
@@ -294,7 +294,7 @@
 <polyline points="160,842 190.32,843.22" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="160,858.75 201.72,874.39" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="189.4,653.14 402.21,500" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="381.61" y="530.58" font-size="12">[1,1]</text>
+<text x="376.9" y="533.97" font-size="12">[1,1]</text>
 <polyline points="164.28,689.69 118.83,820.66" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="160.5,688.38 115.05,819.34" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="85.5" y="801.22" font-size="12">[0,n]</text>
@@ -302,7 +302,7 @@
 <polyline points="1160,1262.08 1190.24,1263.34" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="1160,1278.02 1204.33,1294.01" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="1126,1045 778,900" fill="none" stroke="#000000" stroke-width="1"/>
-<text x="788.85" y="897.35" font-size="12">[1,1]</text>
+<text x="790.7" y="898.12" font-size="12">[1,1]</text>
 <polyline points="1145.65,1077.28 1113.9,1240" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="1079.61" y="1223.64" font-size="12">[0,n]</text>
 <polyline points="1538.72,257.05 1452.57,120" fill="none" stroke="#000000" stroke-width="1"/>

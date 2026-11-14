@@ -567,15 +567,7 @@ thread_local! {
 const MAX_MEASURED: usize = 50_000;
 
 /// How diagrams are drawn beyond what they store: the user's settings.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Display {
-    /// Members show their visibility in UmlCraft's own column.
-    pub visibility_column: bool,
-    /// Abstract classes show «abstract» above their name instead of `{abstract}` below it.
-    pub abstract_stereotype: bool,
-    /// Read-only attributes end in `{readOnly}`.
-    pub read_only_constraint: bool,
-}
+pub use umlcraft_notation::scene::Display;
 
 /// Measures text with the window's font system, at 100 % zoom.
 pub struct FontMeasure<'a> {
@@ -2891,6 +2883,9 @@ impl Painter<'_> {
             self.primitive(&primitive);
         }
         self.node_fill = None;
+        if draw::rows_on_backdrop(node) {
+            return;
+        }
         for row in &node.rows {
             if editing.is_some() && row.element == editing {
                 continue;
@@ -2899,6 +2894,40 @@ impl Painter<'_> {
         }
     }
 
+    /// The rows of a node that stand on a backdrop, over the nodes drawn before: the labels of
+    /// combined fragments, which lifelines and bars run beneath, in their opaque tab.
+    fn rows_on_backdrop(&mut self, node: &NodeShape, editing: Option<Id>) {
+        if let Some(tab) = draw::tab_backdrop(node) {
+            self.primitive(&tab);
+        }
+        for row in &node.rows {
+            if editing.is_some() && row.element == editing {
+                continue;
+            }
+            self.backdrop(&row.text, row.rect, row.size, row.bold, row.align);
+            self.row(row);
+        }
+    }
+
+    /// The background behind a text, so that lines passing beneath it do not cross it.
+    fn backdrop(&mut self, text: &str, area: Rect, size: f32, bold: bool, align: LabelAlign) {
+        if text.is_empty() {
+            return;
+        }
+        let width = AppMeasure::new(self.cx, Display::default()).width(text, size, bold);
+        self.primitive(&draw::backdrop(area, width, size, align));
+    }
+
+    /// The backdrops of the labels of `edges` on a sequence diagram, painted before the lines
+    /// so that lifelines passing beneath the labels do not cross them and no backdrop covers
+    /// an arrowhead.
+    fn label_backdrops(&mut self, edges: &[EdgeShape]) {
+        for label in edges.iter().flat_map(|e| &e.labels) {
+            self.backdrop(&label.text, draw::label_area(label), FONT_SIZE, false, label.align);
+        }
+    }
+
+    /// Paints an edge with its labels.
     fn edge(&mut self, edge: &EdgeShape, selected: bool) {
         let light = self.c.background.l > 0.5;
         self.edge_line = edge.stroke.filter(|_| light).map(hsla);
@@ -3283,8 +3312,14 @@ impl Render for DiagramCanvas {
                             for node in &scene.nodes {
                                 p.node(node, editing_element);
                             }
+                            for node in scene.nodes.iter().filter(|n| draw::rows_on_backdrop(n)) {
+                                p.rows_on_backdrop(node, editing_element);
+                            }
                             if let Some(layout) = &scene.sequence {
                                 p.sequence(layout);
+                            }
+                            if scene.sequence.is_some() {
+                                p.label_backdrops(&scene.edges);
                             }
                             for edge in &scene.edges {
                                 p.edge(edge, selection.contains(&edge.id));

@@ -60,7 +60,23 @@ pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> St
             svg.primitive(&p);
         }
         svg.fill = None;
+        if draw::rows_on_backdrop(node) {
+            continue;
+        }
         for row in &node.rows {
+            svg.ink = row.color;
+            svg.row(row);
+        }
+        svg.ink = None;
+    }
+    // The labels of combined fragments over the lifelines and bars that pass beneath them.
+    for node in scene.nodes.iter().filter(|n| draw::rows_on_backdrop(n)) {
+        if let Some(tab) = draw::tab_backdrop(node) {
+            svg.primitive(&tab);
+        }
+        for row in &node.rows {
+            let width = measure.width(&row.text, row.size, row.bold);
+            svg.primitive(&draw::backdrop(row.rect, width, row.size, row.align));
             svg.ink = row.color;
             svg.row(row);
         }
@@ -69,6 +85,15 @@ pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> St
     if let Some(layout) = &scene.sequence {
         for p in draw::sequence(layout) {
             svg.primitive(&p);
+        }
+    }
+    // Message labels stay readable where lifelines pass beneath them, on backgrounds drawn
+    // before the lines, so that none covers an arrowhead.
+    if scene.sequence.is_some() {
+        for label in scene.edges.iter().flat_map(|e| &e.labels).filter(|l| !l.text.is_empty()) {
+            let width = measure.width(&label.text, FONT_SIZE, false);
+            let area = draw::label_area(label);
+            svg.primitive(&draw::backdrop(area, width, FONT_SIZE, label.align));
         }
     }
     for edge in &scene.edges {

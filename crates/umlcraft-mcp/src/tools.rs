@@ -14,7 +14,7 @@ use umlcraft_model::{
     Point, Rect, Shape, SharedStyle, StateInvariantProps, TerminationProps, Tx, Visibility,
 };
 use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
-use umlcraft_notation::scene::{self, Preview, TextMeasure};
+use umlcraft_notation::scene::{self, Display, Preview, TextMeasure};
 use umlcraft_notation::{
     activity, autoroute, composite, edit, er, layout, member, sequence_edit, state_edit, svg,
 };
@@ -412,6 +412,23 @@ pub fn list() -> Vec<Value> {
             &[],
         ),
         tool(
+            "set_display",
+            "Sets how diagrams are drawn beyond what the project stores, for drawing, sizing \
+             boxes and exporting alike, so that diagrams look the same wherever they are made. \
+             All off, they look as in Astah. In the app these are the user's settings, which it \
+             keeps; without the app the session starts with the app's saved settings. Omitted \
+             flags stay; the reply gives all of them.",
+            json!({
+                "visibility_column": flag("Members show their visibility (+ − # ~) in a column \
+                                           of its own, so that all names of a compartment start \
+                                           in one line, and a minus as wide as a plus."),
+                "abstract_stereotype": flag("Abstract classes show «abstract» above their \
+                                             name instead of {abstract} below it."),
+                "read_only_constraint": flag("Read-only attributes end in {readOnly}."),
+            }),
+            &[],
+        ),
+        tool(
             "select",
             "Selects elements on the diagram shown, as a click would; the properties panel \
              shows the first. An empty list clears the selection. In a structogram `path` \
@@ -686,7 +703,11 @@ pub fn list() -> Vec<Value> {
                     "guard": text("Messages, operands, flows, transitions: the guard, without brackets."),
                     "sort": { "type": "string",
                               "enum": ["synchronous", "asynchronous", "reply", "create", "destroy"] },
-                    "arguments": text("Messages: the arguments, written between the parentheses."),
+                    "arguments": { "type": ["string", "null"],
+                                   "description": "Messages: the arguments, written between the \
+                                                   parentheses; null for no parentheses, as a \
+                                                   signal is written (an asynchronous message \
+                                                   named without them has none)." },
                     "return_value": text("Replies: the value they return."),
                     "operation": text("Messages: the id of the operation it calls, or \"\" for none."),
                     "operator": { "type": "string",
@@ -876,6 +897,7 @@ pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> R
         "get_element" => get_element(host, args),
         "get_diagram" => get_diagram(host, args),
         "render_diagram" => render_diagram(host, args),
+        "set_display" => set_display(host, args),
         // The app answers this one itself, with its window; it never comes here from the app
         // but inside `batch`.
         "screenshot" | "set_window" | "set_view" => Err(if host.live() {
@@ -1131,6 +1153,7 @@ fn change_measured<R>(
 // ----- Reading -------------------------------------------------------------------------------
 
 fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
+    let display = display_json(host.display());
     let model = host.document().model();
     let mut diagrams = Vec::new();
     let mut structograms = Vec::new();
@@ -1169,6 +1192,7 @@ fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
         "shown_diagram": host.active_diagram(),
         "selection": host.selection(),
         "allowed_folders": if access.any { json!("any") } else { json!(access.folders) },
+        "display": display,
     })))
 }
 
@@ -1386,6 +1410,31 @@ fn structogram_svg(d: &umlcraft_nsd::Diagram) -> String {
     let m = umlcraft_nsd::Metrics::for_platform();
     let layout = umlcraft_nsd::layout::Layout::of(d, m);
     umlcraft_nsd::svg::render_with(d, &layout, m, &umlcraft_nsd::svg::Palette::PLAIN)
+}
+
+fn set_display(host: &mut dyn Host, args: &Value) -> Outcome {
+    let mut display = host.display();
+    for (key, setting) in [
+        ("visibility_column", &mut display.visibility_column),
+        ("abstract_stereotype", &mut display.abstract_stereotype),
+        ("read_only_constraint", &mut display.read_only_constraint),
+    ] {
+        if let Some(value) = args.get(key) {
+            *setting = value.as_bool().ok_or_else(|| format!("`{key}` is true or false"))?;
+        }
+    }
+    if display != host.display() {
+        host.set_display(display);
+    }
+    Ok(Reply::json(display_json(display)))
+}
+
+fn display_json(display: Display) -> Value {
+    json!({
+        "visibility_column": display.visibility_column,
+        "abstract_stereotype": display.abstract_stereotype,
+        "read_only_constraint": display.read_only_constraint,
+    })
 }
 
 fn render_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
@@ -1693,8 +1742,12 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
         let element = tx.model().view(diagram).and_then(|v| v.get(edge)).and_then(|p| p.element);
         // A reply starts where its bar ends; one given a height goes there, as dragged, and
         // its bar goes on to it.
-        if let (EdgeTool::Reply, Some(y), Some(reply)) = (tool, opt_num(args, "y"), element) {
-            sequence_edit::move_item(tx, diagram, reply, y)?;
+        // One given none goes below the fragments its bar only reaches into.
+        if let (EdgeTool::Reply, Some(reply)) = (tool, element) {
+            match opt_num(args, "y") {
+                Some(y) => sequence_edit::move_item(tx, diagram, reply, y)?,
+                None => sequence_edit::reply_below_frames(tx, diagram, reply)?,
+            }
         }
         // An association class's name is its class's.
         let class = match element.and_then(|e| tx.model().get(e)).map(|e| e.kind()) {
@@ -1717,6 +1770,10 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
             })?;
         } else if let (Some(name), Some(element)) = (&name, call) {
             set_call(tx, element, name)?;
+            // An asynchronous message named without parentheses is a signal, written bare.
+            if tool == EdgeTool::AsyncMessage && !name.contains('(') {
+                tx.update_presentation(diagram, edge, |p| p.style.hide_parameters = true)?;
+            }
         } else if let (Some(name), Some(element)) = (&name, class.or(element)) {
             tx.rename(element, name.clone())?;
         }
@@ -1952,6 +2009,16 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         }
     }
     set_er(&mut settings, args)?;
+    // A message shows its parentheses once it is given arguments or a name written with them,
+    // and none with `"arguments": null`, as a signal is mostly written.
+    let call = matches!(&kind, ElementKind::Message(p) if p.sort != MessageSort::Reply);
+    let parentheses = match (args.get("arguments"), &name) {
+        _ if !call => None,
+        (Some(Value::Null), _) => Some(false),
+        (Some(_), _) => Some(true),
+        (None, Some(name)) if name.contains('(') => Some(true),
+        _ => None,
+    };
     // A call named `rechne(a)` is named `rechne` with the arguments `a`, unless they are given.
     let name = match (&mut settings, name) {
         (ElementKind::Message(p), Some(name)) if p.sort != MessageSort::Reply => {
@@ -2062,6 +2129,11 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
             if let Some(shown) = empty_slots {
                 tx.update_presentation(diagram, presentation, |p| {
                     p.style.hide_empty_slots = !shown;
+                })?;
+            }
+            if let Some(shown) = parentheses {
+                tx.update_presentation(diagram, presentation, |p| {
+                    p.style.hide_parameters = !shown;
                 })?;
             }
         }
@@ -3144,6 +3216,8 @@ mod tests {
     use super::*;
     use crate::host::Headless;
     use umlcraft_model::PseudostateKind;
+    use umlcraft_notation::scene::Figure;
+    use umlcraft_notation::{labels, sequence};
 
     fn ok(reply: Reply) -> Value {
         assert!(!reply.is_error, "{reply:?}");
@@ -6330,5 +6404,590 @@ mod tests {
         let (a, b) = (&r[0]["bounds"], &r[1]["bounds"]);
         assert!(a["x"].as_f64() < b["x"].as_f64(), "{node}");
         assert!((a["y"].as_f64().unwrap() - b["y"].as_f64().unwrap()).abs() < 0.5, "{node}");
+    }
+
+    /// Runs `calls` as one batch and returns the replies.
+    fn build(host: &mut Headless, calls: Value) -> Vec<Value> {
+        run(host, "batch", json!({ "calls": calls }))["results"].as_array().unwrap().clone()
+    }
+
+    /// The scene of the diagram `d`.
+    fn drawn(host: &mut Headless, d: &Value) -> scene::Scene {
+        let (doc, measure) = host.parts();
+        scene::build(doc.model(), id(d).parse().unwrap(), &Preview::default(), measure)
+    }
+
+    /// The heights of the messages of the sequence diagram `d`, by name.
+    fn message_heights(host: &mut Headless, d: &Value) -> Vec<(String, f64)> {
+        let lines = run(host, "get_diagram", json!({ "diagram": d }))["lines"].clone();
+        let lines = lines.as_array().unwrap().iter();
+        lines.map(|l| (l["name"].as_str().unwrap().to_owned(), l["y"].as_f64().unwrap())).collect()
+    }
+
+    /// A sequence diagram without numbers or frame, with lifelines named `names`.
+    fn lifelines(names: &[&str]) -> Vec<Value> {
+        let mut calls = vec![json!({ "tool": "create_diagram", "arguments": {
+            "kind": "sequence", "name": "s", "message_numbers": false, "frame": false } })];
+        for name in names {
+            calls.push(json!({ "tool": "create_element", "arguments": {
+                "diagram": "$0.diagram", "tool": "lifeline", "name": name } }));
+        }
+        calls
+    }
+
+    fn message(tool: &str, from: usize, to: usize, name: &str, y: Option<f64>) -> Value {
+        let mut args = json!({ "diagram": "$0.diagram", "tool": tool, "name": name,
+                               "source": format!("${from}.element"),
+                               "target": format!("${to}.element") });
+        if let Some(y) = y {
+            args["y"] = json!(y);
+        }
+        json!({ "tool": "connect", "arguments": args })
+    }
+
+    #[test]
+    fn heads_of_lifelines_grow_with_their_names() {
+        let mut host = Headless::new();
+        let calls = lifelines(&["e:EchoClientVerbindung", "k"]);
+        let r = build(&mut host, json!(calls));
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        // As wide as the name with room on either side, around the line where it was; a short
+        // name keeps the width Astah gives a head (#59).
+        for (reply, at_least) in [(&r[1], 150.0), (&r[2], sequence::HEAD_WIDTH)] {
+            let node = scene.node(id(&reply["presentation"]).parse().unwrap()).unwrap();
+            let Figure::Lifeline { head, .. } = node.figure else { panic!("a lifeline") };
+            let name = node.rows[0].rect;
+            assert!(head.width >= at_least, "{head:?}");
+            assert!(head.x + 8.0 <= name.x && name.right() + 8.0 <= head.right(), "{head:?}");
+        }
+    }
+
+    #[test]
+    fn lifelines_end_together_below_the_last_message() {
+        let mut host = Headless::new();
+        let mut calls = lifelines(&[":Program", "t:Theke", "g:Geraet"]);
+        calls.push(message("message", 1, 2, "ausleihen()", Some(100.0)));
+        calls.push(message("message", 2, 3, "istFrei()", Some(130.0)));
+        calls.push(message("reply", 3, 2, "frei", Some(160.0)));
+        calls.push(message("reply", 2, 1, "frei", Some(450.0)));
+        let r = build(&mut host, json!(calls));
+        // All three as long, also the one the last message does not reach (#56).
+        let g = run(&mut host, "get_diagram", json!({ "diagram": r[0]["diagram"] }));
+        let bottoms: Vec<f64> = g["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["name"].as_str().is_some_and(|n| n.contains(':')))
+            .map(|n| n["bounds"]["y"].as_f64().unwrap() + n["bounds"]["height"].as_f64().unwrap())
+            .collect();
+        assert_eq!(bottoms.len(), 3);
+        assert!(bottoms.iter().all(|&b| (b - bottoms[0]).abs() < 0.01 && b > 450.0), "{bottoms:?}");
+    }
+
+    #[test]
+    fn a_reply_without_height_goes_below_a_fragment_it_is_not_in() {
+        let mut host = Headless::new();
+        let mut calls = lifelines(&["b:Betrieb", "a:Auftrag", "e:Mitarbeiter"]);
+        calls.push(message("message", 1, 2, "finde()", Some(100.0)));
+        calls.push(message("message", 2, 3, "neuerAuftrag(a)", Some(170.0)));
+        calls.push(json!({ "tool": "wrap_in_fragment", "arguments": { "diagram": "$0.diagram",
+            "items": ["$5.element"], "operator": "opt", "guard": "e != null" } }));
+        calls.push(message("reply", 2, 1, "e", None));
+        let r = build(&mut host, json!(calls));
+        let frame = drawn(&mut host, &r[0]["diagram"])
+            .nodes
+            .iter()
+            .find(|n| matches!(n.figure, Figure::Fragment { .. }))
+            .unwrap()
+            .rect;
+        // Below the frame, not at the end of the bar inside it (#55).
+        let heights = message_heights(&mut host, &r[0]["diagram"]);
+        let reply = heights.iter().find(|(name, _)| name == "e").unwrap().1;
+        assert!(reply > f64::from(frame.bottom()), "{reply} in {frame:?}");
+        // A reply whose call is in the fragment stays in it.
+        let mut calls = lifelines(&["b", "a"]);
+        calls.push(message("message", 1, 2, "x()", Some(100.0)));
+        calls.push(json!({ "tool": "wrap_in_fragment", "arguments": { "diagram": "$0.diagram",
+            "items": ["$3.element"], "operator": "loop", "guard": "i" } }));
+        calls.push(message("reply", 2, 1, "r", None));
+        let r = build(&mut host, json!(calls));
+        let frame = drawn(&mut host, &r[0]["diagram"])
+            .nodes
+            .iter()
+            .find(|n| matches!(n.figure, Figure::Fragment { .. }))
+            .unwrap()
+            .rect;
+        let heights = message_heights(&mut host, &r[0]["diagram"]);
+        let reply = heights.iter().find(|(name, _)| name == "r").unwrap().1;
+        assert!(reply < f64::from(frame.bottom()), "{reply} below {frame:?}");
+    }
+
+    #[test]
+    fn signals_keep_their_height_and_go_without_parentheses() {
+        let mut host = Headless::new();
+        let mut calls = lifelines(&[":PC", ":Arduino"]);
+        calls.push(message("asyncMessage", 1, 2, "START", Some(100.0)));
+        calls.push(message("asyncMessage", 1, 2, "DATEN(17)", Some(140.0)));
+        calls.push(message("asyncMessage", 1, 2, "STOP", Some(180.0)));
+        calls.push(message("message", 1, 2, "frage", Some(240.0)));
+        let r = build(&mut host, json!(calls));
+        // Where they were drawn, not below the bars the ones before start (#54).
+        let heights = message_heights(&mut host, &r[0]["diagram"]);
+        let ys: Vec<f64> = heights.iter().map(|(_, y)| *y).collect();
+        assert_eq!(ys, [100.0, 140.0, 180.0, 240.0]);
+        // Signals named without parentheses show none; calls keep theirs.
+        let texts = |host: &mut Headless| -> Vec<String> {
+            let scene = drawn(host, &r[0]["diagram"]);
+            scene.edges.iter().flat_map(|e| e.labels.iter().map(|l| l.text.clone())).collect()
+        };
+        assert_eq!(texts(&mut host), ["START", "DATEN(17)", "STOP", "frage()"]);
+        // Arguments bring them back, `null` takes them away.
+        run(&mut host, "update_element", json!({ "id": r[5]["element"], "arguments": "x" }));
+        run(&mut host, "update_element", json!({ "id": r[6]["element"], "arguments": null }));
+        assert_eq!(texts(&mut host), ["START", "DATEN(17)", "STOP(x)", "frage"]);
+    }
+
+    #[test]
+    fn roles_keep_off_the_class_they_name() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "class", "name": "rolle" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "class", "name": "Bibliothek" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "class", "name": "Buch" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                  "tool": "association", "source": "$1.element", "target": "$2.element",
+                  "target_end": { "navigability": "navigable", "role": "- buecher",
+                                  "multiplicity": "*" } } },
+                { "tool": "arrange_diagram", "arguments": { "diagram": "$0.diagram",
+                  "direction": "right" } },
+            ]),
+        );
+        let (doc, measure) = host.parts();
+        let d = id(&r[0]["diagram"]).parse().unwrap();
+        let scene = scene::build(doc.model(), d, &Preview::default(), measure);
+        let book = scene.node(id(&r[2]["presentation"]).parse().unwrap()).unwrap().rect;
+        let edge = scene.edge(id(&r[3]["presentation"]).parse().unwrap()).unwrap();
+        // A gap as the multiplicity keeps, not touching the box (#51).
+        for label in &edge.labels {
+            let drawn = labels::label_rect(label, measure);
+            assert!(drawn.right() + 4.0 <= book.x, "{} at {drawn:?}, box {book:?}", label.text);
+        }
+    }
+
+    #[test]
+    fn roles_at_one_class_do_not_run_into_one() {
+        let mut host = Headless::new();
+        let class = |name: &str| {
+            json!({ "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "class", "name": name } })
+        };
+        let general = |from: usize| {
+            json!({ "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                    "tool": "generalization", "source": format!("${from}.element"),
+                    "target": "$1.element" } })
+        };
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "class", "name": "gatter" } },
+                class("Gatter"), class("Und"), class("Oder"), class("Nicht"),
+                general(2), general(3), general(4),
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                  "tool": "association", "source": "$1.element", "target": "$1.element",
+                  "target_end": { "role": "- eingaenge", "multiplicity": "1..2",
+                                  "navigability": "navigable" } } },
+                class("Schaltung"),
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                  "tool": "association", "source": "$9.element", "target": "$1.element",
+                  "source_end": { "aggregation": "composite" },
+                  "target_end": { "role": "- gatter", "multiplicity": "*",
+                                  "navigability": "navigable" } } },
+                { "tool": "arrange_diagram", "arguments": { "diagram": "$0.diagram" } },
+            ]),
+        );
+        // No two labels side by side without a gap, where they read as one (#52).
+        let (doc, measure) = host.parts();
+        let d = id(&r[0]["diagram"]).parse().unwrap();
+        let scene = scene::build(doc.model(), d, &Preview::default(), measure);
+        let drawn: Vec<(String, Rect)> = [&r[8], &r[10]]
+            .iter()
+            .flat_map(|line| {
+                let edge = scene.edge(id(&line["presentation"]).parse().unwrap()).unwrap();
+                edge.labels.iter().map(|l| (l.text.clone(), labels::label_rect(l, measure)))
+            })
+            .collect();
+        for (i, (a, ra)) in drawn.iter().enumerate() {
+            for (b, rb) in &drawn[i + 1..] {
+                let rows = ra.y < rb.bottom() - 1.0 && rb.y < ra.bottom() - 1.0;
+                let apart = ra.right() + 3.0 <= rb.x || rb.right() + 3.0 <= ra.x;
+                assert!(!rows || apart, "{a} at {ra:?}, {b} at {rb:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn texts_stay_readable_over_lifelines() {
+        let mut host = Headless::new();
+        let mut calls = lifelines(&["k:Kasse", "f:Film", "s:Saal"]);
+        calls.push(message("message", 1, 3, "istAusverkauft()", Some(100.0)));
+        calls.push(message("message", 1, 2, "laufe()", Some(160.0)));
+        calls.push(json!({ "tool": "wrap_in_fragment", "arguments": { "diagram": "$0.diagram",
+            "items": ["$5.element"], "operator": "loop", "guard": "bis RICHTIG" } }));
+        let r = build(&mut host, json!(calls));
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let image = svg::render(&scene, &umlcraft_notation::scene::ApproxMeasure);
+        // A fragment's label stands on a white box drawn right before it, in a tab filled white,
+        // above the lifelines and bars (#58, #64).
+        let lines: Vec<&str> = image.lines().collect();
+        let white = |l: &str, tag: &str| l.starts_with(tag) && l.contains("fill=\"#ffffff\"");
+        let label = lines.iter().position(|l| l.contains(">loop [bis RICHTIG]</text>")).unwrap();
+        assert!(white(lines[label - 1], "<rect"), "{:?}", &lines[label - 2..=label]);
+        assert!(white(lines[label - 2], "<polygon"), "{:?}", &lines[label - 2..=label]);
+        // A message's name stands on one too, above the message line and drawn before the
+        // arrowheads, so that it covers none (#64).
+        let y = |l: &str, name: &str| -> f32 {
+            let at = l.find(&format!(" {name}=\"")).unwrap() + name.len() + 3;
+            l[at..].split('"').next().unwrap().parse().unwrap()
+        };
+        let backdrop = lines
+            .iter()
+            .position(|l| {
+                white(l, "<rect") && (80.0..100.0).contains(&(y(l, "y") + y(l, "height")))
+            })
+            .unwrap_or_else(|| panic!("{image}"));
+        let head = lines
+            .iter()
+            .position(|l| l.starts_with("<polygon") && l.contains("fill=\"#000000\""))
+            .unwrap();
+        assert!(backdrop < head, "{image}");
+    }
+
+    #[test]
+    fn lines_keep_a_last_stretch_longer_than_their_marker() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "class", "name": "tiere" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "class", "name": "Tier" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "class", "name": "Hund" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "class", "name": "Katze" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                  "tool": "generalization", "source": "$2.element", "target": "$1.element" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                  "tool": "generalization", "source": "$3.element", "target": "$1.element" } },
+                { "tool": "update_element", "arguments": { "id": "$4.element",
+                  "shared_style": "separate" } },
+                { "tool": "update_element", "arguments": { "id": "$5.element",
+                  "shared_style": "separate" } },
+                { "tool": "arrange_diagram", "arguments": { "diagram": "$0.diagram" } },
+            ]),
+        );
+        // Not bent right before the triangle, where the bend meets it (#53).
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        for line in [&r[4], &r[5]] {
+            let points = &scene.edge(id(&line["presentation"]).parse().unwrap()).unwrap().points;
+            let n = points.len();
+            assert!(n == 2 || points[n - 1].distance(points[n - 2]) > 20.0, "{points:?}");
+        }
+    }
+
+    #[test]
+    fn roles_of_a_moved_recursive_relationship_keep_off_the_rhombus() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+                  "name": "er" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erEntity", "name": "Mitglied" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erKeyAttribute", "name": "mitgliedID" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$2.element", "target": "$1.element" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erRelationship", "name": "wirbt" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$4.element", "target": "$1.element" } },
+                { "tool": "update_element", "arguments": { "id": "$5.element",
+                  "cardinality": "[0,n]", "role": "Werber" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$4.element", "target": "$1.element" } },
+                { "tool": "update_element", "arguments": { "id": "$7.element",
+                  "cardinality": "[0,1]", "role": "Geworbener" } },
+                { "tool": "arrange_diagram", "arguments": { "diagram": "$0.diagram" } },
+                { "tool": "move_node", "arguments": { "diagram": "$0.diagram",
+                  "node": "$1.presentation", "x": 100, "y": 140 } },
+            ]),
+        );
+        // Clear of the rhombus and the entity after the move (#57).
+        let (doc, measure) = host.parts();
+        let d = id(&r[0]["diagram"]).parse().unwrap();
+        let scene = scene::build(doc.model(), d, &Preview::default(), measure);
+        let rect =
+            |reply: &Value| scene.node(id(&reply["presentation"]).parse().unwrap()).unwrap().rect;
+        let (rhombus, entity) = (rect(&r[4]), rect(&r[1]));
+        for line in [&r[5], &r[7]] {
+            for label in &scene.edge(id(&line["presentation"]).parse().unwrap()).unwrap().labels {
+                let drawn = labels::label_rect(label, measure);
+                for node in [rhombus, entity] {
+                    assert!(!drawn.intersects(&node), "{} at {drawn:?} on {node:?}", label.text);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_cardinality_on_a_short_line_stays_beside_it() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+                  "name": "er" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erEntity", "name": "Interpret", "x": 0, "y": 0 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erEntity", "name": "Album", "x": 340, "y": 0 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erRelationship", "name": "veröffentlicht", "x": 170, "y": -5 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$3.element", "target": "$1.element" } },
+                { "tool": "update_element", "arguments": { "id": "$4.element",
+                  "cardinality": "[1,1]" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$3.element", "target": "$2.element" } },
+                { "tool": "update_element", "arguments": { "id": "$6.element",
+                  "cardinality": "[0,n]" } },
+            ]),
+        );
+        // Beside the line, not below the entity (#60).
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let (_, measure) = host.parts();
+        let album = scene.node(id(&r[2]["presentation"]).parse().unwrap()).unwrap().rect;
+        let edge = scene.edge(id(&r[6]["presentation"]).parse().unwrap()).unwrap();
+        let label = edge.labels.iter().find(|l| l.text == "[0,n]").unwrap();
+        let drawn = labels::label_rect(label, measure);
+        assert!(drawn.y < album.bottom(), "{drawn:?} below {album:?}");
+        assert!(!drawn.intersects(&album), "{drawn:?} on {album:?}");
+    }
+
+    #[test]
+    fn a_multiplicity_stays_on_its_side_of_a_line_above_it() {
+        let mut host = Headless::new();
+        let members: [(&str, &[&str]); 4] = [
+            ("Betrieb", &["- name : String", "+ einstellen(m : Mitarbeiter)", "+ ausgeben()"]),
+            ("Mitarbeiter", &["- name : String", "- krank : boolean", "+ istKrank() : boolean"]),
+            ("Auftrag", &["- nummer : String", "+ findeBearbeiter()"]),
+            ("Maschine", &["- name : String", "+ schulen(m : Mitarbeiter)"]),
+        ];
+        let mut calls = vec![json!({ "tool": "create_diagram",
+            "arguments": { "kind": "class", "name": "krank" } })];
+        for (name, _) in members {
+            calls.push(json!({ "tool": "create_element", "arguments": {
+                "diagram": "$0.diagram", "tool": "class", "name": name } }));
+        }
+        for (k, (_, texts)) in members.iter().enumerate() {
+            for text in *texts {
+                calls.push(json!({ "tool": "add_member", "arguments": {
+                    "owner": format!("${}.element", k + 1), "text": text } }));
+            }
+        }
+        let n = calls.len();
+        let assoc = |s: usize, t: usize, role: &str, target: &str, source: &str| {
+            json!({ "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                "tool": "association", "source": format!("${s}.element"),
+                "target": format!("${t}.element"),
+                "target_end": { "role": role, "multiplicity": target, "navigability": "navigable" },
+                "source_end": { "multiplicity": source } } })
+        };
+        let at = |k: usize, x: f64, y: f64| {
+            json!({ "tool": "move_node", "arguments": { "diagram": "$0.diagram",
+                "node": format!("${k}.presentation"), "x": x, "y": y } })
+        };
+        calls.extend([
+            assoc(1, 2, "- belegschaft", "*", "1"),
+            assoc(2, 3, "- auftraege", "*", "1"),
+            assoc(3, 4, "- maschine", "1", "*"),
+            assoc(4, 2, "- geschulte", "*", "*"),
+            json!({ "tool": "arrange_diagram", "arguments": { "diagram": "$0.diagram",
+                "direction": "right" } }),
+            at(1, 40.0, 40.0),
+            at(2, 400.0, 25.0),
+            at(3, 470.0, 250.0),
+            at(4, 40.0, 243.0),
+        ]);
+        let r = build(&mut host, json!(calls));
+        // The `1` of the lower line at `Maschine` stays below the upper line (#62).
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let (_, measure) = host.parts();
+        let edge = |k: usize| scene.edge(id(&r[k]["presentation"]).parse().unwrap()).unwrap();
+        let (lower, upper) = (edge(n + 2), edge(n + 3));
+        let upper_y = upper.points[0].y;
+        assert_eq!(upper_y, upper.points[1].y, "{:?}", upper.points);
+        let one = lower.labels.iter().find(|l| l.text == "1").unwrap();
+        let drawn = labels::label_rect(one, measure);
+        assert!(drawn.y >= upper_y, "{drawn:?} above the line at {upper_y}");
+    }
+
+    #[test]
+    fn links_run_straight_where_objects_overlap_and_keep_off_separators() {
+        let mut host = Headless::new();
+        let root = run(&mut host, "get_document", json!({}))["root"].clone();
+        let class = |name: &str, members: &[&str]| {
+            let mut calls = vec![json!({ "tool": "create_model_element", "arguments": {
+                "owner": root, "tool": "class", "name": name } })];
+            calls.extend(members.iter().map(|text| {
+                json!({ "tool": "add_member", "arguments": { "owner": "$0.element", "text": text } })
+            }));
+            calls
+        };
+        let ids: Vec<Value> = [
+            class("Mitglied", &["- name : String"]),
+            class("Zeitschrift", &["- titel : String", "- jahr : int", "- ausgabe : int"]),
+            class("Buch", &["- titel : String", "- jahr : int"]),
+        ]
+        .into_iter()
+        .map(|calls| build(&mut host, json!(calls))[0]["element"].clone())
+        .collect();
+        let object = |name: &str, classifier: &Value| {
+            json!({ "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                "tool": "object", "name": name, "classifier": classifier } })
+        };
+        let at = |k: usize, x: f64, y: f64, width: f64| {
+            json!({ "tool": "move_node", "arguments": { "diagram": "$0.diagram",
+                "node": format!("${k}.presentation"), "x": x, "y": y, "width": width } })
+        };
+        let link = |t: usize| {
+            json!({ "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "link",
+                "source": "$1.element", "target": format!("${t}.element") } })
+        };
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "object", "name": "objekte" } },
+                object("ben", &ids[0]),
+                object("z", &ids[1]),
+                object("b", &ids[2]),
+                link(2),
+                link(3),
+                at(1, 119.0, 40.0, 95.0),
+                at(2, 40.0, 162.19, 96.0),
+                at(3, 196.0, 162.19, 98.0),
+                { "tool": "arrange_diagram", "arguments": { "diagram": "$0.diagram" } },
+            ]),
+        );
+        // `ben` overlaps both below it: straight down, not out of its side at the height of its
+        // compartment separator (#63).
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let ben = scene.node(id(&r[1]["presentation"]).parse().unwrap()).unwrap();
+        for line in [&r[4], &r[5]] {
+            let points = &scene.edge(id(&line["presentation"]).parse().unwrap()).unwrap().points;
+            assert_eq!(points.len(), 2, "{points:?}");
+            assert_eq!(points[0].y, ben.rect.bottom(), "{points:?}");
+            assert_eq!(points[0].x, points[1].x, "{points:?}");
+        }
+    }
+
+    #[test]
+    fn a_loop_to_the_same_entity_leaves_the_labels_of_a_straight_line_at_it() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+                  "name": "er" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erEntity", "name": "Nutzer", "x": 20, "y": 100 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erRelationship", "name": "befreundet", "x": 260, "y": 95 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$2.element", "target": "$1.element" } },
+                { "tool": "update_element", "arguments": { "id": "$3.element",
+                  "cardinality": "[0,n]", "role": "Anfragender" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$2.element", "target": "$1.element" } },
+            ]),
+        );
+        // The straight line along the middle, the other as a loop over the top (#61).
+        let (doc, _) = host.parts();
+        let d: Id = id(&r[0]["diagram"]).parse().unwrap();
+        let (straight, around): (Id, Id) = (
+            id(&r[3]["presentation"]).parse().unwrap(),
+            id(&r[5]["presentation"]).parse().unwrap(),
+        );
+        let middle = (Some(Point::new(0.0, 0.5)), Some(Point::new(1.0, 0.5)));
+        let top = (Some(Point::new(0.5, 0.0)), Some(Point::new(0.5, 0.0)));
+        let over = vec![Point::new(321.37, 50.0), Point::new(70.0, 50.0)];
+        doc.edit("route", |tx| {
+            tx.set_route(d, straight, Vec::new(), middle)?;
+            tx.set_route(d, around, over, top)
+        })
+        .unwrap();
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let edge = scene.edge(straight).unwrap();
+        let y = edge.points[0].y;
+        assert!(edge.points.iter().all(|p| p.y == y), "{:?}", edge.points);
+        let (_, measure) = host.parts();
+        for label in &edge.labels {
+            let drawn = labels::label_rect(label, measure);
+            let off = (drawn.y - y).max(y - drawn.bottom());
+            assert!(off < 12.0, "{} at {drawn:?}, line at {y}", label.text);
+        }
+    }
+
+    #[test]
+    fn clients_set_how_diagrams_are_drawn() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "class", "name": "c" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "class", "name": "Konto", "abstract": true } },
+                { "tool": "add_member", "arguments": { "owner": "$1.element",
+                  "text": "- stand : int" } },
+                { "tool": "add_member", "arguments": { "owner": "$1.element",
+                  "text": "+ zahle(betrag : int) : void" } },
+            ]),
+        );
+        let svg = |host: &mut Headless| {
+            let (doc, measure) = host.parts();
+            let d = id(&r[0]["diagram"]).parse().unwrap();
+            svg::render(&scene::build(doc.model(), d, &Preview::default(), measure), measure)
+        };
+        // As in Astah until a client says otherwise.
+        let off = json!({ "visibility_column": false, "abstract_stereotype": false,
+                          "read_only_constraint": false });
+        assert_eq!(run(&mut host, "get_document", json!({}))["display"], off);
+        assert!(svg(&mut host).contains(">- stand : int<"));
+        // Then the visibility in its own column, a minus as wide as a plus, and «abstract».
+        let on = run(
+            &mut host,
+            "set_display",
+            json!({ "visibility_column": true, "abstract_stereotype": true }),
+        );
+        assert_eq!(on["visibility_column"], true);
+        assert_eq!(on["read_only_constraint"], false);
+        let drawn = svg(&mut host);
+        assert!(drawn.contains(">\u{2212}<") && drawn.contains(">stand : int<"), "{drawn}");
+        assert!(drawn.contains("abstract&gt;&gt;") || drawn.contains("«abstract»"), "{drawn}");
+        // Omitted flags stay, also for a new project.
+        let kept = run(&mut host, "set_display", json!({ "read_only_constraint": true }));
+        assert_eq!(kept["visibility_column"], true);
+        run(&mut host, "new_document", json!({}));
+        assert_eq!(run(&mut host, "get_document", json!({}))["display"]["visibility_column"], true);
+        assert!(
+            call(&mut host, &Access::default(), "set_display", &json!({ "visibility_column": 1 }))
+                .is_error
+        );
     }
 }

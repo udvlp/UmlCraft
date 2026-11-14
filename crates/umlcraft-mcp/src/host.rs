@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use umlcraft_model::{DiagramKind, Document, Id, Model};
 use umlcraft_notation::arial::ArialMeasure;
 use umlcraft_notation::edit;
-use umlcraft_notation::scene::TextMeasure;
+use umlcraft_notation::scene::{Display, Displayed, TextMeasure};
 
 /// The project the tools read and edit, and what the user is looking at.
 pub trait Host {
@@ -39,6 +39,43 @@ pub trait Host {
     /// The app's sample project; only the app has it.
     fn sample(&self) -> Result<Document, String> {
         Err("The sample project comes with the UmlCraft app, which is not running.".into())
+    }
+    /// How diagrams are drawn beyond what they store.
+    fn display(&mut self) -> Display {
+        Display::of(self.parts().1)
+    }
+    /// Draws diagrams as `display` says from now on: in the app, as if the user changed its
+    /// settings.
+    fn set_display(&mut self, display: Display);
+}
+
+/// The app's settings file, `UmlCraft/settings.json` in the platform's folder for such
+/// settings: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS,
+/// `$XDG_CONFIG_HOME` (else `~/.config`) elsewhere.
+pub fn settings_file() -> Option<PathBuf> {
+    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let base = if cfg!(windows) {
+        var("APPDATA")
+    } else if cfg!(target_os = "macos") {
+        var("HOME").map(|h| h.join("Library").join("Application Support"))
+    } else {
+        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| h.join(".config")))
+    }?;
+    Some(base.join("UmlCraft").join("settings.json"))
+}
+
+/// How the app draws diagrams, from its settings file, so that a headless session draws them
+/// the same; all off without the file.
+pub fn app_display() -> Display {
+    let settings: Value = settings_file()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    let on = |key: &str| settings.get(key).and_then(Value::as_bool).unwrap_or(false);
+    Display {
+        visibility_column: on("visibilityColumn"),
+        abstract_stereotype: on("abstractStereotype"),
+        read_only_constraint: on("readOnlyConstraint"),
     }
 }
 
@@ -153,12 +190,13 @@ fn strip_verbatim(path: PathBuf) -> PathBuf {
 }
 
 /// A project of the MCP server's own, when the app is not running: in memory, opened from and
-/// saved to files the [`Access`] allows. Texts are measured in Arial, the diagram font.
+/// saved to files the [`Access`] allows. Texts are measured in Arial, the diagram font; the
+/// diagrams are drawn as in Astah unless [`Host::set_display`] says otherwise.
 pub struct Headless {
     doc: Document,
     path: Option<PathBuf>,
     active: Option<Id>,
-    measure: ArialMeasure,
+    measure: Displayed<ArialMeasure>,
 }
 
 impl Headless {
@@ -169,7 +207,14 @@ impl Headless {
 
     pub fn with(doc: Document, path: Option<PathBuf>) -> Self {
         let active = first_diagram(doc.model());
-        Self { doc, path, active, measure: ArialMeasure }
+        let measure = Displayed { measure: ArialMeasure, display: Display::default() };
+        Self { doc, path, active, measure }
+    }
+
+    /// The project drawn as `display` says.
+    pub fn drawn_as(mut self, display: Display) -> Self {
+        self.measure.display = display;
+        self
     }
 
     /// Whether anything happened to the project yet: an edit, or a file opened.
@@ -218,7 +263,7 @@ impl Host for Headless {
     }
 
     fn replace(&mut self, doc: Document, path: Option<PathBuf>) -> Result<(), String> {
-        *self = Self::with(doc, path);
+        *self = Self::with(doc, path).drawn_as(self.measure.display);
         Ok(())
     }
 
@@ -228,6 +273,10 @@ impl Host for Headless {
 
     // Nobody sees a selection here.
     fn select(&mut self, _presentations: Vec<Id>) {}
+
+    fn set_display(&mut self, display: Display) {
+        self.measure.display = display;
+    }
 }
 
 /// Opens the UmlCraft project at `path`.

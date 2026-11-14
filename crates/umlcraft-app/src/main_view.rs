@@ -451,6 +451,13 @@ impl MainView {
         if let Some(path) = effects.saved {
             self.remember(&path, cx);
         }
+        // An AI client changed how diagrams are drawn: the settings say so from now on.
+        if let Some(display) = effects.display {
+            self.settings.visibility_column = display.visibility_column;
+            self.settings.abstract_stereotype = display.abstract_stereotype;
+            self.settings.read_only_constraint = display.read_only_constraint;
+            self.apply_display(cx);
+        }
         if let Some((id, selection)) = effects.structogram_selection {
             // The call may have just shown the structogram: its editor comes up first.
             self.sync_structograms(window, cx);
