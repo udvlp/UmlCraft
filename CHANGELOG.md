@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.21.3 – 2026-11-14
 
 - **`ja` and `nein` in German structograms**: an alternative in a structogram with German
   keywords labels its branches `ja` and `nein`, as German schoolbooks do, instead of
