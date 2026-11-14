@@ -1145,6 +1145,11 @@ pub struct DiagramProps {
     /// ER diagrams: show the physical names of entities and attributes (the database's).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub physical_names: bool,
+    /// State machine diagrams: a state with no activities, internal transitions, regions or
+    /// substates shows only its name, centered, as the UML specification draws a simple state,
+    /// instead of its name above a line with nothing below (as Astah draws every state).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub simple_states: bool,
 }
 
 /// Marks what a source import made and may change or delete on a new import: associations made
@@ -1488,6 +1493,7 @@ impl ElementKind {
             look_here: false,
             er_display: ErDisplay::Attributes,
             physical_names: false,
+            simple_states: false,
         })
     }
 

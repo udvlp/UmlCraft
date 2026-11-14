@@ -735,25 +735,28 @@ fn nudge(
         (s.k == 0 && along_side(left)) || (s.k + 2 == points.len() && along_side(entered))
     };
     segments.sort_by(|a, b| a.level.total_cmp(&b.level).then(a.from.total_cmp(&b.from)));
-    // Segments closer than their spacing along a common stretch are one group; at ports the
-    // spacing is wider, so that the labels at the ends fit between the lines.
-    let mut groups: Vec<(Vec<Segment>, bool, f32, f32)> = Vec::new();
+    // Segments closer than their spacing to one of a group along a common stretch join it; at
+    // ports the spacing is wider, so that the labels at the ends fit between the lines. Only a
+    // stretch beside one of the group counts, not one that merely lies within the group's
+    // reach: the stretches of one line that meet at a bend are not side by side.
+    let mut groups: Vec<(Vec<Segment>, bool)> = Vec::new();
     for s in segments {
         let port = at_port(&s);
-        let close = |(group, ports, from, to): &(Vec<Segment>, bool, f32, f32)| {
-            let last = group.last().expect("groups are not empty").level;
+        let close = |(group, ports): &(Vec<Segment>, bool)| {
             let gap = if port && *ports { PORT_SPACING } else { SPACING };
-            s.level - last < gap - SAME && s.from < to - 1.0 && s.to > from + 1.0
+            group.iter().any(|g| {
+                s.level - g.level < gap - SAME && s.from < g.to - 1.0 && s.to > g.from + 1.0
+            })
         };
         match groups.iter_mut().rev().take(8).find(|g| close(g)) {
-            Some((group, ports, from, to)) => {
-                (*ports, *from, *to) = (*ports || port, from.min(s.from), to.max(s.to));
+            Some((group, ports)) => {
+                *ports = *ports || port;
                 group.push(s);
             }
-            None => groups.push((vec![s], port, s.from, s.to)),
+            None => groups.push((vec![s], port)),
         }
     }
-    for (mut group, ports, _, _) in groups.into_iter().filter(|g| g.0.len() > 1) {
+    for (mut group, ports) in groups.into_iter().filter(|g| g.0.len() > 1) {
         // Lines that turn toward lower levels at their ends go first, so that they do not
         // cross the others where they leave the shared stretch.
         let turn = |s: &Segment| {
@@ -771,20 +774,23 @@ fn nudge(
             turn(a).total_cmp(&turn(b)).then(a.level.total_cmp(&b.level)).then(a.line.cmp(&b.line))
         });
         let level = group.iter().map(|s| s.level).sum::<f32>() / group.len() as f32;
-        let (from, to) = group
-            .iter()
-            .fold((f32::INFINITY, f32::NEG_INFINITY), |(f, t), s| (f.min(s.from), t.max(s.to)));
-        // The free space on either side: up to the nearest box that the stretch passes.
+        // The free space on either side: up to the nearest box that a stretch passes, on the
+        // side of the stretches that pass it.
         let (mut low, mut high) = (f32::NEG_INFINITY, f32::INFINITY);
         for r in boxes {
             let (r_from, r_to) = if horizontal { (r.x, r.right()) } else { (r.y, r.bottom()) };
             let (r_low, r_high) = if horizontal { (r.y, r.bottom()) } else { (r.x, r.right()) };
-            if r_to <= from + SAME || r_from >= to - SAME {
+            let passing: Vec<f32> = group
+                .iter()
+                .filter(|s| r_to > s.from + SAME && r_from < s.to - SAME)
+                .map(|s| s.level)
+                .collect();
+            if passing.is_empty() {
                 continue;
             }
-            if r_high <= level + SAME {
+            if passing.iter().all(|&l| r_high <= l + SAME) {
                 low = low.max(r_high + MARGIN / 2.0);
-            } else if r_low >= level - SAME {
+            } else if passing.iter().all(|&l| r_low >= l - SAME) {
                 high = high.min(r_low - MARGIN / 2.0);
             }
         }

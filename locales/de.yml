@@ -345,6 +345,7 @@ prop:
   message_numbers: Nachrichtennummern anzeigen
   return_values: Rückgabewerte anzeigen
   flat_message_numbers: Durchnummerieren (1, 2, 3 statt 2.1)
+  simple_states: Einfache Zustände nur mit Namen
   query: Abfrage (ändert nichts)
   end: Ende
   role: Rolle

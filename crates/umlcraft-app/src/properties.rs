@@ -2188,6 +2188,20 @@ impl PropertiesPanel {
                         },
                     ));
             }
+            ElementKind::Diagram(p) if p.diagram == DiagramKind::StateMachine => {
+                body = body.child(flag(
+                    "simple-states",
+                    t!("prop.simple_states").into(),
+                    p.simple_states,
+                    workspace.clone(),
+                    id,
+                    |d, v| {
+                        if let ElementKind::Diagram(p) = &mut d.kind {
+                            p.simple_states = v;
+                        }
+                    },
+                ));
+            }
             ElementKind::Class(p) => {
                 body = body
                     .child(flag(

@@ -1319,6 +1319,12 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             Some(layout_node(model, p, bounds, kind, listing, measure))
         })
         .collect();
+    if matches!(model.get(diagram).map(|d| d.kind()), Some(ElementKind::Diagram(p)) if p.simple_states)
+    {
+        for node in &mut nodes {
+            simplify_state(model, node);
+        }
+    }
     let is_sequence = kind == Some(DiagramKind::Sequence);
     if kind == Some(DiagramKind::CompositeStructure) {
         place_port_names(&mut nodes);
@@ -2683,6 +2689,45 @@ fn layout_object(
     (r, Figure::Classifier { separators, compartments, template: None }, rows)
 }
 
+/// On diagrams with [`umlcraft_model::DiagramProps::simple_states`]: a state with nothing
+/// below its name (no entry, do or exit activity, no internal transition, no region or
+/// substate, not a submachine state) loses the line and shows its stereotypes and name
+/// centered in it, as the UML specification draws a simple state.
+fn simplify_state(model: &Model, node: &mut NodeShape) {
+    let Figure::State { separator, regions, submachine: None, .. } = &mut node.figure else {
+        return;
+    };
+    let Some(element) = node.element.and_then(|e| model.get(e)) else { return };
+    let ElementKind::State(props) = element.kind() else { return };
+    let quiet = |s: &str| s.trim().is_empty();
+    if !(quiet(&props.entry) && quiet(&props.do_activity) && quiet(&props.exit))
+        || props.submachine.is_some()
+        || !regions.is_empty()
+    {
+        return;
+    }
+    let holds = element.children().iter().filter_map(|&c| model.get(c)).any(|c| {
+        matches!(
+            c.kind(),
+            ElementKind::InternalTransition(_)
+                | ElementKind::Region
+                | ElementKind::State(_)
+                | ElementKind::FinalState
+                | ElementKind::Pseudostate(_)
+        )
+    });
+    if holds || node.rows.is_empty() {
+        return;
+    }
+    *separator = None;
+    let top = node.rows.iter().map(|r| r.rect.y).fold(f32::MAX, f32::min);
+    let bottom = node.rows.iter().map(|r| r.rect.bottom()).fold(f32::MIN, f32::max);
+    let dy = node.rect.center().y - (top + bottom) / 2.0;
+    for row in &mut node.rows {
+        row.rect.y += dy;
+    }
+}
+
 /// States: their stereotypes and the name, centered; below a line the internal activities
 /// (`entry / …`), or room for the substates of a composite state.
 fn layout_state(
@@ -3497,6 +3542,20 @@ pub fn with_contents(model: &Model, scene: &Scene, ids: &[Id]) -> Vec<Id> {
 /// content changes, not when it draws, so the bounds are only fitted while editing.
 pub fn fitted_size(model: &Model, p: &Presentation, measure: &dyn TextMeasure) -> Option<Size> {
     fitted_box(model, p, measure).map(|(size, _)| size)
+}
+
+/// The size a node is drawn at, for nodes that grow beyond their stored bounds as they are
+/// drawn without being sized automatically: a use case is as wide as its name needs. Arranging
+/// lays them out at that size, so that a system boundary is sized around what it shows.
+pub fn drawn_size(model: &Model, p: &Presentation, measure: &dyn TextMeasure) -> Option<Size> {
+    let bounds = p.bounds()?;
+    let element = model.get(p.element?)?;
+    match element.kind() {
+        ElementKind::UseCase(_) => {
+            Some(layout_use_case(model, element, &p.style, bounds, measure).0.size())
+        }
+        _ => None,
+    }
 }
 
 /// [`fitted_size`] and the texts of the box, one per line, to tell when its content changed.

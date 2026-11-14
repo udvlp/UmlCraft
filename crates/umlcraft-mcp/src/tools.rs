@@ -236,6 +236,10 @@ pub fn list() -> Vec<Value> {
                                (`submit() : ok`); true by default."),
         "frame": flag("Sequence diagrams: draw the `sd` frame around the interaction; true \
                        by default."),
+        "simple_states": flag("State machine diagrams: a state with no activities, internal \
+                               transitions, regions or substates shows only its name, \
+                               centered, as UML draws a simple state; false by default (a \
+                               line below the name, as Astah draws every state)."),
     });
     // The settings of ER elements, which `update_element` takes.
     let er = json!({
@@ -646,12 +650,15 @@ pub fn list() -> Vec<Value> {
              ordering, upper bound, stream, control, effect and exception of an object node, \
              pin or activity parameter (a control pin, an exception pin); \
              the activity a call behavior action calls; the state machine a submachine state \
-             stands for; a state's entry, do and exit activities and the `trigger [guard] / \
+             stands for; a state's entry, do and exit activities and its orthogonal regions \
+             (`regions`; `get_diagram` gives their bounds, a state created at `x`, `y` in one \
+             goes into it); the `trigger [guard] / \
              effect` of a transition or internal transition (as `text`); the constraints of an element (members show them after their text, \
              lines below their name); on every diagram showing it, the shared style of a \
              generalization (one triangle for all generalizations to its general element) \
              and whether a class «boundary», «control» or «entity» is drawn as its icon; \
              whether a sequence diagram shows message numbers, return values and its frame; \
+             whether a state machine diagram draws simple states with their name only; \
              the ends of associations and links (role, multiplicity, navigability, \
              aggregation); abstract classes and operations, static attributes and operations; \
              an object's class and the values of its slots; the settings of ER entities, attributes, relationships, IS-As and participations \
@@ -666,6 +673,14 @@ pub fn list() -> Vec<Value> {
                     "entry": text("States: the entry activity, without `entry /`; \"\" for none."),
                     "do": text("States: the do activity, without `do /`; \"\" for none."),
                     "exit": text("States: the exit activity, without `exit /`; \"\" for none."),
+                    "regions": { "type": "integer", "minimum": 2,
+                                 "description": "States: divide into this many orthogonal \
+                                                 regions (more than it has; `delete_element` \
+                                                 removes one). Its substates go into the region \
+                                                 they are drawn in. The reply lists the \
+                                                 regions." },
+                    "side_by_side": flag("States divided into regions for the first time: the \
+                                          regions side by side instead of one below the other."),
                     "documentation": text("New documentation."),
                     "stereotypes": { "type": "array", "items": { "type": "string" } },
                     "guard": text("Messages, operands, flows, transitions: the guard, without brackets."),
@@ -964,6 +979,15 @@ fn summary(model: &Model, id: Id) -> Value {
     })
 }
 
+/// The reply of a tool that made `id`: its summary, with the id also as `element`, the name
+/// `create_element` and `connect` reply with, so that `$n.element` in a batch works after any
+/// of them.
+fn created(model: &Model, id: Id) -> Value {
+    let mut reply = summary(model, id);
+    reply["element"] = json!(id);
+    reply
+}
+
 /// `id` if it names a diagram, else an error.
 fn diagram_of(model: &Model, id: Id) -> Result<DiagramKind, String> {
     model
@@ -1041,6 +1065,41 @@ fn free_origin(model: &Model, diagram: Id) -> Point {
         Some(r) if r.right() < 1000.0 => Point::new(snap(r.right() + 60.0), snap(r.y.max(40.0))),
         Some(r) => Point::new(snap(r.x), snap(r.bottom() + 60.0)),
     }
+}
+
+/// Room kept inside a system boundary around its use cases, and between them.
+const BOUNDARY_PADDING: f32 = 20.0;
+const BOUNDARY_HEADER: f32 = 40.0;
+const USE_CASE_GAP: f32 = 40.0;
+
+/// On a diagram with exactly one system boundary: that boundary's presentation and a free
+/// place in it for a new use case, below the use cases it holds as they are drawn.
+fn spot_in_boundary(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> Option<(Id, Point)> {
+    let view = model.view(diagram)?;
+    let kind_of = |p: &umlcraft_model::Presentation| p.element.and_then(|e| model.get(e));
+    let mut boundaries = view
+        .presentations()
+        .iter()
+        .filter(|p| kind_of(p).is_some_and(|e| matches!(e.kind(), ElementKind::SystemBoundary)));
+    let boundary = boundaries.next()?;
+    if boundaries.next().is_some() {
+        return None;
+    }
+    let frame = boundary.bounds()?;
+    let lowest = view
+        .presentations()
+        .iter()
+        .filter(|p| kind_of(p).is_some_and(|e| matches!(e.kind(), ElementKind::UseCase(_))))
+        .filter_map(|p| {
+            let b = p.bounds()?;
+            let size = scene::drawn_size(model, p, measure).unwrap_or(b.size());
+            Some(Rect::new(b.x, b.y, size.width, size.height))
+        })
+        .filter(|r| frame.contains(r.center()))
+        .map(|r| r.bottom())
+        .reduce(f32::max);
+    let y = lowest.map_or(frame.y + BOUNDARY_HEADER, |b| b + USE_CASE_GAP);
+    Some((boundary.id, Point::new(frame.x + BOUNDARY_PADDING, y)))
 }
 
 fn is_sequence(model: &Model, diagram: Id) -> bool {
@@ -1238,6 +1297,19 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
                     .collect();
                 node["operands"] = json!(operands);
             }
+            // Where each region of a state lies, for putting substates into it.
+            let state = p.element.and_then(|e| model.get(e));
+            let regions = match state.map(|e| e.kind()) {
+                Some(ElementKind::State(_)) => scene::state_regions(model, p),
+                _ => Vec::new(),
+            };
+            if !regions.is_empty() {
+                let regions: Vec<Value> = regions
+                    .iter()
+                    .map(|r| json!({ "id": r.region, "bounds": rect(r.rect) }))
+                    .collect();
+                node["regions"] = json!(regions);
+            }
             // What a state invariant, termination or constraint of a sequence diagram is on.
             match p.element.and_then(|e| model.get(e)).map(|e| e.kind()) {
                 Some(
@@ -1349,7 +1421,7 @@ fn create_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
         return Err("only ER diagrams take `notation`".into());
     }
     let mut settings = ElementKind::diagram(kind);
-    set_sequence_diagram(&mut settings, args)?;
+    set_diagram_settings(&mut settings, args)?;
     let diagram = change_measured(host, "create_diagram", |tx, measure| {
         let diagram = if objects {
             edit::create_object_diagram(tx, owner, &name)?
@@ -1363,6 +1435,7 @@ fn create_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
                     p.flat_message_numbers = wanted.flat_message_numbers;
                     p.hide_return_values = wanted.hide_return_values;
                     p.hide_frame = wanted.hide_frame;
+                    p.simple_states = wanted.simple_states;
                 }
             })?;
         }
@@ -1378,9 +1451,20 @@ fn create_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
 fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
     let tool = node_tool(host.document().model(), diagram, kind, str_arg(args, "tool")?)?;
+    // A use case without a place goes into the system boundary, if there is one, which grows
+    // to hold it: a script that makes the boundary and then its use cases gets them in it.
+    let unplaced = opt_num(args, "x").is_none() && opt_num(args, "y").is_none();
+    let use_case = matches!(tool, NodeTool::UseCase);
+    let in_boundary = if use_case && unplaced && opt_id(args, "on")?.is_none() {
+        let (doc, measure) = host.parts();
+        spot_in_boundary(doc.model(), diagram, measure)
+    } else {
+        None
+    };
     let model = host.document().model();
     let on_lifeline = matches!(tool, NodeTool::StateInvariant | NodeTool::Termination);
     let origin = match (opt_num(args, "x"), opt_num(args, "y"), opt_id(args, "on")?) {
+        _ if in_boundary.is_some() => in_boundary.map_or(Point::new(0.0, 0.0), |(_, at)| at),
         // A state invariant or termination goes on the lifeline `on`, at `y` or below the rest.
         (_, y, Some(on)) if on_lifeline => {
             let view = model.view(diagram).ok_or("not a diagram")?;
@@ -1450,6 +1534,24 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
         if place_pin {
             activity::place_pin(tx, diagram, node, measure)?;
         }
+        if let Some((boundary, _)) = in_boundary {
+            let model = tx.model();
+            let p = model.view(diagram).and_then(|v| v.get(node));
+            let case = p.and_then(|p| {
+                let b = p.bounds()?;
+                let size = scene::drawn_size(model, p, measure).unwrap_or(b.size());
+                Some(Rect::new(b.x, b.y, size.width, size.height))
+            });
+            if let Some(case) = case {
+                tx.update_presentation(diagram, boundary, |p| {
+                    if let Shape::Node { bounds, .. } = &mut p.shape {
+                        bounds.width = bounds.width.max(case.right() + BOUNDARY_PADDING - bounds.x);
+                        bounds.height =
+                            bounds.height.max(case.bottom() + BOUNDARY_PADDING - bounds.y);
+                    }
+                })?;
+            }
+        }
         if is_sequence(tx.model(), diagram) {
             sequence_edit::tidy(tx, diagram)?;
         }
@@ -1484,7 +1586,7 @@ fn create_model_element(host: &mut dyn Host, args: &Value) -> Outcome {
             return Err(format!("a {} cannot own an erDomain", owner_kind.type_name()));
         }
         let element = change(host, "create_model_element", |tx| tx.create(owner, data))?;
-        return Ok(Reply::json(summary(host.document().model(), element)));
+        return Ok(Reply::json(created(host.document().model(), element)));
     }
     let tool = DIAGRAM_KINDS
         .iter()
@@ -1501,7 +1603,7 @@ fn create_model_element(host: &mut dyn Host, args: &Value) -> Outcome {
         return Err(format!("a {} cannot own a {}", owner_kind.type_name(), data.kind.type_name()));
     }
     let element = change(host, "create_model_element", |tx| tx.create(owner, data))?;
-    Ok(Reply::json(summary(host.document().model(), element)))
+    Ok(Reply::json(created(host.document().model(), element)))
 }
 
 fn show_element(host: &mut dyn Host, args: &Value) -> Outcome {
@@ -1699,6 +1801,7 @@ fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     let shown = if literal || column { text } else { member::member_text(model, member) };
     Ok(Reply::json(json!({
         "id": member,
+        "element": member,
         "kind": kind_name(model, member),
         "text": shown,
     })))
@@ -1720,7 +1823,9 @@ fn add_state_member(
             _ => props.exit = activity,
         }
         change(host, "add_member", |tx| tx.update(state, |d| d.kind = ElementKind::State(props)))?;
-        return Ok(Reply::json(json!({ "id": state, "kind": "state", "text": text })));
+        return Ok(Reply::json(
+            json!({ "id": state, "element": state, "kind": "state", "text": text }),
+        ));
     }
     if text.is_empty() {
         return Err("an internal transition needs a trigger, a guard or an effect".into());
@@ -1736,6 +1841,7 @@ fn add_state_member(
     };
     Ok(Reply::json(json!({
         "id": member,
+        "element": member,
         "kind": kind_name(model, member),
         "text": shown,
     })))
@@ -1810,7 +1916,7 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let shown = model.shown_on(id);
     let mut settings = kind.clone();
     set_properties(model, &mut settings, args)?;
-    set_sequence_diagram(&mut settings, args)?;
+    set_diagram_settings(&mut settings, args)?;
     uml::set_ends(&mut settings, args)?;
     if let Some(classifier) = uml::classifier(model, args)? {
         uml::set_classifier(&mut settings, classifier)?;
@@ -1882,7 +1988,35 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let is_alt = |kind: &ElementKind| matches!(kind, ElementKind::CombinedFragment(p) if p.operator == InteractionOperator::Alt);
     let becomes_alt = is_alt(&settings) && !is_alt(&kind);
     let recovered = args.get("covered").is_some();
+    // A state divided into as many regions as `regions` says, as the app divides it.
+    let regions = match args.get("regions") {
+        None => None,
+        Some(v) => {
+            let n = v.as_u64().filter(|&n| n >= 2).ok_or("`regions` is a number of at least 2")?;
+            if !matches!(kind, ElementKind::State(_)) {
+                return Err(format!("a {} has no regions", kind.type_name()));
+            }
+            let have = state_edit::regions_of(model, id).len();
+            if (n as usize) < have {
+                return Err(format!(
+                    "the state has {have} regions; `delete_element` removes one of them"
+                ));
+            }
+            Some(n as usize)
+        }
+    };
+    let side_by_side = match args.get("side_by_side") {
+        None => false,
+        Some(_) if regions.is_none() => return Err("`side_by_side` goes with `regions`".into()),
+        Some(v) => v.as_bool().ok_or("`side_by_side` is true or false")?,
+    };
     change_measured(host, "update_element", |tx, measure| {
+        if let Some(n) = regions {
+            let diagram = shown.first().map(|&(d, _)| d);
+            while state_edit::regions_of(tx.model(), id).len() < n {
+                state_edit::add_region(tx, id, side_by_side, diagram)?;
+            }
+        }
         // Refused while entities take part in the associative entity.
         if let Some(associative) = associative {
             er::set_associative(tx, id, associative)?;
@@ -1948,7 +2082,12 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         }
         sequence_edit::tidy_all(tx)
     })?;
-    Ok(Reply::json(summary(host.document().model(), id)))
+    let model = host.document().model();
+    let mut reply = summary(model, id);
+    if regions.is_some() {
+        reply["regions"] = json!(state_edit::regions_of(model, id));
+    }
+    Ok(Reply::json(reply))
 }
 
 const SHARED_STYLES: [(&str, SharedStyle); 3] = [
@@ -2309,8 +2448,18 @@ fn set_submachine(
 
 /// Writes the settings of `args` that belong to the element's kind into `kind`: a guard, a
 /// message's sort, arguments, return value and operation, a fragment's operator.
-/// The settings of a sequence diagram in `args`: what it numbers, shows and frames.
-fn set_sequence_diagram(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
+/// The settings of a diagram in `args`: what a sequence diagram numbers, shows and frames;
+/// whether a state machine diagram draws simple states as UML does.
+fn set_diagram_settings(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
+    if let Some(v) = args.get("simple_states") {
+        let on = v.as_bool().ok_or("`simple_states` is true or false")?;
+        match kind {
+            ElementKind::Diagram(p) if p.diagram == DiagramKind::StateMachine => {
+                p.simple_states = on;
+            }
+            _ => return Err("only state machine diagrams take `simple_states`".into()),
+        }
+    }
     let keys = ["message_numbers", "flat_numbers", "return_values", "frame"];
     let Some(key) = keys.into_iter().find(|k| args.get(k).is_some()) else { return Ok(()) };
     let p = match kind {
@@ -2439,7 +2588,7 @@ fn wrap_in_fragment(host: &mut dyn Host, args: &Value) -> Outcome {
         Ok(fragment)
     })?;
     let model = host.document().model();
-    let mut reply = summary(model, fragment);
+    let mut reply = created(model, fragment);
     reply["operands"] = json!(model.children(fragment));
     Ok(Reply::json(reply))
 }
@@ -2462,8 +2611,12 @@ fn operation_arg(model: &Model, operation: Id) -> Result<Id, String> {
 
 fn structogram_reply(model: &Model, id: Id) -> Result<Value, String> {
     let p = structogram_of(model, id)?;
+    // `element` as after create_element, `diagram` as after create_diagram: the tools that
+    // draw or export a structogram take it as their `diagram`.
     Ok(json!({
         "id": id,
+        "element": id,
+        "diagram": id,
         "kind": "structogram",
         "owner": model.get(id).and_then(|e| e.owner()),
         "operation": p.operation,
@@ -2546,7 +2699,7 @@ fn add_operand(host: &mut dyn Host, args: &Value) -> Outcome {
         sequence_edit::tidy_all(tx)?;
         Ok(operand)
     })?;
-    Ok(Reply::json(summary(host.document().model(), operand)))
+    Ok(Reply::json(created(host.document().model(), operand)))
 }
 
 fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
@@ -3270,6 +3423,42 @@ mod tests {
         assert!(
             call(&mut host, &Access::default(), "batch", &json!({ "calls": dangling })).is_error
         );
+    }
+
+    #[test]
+    fn every_tool_that_makes_an_element_names_it_element() {
+        // So `$n.element` works in a batch whatever made the element, not only after
+        // create_element and connect; `id` stays for the clients that read it.
+        let mut host = Headless::new();
+        let root = run(&mut host, "get_document", json!({}))["root"].clone();
+        let calls = json!([
+            { "tool": "create_model_element",
+              "arguments": { "owner": root, "tool": "class", "name": "Konto" } },
+            { "tool": "add_member", "arguments": { "owner": "$0.element", "text": "- saldo : double" } },
+            { "tool": "update_element", "arguments": { "id": "$1.element", "static": true } },
+            { "tool": "create_diagram", "arguments": { "kind": "sequence", "name": "S" } },
+            { "tool": "create_element",
+              "arguments": { "diagram": "$3.diagram", "tool": "lifeline", "name": "a" } },
+            { "tool": "create_element",
+              "arguments": { "diagram": "$3.diagram", "tool": "lifeline", "name": "b" } },
+            { "tool": "connect", "arguments": { "diagram": "$3.diagram", "tool": "message",
+                "source": "$4.element", "target": "$5.element", "name": "m" } },
+            { "tool": "wrap_in_fragment",
+              "arguments": { "diagram": "$3.diagram", "items": ["$6.element"], "operator": "alt" } },
+            { "tool": "add_operand", "arguments": { "fragment": "$7.element", "guard": "x" } },
+            { "tool": "update_element", "arguments": { "id": "$8.element", "guard": "y" } },
+            { "tool": "create_structogram", "arguments": { "structogram": {
+                "title": "t", "body": [{ "kind": "instruction", "text": "x := 1" }] } } },
+            { "tool": "get_structogram", "arguments": { "id": "$10.element" } },
+            { "tool": "get_structogram", "arguments": { "id": "$10.diagram" } },
+        ]);
+        let done = run(&mut host, "batch", json!({ "calls": calls }));
+        let results = done["results"].as_array().unwrap();
+        for i in [0, 1, 7, 8, 10] {
+            assert!(results[i]["element"].is_string(), "call {i}: {}", results[i]);
+            assert_eq!(results[i]["element"], results[i]["id"], "call {i}");
+        }
+        assert_eq!(results[10]["diagram"], results[10]["id"]);
     }
 
     #[test]
@@ -4343,6 +4532,31 @@ mod tests {
             assert!(label.anchor.x - width / 2.0 >= edge.points[0].x, "{k}: {label:?} {edge:?}");
             host.document().model().check().unwrap();
         }
+    }
+
+    #[test]
+    fn a_fragment_around_a_create_message_keeps_what_follows_below_it() {
+        // The head the create message brings down and the bar below it belong to the message,
+        // so what follows keeps the same distance to the frame as after an ordinary call.
+        let gap = |tool: &'static str| {
+            let mut host = Headless::new();
+            let steps: Vec<Step> = vec![
+                ("message", 0, 1, "ausleihen", 100.0),
+                (tool, 1, 2, "Ausleihe", 180.0),
+                ("reply", 1, 0, "true", 230.0),
+            ];
+            let (d, messages) = sequence_script(&mut host, &steps);
+            let args =
+                json!({ "diagram": d, "items": [messages[1]["element"]], "operator": "opt" });
+            let opt = run(&mut host, "wrap_in_fragment", args);
+            let frame = frame_of(&host, &d, &opt);
+            let (reply, _) = message_y(&host, &d, &messages[2]);
+            host.document().model().check().unwrap();
+            reply - frame.bottom()
+        };
+        let (call, create) = (gap("message"), gap("createMessage"));
+        assert!(call >= 30.0, "{call}");
+        assert!((create - call).abs() < 0.5, "create {create}, call {call}");
     }
 
     #[test]
@@ -5736,5 +5950,365 @@ mod tests {
                 assert!((p.y - g.y).abs() < 1.0 && (g.y - v.y).abs() < 1.0, "{p:?} {g:?} {v:?}");
             }
         }
+    }
+
+    /// A use case diagram: the system boundary "Mensa" at 200, 20 (400 × 300), the use cases
+    /// at the positions given (none: where `create_element` puts them), the actor Mitglied
+    /// associated with the first two, and the first including the third. Returns the diagram
+    /// and the replies for boundary, use cases and actor.
+    fn mensa(host: &mut Headless, at: [Option<(f32, f32)>; 3]) -> (String, Vec<Value>) {
+        let d = run(host, "create_diagram", json!({ "kind": "use_case", "name": "Mensa" }));
+        let d = id(&d["diagram"]);
+        let args = json!({ "diagram": d, "tool": "systemBoundary", "name": "Mensa",
+                           "x": 200, "y": 20 });
+        let boundary = run(host, "create_element", args);
+        let args = json!({ "diagram": d, "node": boundary["presentation"], "x": 200, "y": 20,
+                           "width": 400, "height": 300 });
+        run(host, "move_node", args);
+        let names = ["Essen bestellen", "Bestellung stornieren", "Guthaben prüfen"];
+        let mut made = vec![boundary];
+        for (name, at) in names.iter().zip(at) {
+            let mut args = json!({ "diagram": d, "tool": "useCase", "name": name });
+            if let Some((x, y)) = at {
+                (args["x"], args["y"]) = (json!(x), json!(y));
+            }
+            made.push(run(host, "create_element", args));
+        }
+        let args = json!({ "diagram": d, "tool": "actor", "name": "Mitglied", "x": 40, "y": 60 });
+        made.push(run(host, "create_element", args));
+        for (tool, s, t) in [("association", 4, 1), ("association", 4, 2), ("include", 1, 3)] {
+            let args = json!({ "diagram": d, "tool": tool, "source": made[s]["element"],
+                               "target": made[t]["element"] });
+            run(host, "connect", args);
+        }
+        (d, made)
+    }
+
+    /// The drawn rectangles of the nodes `made` on diagram `d`.
+    fn drawn_rects(host: &mut Headless, d: &str, made: &[Value]) -> Vec<Rect> {
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        made.iter()
+            .map(|v| scene.node(id(&v["presentation"]).parse().unwrap()).unwrap().rect)
+            .collect()
+    }
+
+    #[test]
+    fn use_cases_made_without_a_place_go_into_the_boundary() {
+        let mut host = Headless::new();
+        let (d, made) = mensa(&mut host, [None, None, None]);
+        let rects = drawn_rects(&mut host, &d, &made[..4]);
+        let (boundary, cases) = (rects[0], &rects[1..]);
+        for case in cases {
+            assert!(boundary.contains_rect(case), "{case:?} outside {boundary:?}");
+        }
+        for pair in cases.windows(2) {
+            assert!(pair[0].bottom() < pair[1].y, "one below the other: {pair:?}");
+        }
+        // The actor, too, is placed without a position, and stays outside.
+        let actor = drawn_rects(&mut host, &d, &made[4..])[0];
+        assert!(!boundary.intersects(&actor), "{actor:?} in {boundary:?}");
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        let rects = drawn_rects(&mut host, &d, &made[..4]);
+        for case in &rects[1..] {
+            assert!(rects[0].contains_rect(case), "{case:?} outside {:?}", rects[0]);
+        }
+    }
+
+    #[test]
+    fn arranged_use_cases_stay_inside_their_boundary() {
+        let mut host = Headless::new();
+        let at = [Some((250.0, 60.0)), Some((250.0, 140.0)), Some((450.0, 60.0))];
+        let (d, made) = mensa(&mut host, at);
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let rect = |v: &Value| scene.node(id(&v["presentation"]).parse().unwrap()).unwrap().rect;
+        let boundary = rect(&made[0]);
+        let cases: Vec<Rect> = made[1..4].iter().map(rect).collect();
+        for case in &cases {
+            assert!(boundary.contains_rect(case), "{case:?} sticks out of {boundary:?}");
+        }
+        // «include» runs from the first use case to the third without crossing the second,
+        // its label inside the boundary.
+        let include = scene
+            .edges
+            .iter()
+            .find(|e| e.labels.iter().any(|l| l.text.contains("include")))
+            .expect("the include");
+        for pair in include.points.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            for k in 0..=20 {
+                let t = k as f32 / 20.0;
+                let p = Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+                assert!(!cases[1].contains(p), "{:?} crosses {:?}", include.points, cases[1]);
+            }
+        }
+        let label = &include.labels[0];
+        let width = scene::label_width(&label.text, measure);
+        let left = match label.align {
+            scene::LabelAlign::Left => label.anchor.x,
+            scene::LabelAlign::Center => label.anchor.x - width / 2.0,
+            scene::LabelAlign::Right => label.anchor.x - width,
+        };
+        let label = Rect::new(left, label.anchor.y, width, scene::LABEL_HEIGHT);
+        assert!(boundary.contains_rect(&label), "{label:?} outside {boundary:?}");
+    }
+
+    #[test]
+    fn simple_states_show_only_their_name_when_asked() {
+        let mut host = Headless::new();
+        // Whether the state's line is drawn, and how far the name's center lies from the
+        // state's.
+        let drawn = |host: &mut Headless, d: &str, state: &Value| {
+            let (doc, measure) = host.parts();
+            let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+            let node = scene.node(id(&state["presentation"]).parse().unwrap()).unwrap();
+            let scene::Figure::State { separator, .. } = node.figure else { panic!("a state") };
+            (separator.is_some(), (node.rows[0].rect.center().y - node.rect.center().y).abs())
+        };
+        for simple in [false, true] {
+            let args = json!({ "kind": "state_machine", "name": "S", "simple_states": simple });
+            let d = id(&run(&mut host, "create_diagram", args)["diagram"]);
+            let mut state = |name: &str| {
+                let args = json!({ "diagram": d, "tool": "state", "name": name });
+                run(&mut host, "create_element", args)
+            };
+            let (ready, running) = (state("bereit"), state("aktiv"));
+            let args = json!({ "owner": running["element"], "text": "entry / starten" });
+            run(&mut host, "add_member", args);
+            let (line, off) = drawn(&mut host, &d, &ready);
+            assert_eq!(line, !simple, "simple_states {simple}");
+            if simple {
+                assert!(off < 0.5, "the name centered: {off}");
+            }
+            assert!(drawn(&mut host, &d, &running).0, "a state with an activity keeps its line");
+            // Switched afterwards on the diagram.
+            run(&mut host, "update_element", json!({ "id": d, "simple_states": !simple }));
+            assert_eq!(drawn(&mut host, &d, &ready).0, simple);
+        }
+        let class = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "C" }));
+        let args = json!({ "id": class["diagram"], "simple_states": true });
+        assert!(call(&mut host, &Access::default(), "update_element", &args).is_error);
+    }
+
+    /// What lies under the labels of the lines on diagram `d`: for each label, the nodes, other
+    /// labels and other lines it covers.
+    fn covered_by_labels(host: &mut Headless, d: &str) -> Vec<String> {
+        let (lines, nodes) = drawn_labels(host, d);
+        let inside = |r: &Rect, p: Point| {
+            p.x > r.x + 0.5 && p.x < r.right() - 0.5 && p.y > r.y + 0.5 && p.y < r.bottom() - 0.5
+        };
+        let crosses = |points: &[Point], r: &Rect| {
+            points.windows(2).any(|w| {
+                let steps = w[0].distance(w[1]).ceil().max(1.0) as usize;
+                (0..=steps).any(|i| {
+                    let t = i as f32 / steps as f32;
+                    let p =
+                        Point::new(w[0].x + (w[1].x - w[0].x) * t, w[0].y + (w[1].y - w[0].y) * t);
+                    inside(r, p)
+                })
+            })
+        };
+        let mut found = Vec::new();
+        for (e, (_, labels)) in lines.iter().enumerate() {
+            for (text, r) in labels {
+                for n in nodes.iter().filter(|n| n.intersects(r)) {
+                    found.push(format!("{text:?} {r:?} on node {n:?}"));
+                }
+                for (f, (points, others)) in lines.iter().enumerate().filter(|&(f, _)| f != e) {
+                    if crosses(points, r) {
+                        found.push(format!("{text:?} {r:?} on line {f} {points:?}"));
+                    }
+                    for (other, o) in others.iter().filter(|(_, o)| o.intersects(r)) {
+                        found.push(format!("{text:?} {r:?} on label {other:?} {o:?}"));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn arranged_states_leave_room_for_the_labels_of_their_transitions() {
+        // The phone lock of #42, and three states in a row.
+        let mut host = Headless::new();
+        let calls = json!([
+            {"tool": "create_diagram", "arguments": {"kind": "state_machine", "name": "handy"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "initialPseudostate"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Gesperrt"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Entsperrt"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Blockiert"}},
+            {"tool": "add_member", "arguments": {"owner": "$2.element", "text": "entry / Sperrbildschirm zeigen"}},
+            {"tool": "add_member", "arguments": {"owner": "$2.element", "text": "pin(p) [p != code && fehler < 2] / fehler++"}},
+            {"tool": "add_member", "arguments": {"owner": "$3.element", "text": "entry / Startbildschirm zeigen"}},
+            {"tool": "add_member", "arguments": {"owner": "$4.element", "text": "entry / Hinweis 30 s warten"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$1.element", "target": "$2.element", "name": "/ fehler = 0"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$2.element", "target": "$3.element", "name": "pin(p) [p == code] / fehler = 0"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$3.element", "target": "$2.element", "name": "sperren, after(1 min)"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$2.element", "target": "$4.element", "name": "pin(p) [p != code && fehler == 2]"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$4.element", "target": "$2.element", "name": "after(30 s) / fehler = 0"}},
+            {"tool": "arrange_diagram", "arguments": {"diagram": "$0.diagram"}}
+        ]);
+        let replies = run(&mut host, "batch", json!({ "calls": calls }));
+        let d = id(&replies["results"][0]["diagram"]);
+        let covered = covered_by_labels(&mut host, &d);
+        assert!(covered.is_empty(), "{covered:#?}");
+
+        let calls = json!([
+            {"tool": "create_diagram", "arguments": {"kind": "state_machine", "name": "reihe"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Aus"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Bereit"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Druckt"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$1.element", "target": "$2.element", "name": "einschalten / selbsttest()"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$2.element", "target": "$3.element", "name": "auftrag(a) [papier > 0] / drucken(a)"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$3.element", "target": "$2.element", "name": "fertig / auswerfen()"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$2.element", "target": "$1.element", "name": "after(10 min) / abschalten()"}},
+            {"tool": "arrange_diagram", "arguments": {"diagram": "$0.diagram"}}
+        ]);
+        let replies = run(&mut host, "batch", json!({ "calls": calls }));
+        let d = id(&replies["results"][0]["diagram"]);
+        let covered = covered_by_labels(&mut host, &d);
+        assert!(covered.is_empty(), "{covered:#?}");
+    }
+
+    #[test]
+    fn arranged_transitions_run_around_the_states_between() {
+        // A traffic light: the line from Gelb back to Rot passes Gruen, which a line from Gruen
+        // to Gelb leaves beside it.
+        let mut host = Headless::new();
+        let calls = json!([
+            {"tool": "create_diagram", "arguments": {"kind": "state_machine", "name": "ampel"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "initialPseudostate"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Rot"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "RotGelb"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Gruen"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "state", "name": "Gelb"}},
+            {"tool": "create_element", "arguments": {"diagram": "$0.diagram", "tool": "finalState"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$1.element", "target": "$2.element"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$2.element", "target": "$3.element", "name": "after(20 s)"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$3.element", "target": "$4.element", "name": "after(2 s)"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$4.element", "target": "$5.element", "name": "after(30 s) [!fussgaenger]"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$4.element", "target": "$5.element", "name": "taster / anfordern()"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$5.element", "target": "$2.element", "name": "after(3 s)"}},
+            {"tool": "connect", "arguments": {"diagram": "$0.diagram", "tool": "transition", "source": "$2.element", "target": "$6.element", "name": "ausschalten"}},
+            {"tool": "arrange_diagram", "arguments": {"diagram": "$0.diagram"}}
+        ]);
+        let replies = run(&mut host, "batch", json!({ "calls": calls }));
+        let d = id(&replies["results"][0]["diagram"]);
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let mut through = Vec::new();
+        for e in &scene.edges {
+            for n in scene.nodes.iter().filter(|n| !e.ends.contains(&n.rect)) {
+                let r = n.rect.inflate(-1.0);
+                let hits = |a: Point, b: Point| {
+                    a.x.min(b.x) < r.right()
+                        && a.x.max(b.x) > r.x
+                        && a.y.min(b.y) < r.bottom()
+                        && a.y.max(b.y) > r.y
+                };
+                if e.points.windows(2).any(|w| hits(w[0], w[1])) {
+                    through.push(format!("{:?} through {:?}", e.points, n.rect));
+                }
+            }
+        }
+        assert!(through.is_empty(), "{through:#?}");
+        // Nor do two lines run on top of each other.
+        let horizontal = |e: &scene::EdgeShape| -> Vec<(f32, f32, f32)> {
+            e.points
+                .windows(2)
+                .filter(|w| (w[0].y - w[1].y).abs() < 0.5)
+                .map(|w| (w[0].y, w[0].x.min(w[1].x), w[0].x.max(w[1].x)))
+                .collect()
+        };
+        for (i, a) in scene.edges.iter().enumerate() {
+            for b in &scene.edges[i + 1..] {
+                for (ya, a0, a1) in horizontal(a) {
+                    for (yb, b0, b1) in horizontal(b) {
+                        let shared = a1.min(b1) - a0.max(b0);
+                        assert!(
+                            (ya - yb).abs() >= 4.0 || shared <= 1.0,
+                            "{:?} on {:?}",
+                            a.points,
+                            b.points
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_state_is_divided_into_regions_that_take_substates() {
+        // An air conditioner that, while on, is in a fan level and a mode at the same time.
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "K" }));
+        let d = id(&d["diagram"]);
+        let args = json!({ "diagram": d, "tool": "state", "name": "Ein", "x": 100, "y": 20 });
+        let on = run(&mut host, "create_element", args);
+        let args = json!({ "diagram": d, "node": on["presentation"], "x": 100, "y": 20,
+                           "width": 400, "height": 200 });
+        run(&mut host, "move_node", args);
+        let args = json!({ "id": on["element"], "regions": 2 });
+        let divided = run(&mut host, "update_element", args);
+        let regions: Vec<String> = divided["regions"].as_array().unwrap().iter().map(id).collect();
+        assert_eq!(regions.len(), 2, "{divided}");
+        // get_diagram tells where each region lies.
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let node = diagram["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["element"] == on["element"])
+            .unwrap();
+        let shown = node["regions"].as_array().unwrap();
+        assert_eq!(shown.iter().map(|r| id(&r["id"])).collect::<Vec<_>>(), regions);
+        // One below the other: a state put into each goes into that region.
+        for (k, (region, name)) in shown.iter().zip(["Stufe 1", "Kühlen"]).enumerate() {
+            let b = &region["bounds"];
+            let (x, y) = (b["x"].as_f64().unwrap() + 20.0, b["y"].as_f64().unwrap() + 30.0);
+            let args = json!({ "diagram": d, "tool": "state", "name": name, "x": x, "y": y });
+            let made = run(&mut host, "create_element", args);
+            let element = run(&mut host, "get_element", json!({ "id": made["element"] }));
+            assert_eq!(element["owner"], region["id"], "{k}: {element}");
+        }
+        // A third region, and refusals.
+        let args = json!({ "id": on["element"], "regions": 3 });
+        let three = run(&mut host, "update_element", args);
+        assert_eq!(three["regions"].as_array().unwrap().len(), 3);
+        for wrong in [
+            json!({ "id": on["element"], "regions": 2 }),
+            json!({ "id": on["element"], "regions": 1 }),
+            json!({ "id": on["element"], "side_by_side": true }),
+            json!({ "id": d, "regions": 2 }),
+        ] {
+            assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+        }
+        host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn regions_side_by_side_stand_next_to_each_other() {
+        let mut host = Headless::new();
+        let host = &mut host;
+        let d = run(host, "create_diagram", json!({ "kind": "state_machine", "name": "V" }));
+        let d = id(&d["diagram"]);
+        let args = json!({ "diagram": d, "tool": "state", "name": "Ein", "x": 40, "y": 20 });
+        let on = run(host, "create_element", args);
+        let args = json!({ "id": on["element"], "regions": 2, "side_by_side": true });
+        run(host, "update_element", args);
+        let diagram = run(host, "get_diagram", json!({ "diagram": d }));
+        let node = diagram["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["element"] == on["element"])
+            .unwrap()
+            .clone();
+        let r = node["regions"].as_array().unwrap();
+        let (a, b) = (&r[0]["bounds"], &r[1]["bounds"]);
+        assert!(a["x"].as_f64() < b["x"].as_f64(), "{node}");
+        assert!((a["y"].as_f64().unwrap() - b["y"].as_f64().unwrap()).abs() < 0.5, "{node}");
     }
 }

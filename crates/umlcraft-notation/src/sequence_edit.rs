@@ -491,9 +491,18 @@ pub fn extent(model: &Model, diagram: Id, items: &[Id]) -> (f32, f32, Vec<Id>) {
         if let Some(m) = g.messages.iter().find(|m| m.element == Some(item)) {
             top = top.min(m.y);
             bottom = bottom.max(m.drawn_end());
-            // The bar a call starts belongs to it.
+            // The bar a call starts belongs to it. A create message brings the head of the
+            // lifeline it makes down to it: the head belongs to it, and so does the bar below
+            // the head.
+            let start = match g.lane(m.target) {
+                Some(l) if m.sort == MessageSort::Create => {
+                    bottom = bottom.max(l.line_top());
+                    l.line_top()
+                }
+                _ => m.end(),
+            };
             if let Some(bar) =
-                g.bars.iter().find(|b| b.lane == m.target && (b.top - m.end()).abs() < 0.5)
+                g.bars.iter().find(|b| b.lane == m.target && (b.top - start).abs() < 0.5)
             {
                 bottom = bottom.max(bar.bottom);
             }

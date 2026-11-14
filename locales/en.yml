@@ -345,6 +345,7 @@ prop:
   message_numbers: Show message numbers
   return_values: Show return values
   flat_message_numbers: Number straight through (1, 2, 3 instead of 2.1)
+  simple_states: Simple states as their name alone
   query: Query (changes nothing)
   end: End
   role: Role

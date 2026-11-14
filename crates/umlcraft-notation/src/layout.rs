@@ -583,11 +583,15 @@ pub fn arrange(
     // lands on them.
     let margins = if kind == DiagramKind::Activity {
         outside_margins(model, diagram, measure)
+    } else if kind == DiagramKind::StateMachine {
+        transition_label_margins(model, view, diagram, direction, measure)
     } else if direction == Direction::Right {
         end_label_margins(model, view, measure)
     } else {
         HashMap::new()
     };
+    // States hold substates but keep room for their transitions' labels all the same.
+    let container_margins = kind == DiagramKind::StateMachine;
     for p in view.presentations() {
         let Shape::Node { bounds, .. } = p.shape else { continue };
         // The diagram's frame is not laid out but drawn around the rest afterwards.
@@ -602,7 +606,9 @@ pub fn arrange(
             let name = element.map_or(0.0, |e| measure.width(e.name(), scene::FONT_SIZE, true));
             Size::new(name.max(24.0), 24.0 + scene::line_height(scene::FONT_SIZE))
         } else {
-            scene::fitted_size(model, p, measure).unwrap_or(bounds.size())
+            scene::fitted_size(model, p, measure)
+                .or_else(|| scene::drawn_size(model, p, measure))
+                .unwrap_or(bounds.size())
         };
         let name_width = element.map_or(0.0, |e| measure.width(e.name(), scene::FONT_SIZE, true));
         let container = kind.is_some_and(crate::palette::is_container);
@@ -615,7 +621,7 @@ pub fn arrange(
             }))
         );
         let margin = match margins.get(&p.id) {
-            Some(&m) if !container && !partition && !bar => m,
+            Some(&m) if (!container || container_margins) && !partition && !bar => m,
             _ => [0.0; 4],
         };
         let size =
@@ -642,6 +648,11 @@ pub fn arrange(
             cell.width - left - right,
             cell.height - top - bottom,
         )
+    };
+    // The size laid out for a node of `size` with its margin.
+    let with_margin = |i: usize, size: Size| {
+        let [left, top, right, bottom] = nodes[i].margin;
+        Size::new(size.width + left + right, size.height + top + bottom)
     };
     let index: HashMap<Id, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     // Each node's container: on state machine diagrams the nearest state it belongs to that
@@ -1004,11 +1015,14 @@ pub fn arrange(
                     }
                 }
                 let name = nodes[c].name_width + 2.0 * PADDING;
-                size[c] = if regions.vertical {
-                    Size::new(along.max(name), HEADER + deepest + PADDING)
-                } else {
-                    Size::new((deepest + 2.0 * PADDING).max(name), along)
-                };
+                size[c] = with_margin(
+                    c,
+                    if regions.vertical {
+                        Size::new(along.max(name), HEADER + deepest + PADDING)
+                    } else {
+                        Size::new((deepest + 2.0 * PADDING).max(name), along)
+                    },
+                );
                 new_regions.push((c, Regions { vertical: regions.vertical, separators }));
                 continue;
             }
@@ -1044,7 +1058,7 @@ pub fn arrange(
                 bottom = bottom.max(p.y + size[child].height);
             }
             let width = (right + 2.0 * PADDING).max(nodes[c].name_width + 2.0 * PADDING);
-            size[c] = Size::new(width, bottom + HEADER + PADDING);
+            size[c] = with_margin(c, Size::new(width, bottom + HEADER + PADDING));
         }
         let mut top: Vec<usize> = roots.clone();
         top.sort();
@@ -1415,27 +1429,55 @@ fn order_use_cases(
         })
         .collect();
     // Those without an actor follow a related one, as far as the relations reach.
+    let mut anchor: HashMap<usize, usize> = HashMap::new();
     for _ in 0..cases.len() {
-        let next: Vec<(usize, f32)> = cases
+        let next: Vec<(usize, f32, usize)> = cases
             .iter()
             .filter(|c| !key.contains_key(c))
             .filter_map(|&c| {
-                let k = cases
+                let (k, o) = cases
                     .iter()
                     .filter(|&&o| between(o, c))
-                    .filter_map(|o| key.get(o))
-                    .copied()
-                    .reduce(f32::min)?;
-                Some((c, k + 0.5))
+                    .filter_map(|&o| Some((*key.get(&o)?, o)))
+                    .min_by(|a, b| a.0.total_cmp(&b.0))?;
+                Some((c, k + 0.5, o))
             })
             .collect();
         if next.is_empty() {
             break;
         }
-        key.extend(next);
+        for (c, k, o) in next {
+            key.insert(c, k);
+            anchor.insert(c, o);
+        }
     }
     let key = |c: &usize| key.get(c).copied().unwrap_or(f32::INFINITY);
-    cases.sort_by(|a, b| key(a).total_cmp(&key(b)));
+    // Each of them right below the one it follows (and below what follows that one already),
+    // so that the «include» or «extend» between them is short and crosses no other use case.
+    let follows = |mut c: usize, a: usize| {
+        while let Some(&o) = anchor.get(&c) {
+            if o == a {
+                return true;
+            }
+            c = o;
+        }
+        false
+    };
+    let mut column: Vec<usize> =
+        cases.iter().copied().filter(|c| !anchor.contains_key(c)).collect();
+    column.sort_by(|a, b| key(a).total_cmp(&key(b)));
+    let mut followers: Vec<usize> =
+        cases.iter().copied().filter(|c| anchor.contains_key(c)).collect();
+    followers.sort_by(|a, b| key(a).total_cmp(&key(b)));
+    for f in followers {
+        let a = anchor[&f];
+        let mut at = column.iter().position(|&c| c == a).map_or(column.len(), |p| p + 1);
+        while at < column.len() && follows(column[at], a) {
+            at += 1;
+        }
+        column.insert(at, f);
+    }
+    cases.copy_from_slice(&column);
 }
 
 /// On use case diagrams with a system boundary: puts the actors among the `top` nodes into a
@@ -1790,6 +1832,55 @@ fn end_label_margins(
             // A label keeps 4 from its node and its line's other end keeps as much.
             let side = (width + 2.0 * 4.0 - LAYER_GAP / 2.0).max(0.0);
             (side > 0.01).then_some((node, [side, 0.0, side, 0.0]))
+        })
+        .collect()
+}
+
+/// Room around the states for the labels of their transitions (`trigger [guard] / effect`, the
+/// guard on a second line): a label stands beside the middle of its line, between the two
+/// layers, so the space between layers takes the widest label of each node's lines, laid out
+/// left to right, or the highest, laid out top down, with `LABEL_ROOM` on either side.
+fn transition_label_margins(
+    model: &Model,
+    view: &View,
+    diagram: Id,
+    direction: Direction,
+    measure: &dyn TextMeasure,
+) -> HashMap<Id, [f32; 4]> {
+    const LABEL_ROOM: f32 = 8.0;
+    let scene = scene::build(model, diagram, &scene::Preview::default(), measure);
+    let mut largest: HashMap<Id, Size> = HashMap::new();
+    for edge in &scene.edges {
+        let Some(p) = view.get(edge.id) else { continue };
+        let Shape::Edge { source, target, .. } = &p.shape else { continue };
+        let transition = p.element.and_then(|e| model.get(e)).map(|e| e.kind());
+        if !matches!(transition, Some(ElementKind::Transition(_))) || edge.labels.is_empty() {
+            continue;
+        }
+        let width = edge.labels.iter().map(|l| scene::label_width(&l.text, measure));
+        let size =
+            Size::new(width.fold(0.0, f32::max), edge.labels.len() as f32 * scene::LABEL_HEIGHT);
+        for node in [*source, *target] {
+            let s = largest.entry(node).or_insert(Size::new(0.0, 0.0));
+            *s = Size::new(s.width.max(size.width), s.height.max(size.height));
+        }
+    }
+    largest
+        .into_iter()
+        .filter_map(|(node, size)| {
+            let margin = match direction {
+                Direction::Right => {
+                    let side = ((size.width + 2.0 * LABEL_ROOM - LAYER_GAP) / 2.0).max(0.0);
+                    [side, 0.0, side, 0.0]
+                }
+                // Beside a line running down, as wide as the label.
+                Direction::Down => {
+                    let side = ((size.width + 2.0 * LABEL_ROOM - NODE_GAP) / 2.0).max(0.0);
+                    let ends = ((size.height + 2.0 * LABEL_ROOM - LAYER_GAP) / 2.0).max(0.0);
+                    [side, ends, side, ends]
+                }
+            };
+            margin.iter().any(|&m| m > 0.01).then_some((node, margin))
         })
         .collect()
 }

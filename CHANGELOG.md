@@ -16,6 +16,32 @@ today.
 - **Aligned states behave as dragged ones**: a state aligned into another one makes it grow
   around it, and lines that now cross a state's border lose their bends. A state an AI client
   resizes lets go of the substates that no longer lie in it, as in the app.
+- **Room for transition labels**: arranging a state machine diagram leaves enough room between
+  the states for the labels of their transitions, a guard on its own line included, so that no
+  label lies on a state or on another line. The label of an initial transition starts after
+  the dot.
+- **Regions for AI clients**: `update_element` divides a state into regions
+  (`"regions": 2`, with `"side_by_side": true` next to each other), and `get_diagram` lists
+  each region with its bounds, so that substates can be created in one.
+- **Simple states**: a state machine diagram with simple states (a checkbox in the diagram's
+  properties; `simple_states` on `create_diagram` or `update_element`) draws a state without
+  activities, internal transitions or substates as its name alone, centered, without the line
+  below it.
+- **Lines spread apart around nodes**: where routed lines that run side by side are spread
+  apart, a line no longer joins lines it only meets at a bend of its own, and the spread keeps
+  clear of every node beside the lines, so that a line no longer runs through a state that
+  lies between its ends.
+- **Fragments around create messages**: a fragment around a create message keeps the messages
+  that follow below its frame, as for any other message.
+- **Use cases go into the system boundary**: a use case an AI client creates without a place
+  on a diagram with one system boundary goes into it, below the use cases it holds, and the
+  boundary grows to hold it.
+- **Arranged use cases stay inside**: arranging a use case diagram sizes the system boundary
+  around the use cases as drawn, and a use case that only another one includes or extends
+  stands next to it.
+- **Created elements by one name**: every tool that creates an element names it `element` in
+  its reply, also `create_model_element`, `wrap_in_fragment`, `add_operand`, `add_member`,
+  `add_state_member` and `create_structogram`.
 
 ## 0.21.2 – 2026-11-13
 
