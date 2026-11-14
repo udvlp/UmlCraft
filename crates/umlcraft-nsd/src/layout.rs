@@ -7,6 +7,7 @@
 //! element at `x` of width `w` draws its left line at `x` and its right line at `x + w`, which
 //! is the left line of its neighbour.
 
+use crate::create::Keywords;
 use crate::metrics::Metrics;
 use crate::model::{Diagram, Element, ElementKind, RootKind, RootStyle, Sequence};
 use crate::path::{Selection, Slot};
@@ -28,6 +29,10 @@ const CATCH_INDENT: i32 = 40;
 const PARALLEL_MIN: i32 = 31;
 /// The first baseline of an alternative's condition below its top line.
 pub const COND_BASELINE: i32 = 19;
+/// The baseline of an alternative's branch labels above the bottom line of its head.
+pub const LABEL_BASELINE: i32 = 10;
+/// The least room between a branch label and the diagonal above it.
+const LABEL_GAP: i32 = 3;
 /// The include list above the title: its box's top and the space below it (its height and
 /// caption width depend on the platform's small font, `Metrics::includes`).
 pub const INCLUDES: (i32, i32) = (20, 10);
@@ -135,7 +140,7 @@ pub struct Layout {
 
 impl Layout {
     pub fn of(diagram: &Diagram, m: &Metrics) -> Layout {
-        Layouter { m }.diagram(diagram)
+        Layouter { m, labels: Keywords::of(diagram).branch_labels() }.diagram(diagram)
     }
 
     /// The innermost element at a point, with its path.
@@ -267,6 +272,8 @@ struct Size {
 
 struct Layouter<'a> {
     m: &'a Metrics,
+    /// The labels of an alternative's branches (`T` and `F`, or `ja` and `nein`).
+    labels: (&'static str, &'static str),
 }
 
 /// Lines of `e`'s text and the widest one.
@@ -427,9 +434,27 @@ impl Layouter<'_> {
             .unwrap_or(0);
         let mut l = self.sequence_size(&e.branches[0], false);
         let mut r = self.sequence_size(&e.branches[1], false);
-        l.w = l.w.max(2 * self.m.width(TRUE_LABEL, false) + 16);
-        r.w = r.w.max(self.m.width(FALSE_LABEL, false) + 23);
+        let (yes, no) = (self.m.width(self.labels.0, false), self.m.width(self.labels.1, false));
+        l.w = l.w.max(2 * yes + 16);
+        r.w = r.w.max(no + 23);
+        if self.labels != (TRUE_LABEL, FALSE_LABEL) {
+            // Longer labels (`ja`, `nein`) get columns wide enough that the diagonals pass above
+            // them; Structorizer's rule above is made for its one-letter `T` and `F`.
+            l.w = l.w.max(self.label_clearance(head, 10 + yes));
+            r.w = r.w.max(self.label_clearance(head, 16 + no) - 1);
+        }
         (head, min_w, l, r)
+    }
+
+    /// The width a branch column of an alternative needs so that its diagonal clears the label
+    /// at the column's outer side: `inset` is the room from the outer line to the label's inner
+    /// end. The diagonal is nearest at the top of the label, `LABEL_BASELINE` plus the font's
+    /// cap height above the head's bottom line.
+    fn label_clearance(&self, head: i32, inset: i32) -> i32 {
+        let top = LABEL_BASELINE + self.line() * 3 / 4;
+        let free = i64::from((head - top).max(1));
+        let need = i64::from(inset + LABEL_GAP) * i64::from(head);
+        ((need + free - 1) / free) as i32
     }
 
     /// The shown branches with their natural column sizes, the head's height, the total width

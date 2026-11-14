@@ -4,9 +4,10 @@
 //! sets: a painter draws lines, texts and the background in its theme, an export black on
 //! white as Structorizer does. Fills come first, then lines, then texts.
 
+use crate::create::Keywords;
 use crate::layout::{
-    CASE_LABELS, CATCH_LABEL, COND_BASELINE, ElementBox, FALSE_LABEL, FINALLY_LABEL, INCLUDES,
-    INCLUDES_LABEL, Layout, PADDING, Rect, SeqBox, Shape, TRUE_LABEL, TRY_LABEL,
+    CASE_LABELS, CATCH_LABEL, COND_BASELINE, ElementBox, FINALLY_LABEL, INCLUDES, INCLUDES_LABEL,
+    LABEL_BASELINE, Layout, PADDING, Rect, SeqBox, Shape, TRY_LABEL,
 };
 use crate::metrics::Metrics;
 use crate::model::{Color, Diagram, Element, ElementKind, RootKind, RootStyle, Sequence};
@@ -72,7 +73,8 @@ fn rect_area(r: Rect) -> Vec<Px> {
 
 /// Everything the diagram draws, in painting order.
 pub fn draw(diagram: &Diagram, layout: &Layout, m: &Metrics) -> Vec<Primitive> {
-    let mut d = Drawing { m, fills: Vec::new(), lines: Vec::new(), texts: Vec::new() };
+    let labels = Keywords::of(diagram).branch_labels();
+    let mut d = Drawing { m, labels, fills: Vec::new(), lines: Vec::new(), texts: Vec::new() };
     d.frame(diagram, layout);
     d.sequence(&diagram.children, &layout.body);
     let mut all = d.fills;
@@ -83,6 +85,8 @@ pub fn draw(diagram: &Diagram, layout: &Layout, m: &Metrics) -> Vec<Primitive> {
 
 struct Drawing<'a> {
     m: &'a Metrics,
+    /// The labels of an alternative's branches (`T` and `F`, or `ja` and `nein`).
+    labels: (&'static str, &'static str),
     fills: Vec<Primitive>,
     lines: Vec<Primitive>,
     texts: Vec<Primitive>,
@@ -275,9 +279,10 @@ impl Drawing<'_> {
                     + 5.83)
                     .round()) as i32;
                 self.lines_at(&text, r.x + x, r.y + COND_BASELINE);
-                self.text(r.x + 10, hy - 10, TRUE_LABEL, false);
-                let fw = self.m.width(FALSE_LABEL, false);
-                self.text(r.right() - 16 - fw, hy - 10, FALSE_LABEL, false);
+                let (yes, no) = self.labels;
+                self.text(r.x + 10, hy - LABEL_BASELINE, yes, false);
+                let fw = self.m.width(no, false);
+                self.text(r.right() - 16 - fw, hy - LABEL_BASELINE, no, false);
             }
             Shape::Case { head, columns, apex, default } => {
                 let hy = r.y + head;
@@ -435,6 +440,58 @@ fn rounded(r: Rect, radius: i32) -> Vec<Px> {
 mod tests {
     use super::*;
     use crate::create::{Provenance, lines};
+
+    /// The labels an alternative's branches are drawn with, for diagrams in `keywords`.
+    fn branch_labels(keywords: Option<Keywords>) -> Vec<String> {
+        let made = Provenance { author: "", date: "", origin: "" };
+        let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
+        if let Some(k) = keywords {
+            d.set_keywords(k);
+        }
+        d.children = Sequence::new(vec![Element::alternative(&lines(&["x > 0?"]))]);
+        let m = Metrics::linux();
+        let layout = Layout::of(&d, m);
+        draw(&d, &layout, m)
+            .into_iter()
+            .filter_map(|p| match p {
+                Primitive::Text { text, .. } if !["t", "x > 0?", "∅"].contains(&text.as_str()) => {
+                    Some(text)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_diagonals_pass_above_ja_and_nein() {
+        let m = Metrics::linux();
+        for condition in [vec!["x > 0?"], vec!["x > 0 und y > 0", "oder z > 0?"]] {
+            let made = Provenance { author: "", date: "", origin: "" };
+            let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
+            d.set_keywords(Keywords::German);
+            // Empty branches: both columns as narrow as their labels allow.
+            d.children = Sequence::new(vec![Element::alternative(&lines(&condition))]);
+            let layout = Layout::of(&d, m);
+            let b = layout.element(&[0]).unwrap();
+            let Shape::Alternative { head, split } = b.shape else { panic!() };
+            let r = b.rect;
+            let hy = r.y + head;
+            // The labels' top, where the diagonals come nearest.
+            let top = LABEL_BASELINE + m.line() * 3 / 4;
+            let left = split - (split - r.x) * top / head;
+            let right = split + (r.right() - split) * top / head;
+            assert!(r.x + 10 + m.width("ja", false) < left, "{condition:?}");
+            assert!(right < r.right() - 16 - m.width("nein", false), "{condition:?}");
+            assert!(hy > r.y);
+        }
+    }
+
+    #[test]
+    fn german_diagrams_label_their_branches_ja_and_nein() {
+        assert_eq!(branch_labels(None), ["T", "F"]);
+        assert_eq!(branch_labels(Some(Keywords::English)), ["T", "F"]);
+        assert_eq!(branch_labels(Some(Keywords::German)), ["ja", "nein"]);
+    }
 
     /// A case with so many branches that its plain elements are turned.
     fn turned(e: Element) -> (Rect, Vec<Primitive>) {
