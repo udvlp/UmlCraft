@@ -56,6 +56,14 @@ const ROW_17: f32 = 17.0 - 12.06;
 const ROW_18: f32 = 18.0 - 12.06;
 /// Edge labels have their baseline 13 below their top, rows 12.06.
 const LABEL_TO_ROW: f32 = 13.0 - 12.06;
+/// Room a guard keeps from the lifelines and bars beside it.
+const GUARD_GAP: f32 = 4.0;
+/// Room a message label keeps from a lifeline its line crosses, where it fits between two.
+const LINE_GAP: f32 = 4.0;
+/// What the arrowhead of a message takes of its line, with a little room: a label keeps off
+/// it, or is lifted by [`HEAD_LIFT`] where the line is too short for that.
+const HEAD_ROOM: f32 = 13.0;
+const HEAD_LIFT: f32 = 3.0;
 
 /// What the sequence layout adds to a scene besides nodes and edges.
 #[derive(Clone, Debug, Default)]
@@ -350,6 +358,8 @@ pub(crate) fn arrange(
         _ => (false, false),
     };
 
+    // The guards that stand where the fragment puts them, by node and row: not moved by hand.
+    let mut placed_guards: Vec<(Id, usize)> = Vec::new();
     for node in nodes.iter_mut() {
         let Some(p) = view.get(node.id) else { continue };
         match &p.shape {
@@ -408,7 +418,11 @@ pub(crate) fn arrange(
                     } else {
                         separators.get(k - 1).copied().unwrap_or(r.bottom())
                     };
-                    let moved = guards.get(k).copied().flatten().unwrap_or_default();
+                    let by_hand = guards.get(k).copied().flatten();
+                    if by_hand.is_none() {
+                        placed_guards.push((node.id, rows.len()));
+                    }
+                    let moved = by_hand.unwrap_or_default();
                     let w = measure.width(&text, 12.0, false);
                     rows.push(Row {
                         rect: Rect::new(
@@ -516,6 +530,39 @@ pub(crate) fn arrange(
             node.rect = Rect::new(bar.left, bar.top, bar.width, bar.bottom - bar.top);
             node.figure = Figure::Activation;
             node.rows = Vec::new();
+        }
+    }
+    // A guard keeps off the lifelines and bars that pass beneath it: it starts right of the
+    // first lifeline it would run into, or of the next one that leaves it room.
+    for (id, k) in placed_guards {
+        let Some(node) = nodes.iter_mut().find(|n| n.id == id) else { continue };
+        let frame = node.rect;
+        let Some(row) = node.rows.get_mut(k) else { continue };
+        let (top, bottom) = (row.rect.y - GUARD_GAP, row.rect.bottom() + GUARD_GAP);
+        // What each lifeline inside the frame takes up at the guard's height, from the left.
+        let mut taken: Vec<(f32, f32)> = lanes
+            .values()
+            .filter(|l| frame.x < l.center() && l.center() < frame.right())
+            .filter(|l| l.head.y < bottom)
+            .map(|l| {
+                let bars = l.bars.iter().filter(|b| b.top < bottom && b.bottom > top);
+                bars.fold((l.center(), l.center()), |(lo, hi), b| {
+                    (lo.min(b.left), hi.max(b.right()))
+                })
+            })
+            .collect();
+        taken.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let width = row.rect.width;
+        let clear =
+            |x: f32| taken.iter().all(|&(l, r)| r + GUARD_GAP <= x || x + width + GUARD_GAP <= l);
+        if clear(row.rect.x) {
+            continue;
+        }
+        let starts: Vec<f32> = taken.iter().map(|&(_, r)| r + GUARD_GAP).collect();
+        let fits = |x: &&f32| **x > row.rect.x && clear(**x) && **x + width <= frame.right();
+        let first = starts.iter().find(|x| **x > row.rect.x);
+        if let Some(&x) = starts.iter().find(fits).or(first) {
+            row.rect.x = x;
         }
     }
     // Bars are not nodes of their own presentations' bounds; add those the scene left out.
@@ -1054,6 +1101,38 @@ fn clear_of_bars(center: f32, width: f32, span: (f32, f32), mut bars: Vec<(f32, 
         .map_or(center, |(l, r)| (l + r) / 2.0)
 }
 
+/// Where a message label `width` wide goes on its line from `span.0` to `span.1` to keep off
+/// `taken` (stretches of the line, from left to right side): at `center` where it is clear
+/// there, else as near to it as it fits between them, toward `source` if both ways are as far.
+/// None where it fits nowhere.
+fn between(
+    center: f32,
+    width: f32,
+    span: (f32, f32),
+    source: f32,
+    mut taken: Vec<(f32, f32)>,
+) -> Option<f32> {
+    let half = width / 2.0;
+    if taken.iter().all(|&(l, r)| r <= center - half || l >= center + half) {
+        return Some(center);
+    }
+    taken.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut free = Vec::new();
+    let mut from = span.0;
+    for (l, r) in taken {
+        free.push((from, l));
+        from = from.max(r);
+    }
+    free.push((from, span.1));
+    free.into_iter()
+        .filter(|&(l, r)| r - l >= width)
+        .map(|(l, r)| center.clamp(l + half, r - half))
+        .min_by(|a, b| {
+            let off = |x: &f32| ((x - center).abs() * 2.0).round();
+            off(a).total_cmp(&off(b)).then((a - source).abs().total_cmp(&(b - source).abs()))
+        })
+}
+
 fn message_edge(
     model: &Model,
     m: &Msg,
@@ -1165,7 +1244,28 @@ fn message_edge(
                 .filter(|b| b.top < top + line_height(FONT_SIZE) && b.bottom > top - above)
                 .map(|b| (b.left, b.left + b.width))
                 .collect();
-            (top, Some(clear_of_bars((a.x + b.x) / 2.0, width, span, bars)))
+            // Off the lifelines the line crosses and off the arrowhead, where the label fits
+            // between them; a label too long for that covers the lifelines, and goes up a
+            // little where it reaches over the arrowhead.
+            let crossed = lanes
+                .iter()
+                .filter(|(id, _)| **id != m.source && **id != m.target)
+                .map(|(_, l)| l.center())
+                .filter(|&x| span.0 < x && x < span.1)
+                .map(|x| (x - LINE_GAP, x + LINE_GAP));
+            let head = if b.x >= a.x { (b.x - HEAD_ROOM, b.x) } else { (b.x, b.x + HEAD_ROOM) };
+            let taken: Vec<(f32, f32)> =
+                bars.iter().copied().chain(crossed).chain([head]).collect();
+            let middle = (a.x + b.x) / 2.0;
+            match between(middle, width + 2.0, span, a.x, taken) {
+                Some(center) => (top, Some(center)),
+                None => {
+                    let center = clear_of_bars(middle, width, span, bars);
+                    let half = width / 2.0 + 1.0;
+                    let over_head = center + half > head.0 && center - half < head.1;
+                    (if over_head { top - HEAD_LIFT } else { top }, Some(center))
+                }
+            }
         }
     };
     let left_at = m.label.map(|offset| from.center() + offset.x);

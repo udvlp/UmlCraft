@@ -16,6 +16,17 @@ today.
   a little above or below a compartment separator, never at its height, where they looked like
   the separator running on. Where two boxes overlap only narrowly, a straight line runs
   through the overlap instead of bending around.
+- **Labels at short line ends and at corners of a node**: the role of a line that bends shortly
+  before its node stands beside the stretch that meets the node, not past the bend. A line at
+  another side of a node no longer moves the cardinality of a line beside the corner.
+- **No hooks at line ends**: routed lines end with a clearly visible last stretch where there
+  is room: the bend before a node moves away from it, so a triangle no longer sits right after
+  a bend and a line with one bend no longer enters its target as a short stub.
+- **Guards and message names keep off lifelines**: the guard of an operand starts right of the
+  lifeline and activation bar it would run into, and a fragment an AI client wraps around a
+  message leaves room for the guard above the message's name. A message name that fits between
+  two lifelines stands beside the lifeline its arrow crosses, not on it. A name about as long
+  as its arrow ends before the arrowhead, and a longer one stands a little higher.
 - **Complete arrowheads under message names**: the background of a message name no longer
   covers a corner of the arrowhead, and the whole tab of a combined fragment is opaque, so no
   activation bar shows inside it.

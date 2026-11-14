@@ -1766,6 +1766,20 @@ pub fn set_binding(
 /// everything between them. They must all be in the same interaction or operand.
 /// Returns (fragment, node).
 pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(Id, Id)> {
+    wrap_in_guarded_fragment(tx, diagram, items, false)
+}
+
+/// Room between the guard below a fragment's tab and the label of a message right below it.
+const GUARD_ROOM: f32 = 10.0;
+
+/// [`wrap_in_fragment`]; with `guard`, a message at the top keeps its label below the guard
+/// that will stand below the tab.
+pub fn wrap_in_guarded_fragment(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    items: &[Id],
+    guard: bool,
+) -> Result<(Id, Id)> {
     let model = tx.model();
     let invalid = |msg: &str| ModelError::Invalid(msg.to_owned());
     let mut owners = items.iter().map(|&i| model.element(i).map(|e| e.owner()));
@@ -1810,7 +1824,8 @@ pub fn wrap_in_fragment(tx: &mut Tx<'_>, diagram: Id, items: &[Id]) -> Result<(I
             })
             .filter(|&y| (y - top).abs() < 0.5)
     });
-    let label = if topmost.is_some() { sequence::LABEL_ABOVE } else { 0.0 };
+    let room = if guard { GUARD_ROOM } else { 0.0 };
+    let label = if topmost.is_some() { sequence::LABEL_ABOVE + room } else { 0.0 };
     // ...as far as the item before it leaves room: a frame reaching into that would take it in.
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;

@@ -219,8 +219,8 @@ impl Block {
     /// For a label of a line beside another line between the same two nodes: makes the spots
     /// between the two cost more, so that the label goes to the outer side, where it reads as
     /// its own line's. A role or multiplicity looks at its end segment, a name or keyword at the
-    /// middle segment. At an end, a labelled line from elsewhere that meets the node close by
-    /// and from about the same direction counts as well.
+    /// middle segment. At an end, a labelled line from elsewhere that meets the same side of the
+    /// node close by and from about the same direction counts as well.
     fn keep_outside(&mut self, edge: &EdgeShape, free: &FreeLabel, edges: &[EdgeShape]) {
         let ends = |e: &EdgeShape| {
             let [a, b] = e.ends;
@@ -289,12 +289,13 @@ impl Block {
             }
             None => true,
         };
-        // A line without labels (an attribute's) leaves no doubt whose a label is.
+        // A line without labels (an attribute's) leaves no doubt whose a label is, nor does a
+        // line at another side of the node.
         let near = |e: &EdgeShape| match end {
             Some(node) if e.ends.contains(&node) && !e.labels.is_empty() => {
                 let k = e.points.len();
                 let p = if e.ends[0] == node { e.points[0] } else { e.points[k - 1] };
-                p.distance(tip) <= NEAR_END
+                p.distance(tip) <= NEAR_END && nearest_side(node, p) == nearest_side(node, tip)
             }
             _ => false,
         };
@@ -445,12 +446,18 @@ fn end_spots(
         None => first_side,
     };
     let (half_w, half_h) = (w / 2.0, h / 2.0);
+    let half_along = half_w * u.0.abs() + half_h * u.1.abs();
     // Far enough from the end not to reach back over its node.
-    let clear = half_w * u.0.abs() + half_h * u.1.abs() + GAP;
+    let clear = half_along + GAP;
+    // Where the line bends before the label fits beside its end segment as far along as Astah
+    // puts it, right at the end comes first: beside the segment that meets the node, not past
+    // the bend.
+    let short = n > 2 && base + half_along > len;
+    let nearer = short.then_some(clear + GAP - base);
     let mut spots = Vec::new();
     for wider in WIDER {
         for side in [first_side, -first_side] {
-            for extra in FURTHER {
+            for extra in nearer.into_iter().chain(FURTHER) {
                 let along = (base + extra).max(clear);
                 let (p, d, first) = along_from_end(&path, along);
                 let extended = Point::new(tip.x + u.0 * along, tip.y + u.1 * along);
@@ -472,6 +479,13 @@ fn end_spots(
         }
     }
     spots
+}
+
+/// Which side of `r` the point `p` on its border lies on: left, right, top or bottom, as 0 to 3.
+fn nearest_side(r: Rect, p: Point) -> usize {
+    let off =
+        [(p.x - r.x).abs(), (p.x - r.right()).abs(), (p.y - r.y).abs(), (p.y - r.bottom()).abs()];
+    (0..4).min_by(|&a, &b| off[a].total_cmp(&off[b])).unwrap_or(0)
 }
 
 /// The point `length` along `path` from its start, the direction of the segment it lies on and

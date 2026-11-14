@@ -2643,8 +2643,11 @@ fn wrap_in_fragment(host: &mut dyn Host, args: &Value) -> Outcome {
     let operator = pick(args, "operator", &OPERATORS)?.unwrap_or(InteractionOperator::Opt);
     let mut guard = ElementKind::InteractionOperand(Default::default());
     set_properties(model, &mut guard, &json!({ "guard": opt_str(args, "guard").unwrap_or("") }))?;
+    // A loop's guard goes into the tab; any other stands below it, above the first message.
+    let guarded = operator != InteractionOperator::Loop
+        && opt_str(args, "guard").is_some_and(|g| !g.trim().is_empty());
     let fragment = change(host, "wrap_in_fragment", |tx| {
-        let (fragment, _) = palette::wrap_in_fragment(tx, diagram, &items)?;
+        let (fragment, _) = palette::wrap_in_guarded_fragment(tx, diagram, &items, guarded)?;
         tx.update(fragment, |data| {
             if let ElementKind::CombinedFragment(p) = &mut data.kind {
                 p.operator = operator;
@@ -6630,6 +6633,85 @@ mod tests {
     }
 
     #[test]
+    fn guards_keep_off_lifelines_bars_and_message_labels() {
+        for guard in ["g != null", "nicht voll und betrag >= preis"] {
+            let mut host = Headless::new();
+            let mut calls = lifelines(&[":Program", "t:Theke"]);
+            calls.push(message("message", 1, 2, "pruefen()", Some(100.0)));
+            calls.push(message("message", 2, 1, "ok", Some(200.0)));
+            calls.push(message("reply", 2, 1, "fertig", Some(260.0)));
+            calls.push(json!({ "tool": "wrap_in_fragment", "arguments": {
+                "diagram": "$0.diagram", "items": ["$4.element"], "operator": "alt",
+                "guard": guard } }));
+            let r = build(&mut host, json!(calls));
+            let scene = drawn(&mut host, &r[0]["diagram"]);
+            let (_, measure) = host.parts();
+            let fragment =
+                scene.nodes.iter().find(|n| matches!(n.figure, Figure::Fragment { .. })).unwrap();
+            let row = fragment.rows.iter().find(|row| row.text.contains(guard)).unwrap().rect;
+            // Clear of the bars and lifelines beneath it (#69)...
+            for node in &scene.nodes {
+                match node.figure {
+                    Figure::Activation => {
+                        assert!(!row.inflate(1.0).intersects(&node.rect), "{row:?} {:?}", node.rect)
+                    }
+                    Figure::Lifeline { head, .. } => {
+                        let x = head.center().x;
+                        assert!(x < row.x - 1.0 || x > row.right() + 1.0, "{row:?} over {x}");
+                    }
+                    _ => {}
+                }
+            }
+            // ...and above the name of the message below it.
+            let edge = scene.edge(id(&r[4]["presentation"]).parse().unwrap()).unwrap();
+            let name = labels::label_rect(&edge.labels[0], measure);
+            assert!(!row.intersects(&name), "{row:?} on {name:?}");
+        }
+    }
+
+    #[test]
+    fn message_names_keep_off_crossed_lifelines_and_arrowheads() {
+        // A short name beside the lifeline its line crosses, not on it (#70).
+        let mut host = Headless::new();
+        let mut calls = lifelines(&["a:A", "b:B", "c:C"]);
+        calls.push(message("message", 1, 3, "anzahl", Some(100.0)));
+        calls.push(message("reply", 3, 1, "2", Some(130.0)));
+        let r = build(&mut host, json!(calls));
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let (_, measure) = host.parts();
+        let b = scene.node(id(&r[2]["presentation"]).parse().unwrap()).unwrap();
+        let Figure::Lifeline { head, .. } = b.figure else { panic!("a lifeline") };
+        let crossed = head.center().x;
+        for line in [&r[4], &r[5]] {
+            let edge = scene.edge(id(&line["presentation"]).parse().unwrap()).unwrap();
+            let name = labels::label_rect(&edge.labels[0], measure);
+            assert!(
+                name.right() + 3.0 <= crossed || crossed + 3.0 <= name.x,
+                "{name:?} at {crossed}"
+            );
+        }
+        // A name about as long as its line ends before the arrowhead; a longer one goes up
+        // (#71).
+        let top_of = |text: &str| {
+            let mut host = Headless::new();
+            let mut calls = lifelines(&[":Program", "s:Socket"]);
+            calls.push(message("message", 1, 2, text, Some(100.0)));
+            let r = build(&mut host, json!(calls));
+            let scene = drawn(&mut host, &r[0]["diagram"]);
+            let (_, measure) = host.parts();
+            let edge = scene.edge(id(&r[3]["presentation"]).parse().unwrap()).unwrap();
+            let tip = edge.points[edge.points.len() - 1].x;
+            let name = labels::label_rect(&edge.labels[0], measure);
+            (name.y, name.right() <= tip - 11.0, name.x >= edge.points[0].x)
+        };
+        let (usual, _, _) = top_of("write()");
+        let (top, clear, from_bar) = top_of("write(\"SUCHE Demir, Aylin\\n\")");
+        assert!(top == usual && clear && from_bar);
+        let (top, clear, _) = top_of("write(\"SUCHE Demir, Aylin, geboren in Ulm\\n\")");
+        assert!(top < usual && !clear);
+    }
+
+    #[test]
     fn texts_stay_readable_over_lifelines() {
         let mut host = Headless::new();
         let mut calls = lifelines(&["k:Kasse", "f:Film", "s:Saal"]);
@@ -6895,6 +6977,89 @@ mod tests {
             assert_eq!(points[0].y, ben.rect.bottom(), "{points:?}");
             assert_eq!(points[0].x, points[1].x, "{points:?}");
         }
+    }
+
+    #[test]
+    fn the_labels_of_a_loop_into_the_top_of_an_entity_stay_at_the_entity() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+                  "name": "er" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erEntity", "name": "Nutzer", "x": 0, "y": 0 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erRelationship", "name": "befreundet", "x": 220, "y": -5 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$2.element", "target": "$1.element" } },
+                { "tool": "update_element", "arguments": { "id": "$3.element",
+                  "cardinality": "[0,n]", "role": "Anfragender" } },
+            ]),
+        );
+        // Out of the top of the rhombus, left above the entity and down into its top (#65).
+        let (doc, _) = host.parts();
+        let d: Id = id(&r[0]["diagram"]).parse().unwrap();
+        let line: Id = id(&r[3]["presentation"]).parse().unwrap();
+        let top = (Some(Point::new(0.5, 0.0)), Some(Point::new(0.5, 0.0)));
+        let over = vec![Point::new(281.37, -30.0), Point::new(50.0, -30.0)];
+        doc.edit("route", |tx| tx.set_route(d, line, over, top)).unwrap();
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let edge = scene.edge(line).unwrap();
+        let (_, measure) = host.parts();
+        // Both beside the last segment, below the stretch that leads away, one on either side.
+        let rects: Vec<Rect> = edge.labels.iter().map(|l| labels::label_rect(l, measure)).collect();
+        assert_eq!(rects.len(), 2);
+        for (label, r) in edge.labels.iter().zip(&rects) {
+            assert!(r.y > -30.0 && r.bottom() <= 0.0, "{} at {r:?}", label.text);
+        }
+        assert!(rects.iter().any(|r| r.right() < 50.0) && rects.iter().any(|r| r.x > 50.0));
+    }
+
+    #[test]
+    fn a_line_at_another_side_leaves_a_cardinality_where_it_is() {
+        let mut host = Headless::new();
+        let entity = |name: &str, x: f64| {
+            json!({ "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                "tool": "erEntity", "name": name, "x": x, "y": 230 } })
+        };
+        let relationship = |name: &str, x: f64, y: f64| {
+            json!({ "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                "tool": "erRelationship", "name": name, "x": x, "y": y } })
+        };
+        let line = |from: usize, to: usize| {
+            json!({ "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                "source": format!("${from}.element"), "target": format!("${to}.element") } })
+        };
+        let cardinality = |of: usize, text: &str| {
+            json!({ "tool": "update_element", "arguments": {
+                "id": format!("${of}.element"), "cardinality": text } })
+        };
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+                  "name": "er" } },
+                entity("Mitarbeiter", 0.0),
+                entity("Projekt", 380.0),
+                relationship("arbeitet mit", 190.0, 225.0),
+                line(3, 1),
+                cardinality(4, "[0,n]"),
+                line(3, 2),
+                cardinality(6, "[1,m]"),
+                relationship("leitet", 70.0, 110.0),
+                line(8, 1),
+                cardinality(9, "[1,1]"),
+            ]),
+        );
+        // `leitet` meets the top of `Mitarbeiter`, the other line its right side: the `[0,n]`
+        // stays above its line (#66).
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let (_, measure) = host.parts();
+        let edge = scene.edge(id(&r[4]["presentation"]).parse().unwrap()).unwrap();
+        let end = edge.points[edge.points.len() - 1];
+        let drawn = labels::label_rect(&edge.labels[0], measure);
+        assert!(drawn.bottom() <= end.y + 2.0, "{drawn:?} below the line at {end:?}");
     }
 
     #[test]

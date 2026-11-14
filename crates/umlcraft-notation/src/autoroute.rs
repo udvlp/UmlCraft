@@ -516,7 +516,7 @@ pub fn route_around(
             for pair in vertices.windows(2) {
                 *used.entry((pair[0].min(pair[1]), pair[0].max(pair[1]))).or_default() += 1;
             }
-            let points = unjog(points, boxes, request);
+            let points = lengthen_ends(unjog(points, boxes, request), boxes, request);
             for (b, side, p) in [
                 (request.source, ends.0, points[0]),
                 (request.target, ends.1, points[points.len() - 1]),
@@ -769,6 +769,71 @@ fn unjog(points: Vec<Point>, boxes: &[Rect], request: Request) -> Vec<Point> {
             || !segment_hits(from, to, r.inflate(MARGIN / 2.0 - 1.0))
     });
     if free { vec![from, to] } else { points }
+}
+
+/// How long the last stretch of a route into a node is where there is room: clearly longer
+/// than an arrowhead or triangle, and no mere hook at the node.
+const END_STRETCH: f32 = 30.0;
+
+/// `points` with the bends next to either end moved away from the node where the stretch into
+/// it is shorter than [`END_STRETCH`]: up to half way to the bend before, or, for a route with
+/// one bend, by sliding the port at the other node along its side.
+fn lengthen_ends(points: Vec<Point>, boxes: &[Rect], request: Request) -> Vec<Point> {
+    let points = lengthen_end(points, boxes, request.source, request.target);
+    let mut back: Vec<Point> = points.into_iter().rev().collect();
+    back = lengthen_end(back, boxes, request.target, request.source);
+    back.reverse();
+    back
+}
+
+/// [`lengthen_ends`] for the last stretch of `points`, which run from box `from` to box `to`.
+fn lengthen_end(points: Vec<Point>, boxes: &[Rect], from: usize, to: usize) -> Vec<Point> {
+    let n = points.len();
+    if n < 3 {
+        return points;
+    }
+    let (tip, bend, before) = (points[n - 1], points[n - 2], points[n - 3]);
+    let len = tip.distance(bend);
+    if !(1e-3..END_STRETCH).contains(&len) {
+        return points;
+    }
+    // Away from the node.
+    let u = ((bend.x - tip.x) / len, (bend.y - tip.y) / len);
+    let along = |a: Point, b: Point| (b.x - a.x) * u.0 + (b.y - a.y) * u.1;
+    let mut wanted = END_STRETCH;
+    if n == 3 {
+        // The port at the other node slides along its side, clear of the corners.
+        let r = boxes[from];
+        let (lo, hi) = if u.0.abs() > 0.5 { (r.x, r.right()) } else { (r.y, r.bottom()) };
+        let inset = SLIDE_INSET.min((hi - lo) / 4.0);
+        let at = if u.0.abs() > 0.5 { before.x } else { before.y };
+        let sign = if u.0 + u.1 > 0.0 { 1.0 } else { -1.0 };
+        let room = if sign > 0.0 { hi - inset - at } else { at - (lo + inset) };
+        wanted = wanted.min(len + room.max(0.0));
+    } else {
+        // Sharing the way with the stretch before the bends, if that runs the same way.
+        let earlier = along(before, points[n - 4]);
+        if earlier > 0.0 {
+            wanted = wanted.min((len + earlier) / 2.0);
+        }
+    }
+    let by = wanted - len;
+    if by < 1.0 {
+        return points;
+    }
+    let mut moved = points.clone();
+    moved[n - 2] = bend.offset(u.0 * by, u.1 * by);
+    moved[n - 3] = before.offset(u.0 * by, u.1 * by);
+    let (source, target) = (boxes[from], boxes[to]);
+    let free = boxes.iter().enumerate().all(|(i, r)| {
+        let own = i == from || i == to;
+        if !own && (r.contains_rect(&source) || r.contains_rect(&target)) {
+            return true;
+        }
+        let r = if own { *r } else { r.inflate(MARGIN / 2.0 - 1.0) };
+        !moved[n.saturating_sub(4)..].windows(2).any(|w| segment_hits(w[0], w[1], r))
+    });
+    if free { moved } else { points }
 }
 
 /// `points` without those that do not turn the line.
@@ -1498,6 +1563,27 @@ mod tests {
         for p in points {
             assert!(dividers.iter().all(|&(_, y)| (p.y - y).abs() >= DIVIDER_ROOM - SAME), "{p:?}");
         }
+    }
+
+    #[test]
+    fn the_stretch_into_a_node_is_no_mere_hook() {
+        let stretches = |points: &[Point]| {
+            let n = points.len();
+            (points[0].distance(points[1]), points[n - 1].distance(points[n - 2]))
+        };
+        // One bend, the target right below the source's corner (#67): the port slides.
+        let boxes = [Rect::new(260.0, 20.0, 140.0, 46.19), Rect::new(398.0, 120.0, 235.0, 91.47)];
+        let requests = [Request { source: 0, target: 1, facing: false, markers: [false; 2] }];
+        let points = route(&boxes, &requests)[0].clone().expect("routed");
+        assert_eq!(points.len(), 3, "{points:?}");
+        assert!(stretches(&points).1 >= END_STRETCH, "{points:?}");
+        // Two bends, a triangle at the target (#68): the bends move away from it.
+        let boxes = [Rect::new(100.0, 380.0, 113.0, 60.0), Rect::new(320.0, 230.0, 122.0, 72.28)];
+        let requests = [Request { source: 0, target: 1, facing: true, markers: [false, true] }];
+        let points = route(&boxes, &requests)[0].clone().expect("routed");
+        assert_eq!(points.len(), 4, "{points:?}");
+        let (first, last) = stretches(&points);
+        assert!(first >= END_STRETCH && last >= END_STRETCH, "{points:?}");
     }
 
     #[test]
