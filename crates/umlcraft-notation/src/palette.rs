@@ -1197,8 +1197,10 @@ fn add_node_for(tx: &mut Tx<'_>, diagram: Id, element: Id, bounds: Rect) -> Resu
     } else {
         umlcraft_model::Presentation::node(Some(element), bounds)
     };
-    // New class boxes size themselves to their content, as in Astah.
-    presentation.style.auto_size = crate::scene::is_boxed_classifier(kind) && !structured;
+    // New class boxes and objects size themselves to their content, as in Astah.
+    let object = matches!(kind, ElementKind::Instance(p) if p.instance == InstanceKind::Object);
+    presentation.style.auto_size =
+        (crate::scene::is_boxed_classifier(kind) || object) && !structured;
     if is_container(kind) || fragment || structured {
         let id = presentation.id;
         let index = behind_contents(model, diagram, bounds);

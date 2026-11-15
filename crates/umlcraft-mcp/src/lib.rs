@@ -11,6 +11,7 @@
 pub mod backend;
 mod base64;
 pub mod host;
+mod line;
 pub mod live;
 pub mod protocol;
 mod structogram;

@@ -3,6 +3,21 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## 0.21.8 – 2026-11-15
+
+- **New objects fit their content**: an object placed on a diagram is as wide as its name and
+  slots need, like a class, and grows when a value gets longer. One given a size by hand keeps
+  it.
+- **MCP: line routes**: AI assistants can give a line its waypoints, the points where it
+  leaves and enters its nodes and its line style, or hand it back to the router, when they draw
+  it or later; `get_diagram` tells each line's route. A recursive relationship can run around
+  its entity this way.
+- **MCP: activation bars**: assistants see each bar with its id, move and stretch it, and
+  remove it. A bar stretched over the next bars of its lifeline takes them in, so a lifeline
+  can keep one bar from its first message to its last.
+- **MCP: arguments are checked**: a tool refuses an argument it does not know instead of
+  ignoring it.
+
 ## 0.21.7 – 2026-11-15
 
 - **Lines that leave a node side by side do not cross**: where two routed lines leave the same

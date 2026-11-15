@@ -2,6 +2,7 @@
 //! [`Host`] ([`call`]). Ids are the model's UUIDs as strings. Every tool that changes the
 //! project is one undo step, made as the app makes its edits.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
@@ -21,6 +22,7 @@ use umlcraft_notation::{
 
 use crate::base64;
 use crate::host::{Access, Host, first_diagram, new_document};
+use crate::line;
 use crate::structogram;
 use crate::uml;
 
@@ -214,6 +216,33 @@ pub fn list() -> Vec<Value> {
                 } })
     };
     let ends = json!({ "source_end": end("source"), "target_end": end("target") });
+    // The route of a line, which `connect` and `update_element` take.
+    let point = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2,
+                        "maxItems": 2 });
+    let anchor = |which: &str| {
+        json!({ "type": ["array", "null"], "items": { "type": "number" }, "minItems": 2,
+                "maxItems": 2,
+                "description": format!("Lines: where the line leaves or enters its {which} \
+                                        node, relative to it: [0, 0] top left, [1, 1] bottom \
+                                        right, [0.5, 0] the middle of its top; null for its \
+                                        center.") })
+    };
+    let route = json!({
+        "waypoints": { "type": "array", "items": point,
+                       "description": "Lines: the points the line runs through between its \
+                                       ends, e.g. [[290, 50], [70, 50]]; [] for a straight \
+                                       line. A route given by hand turns `auto_route` off." },
+        "source_anchor": anchor("source"),
+        "target_anchor": anchor("target"),
+        "line_shape": { "type": "string",
+                        "enum": ["line", "right_angle", "curve", "curve_right_angle"],
+                        "description": "Lines: straight segments, horizontal and vertical ones \
+                                        (the waypoints are the corners), a curve, or a curve \
+                                        over right-angled corners." },
+        "auto_route": flag("Lines: true lets the router lay the line out at right angles \
+                            around the nodes and again when they move (without the keys \
+                            above); false keeps the route as it is."),
+    });
     // The settings of classes and objects, which `create_element` and `update_element` take.
     let classes = json!({
         "abstract": flag("Classes, interfaces, operations: abstract (the name in italics)."),
@@ -355,10 +384,12 @@ pub fn list() -> Vec<Value> {
         read_only(tool(
             "get_diagram",
             "What a diagram shows: nodes with their element, kind, name and bounds as drawn; \
-             lines with their element and ends; and the tools its kind offers for \
+             lines with their element, ends and route (`waypoints`, `source_anchor`, \
+             `target_anchor`, `line_shape`, `auto_route`); and the tools its kind offers for \
              `create_element` and `connect`. Sequence diagrams: messages with their height \
              `y`, fragments with the range of each operand, and the activation bars of each \
-             lifeline (`top`, `bottom`).",
+             lifeline (`bars`: `presentation`, `lifeline`, `top`, `bottom`), which `move_node` \
+             moves and stretches and `remove_from_diagram` removes.",
             json!({ "diagram": id("The diagram; the one shown if omitted.") }),
             &[],
         )),
@@ -555,20 +586,25 @@ pub fn list() -> Vec<Value> {
              `update_element` gives it another `sort`. A `durationConstraint` runs from the \
              message `source` to the message `target` (`name` is the constraint without \
              braces, e.g. `d..3*d`); a `timeConstraint` goes on the one message `source` \
-             (e.g. `t..t+3`).",
-            json!({
-                "diagram": id("The diagram."),
-                "tool": text("The relationship tool."),
-                "source": id("Element or presentation it starts at."),
-                "target": id("Element or presentation it ends at; not for found and lost messages and time constraints."),
-                "y": number("Sequence diagrams: the height of the message."),
-                "name": text("Its name, e.g. a message's or an association's; a call's may be `name(arguments)`; a transition's label `trigger [guard] / effect`."),
-                "allow_invalid": flag("Draw an association UML does not allow, between two \
-                                       actors or two use cases, e.g. for an exercise in \
-                                       finding mistakes."),
-                "source_end": ends["source_end"],
-                "target_end": ends["target_end"],
-            }),
+             (e.g. `t..t+3`). A line other than a message may be given its route by hand \
+             (`waypoints`, anchors, `line_shape`) instead of the one UmlCraft lays out, e.g. \
+             a recursive relationship around its entity.",
+            with(
+                json!({
+                    "diagram": id("The diagram."),
+                    "tool": text("The relationship tool."),
+                    "source": id("Element or presentation it starts at."),
+                    "target": id("Element or presentation it ends at; not for found and lost messages and time constraints."),
+                    "y": number("Sequence diagrams: the height of the message."),
+                    "name": text("Its name, e.g. a message's or an association's; a call's may be `name(arguments)`; a transition's label `trigger [guard] / effect`."),
+                    "allow_invalid": flag("Draw an association UML does not allow, between two \
+                                           actors or two use cases, e.g. for an exercise in \
+                                           finding mistakes."),
+                    "source_end": ends["source_end"],
+                    "target_end": ends["target_end"],
+                }),
+                &route,
+            ),
             &["diagram", "tool", "source"],
         ),
         tool(
@@ -679,7 +715,9 @@ pub fn list() -> Vec<Value> {
              the ends of associations and links (role, multiplicity, navigability, \
              aggregation); abstract classes and operations, static attributes and operations; \
              an object's class and the values of its slots; the settings of ER entities, attributes, relationships, IS-As and participations \
-             (weak, key, cardinality, …).",
+             (weak, key, cardinality, …); the route of a line (`waypoints`, anchors, \
+             `line_shape`, `auto_route`, as `get_diagram` lists them), also of a line given \
+             by its presentation, such as a note anchor.",
             with(
                 json!({
                     "id": id("The element."),
@@ -734,9 +772,13 @@ pub fn list() -> Vec<Value> {
                 &with(
                     with(with(activity_node.clone(), &er), &sequence),
                     &with(
-                        with(ends.clone(), &classes),
-                        &json!({ "static": flag("Attributes and operations: static \
-                                                 (underlined).") }),
+                        with(with(ends.clone(), &classes), &route),
+                        &json!({
+                            "static": flag("Attributes and operations: static (underlined)."),
+                            "diagram": id("Lines: the diagram whose drawing of the line takes \
+                                           the route; needed only when several diagrams show \
+                                           it."),
+                        }),
                     ),
                 ),
             ),
@@ -749,13 +791,19 @@ pub fn list() -> Vec<Value> {
              state machine diagrams a state moved into another one becomes its substate (out \
              of it, no longer). In a sequence diagram it also moves a message (to height `y`) or a fragment (its top to `y`) as dragging \
              does: into the interaction or operand found there, with the bar a message starts; \
-             `get_diagram` gives the heights of messages and operands.",
+             `get_diagram` gives the heights of messages and operands. An activation bar (its \
+             presentation from `get_diagram`) takes a new top `y` and `height`, e.g. one bar \
+             from a lifeline's first message to its last; bars it then covers stay nested in \
+             it until `remove_from_diagram` removes them, and messages added later start their \
+             own bars as usual. A box given a `width` or `height` keeps that size instead of \
+             fitting its content.",
             json!({
                 "diagram": id("The diagram."),
-                "node": id("The element or its presentation: a node, or a message."),
-                "x": number("Left edge; kept if omitted."),
+                "node": id("The element or its presentation: a node, a message, or an \
+                            activation bar's presentation."),
+                "x": number("Left edge; kept if omitted. Not for activation bars."),
                 "y": number("Top edge, or a message's height."),
-                "width": number("New width."),
+                "width": number("New width. Not for activation bars."),
                 "height": number("New height."),
             }),
             &["diagram", "node", "y"],
@@ -797,10 +845,11 @@ pub fn list() -> Vec<Value> {
         ),
         tool(
             "remove_from_diagram",
-            "Removes a node or line from a diagram; the element stays in the model.",
+            "Removes a node or line from a diagram, or an activation bar of a sequence diagram; \
+             the element stays in the model.",
             json!({
                 "diagram": id("The diagram."),
-                "id": id("The element or its presentation."),
+                "id": id("The element or its presentation (bars: from `get_diagram`)."),
             }),
             &["diagram", "id"],
         ),
@@ -891,6 +940,9 @@ type Outcome = Result<Reply, String>;
 
 /// Runs tool `name` with `args` against `host`; files only in the folders `access` allows.
 pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> Reply {
+    if let Some(why) = unknown_arguments(name, args) {
+        return Reply::error(why);
+    }
     let outcome: Outcome = match name {
         "get_document" => get_document(host, access),
         "list_elements" => list_elements(host, args),
@@ -943,6 +995,44 @@ pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> R
 }
 
 // ----- Arguments -----------------------------------------------------------------------------
+
+/// The arguments each tool's schema names, by tool.
+fn known_arguments() -> &'static HashMap<String, Vec<String>> {
+    static KNOWN: OnceLock<HashMap<String, Vec<String>>> = OnceLock::new();
+    KNOWN.get_or_init(|| {
+        list()
+            .iter()
+            .filter_map(|tool| {
+                let name = tool["name"].as_str()?.to_owned();
+                let properties = tool["inputSchema"]["properties"].as_object()?;
+                Some((name, properties.keys().cloned().collect()))
+            })
+            .collect()
+    })
+}
+
+/// Why `args` do not suit tool `name`: an argument its schema does not name, which would
+/// otherwise be ignored without a word (a misspelt key, or a setting the tool does not have).
+fn unknown_arguments(name: &str, args: &Value) -> Option<String> {
+    let known = known_arguments().get(name)?;
+    let unknown: Vec<&str> = args
+        .as_object()?
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !known.iter().any(|n| n == k))
+        .collect();
+    let list = |keys: &[&str]| keys.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", ");
+    match unknown[..] {
+        [] => None,
+        [key] => Some(format!("`{name}` has no argument `{key}`")),
+        _ => Some(format!("`{name}` has no arguments {}", list(&unknown))),
+    }
+    .map(|why| {
+        let mut known: Vec<&str> = known.iter().map(String::as_str).collect();
+        known.sort_unstable();
+        format!("{why}; it takes {}", list(&known))
+    })
+}
 
 fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(Value::as_str)
@@ -1266,7 +1356,12 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
         // Activation bars, so that a client can send a message from inside one (at its `y`).
         if let Shape::Activation { lifeline, top, height, .. } = p.shape {
             let element = view.get(lifeline).and_then(|l| l.element);
-            bars.push(json!({ "lifeline": element, "top": top, "bottom": top + height }));
+            bars.push(json!({
+                "presentation": p.id,
+                "lifeline": element,
+                "top": top,
+                "bottom": top + height,
+            }));
             continue;
         }
         let kind = match (p.element, &p.shape) {
@@ -1289,6 +1384,7 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
             if let Shape::Message { y, .. } = p.shape {
                 line["y"] = json!(y);
             }
+            line::describe(p, &mut line);
             // A transition's label as drawn: `trigger [guard] / effect`.
             if let Some(ElementKind::Transition(t)) =
                 p.element.and_then(|e| model.get(e)).map(|e| e.kind())
@@ -1702,6 +1798,10 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
         };
         uml::set_ends(&mut trial, args)?;
     }
+    let route = line::Route::parse(args)?;
+    if route.is_some() && tool.message_sort().is_some() {
+        return Err("a message has no route; `y` gives its height".into());
+    }
     let model = host.document().model();
     let source = on_diagram(model, diagram, id_arg(args, "source")?)?;
     // Found and lost messages are drawn from their lifeline to itself.
@@ -1780,6 +1880,9 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
         if let Some(element) = element.filter(|_| with_ends) {
             // Checked above.
             tx.update(element, |d| drop(uml::set_ends(&mut d.kind, args)))?;
+        }
+        if let Some(route) = &route {
+            route.apply(tx, diagram, edge)?;
         }
         Ok(edge)
     })?;
@@ -1931,6 +2034,22 @@ fn set_state_activities(kind: &mut ElementKind, args: &Value) -> Result<(), Stri
 
 fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let id = id_arg(args, "id")?;
+    // A line's presentation (a note anchor has no element) takes its route.
+    let model = host.document().model();
+    let drawn_on = (!model.contains(id))
+        .then(|| model.views().find_map(|(d, v)| v.get(id).map(|_| d)))
+        .flatten();
+    if let Some(diagram) = drawn_on {
+        let keys = args.as_object().into_iter().flat_map(|a| a.keys().map(String::as_str));
+        let other =
+            keys.into_iter().find(|k| !matches!(*k, "id" | "diagram") && !line::KEYS.contains(k));
+        if let Some(key) = other {
+            return Err(format!("a presentation takes only a line's route, not `{key}`"));
+        }
+        let route = line::Route::parse(args)?.ok_or("a presentation takes only a line's route")?;
+        change(host, "update_element", |tx| route.apply(tx, diagram, id))?;
+        return Ok(Reply::json(json!({ "presentation": id })));
+    }
     let model = host.document().model();
     let kind = model.get(id).ok_or_else(|| format!("no element {id}"))?.kind().clone();
     let name = opt_str(args, "name").map(str::to_owned);
@@ -1971,6 +2090,41 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
             .into());
     }
     let shown = model.shown_on(id);
+    // A line's route goes to the one drawing of it that `diagram` (or the only one) names.
+    let route = line::Route::parse(args)?;
+    let routed = match &route {
+        None => None,
+        Some(_) => {
+            let wanted = opt_id(args, "diagram")?;
+            let lines: Vec<(Id, Id)> = shown
+                .iter()
+                .copied()
+                .filter(|&(d, _)| wanted.is_none_or(|w| w == d))
+                .filter(|&(d, p)| {
+                    model
+                        .view(d)
+                        .and_then(|v| v.get(p))
+                        .is_some_and(|p| matches!(p.shape, Shape::Edge { .. }))
+                })
+                .collect();
+            match lines[..] {
+                [line] => Some(line),
+                [] if wanted.is_some() => {
+                    return Err("`diagram` shows no line of the element".into());
+                }
+                [] => {
+                    return Err(format!(
+                        "a {} drawn as a line between nodes has a route, not this one",
+                        kind.type_name()
+                    ));
+                }
+                _ => return Err("several diagrams show the line; give `diagram`".into()),
+            }
+        }
+    };
+    if route.is_none() && args.get("diagram").is_some() {
+        return Err("`diagram` goes with a line's route (`waypoints`, …)".into());
+    }
     let mut settings = kind.clone();
     set_properties(model, &mut settings, args)?;
     set_diagram_settings(&mut settings, args)?;
@@ -2151,6 +2305,9 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         }
         if let Some(notation) = notation {
             er::set_notation(tx, id, notation, measure)?;
+        }
+        if let (Some(route), Some((diagram, line))) = (&route, routed) {
+            route.apply(tx, diagram, line)?;
         }
         sequence_edit::tidy_all(tx)
     })?;
@@ -2782,6 +2939,9 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
     let model = host.document().model();
     let node = on_diagram(model, diagram, id_arg(args, "node")?)?;
     let presentation = model.view(diagram).and_then(|v| v.get(node)).ok_or("no presentation")?;
+    if let Shape::Activation { .. } = presentation.shape {
+        return move_bar(host, args, diagram, node);
+    }
     // Messages and fragments of a sequence diagram move as when dragged in the app: to height
     // `y`, into the interaction or operand found there.
     let item = presentation.element.filter(|&e| {
@@ -2806,7 +2966,9 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
         change(host, "move_node", |tx| palette::move_to_slot(tx, item, slot))?;
         return Ok(Reply::json(json!({ "presentation": node, "y": y })));
     }
-    let bounds = bounds.ok_or("only nodes and messages can be moved")?;
+    let bounds = bounds.ok_or("only nodes, messages and activation bars can be moved")?;
+    // A box sized by hand keeps that size, as in the app.
+    let resized = args.get("width").is_some() || args.get("height").is_some();
     let x = opt_num(args, "x").unwrap_or(bounds.x);
     let width = opt_num(args, "width").unwrap_or(bounds.width).max(4.0);
     let height = opt_num(args, "height").unwrap_or(bounds.height).max(4.0);
@@ -2835,6 +2997,9 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
         if let (Some(item), Some(slot)) = (item, slot) {
             palette::move_to_slot(tx, item, slot)?;
         }
+        if resized {
+            tx.update_presentation(diagram, node, |p| p.style.auto_size = false)?;
+        }
         // Lines between what moves keep their shape; a state moved into another one (or out of
         // it) becomes its substate.
         edit::set_node_bounds(tx, diagram, &nodes)
@@ -2842,6 +3007,68 @@ fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
     Ok(Reply::json(
         json!({ "presentation": node, "x": x, "y": y, "width": width, "height": height }),
     ))
+}
+
+/// Moves the activation bar `bar` of a sequence diagram: its top to `y`, its length to
+/// `height`. Its x follows from its lifeline. Stretched over the next bars of its lifeline, it
+/// takes them in: they go, and it reaches as far as they did. Bars that lay in it before, or in
+/// a bar it takes in, stay nested in it. A bar that no message reaches at its new place is
+/// refused, as tidying would drop it.
+fn move_bar(host: &mut dyn Host, args: &Value, diagram: Id, bar: Id) -> Outcome {
+    if args.get("x").is_some() || args.get("width").is_some() {
+        return Err("an activation bar lies on its lifeline; give only `y` (its top) and \
+                    `height`"
+            .into());
+    }
+    let view = host.document().model().view(diagram).ok_or("no view")?;
+    let bars: Vec<(Id, Id, f32, f32)> = view
+        .presentations()
+        .iter()
+        .filter_map(|p| match p.shape {
+            Shape::Activation { lifeline, top, height, .. } => {
+                Some((p.id, lifeline, top, top + height))
+            }
+            _ => None,
+        })
+        .collect();
+    let &(_, lane, old_top, old_bottom) =
+        bars.iter().find(|b| b.0 == bar).ok_or("no activation bar")?;
+    let top = opt_num(args, "y").unwrap_or(old_top);
+    let height = opt_num(args, "height").unwrap_or(old_bottom - old_top);
+    if height.is_nan() || height <= 0.0 {
+        return Err("`height` of an activation bar is more than 0".into());
+    }
+    let within = |y: f32, top: f32, bottom: f32| top + 0.5 < y && y <= bottom + 0.5;
+    let reached: Vec<&(Id, Id, f32, f32)> = bars
+        .iter()
+        .filter(|b| b.0 != bar && b.1 == lane && within(b.2, top, top + height))
+        .filter(|b| !within(b.2, old_top, old_bottom))
+        .collect();
+    let taken: Vec<&(Id, Id, f32, f32)> = reached
+        .iter()
+        .copied()
+        .filter(|b| !reached.iter().any(|o| o.0 != b.0 && within(b.2, o.2, o.3) && b.3 <= o.3))
+        .collect();
+    let bottom = taken.iter().map(|b| b.3).fold(top + height, f32::max);
+    let gone: Vec<Id> = taken.iter().map(|b| b.0).collect();
+    let (top, height) = change(host, "move_node", |tx| {
+        for &taken in &gone {
+            tx.remove_presentation(diagram, taken)?;
+        }
+        tx.update_presentation(diagram, bar, |p| {
+            if let Shape::Activation { top: t, height: h, .. } = &mut p.shape {
+                (*t, *h) = (top, bottom - top);
+            }
+        })?;
+        sequence_edit::tidy(tx, diagram)?;
+        match tx.model().view(diagram).and_then(|v| v.get(bar)).map(|p| &p.shape) {
+            Some(&Shape::Activation { top, height, .. }) => Ok((top, height)),
+            _ => Err(ModelError::Invalid(
+                "no message starts or ends in the bar there, so it would vanish".into(),
+            )),
+        }
+    })?;
+    Ok(Reply::json(json!({ "presentation": bar, "top": top, "bottom": top + height })))
 }
 
 fn arrange_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
@@ -3218,7 +3445,7 @@ fn export_sql(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
 mod tests {
     use super::*;
     use crate::host::Headless;
-    use umlcraft_model::PseudostateKind;
+    use umlcraft_model::{LineShape, PseudostateKind};
     use umlcraft_notation::scene::Figure;
     use umlcraft_notation::{labels, sequence};
 
@@ -7552,5 +7779,239 @@ mod tests {
                 assert!(!crosses, "{a:?} {c:?}");
             }
         }
+    }
+
+    #[test]
+    fn new_objects_fit_their_content_until_sized_by_hand() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "class", "name": "cd" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "class", "name": "P", "x": 20, "y": 20 } },
+                { "tool": "add_member", "arguments": { "owner": "$1.element", "text": "- n : int" } },
+                { "tool": "create_diagram", "arguments": { "kind": "object", "name": "od" } },
+                { "tool": "create_element", "arguments": { "diagram": "$3.diagram",
+                    "tool": "object", "name": "p", "classifier": "P", "slots": { "n": "1" },
+                    "x": 20, "y": 20 } },
+            ]),
+        );
+        // As narrow as its texts (#83), where it was put.
+        let rect = |host: &mut Headless| {
+            let scene = drawn(host, &r[3]["diagram"]);
+            scene.node(id(&r[4]["presentation"]).parse().unwrap()).unwrap().rect
+        };
+        let fitted = rect(&mut host);
+        assert!(fitted.width < 80.0, "{fitted:?}");
+        assert_eq!(fitted.x, 20.0);
+        let node = |host: &mut Headless| {
+            let d: Id = id(&r[3]["diagram"]).parse().unwrap();
+            let p: Id = id(&r[4]["presentation"]).parse().unwrap();
+            host.document().model().view(d).unwrap().get(p).unwrap().clone()
+        };
+        assert!(node(&mut host).style.auto_size);
+        assert_eq!(node(&mut host).bounds().unwrap().width, fitted.width);
+        // A longer value widens it.
+        run(
+            &mut host,
+            "update_element",
+            json!({ "id": r[4]["element"], "slots": { "n": "123456789" } }),
+        );
+        assert!(rect(&mut host).width > fitted.width);
+        // Sized by hand, it keeps that size.
+        let args = json!({ "diagram": r[3]["diagram"], "node": r[4]["presentation"], "y": 20,
+                           "width": 150 });
+        run(&mut host, "move_node", args);
+        assert!(!node(&mut host).style.auto_size);
+        assert_eq!(rect(&mut host).width, 150.0);
+    }
+
+    #[test]
+    fn lines_take_a_route_given_by_hand() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+                    "name": "er" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "erEntity", "name": "User", "x": 20, "y": 100 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "erRelationship", "name": "refers", "x": 260, "y": 95 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                    "source": "$2.element", "target": "$1.element",
+                    "waypoints": [[290, 50], [70, 50]], "source_anchor": [0.5, 0],
+                    "target_anchor": [0.5, 0], "line_shape": "right_angle" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                    "source": "$2.element", "target": "$1.element" } },
+            ]),
+        );
+        let d: Id = id(&r[0]["diagram"]).parse().unwrap();
+        let route = |host: &mut Headless, line: &Value| {
+            let p: Id = id(line).parse().unwrap();
+            let p = host.document().model().view(d).unwrap().get(p).unwrap().clone();
+            let Shape::Edge { waypoints, source_anchor, target_anchor, .. } = p.shape else {
+                panic!("{p:?}")
+            };
+            (waypoints, source_anchor, target_anchor, p.style.line_shape, p.style.auto_route)
+        };
+        // Given with the line (#84).
+        let (points, from, to, shape, auto) = route(&mut host, &r[3]["presentation"]);
+        assert_eq!(points, vec![Point::new(290.0, 50.0), Point::new(70.0, 50.0)]);
+        assert_eq!((from, to), (Some(Point::new(0.5, 0.0)), Some(Point::new(0.5, 0.0))));
+        assert_eq!((shape, auto), (LineShape::RightAngle, false));
+        // Changed later, by the line's element or its presentation.
+        let below = json!({ "id": r[4]["element"], "waypoints": [[290, 200], [70, 200]],
+                            "source_anchor": [0.5, 1], "target_anchor": [0.5, 1],
+                            "line_shape": "right_angle", "auto_route": false });
+        run(&mut host, "update_element", below);
+        let (points, from, ..) = route(&mut host, &r[4]["presentation"]);
+        assert_eq!(points, vec![Point::new(290.0, 200.0), Point::new(70.0, 200.0)]);
+        assert_eq!(from, Some(Point::new(0.5, 1.0)));
+        let straight = json!({ "id": r[4]["presentation"], "waypoints": [],
+                               "source_anchor": null, "line_shape": "line" });
+        run(&mut host, "update_element", straight);
+        let (points, from, to, shape, _) = route(&mut host, &r[4]["presentation"]);
+        assert_eq!((points, from, to), (vec![], None, Some(Point::new(0.5, 1.0))));
+        assert_eq!(shape, LineShape::Line);
+        // `get_diagram` tells the route as the tools take it.
+        let lines =
+            run(&mut host, "get_diagram", json!({ "diagram": d.to_string() }))["lines"].clone();
+        let first = lines
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["presentation"] == r[3]["presentation"])
+            .unwrap()
+            .clone();
+        assert_eq!(first["waypoints"], json!([[290.0, 50.0], [70.0, 50.0]]));
+        assert_eq!(first["source_anchor"], json!([0.5, 0.0]));
+        assert_eq!(first["line_shape"], "right_angle");
+        assert_eq!(first["auto_route"], false);
+        // Moving a node keeps a route given by hand.
+        let args = json!({ "diagram": d.to_string(), "node": r[1]["element"], "x": 30, "y": 100 });
+        run(&mut host, "move_node", args);
+        assert_eq!(route(&mut host, &r[3]["presentation"]).0[0], Point::new(290.0, 50.0));
+        // Wrong routes, and arguments a tool does not take, are refused.
+        for (tool, args) in [
+            ("update_element", json!({ "id": r[3]["element"], "waypoints": [[1, 2, 3]] })),
+            ("update_element", json!({ "id": r[3]["element"], "target_anchor": [1.5, 0] })),
+            (
+                "update_element",
+                json!({ "id": r[3]["element"], "auto_route": true,
+                                       "waypoints": [] }),
+            ),
+            ("update_element", json!({ "id": r[1]["element"], "waypoints": [] })),
+            ("update_element", json!({ "id": r[3]["presentation"], "name": "x" })),
+            ("update_element", json!({ "id": r[1]["element"], "diagram": d.to_string() })),
+            ("update_element", json!({ "id": r[3]["element"], "waypionts": [] })),
+            (
+                "connect",
+                json!({ "diagram": d.to_string(), "tool": "erLine",
+                                "source": r[2]["element"], "target": r[1]["element"],
+                                "bends": [[1, 2]] }),
+            ),
+        ] {
+            let reply = call(&mut host, &Access::default(), tool, &args);
+            assert!(reply.is_error, "{tool} {args}");
+        }
+        let reply = call(
+            &mut host,
+            &Access::default(),
+            "move_node",
+            &json!({ "diagram": d.to_string(), "node": r[1]["element"], "y": 1, "z": 2 }),
+        );
+        let Content::Text(text) = &reply.content[0] else { panic!() };
+        assert!(text.starts_with("`move_node` has no argument `z`; it takes"), "{text}");
+        // The router takes a line back.
+        run(&mut host, "update_element", json!({ "id": r[3]["element"], "auto_route": true }));
+        assert!(route(&mut host, &r[3]["presentation"]).4);
+    }
+
+    #[test]
+    fn activation_bars_are_listed_moved_and_joined() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "sequence", "name": "sd",
+                    "message_numbers": false, "frame": false } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "lifeline", "name": "pc : PC" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "lifeline", "name": "w : Wetterstation" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                    "tool": "asyncMessage", "source": "$1.element", "target": "$2.element",
+                    "name": "start", "y": 100 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "reply",
+                    "source": "$2.element", "target": "$1.element", "name": "OK", "y": 140 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                    "tool": "asyncMessage", "source": "$2.element", "target": "$1.element",
+                    "name": "temp", "y": 180 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                    "tool": "asyncMessage", "source": "$1.element", "target": "$2.element",
+                    "name": "xoff", "y": 220 } },
+            ]),
+        );
+        let d = r[0]["diagram"].clone();
+        let bars = |host: &mut Headless| {
+            run(host, "get_diagram", json!({ "diagram": d }))["bars"].as_array().unwrap().clone()
+        };
+        // Each bar with its presentation (#85).
+        let before = bars(&mut host);
+        assert!(before.len() > 2, "{before:?}");
+        assert!(before.iter().all(|b| b["presentation"].is_string()), "{before:?}");
+        // One bar per lifeline, from its first message to the end of its last.
+        for lifeline in [&r[1]["element"], &r[2]["element"]] {
+            let mine: Vec<&Value> = before.iter().filter(|b| &b["lifeline"] == lifeline).collect();
+            let top = mine.iter().map(|b| b["top"].as_f64().unwrap()).fold(f64::MAX, f64::min);
+            let bottom = mine.iter().map(|b| b["bottom"].as_f64().unwrap()).fold(0.0, f64::max);
+            let first = mine.iter().find(|b| b["top"].as_f64() == Some(top)).unwrap();
+            let moved = run(
+                &mut host,
+                "move_node",
+                json!({ "diagram": d, "node": first["presentation"], "y": top,
+                        "height": bottom - top }),
+            );
+            assert_eq!(moved["top"].as_f64(), Some(top));
+            assert_eq!(moved["bottom"].as_f64(), Some(bottom));
+            // The bars it reached are taken in; one nested in them stays, until removed.
+            let left: Vec<Value> = bars(&mut host)
+                .into_iter()
+                .filter(|b| {
+                    &b["lifeline"] == lifeline && b["presentation"] != first["presentation"]
+                })
+                .collect();
+            assert!(left.len() < mine.len() - 1, "{left:?}");
+            for other in left {
+                let args = json!({ "diagram": d, "id": other["presentation"] });
+                run(&mut host, "remove_from_diagram", args);
+            }
+        }
+        let after = bars(&mut host);
+        assert_eq!(after.len(), 2, "{after:?}");
+        let ends: Vec<(f64, f64)> = after
+            .iter()
+            .map(|b| (b["top"].as_f64().unwrap(), b["bottom"].as_f64().unwrap()))
+            .collect();
+        let last =
+            |b: &[&Value]| b.iter().map(|b| b["bottom"].as_f64().unwrap()).fold(0.0, f64::max);
+        let pc: Vec<&Value> = before.iter().filter(|b| b["lifeline"] == r[1]["element"]).collect();
+        let w: Vec<&Value> = before.iter().filter(|b| b["lifeline"] == r[2]["element"]).collect();
+        assert_eq!(ends, [(100.0, last(&pc)), (100.0, last(&w))]);
+        // Later edits keep them.
+        run(&mut host, "update_element", json!({ "id": r[6]["element"], "name": "xon" }));
+        assert_eq!(bars(&mut host), after);
+        // A bar no message reaches, or one given a place across, is refused.
+        let bar = &after[0]["presentation"];
+        for args in [
+            json!({ "diagram": d, "node": bar, "y": 1000 }),
+            json!({ "diagram": d, "node": bar, "y": 100, "x": 5 }),
+            json!({ "diagram": d, "node": bar, "y": 100, "height": 0 }),
+        ] {
+            assert!(call(&mut host, &Access::default(), "move_node", &args).is_error, "{args}");
+        }
+        assert_eq!(bars(&mut host), after);
     }
 }
