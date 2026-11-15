@@ -50,8 +50,9 @@ const TIP: f32 = 4.0;
 const OFF: [f32; 3] = [GAP, 20.0, 36.0];
 /// Where along its line a name may go, as a share of the line's length, the middle first.
 const ALONG: [f32; 7] = [0.5, 0.38, 0.62, 0.26, 0.74, 0.14, 0.86];
-/// How much further from its end than Astah a role or multiplicity may go.
-const FURTHER: [f32; 4] = [0.0, 14.0, 28.0, 44.0];
+/// How much further from its end than Astah a role or multiplicity may go: up to where lines
+/// that meet a node close together have run apart.
+const FURTHER: [f32; 6] = [0.0, 14.0, 28.0, 44.0, 64.0, 88.0];
 /// How much further from its line a role or multiplicity may go, after the spots beside it:
 /// beside a short line between crowded nodes, the spots along it lie on the nodes.
 const WIDER: [f32; 3] = [0.0, 16.0, 32.0];
@@ -691,7 +692,7 @@ fn closest_on_segment(p: Point, a: Point, b: Point) -> Point {
 }
 
 /// Whether the segments `p`–`q` and `a`–`b` cross, each strictly between its ends.
-fn segments_cross(p: Point, q: Point, a: Point, b: Point) -> bool {
+pub(crate) fn segments_cross(p: Point, q: Point, a: Point, b: Point) -> bool {
     let cross =
         |o: Point, u: Point, v: Point| (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x);
     let (d1, d2) = (cross(a, b, p), cross(a, b, q));

@@ -971,11 +971,12 @@ impl Obstacles {
         if self.segments.iter().any(|(a, b, o)| foreign(o) && segment_hits(*a, *b, &near)) {
             return false;
         }
-        // Its own line must not run through another node.
+        // Its own line must not run through another node, nor cross another line.
         let (from, to) = (r.center(), owner_box.center());
-        !self.rects.iter().any(|(o, of)| {
+        let through = self.rects.iter().any(|(o, of)| {
             o != owner_box && foreign(of) && segment_hits(from, to, &inflate(o, -1.0))
-        })
+        });
+        !through && !self.segments.iter().any(|(a, b, o)| foreign(o) && crosses(from, to, *a, *b))
     }
 }
 

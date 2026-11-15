@@ -344,20 +344,52 @@ impl Geometry {
     }
 
     /// The bar on `lane` that a message sent at `y` continues: one ending at most
-    /// `CONTINUE_BAR` above, the lowest of them, unless a reply has ended it.
+    /// `CONTINUE_BAR` above, the lowest of them, unless a reply has ended it or it starts in
+    /// an operand that `y` is not in.
     fn bar_ending_above(&self, lane: Id, y: f32) -> Option<Bar> {
         self.bars
             .iter()
             .filter(|b| b.lane == lane && b.bottom < y && y - b.bottom <= CONTINUE_BAR)
-            .filter(|b| !self.replied(b))
+            .filter(|b| !self.replied(b, y) && self.reaches(lane, b.top, y))
             .max_by(|a, b| a.bottom.total_cmp(&b.bottom))
             .copied()
     }
 
-    /// Whether a reply leaves at the end of `bar`, so that the call it holds has returned.
-    fn replied(&self, bar: &Bar) -> bool {
+    /// Whether a bar starting at `top` on `lane` may reach down to `y`: a bar that starts in
+    /// an operand of a combined fragment stays in it (see `fit_fragments`), so a message
+    /// outside that operand does not continue it. One starting outside may run through.
+    fn reaches(&self, lane: Id, top: f32, y: f32) -> bool {
+        let Some(x) = self.lane(lane).map(|l| l.center()) else { return true };
+        self.frames.iter().all(|f| {
+            let r = f.rect;
+            let operand = |y: f32| {
+                (r.y < y && y < r.bottom() && r.x <= x && x <= r.right())
+                    .then(|| f.separators.iter().filter(|&&s| s < y).count())
+            };
+            operand(top).is_none() || operand(top) == operand(y)
+        })
+    }
+
+    /// Whether a reply leaves at the end of `bar`, so that the call it holds has returned before
+    /// `y`. A reply in another operand of a fragment that `y` lies in does not count: the
+    /// operands of an `alt` are alternatives, and each may answer the call.
+    fn replied(&self, bar: &Bar, y: f32) -> bool {
+        let x = self.lane(bar.lane).map_or(f32::MIN, |l| l.center());
         self.messages.iter().any(|m| {
-            m.sort == MessageSort::Reply && m.source == bar.lane && (m.y - bar.bottom).abs() < 0.5
+            m.sort == MessageSort::Reply
+                && m.source == bar.lane
+                && (m.y - bar.bottom).abs() < 0.5
+                && !self.apart(x, m.y, y)
+        })
+    }
+
+    /// Whether `a` and `b` at `x` lie in different operands of one combined fragment.
+    fn apart(&self, x: f32, a: f32, b: f32) -> bool {
+        self.frames.iter().any(|f| {
+            let r = f.rect;
+            let inside = |y: f32| r.y < y && y < r.bottom() && r.x <= x && x <= r.right();
+            let operand = |y: f32| f.separators.iter().filter(|&&s| s < y).count();
+            inside(a) && inside(b) && operand(a) != operand(b)
         })
     }
 
@@ -588,7 +620,8 @@ pub fn continue_open_bar(tx: &mut Tx<'_>, diagram: Id, lane: Id, y: f32) -> Resu
         .bars
         .iter()
         .filter(on_lane)
-        .filter(|b| b.bottom < y && !inside(b) && !g.replied(b))
+        .filter(|b| b.bottom < y && !inside(b) && !g.replied(b, y))
+        .filter(|b| g.reaches(lane, b.top, y))
         .max_by(|a, b| a.bottom.total_cmp(&b.bottom));
     let Some(bar) = open.copied() else { return Ok(()) };
     tx.update_presentation(diagram, bar.id, |p| {

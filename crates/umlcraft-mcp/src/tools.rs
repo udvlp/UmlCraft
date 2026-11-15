@@ -6029,6 +6029,116 @@ mod tests {
         }
     }
 
+    /// Whether the segments `a`–`b` and `c`–`d` cross (touching ends do not count).
+    fn cross(a: Point, b: Point, c: Point, d: Point) -> bool {
+        let side =
+            |o: Point, p: Point, q: Point| (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+        let (d1, d2, d3, d4) = (side(c, d, a), side(c, d, b), side(a, b, c), side(a, b, d));
+        d1 * d2 < 0.0 && d3 * d4 < 0.0
+    }
+
+    #[test]
+    fn arranged_er_lines_keep_clear_of_each_other_and_of_other_lines_labels() {
+        let mut host = Headless::new();
+        let d =
+            run(&mut host, "create_diagram", json!({ "kind": "entity_relationship", "name": "m" }));
+        let d = id(&d["diagram"]);
+        let mut ids = std::collections::HashMap::new();
+        let make = |host: &mut Headless, tool: &str, name: &str| {
+            let r =
+                run(host, "create_element", json!({ "diagram": d, "tool": tool, "name": name }));
+            r["element"].clone()
+        };
+        let entities: [(&str, &[&str]); 5] = [
+            ("Interpret", &["interpretID", "name", "land", "gruendung"]),
+            ("Album", &["albumID", "titel", "jahr"]),
+            ("Lied", &["liedID", "titel", "dauer", "genre"]),
+            (
+                "Nutzer",
+                &["nutzerID", "vorname", "nachname", "gebDatum", "ort", "abo", "registriert"],
+            ),
+            ("Playlist", &["playlistID", "name", "oeffentlich"]),
+        ];
+        let line = |host: &mut Headless, s: &Value, t: &Value| {
+            let args = json!({ "diagram": d, "tool": "erLine", "source": s, "target": t });
+            run(host, "connect", args)["element"].clone()
+        };
+        for (entity, attributes) in entities {
+            let e = make(&mut host, "erEntity", entity);
+            for (k, a) in attributes.iter().enumerate() {
+                let tool = if k == 0 { "erKeyAttribute" } else { "erAttribute" };
+                let a = make(&mut host, tool, a);
+                line(&mut host, &a, &e);
+            }
+            ids.insert(entity, e);
+        }
+        let relationships = [
+            ("veröffentlicht", "Interpret", "Album", "[1,1]", "[0,n]", None),
+            ("enthält", "Album", "Lied", "[1,1]", "[1,n]", Some("trackNr")),
+            ("hört", "Nutzer", "Lied", "[0,n]", "[0,m]", Some("zeitpunkt")),
+            ("erstellt", "Nutzer", "Playlist", "[1,1]", "[0,n]", None),
+            ("umfasst", "Playlist", "Lied", "[0,n]", "[0,m]", Some("position")),
+            ("wirbt", "Nutzer", "Nutzer", "[0,1]", "[0,n]", None),
+        ];
+        for (name, from, to, at_from, at_to, attribute) in relationships {
+            let r = make(&mut host, "erRelationship", name);
+            for (end, cardinality) in [(from, at_from), (to, at_to)] {
+                let l = line(&mut host, &r, &ids[end]);
+                run(&mut host, "update_element", json!({ "id": l, "cardinality": cardinality }));
+            }
+            if let Some(a) = attribute {
+                let a = make(&mut host, "erAttribute", a);
+                line(&mut host, &a, &r);
+            }
+        }
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        let (doc, measure) = host.parts();
+        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let segments: Vec<(usize, Point, Point)> = scene
+            .edges
+            .iter()
+            .enumerate()
+            .flat_map(|(k, e)| e.points.windows(2).map(move |w| (k, w[0], w[1])))
+            .collect();
+        // No line crosses another: an attribute's line goes round a line between other nodes
+        // rather than across it (#81).
+        for (k, a, b) in &segments {
+            for (j, c, e) in &segments {
+                assert!(k == j || !cross(*a, *b, *c, *e), "{a:?}-{b:?} crosses {c:?}-{e:?}");
+            }
+        }
+        // A cardinality stands on its own line's side of the lines beside it: where lines meet a
+        // node close together, it goes further along, where they have run apart (#82).
+        for (k, edge) in scene.edges.iter().enumerate() {
+            for label in &edge.labels {
+                let r = labels::label_rect(label, measure);
+                let c = r.center();
+                let near = edge
+                    .points
+                    .windows(2)
+                    .map(|w| {
+                        let (dx, dy) = (w[1].x - w[0].x, w[1].y - w[0].y);
+                        let len = dx * dx + dy * dy;
+                        let t = if len > 0.0 {
+                            (((c.x - w[0].x) * dx + (c.y - w[0].y) * dy) / len).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        Point::new(w[0].x + t * dx, w[0].y + t * dy)
+                    })
+                    .min_by(|p, q| c.distance(*p).total_cmp(&c.distance(*q)))
+                    .unwrap();
+                for (j, a, b) in &segments {
+                    assert!(
+                        *j == k || !cross(c, near, *a, *b),
+                        "{:?} at {c:?} lies beyond {a:?}-{b:?}",
+                        label.text
+                    );
+                }
+            }
+        }
+    }
+
     /// A use case diagram: the system boundary "Mensa" at 200, 20 (400 × 300), the use cases
     /// at the positions given (none: where `create_element` puts them), the actor Mitglied
     /// associated with the first two, and the first including the third. Returns the diagram
@@ -6523,6 +6633,87 @@ mod tests {
         let heights = message_heights(&mut host, &r[0]["diagram"]);
         let reply = heights.iter().find(|(name, _)| name == "r").unwrap().1;
         assert!(reply < f64::from(frame.bottom()), "{reply} below {frame:?}");
+    }
+
+    #[test]
+    fn a_message_below_a_fragment_does_not_continue_a_bar_inside_it() {
+        for y in [Some(230.0), None] {
+            let mut host = Headless::new();
+            let mut calls = lifelines(&["a", "b"]);
+            calls.push(message("message", 1, 2, "m1", Some(120.0)));
+            calls.push(message("reply", 2, 1, "r1", Some(150.0)));
+            calls.push(json!({ "tool": "wrap_in_fragment", "arguments": { "diagram": "$0.diagram",
+                "items": ["$3.element", "$4.element"], "operator": "loop", "guard": "x" } }));
+            let r = build(&mut host, json!(calls));
+            let frame = |host: &mut Headless| {
+                drawn(host, &r[0]["diagram"])
+                    .nodes
+                    .iter()
+                    .find(|n| matches!(n.figure, Figure::Fragment { .. }))
+                    .unwrap()
+                    .rect
+            };
+            let before = frame(&mut host);
+            let mut args = json!({ "diagram": r[0]["diagram"], "tool": "message", "name": "m2",
+                                   "source": r[1]["element"], "target": r[2]["element"] });
+            if let Some(y) = y {
+                args["y"] = json!(y);
+            }
+            run(&mut host, "connect", args);
+            // The caller's bar in the loop ends there; the message below starts a new one
+            // instead of pulling the loop down around itself (#79).
+            let after = frame(&mut host);
+            assert!((after.bottom() - before.bottom()).abs() < 0.01, "{before:?} -> {after:?}");
+            let heights = message_heights(&mut host, &r[0]["diagram"]);
+            let m2 = heights.iter().find(|(name, _)| name == "m2").unwrap().1;
+            assert!(m2 > f64::from(after.bottom()), "{m2} in {after:?}");
+        }
+    }
+
+    #[test]
+    fn a_reply_in_one_case_of_an_alt_does_not_end_the_bar_in_the_other() {
+        let mut host = Headless::new();
+        let mut calls = lifelines(&["p", "k", "a"]);
+        calls.push(message("message", 1, 2, "kaufen", Some(100.0)));
+        calls.push(message("reply", 2, 1, "kt", Some(170.0)));
+        calls.push(json!({ "tool": "wrap_in_fragment", "arguments": { "diagram": "$0.diagram",
+            "items": ["$5.element"], "operator": "alt", "guard": "frei" } }));
+        let r = build(&mut host, json!(calls));
+        let d = &r[0]["diagram"];
+        let g = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let alt = g["nodes"].as_array().unwrap().iter().find(|n| n["kind"] == "combinedFragment");
+        let operands = alt.unwrap()["operands"].as_array().unwrap().clone();
+        assert_eq!(operands.len(), 2, "{operands:?}");
+        let y = operands[1]["top"].as_f64().unwrap() + 40.0;
+        let k = |e: &str| r[2][e].clone();
+        run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "message", "name": "zeigen",
+            "source": k("element"), "target": r[3]["element"], "y": y }),
+        );
+        run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "reply", "name": "null",
+            "source": k("element"), "target": r[1]["element"], "y": y + 30.0 }),
+        );
+        // The else case goes on in the bar `kaufen` started, and its reply ends that bar, as the
+        // reply in the first case does: no second bar starts inside it (#80).
+        let g = run(&mut host, "get_diagram", json!({ "diagram": d }));
+        let lane = k("element");
+        let bars: Vec<(f64, f64)> = g["bars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["lifeline"] == lane)
+            .map(|b| (b["top"].as_f64().unwrap(), b["bottom"].as_f64().unwrap()))
+            .collect();
+        assert_eq!(bars.len(), 1, "{bars:?}");
+        assert!(
+            (bars[0].0 - 100.0).abs() < 0.01 && (bars[0].1 - (y + 30.0)).abs() < 0.01,
+            "{bars:?}"
+        );
     }
 
     #[test]
@@ -7220,5 +7411,146 @@ mod tests {
             call(&mut host, &Access::default(), "set_display", &json!({ "visibility_column": 1 }))
                 .is_error
         );
+    }
+
+    #[test]
+    fn a_line_drops_its_detour_when_the_node_it_went_around_moves_away() {
+        // #76: one object right above the other, a third one lying on the upper one while
+        // the lower one moves into place; then the third moves away.
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "object", "name": "o" }));
+        let d = id(&d["diagram"]);
+        let object = |host: &mut Headless, name: &str| {
+            let o = run(
+                host,
+                "create_element",
+                json!({ "diagram": d, "tool": "object", "name": name }),
+            );
+            id(&o["element"])
+        };
+        let (upper, lower, other) =
+            (object(&mut host, "a2"), object(&mut host, "jana"), object(&mut host, "digital"));
+        let link = run(
+            &mut host,
+            "connect",
+            json!({ "diagram": d, "tool": "link", "source": lower, "target": upper }),
+        );
+        run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+        let place = |host: &mut Headless, node: &str, x: f32, y: f32, w: f32, h: f32| {
+            run(
+                host,
+                "move_node",
+                json!({ "diagram": d, "node": node, "x": x, "y": y, "width": w, "height": h }),
+            );
+        };
+        place(&mut host, &upper, 280.0, 20.0, 120.0, 46.19);
+        place(&mut host, &other, 274.5, 40.0, 134.9, 46.19);
+        place(&mut host, &lower, 180.0, 130.0, 120.0, 61.28);
+        let bends = |host: &Headless| {
+            let model = host.document().model();
+            let view = model.view(d.parse().unwrap()).unwrap();
+            let p = view.get(id(&link["presentation"]).parse().unwrap()).unwrap();
+            let Shape::Edge { waypoints, .. } = &p.shape else { panic!() };
+            waypoints.len()
+        };
+        // Around the object that lies on the upper one.
+        assert!(bends(&host) >= 2, "{}", bends(&host));
+        place(&mut host, &other, 660.0, 415.0, 134.9, 46.19);
+        // Straight through where the two overlap, or one bend.
+        assert!(bends(&host) <= 1, "{}", bends(&host));
+    }
+
+    #[test]
+    fn a_rerouted_line_swaps_ports_with_a_line_that_stays_instead_of_crossing_it() {
+        // #78: two links leave the bottom of an object, one bending off toward an object
+        // below left, the other straight down; they get their routes one after the other.
+        let mut host = Headless::new();
+        let d = run(&mut host, "create_diagram", json!({ "kind": "object", "name": "o" }));
+        let d = id(&d["diagram"]);
+        let object = |host: &mut Headless, name: &str| {
+            let o = run(
+                host,
+                "create_element",
+                json!({ "diagram": d, "tool": "object", "name": name }),
+            );
+            id(&o["element"])
+        };
+        let (b, tom, digital) =
+            (object(&mut host, "b"), object(&mut host, "tom"), object(&mut host, "digital"));
+        let connect = |host: &mut Headless, source: &str, target: &str| {
+            let l = run(
+                host,
+                "connect",
+                json!({ "diagram": d, "tool": "link", "source": source, "target": target }),
+            );
+            id(&l["presentation"])
+        };
+        // A machine to the left of the upper object, linked to it, keeps the bending link off
+        // that side.
+        let schneider = object(&mut host, "schneider");
+        let beside = connect(&mut host, &schneider, &tom);
+        let first = connect(&mut host, &b, &tom);
+        let second = connect(&mut host, &tom, &digital);
+        let place = |host: &mut Headless, node: &str, x: f32, y: f32, w: f32, h: f32| {
+            run(
+                host,
+                "move_node",
+                json!({ "diagram": d, "node": node, "x": x, "y": y, "width": w, "height": h }),
+            );
+        };
+        place(&mut host, &tom, 690.0, 130.0, 107.0, 61.28);
+        place(&mut host, &schneider, 400.0, 145.0, 180.0, 46.19);
+        place(&mut host, &b, 400.0, 285.0, 176.0, 46.19);
+        place(&mut host, &digital, 660.0, 415.0, 138.0, 46.19);
+        run(&mut host, "route_lines", json!({ "diagram": d, "lines": [beside] }));
+        // The bending link as an earlier edit left it: out of the middle of the upper object's
+        // bottom, down and left into the right side of the object below left.
+        let (diagram, link): (Id, Id) = (d.parse().unwrap(), first.parse().unwrap());
+        host.parts()
+            .0
+            .edit("route", |tx| {
+                let waypoints = vec![Point::new(743.5, 298.09)];
+                let anchors = (Some(Point::new(1.0, 13.09 / 46.19)), Some(Point::new(0.5, 1.0)));
+                tx.set_route(diagram, link, waypoints, anchors)?;
+                tx.update_presentation(diagram, link, |p| {
+                    p.style.line_shape = umlcraft_model::LineShape::RightAngle;
+                    p.style.auto_route = true;
+                })
+            })
+            .unwrap();
+        run(&mut host, "route_lines", json!({ "diagram": d, "lines": [second] }));
+        let model = host.document().model();
+        let view = model.view(d.parse().unwrap()).unwrap();
+        let points = |line: &str| {
+            let p = view.get(line.parse().unwrap()).unwrap();
+            let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, .. } =
+                &p.shape
+            else {
+                panic!()
+            };
+            let bounds = |n: &Id| match view.get(*n).unwrap().shape {
+                Shape::Node { bounds, .. } => bounds,
+                _ => panic!(),
+            };
+            let mut out =
+                vec![umlcraft_notation::route::anchor_point(bounds(source), *source_anchor)];
+            out.extend(waypoints.iter().copied());
+            out.push(umlcraft_notation::route::anchor_point(bounds(target), *target_anchor));
+            out
+        };
+        let (a, c) = (points(&first), points(&second));
+        for s in a.windows(2) {
+            for t in c.windows(2) {
+                let vertical = (s[0].x - s[1].x).abs() < 0.5;
+                let (v, h) = if vertical { (s, t) } else { (t, s) };
+                let crosses = (h[0].y - h[1].y).abs() < 0.5
+                    && (v[0].x - v[1].x).abs() < 0.5
+                    && v[0].x > h[0].x.min(h[1].x) + 0.5
+                    && v[0].x < h[0].x.max(h[1].x) - 0.5
+                    && h[0].y > v[0].y.min(v[1].y) + 0.5
+                    && h[0].y < v[0].y.max(v[1].y) - 0.5;
+                assert!(!crosses, "{a:?} {c:?}");
+            }
+        }
     }
 }

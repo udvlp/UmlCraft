@@ -3,6 +3,26 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## 0.21.7 – 2026-11-15
+
+- **Lines that leave a node side by side do not cross**: where two routed lines leave the same
+  side of a node and cross where they part, they swap their ends. This also holds for a line
+  that is rerouted after a move and a line that stays as it is. A line that runs straight
+  keeps running straight.
+- **No detours left behind**: a routed line that went around a node drops the detour once that
+  node has moved out of its way.
+- **Line ends clear of compartment separators**: a line end that slides along a class or object
+  to lengthen a stretch no longer stops at the height of a compartment separator.
+- **Activation bars in combined fragments**: a message drawn below a fragment starts a bar of
+  its own instead of going on with a bar inside the fragment and pulling the fragment down
+  around itself. In an `alt`, a reply in one case no longer ends the bar for the other case,
+  so a lifeline that answers in both cases keeps one bar.
+- **ER attributes clear of other lines**: Arrange puts an attribute where its line to its owner
+  crosses no other line.
+- **Cardinalities where lines meet close together**: a cardinality may go further along its
+  line, to where lines that meet a node close together have run apart, instead of standing
+  beyond a neighbouring line.
+
 ## 0.21.6 – 2026-11-14
 
 - **Message names in the room between lifelines**: a message name moved off a lifeline its

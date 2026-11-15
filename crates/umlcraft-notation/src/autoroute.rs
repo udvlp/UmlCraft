@@ -22,6 +22,8 @@ use umlcraft_model::{
     SharedStyle, Tx, View,
 };
 
+use crate::labels::segments_cross;
+
 /// Distance a route keeps from the nodes it passes.
 pub const MARGIN: f32 = 12.0;
 /// Distance between lines that share a stretch, where there is room.
@@ -516,7 +518,7 @@ pub fn route_around(
             for pair in vertices.windows(2) {
                 *used.entry((pair[0].min(pair[1]), pair[0].max(pair[1]))).or_default() += 1;
             }
-            let points = lengthen_ends(unjog(points, boxes, request), boxes, request);
+            let points = lengthen_ends(unjog(points, boxes, request), boxes, request, dividers);
             for (b, side, p) in [
                 (request.source, ends.0, points[0]),
                 (request.target, ends.1, points[points.len() - 1]),
@@ -527,9 +529,136 @@ pub fn route_around(
             sides[i] = Some(ends);
         }
     }
+    uncross(&mut routes, &sides, boxes, requests, dividers, requests.len());
     nudge(&mut routes, &sides, boxes, requests, rooms, true);
     nudge(&mut routes, &sides, boxes, requests, rooms, false);
     routes
+}
+
+/// Two lines that leave one side of a node and cross where they part swap their ports when that
+/// clears crossings without a longer way, so that the one turning off first leaves on the side
+/// it turns to (#77). Only the first `movable` routes are new; a pair of two others stays as it
+/// is (#78).
+fn uncross(
+    routes: &mut [Option<Vec<Point>>],
+    sides: &[Option<(Side, Side)>],
+    boxes: &[Rect],
+    requests: &[Request],
+    dividers: &[(usize, f32)],
+    movable: usize,
+) {
+    // Each line end: the line, whether it is the far end, the node and the side.
+    let mut ends = Vec::new();
+    for (i, s) in sides.iter().enumerate() {
+        if let Some((from, to)) = *s {
+            ends.push((i, false, requests[i].source, from));
+            ends.push((i, true, requests[i].target, to));
+        }
+    }
+    // A route as seen from one of its ends.
+    let oriented = |route: &[Point], far: bool| {
+        let mut points = route.to_vec();
+        if far {
+            points.reverse();
+        }
+        points
+    };
+    let crossings = |a: &[Point], b: &[Point]| -> usize {
+        a.windows(2)
+            .map(|s| b.windows(2).filter(|t| segments_cross(s[0], s[1], t[0], t[1])).count())
+            .sum()
+    };
+    let length = |p: &[Point]| p.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>();
+    for _ in 0..ends.len() {
+        let mut swapped = false;
+        for (x, &(i, i_far, node, side)) in ends.iter().enumerate() {
+            for &(j, j_far, other, other_side) in &ends[x + 1..] {
+                if i == j || node != other || side != other_side || i.min(j) >= movable {
+                    continue;
+                }
+                let (Some(ri), Some(rj)) = (&routes[i], &routes[j]) else { continue };
+                let (pi, pj) = (oriented(ri, i_far), oriented(rj, j_far));
+                // The route with its port and first bend moved to `at` along the side, as long as
+                // it still leaves straight out and turns the same way, clear of other nodes. A
+                // straight line moves its far end along as well, which has to stay on its side
+                // of the node there, clear of that node's compartment separators.
+                let moved = |p: &[Point], at: f32, line: usize, far: bool| {
+                    let along = |q: Point| side.along(q);
+                    let put = |q: Point| match side {
+                        Side::Top | Side::Bottom => Point::new(at, q.y),
+                        Side::Left | Side::Right => Point::new(q.x, at),
+                    };
+                    if p.len() < 2 || (along(p[0]) - along(p[1])).abs() >= SAME {
+                        return None;
+                    }
+                    let request = requests[line];
+                    let mut q = p.to_vec();
+                    q[0] = put(q[0]);
+                    q[1] = put(q[1]);
+                    if p.len() == 2 {
+                        let there = if far { request.source } else { request.target };
+                        let r = boxes[there];
+                        let (lo, hi) = match side {
+                            Side::Top | Side::Bottom => (r.x, r.right()),
+                            Side::Left | Side::Right => (r.y, r.bottom()),
+                        };
+                        let divides = matches!(side, Side::Left | Side::Right)
+                            && dividers
+                                .iter()
+                                .any(|&(b, y)| b == there && (at - y).abs() < DIVIDER_ROOM - SAME);
+                        // Nor too close to where another line ends.
+                        let crowded = routes
+                            .iter()
+                            .enumerate()
+                            .filter(|&(k, _)| k != line)
+                            .filter_map(|(_, r)| r.as_deref())
+                            .flat_map(|r| [r[0], r[r.len() - 1]])
+                            .any(|e| e.distance(q[1]) < PORT_SPACING - SAME);
+                        if at < lo + PORT_INSET || at > hi - PORT_INSET || divides || crowded {
+                            return None;
+                        }
+                    } else {
+                        let (was, now) = (along(p[2]) - along(p[1]), along(q[2]) - along(q[1]));
+                        if now.abs() < SAME || was.signum() != now.signum() {
+                            return None;
+                        }
+                    }
+                    let clear = boxes.iter().enumerate().all(|(b, r)| {
+                        b == request.source
+                            || b == request.target
+                            || q[..q.len().min(3)].windows(2).all(|w| !segment_hits(w[0], w[1], *r))
+                    });
+                    clear.then_some(q)
+                };
+                let (Some(qi), Some(qj)) = (
+                    moved(&pi, side.along(pj[0]), i, i_far),
+                    moved(&pj, side.along(pi[0]), j, j_far),
+                ) else {
+                    continue;
+                };
+                let others = |p: &[Point], q: &[Point]| -> usize {
+                    crossings(p, q)
+                        + routes
+                            .iter()
+                            .enumerate()
+                            .filter(|&(k, _)| k != i && k != j)
+                            .filter_map(|(_, r)| r.as_deref())
+                            .map(|r| crossings(p, r) + crossings(q, r))
+                            .sum::<usize>()
+                };
+                if others(&qi, &qj) < others(&pi, &pj)
+                    && length(&qi) + length(&qj) <= length(&pi) + length(&pj) + SAME
+                {
+                    routes[i] = Some(oriented(&qi, i_far));
+                    routes[j] = Some(oriented(&qj, j_far));
+                    swapped = true;
+                }
+            }
+        }
+        if !swapped {
+            break;
+        }
+    }
 }
 
 /// The side of `r` a line to `p` outside it leaves by, and about where: across from `p`, or
@@ -777,17 +906,28 @@ const END_STRETCH: f32 = 30.0;
 
 /// `points` with the bends next to either end moved away from the node where the stretch into
 /// it is shorter than [`END_STRETCH`]: up to half way to the bend before, or, for a route with
-/// one bend, by sliding the port at the other node along its side.
-fn lengthen_ends(points: Vec<Point>, boxes: &[Rect], request: Request) -> Vec<Point> {
-    let points = lengthen_end(points, boxes, request.source, request.target);
+/// one bend, by sliding the port at the other node along its side, clear of its `dividers`.
+fn lengthen_ends(
+    points: Vec<Point>,
+    boxes: &[Rect],
+    request: Request,
+    dividers: &[(usize, f32)],
+) -> Vec<Point> {
+    let points = lengthen_end(points, boxes, request.source, request.target, dividers);
     let mut back: Vec<Point> = points.into_iter().rev().collect();
-    back = lengthen_end(back, boxes, request.target, request.source);
+    back = lengthen_end(back, boxes, request.target, request.source, dividers);
     back.reverse();
     back
 }
 
 /// [`lengthen_ends`] for the last stretch of `points`, which run from box `from` to box `to`.
-fn lengthen_end(points: Vec<Point>, boxes: &[Rect], from: usize, to: usize) -> Vec<Point> {
+fn lengthen_end(
+    points: Vec<Point>,
+    boxes: &[Rect],
+    from: usize,
+    to: usize,
+    dividers: &[(usize, f32)],
+) -> Vec<Point> {
     let n = points.len();
     if n < 3 {
         return points;
@@ -810,6 +950,22 @@ fn lengthen_end(points: Vec<Point>, boxes: &[Rect], from: usize, to: usize) -> V
         let sign = if u.0 + u.1 > 0.0 { 1.0 } else { -1.0 };
         let room = if sign > 0.0 { hi - inset - at } else { at - (lo + inset) };
         wanted = wanted.min(len + room.max(0.0));
+        // Sliding down the left or right side, the port keeps clear of the compartment
+        // separators there: past one where the side has room, else short of it.
+        if u.0.abs() <= 0.5 {
+            let by = wanted - len;
+            let target = at + sign * by;
+            let near = dividers
+                .iter()
+                .filter(|d| d.0 == from)
+                .map(|d| d.1)
+                .find(|&d| (target - d).abs() < DIVIDER_ROOM - SAME);
+            if let Some(d) = near {
+                let past = (d + sign * DIVIDER_ROOM - at) * sign;
+                let short = (d - sign * DIVIDER_ROOM - at) * sign;
+                wanted = len + if past <= room { past } else { short };
+            }
+        }
     } else {
         // Sharing the way with the stretch before the bends, if that runs the same way.
         let earlier = along(before, points[n - 4]);
@@ -1201,6 +1357,37 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         })
         .chain(stems)
         .collect();
+    // Routed lines that stay, as drawn: a line routed now may swap ports with one (#78).
+    let fixed: Vec<(Id, Request, Vec<Point>)> = view
+        .presentations()
+        .iter()
+        .filter(|p| {
+            !routing.contains(&p.id)
+                && p.style.auto_route
+                && p.style.line_shape == LineShape::RightAngle
+                && p.style.shared.is_separate()
+        })
+        .filter_map(|p| {
+            let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, .. } =
+                &p.shape
+            else {
+                return None;
+            };
+            let (&s, &t) = (index.get(source)?, index.get(target)?);
+            if s == t {
+                return None;
+            }
+            let from = crate::route::anchor_point(boxes[s], Some((*source_anchor)?));
+            let to = crate::route::anchor_point(boxes[t], Some((*target_anchor)?));
+            let mut points = vec![from];
+            points.extend(waypoints.iter().copied());
+            points.push(to);
+            let element = p.element.and_then(|e| model.get(e));
+            let request =
+                Request { source: s, target: t, facing: false, markers: end_markers(element) };
+            Some((p.id, request, points))
+        })
+        .collect();
     let around = Around {
         texts: &texts,
         lines: &tree_lines,
@@ -1208,7 +1395,28 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         taken: &taken,
         dividers: &dividers,
     };
-    let routes = route_around(&boxes, &around, &requests, &rooms);
+    let mut routes = route_around(&boxes, &around, &requests, &rooms);
+    // The new lines and those that stay, to swap ports between them where they cross.
+    let movable = routes.len();
+    routes.extend(fixed.iter().map(|(_, _, points)| Some(points.clone())));
+    let all: Vec<Request> = requests.iter().copied().chain(fixed.iter().map(|f| f.1)).collect();
+    let sides: Vec<Option<(Side, Side)>> = routes
+        .iter()
+        .zip(&all)
+        .map(|(route, r)| {
+            let points = route.as_ref().filter(|p| p.len() >= 2)?;
+            let end = |b: usize, p: Point| on_side(boxes[b], p).0;
+            Some((end(r.source, points[0]), end(r.target, points[points.len() - 1])))
+        })
+        .collect();
+    uncross(&mut routes, &sides, &boxes, &all, &dividers, movable);
+    let moved: Vec<(Id, Request, Vec<Point>)> = fixed
+        .into_iter()
+        .zip(routes.drain(movable..))
+        .filter_map(|((id, request, before), after)| {
+            after.filter(|p| *p != before).map(|p| (id, request, p))
+        })
+        .collect();
     let relative = |r: Rect, p: Point| {
         let fraction = |v: f32, start: f32, size: f32| {
             if size > 0.0 { ((v - start) / size).clamp(0.0, 1.0) } else { 0.5 }
@@ -1228,6 +1436,13 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
             p.style.auto_route = true;
         })?;
         count += 1;
+    }
+    for (edge, request, points) in moved {
+        let anchors = (
+            Some(relative(boxes[request.source], points[0])),
+            Some(relative(boxes[request.target], points[points.len() - 1])),
+        );
+        tx.set_route(diagram, edge, points[1..points.len() - 1].to_vec(), anchors)?;
     }
     Ok(count)
 }
@@ -1280,9 +1495,11 @@ fn trees(
 }
 
 /// The edges of `diagram` that the router keeps and that need a new route after an edit:
-/// new ones, those whose end nodes moved or changed size, and those that now run through a
-/// node that moved or appeared. `before` holds the node bounds and the routed edges of the
-/// diagram before the edit (see [`snapshot`]).
+/// new ones, those whose end nodes moved or changed size, those that now run through a
+/// node that moved or appeared, and bent ones that a node moved away from: its margin
+/// reached their route or their end nodes, so it may have made them go around it (#76).
+/// `before` holds the node bounds and the routed edges of the diagram before the edit (see
+/// [`snapshot`]).
 pub fn stale(tx: &Tx<'_>, diagram: Id, before: &Snapshot) -> Vec<Id> {
     let Some(view) = tx.model().view(diagram) else { return Vec::new() };
     let now = snapshot(tx.model(), diagram);
@@ -1310,7 +1527,24 @@ pub fn stale(tx: &Tx<'_>, diagram: Id, before: &Snapshot) -> Vec<Id> {
                         waypoints.windows(2).any(|w| segment_hits(w[0], w[1], r))
                     }
                 });
-                (new || ends || crossed).then_some(p.id)
+                // A node that moved away from beside a bent line or from the margin of one of
+                // its end nodes, where it shut sides the line could have used.
+                let vacated = !waypoints.is_empty() && {
+                    let ends: Vec<Rect> = [source, target]
+                        .into_iter()
+                        .filter_map(|n| now.nodes.get(n).map(|r| r.inflate(MARGIN)))
+                        .collect();
+                    changed.iter().any(|(c, _)| {
+                        c != source
+                            && c != target
+                            && before.nodes.get(c).is_some_and(|old| {
+                                let old = old.inflate(MARGIN);
+                                waypoints.windows(2).any(|w| segment_hits(w[0], w[1], old))
+                                    || ends.iter().any(|e| e.intersects(&old))
+                            })
+                    })
+                };
+                (new || ends || crossed || vacated).then_some(p.id)
             }
             _ => None,
         })
@@ -1563,6 +1797,58 @@ mod tests {
         for p in points {
             assert!(dividers.iter().all(|&(_, y)| (p.y - y).abs() >= DIVIDER_ROOM - SAME), "{p:?}");
         }
+    }
+
+    #[test]
+    fn lines_leaving_side_by_side_do_not_cross_where_they_part() {
+        // #77: two lines from the top of an object to the one above right, one into its left
+        // side, the other into its bottom, and two more lines to objects to the right.
+        let boxes = [
+            Rect::new(40.0, 161.28, 127.0, 61.28),
+            Rect::new(251.0, 40.0, 116.0, 61.28),
+            Rect::new(251.0, 161.28, 116.0, 61.28),
+            Rect::new(251.0, 282.56, 116.0, 61.28),
+        ];
+        let req = |t| Request { source: 0, target: t, facing: false, markers: [false; 2] };
+        let requests = [req(1), req(1), req(2), req(3)];
+        let dividers: Vec<(usize, f32)> =
+            boxes.iter().enumerate().map(|(i, r)| (i, r.y + 23.09)).collect();
+        let around = Around { dividers: &dividers, ..Around::default() };
+        let routes = route_around(&boxes, &around, &requests, &[]);
+        let segments = |r: &Option<Vec<Point>>| {
+            let points = r.as_ref().expect("routed");
+            points.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>()
+        };
+        for (i, a) in routes.iter().enumerate() {
+            for b in &routes[i + 1..] {
+                for &(p, q) in &segments(a) {
+                    for &(c, d) in &segments(b) {
+                        assert!(!segments_cross(p, q, c, d), "{routes:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_port_slid_to_lengthen_a_stretch_stays_clear_of_separators() {
+        // #75: an object with a link to the right and one down to an object below that, the
+        // first stretch out of the source short; the port on the lower object slides down.
+        let boxes = [
+            Rect::new(230.0, 20.0, 162.25, 61.28),
+            Rect::new(440.0, 28.0, 184.42, 46.19),
+            Rect::new(440.0, 86.0, 120.0, 46.19),
+        ];
+        let requests = [
+            Request { source: 0, target: 1, facing: false, markers: [false; 2] },
+            Request { source: 0, target: 2, facing: false, markers: [false; 2] },
+        ];
+        let dividers = [(0, 43.09), (1, 51.09), (2, 109.09)];
+        let around = Around { dividers: &dividers, ..Around::default() };
+        let routes = route_around(&boxes, &around, &requests, &[]);
+        let points = routes[1].as_ref().expect("routed");
+        let end = points[points.len() - 1];
+        assert!((end.y - 109.09).abs() >= DIVIDER_ROOM - SAME, "{points:?}");
     }
 
     #[test]
