@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.22.0 – 2026-11-16
 
 - **Actors in sequence diagrams**: a lifeline whose type is an actor is drawn as a stick figure
   with `name : Actor` below it; messages, bars and fragments work on it as on any lifeline.
