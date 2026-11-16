@@ -1445,8 +1445,17 @@ impl Workspace {
                 if p.operator == umlcraft_model::InteractionOperator::Alt)
         };
         let was_alt = is_alt(self.doc.model());
+        let represents = |model: &umlcraft_model::Model| match model.get(id).map(|e| e.kind()) {
+            Some(ElementKind::Lifeline(p)) => p.represents,
+            _ => None,
+        };
+        let represented = represents(self.doc.model());
         let result = self.edit(label, |tx| {
             tx.update(id, f)?;
+            // A lifeline that comes to stand for an actor becomes a stick figure.
+            if represents(tx.model()) != represented {
+                umlcraft_notation::sequence_edit::fit_head_to_type(tx, id)?;
+            }
             // A fragment turned into an alt gets its else.
             if !was_alt && is_alt(tx.model()) {
                 palette::add_else(tx, id)?;

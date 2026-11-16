@@ -3,6 +3,18 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Actors in sequence diagrams**: a lifeline whose type is an actor is drawn as a stick figure
+  with `name : Actor` below it; messages, bars and fragments work on it as on any lifeline.
+  Choosing an actor as the type turns the head into the figure, a switch in the properties
+  turns it back into a box.
+- **Constraints between associations**: a new class diagram tool joins two associations with a
+  dashed line between the middles of their lines, labeled `{xor}` at first, for "either the one
+  or the other, never both". The `.asta` export leaves it out.
+- **MCP**: lifelines take a class or actor as `classifier`, an actor's lifeline becoming a stick
+  figure; `connect` with `constraint` joins two associations.
+
 ## 0.21.9 – 2026-11-16
 
 - **Stereotypes in guillemets**: a setting writes stereotypes and keywords as UML does,

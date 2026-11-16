@@ -151,6 +151,7 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
         ElementKind::Include(_) => edge(E::Include),
         ElementKind::Extend(_) => edge(E::Extend),
         ElementKind::Comment(_) => node(N::Note),
+        ElementKind::Constraint(_) => edge(E::Constraint),
         ElementKind::Diagram(p) if p.objects => Some(object_diagram_icon()),
         ElementKind::Diagram(p) => Some(diagram_icon(p.diagram)),
         ElementKind::Structogram(_) => Some(structogram_icon()),

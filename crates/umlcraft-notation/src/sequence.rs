@@ -829,7 +829,12 @@ fn head_icon(model: &Model, lifeline: Id) -> HeadIcon {
     let Some(ElementKind::Lifeline(p)) = model.get(lifeline).map(|e| e.kind()) else {
         return HeadIcon::Box;
     };
-    let Some(represented) = p.represents.and_then(|r| model.get(r)) else {
+    p.represents.map_or(HeadIcon::Box, |r| type_icon(model, r))
+}
+
+/// The icon a lifeline standing for `represented` can be drawn as.
+fn type_icon(model: &Model, represented: Id) -> HeadIcon {
+    let Some(represented) = model.get(represented) else {
         return HeadIcon::Box;
     };
     if matches!(represented.kind(), ElementKind::Actor(_)) {
@@ -848,6 +853,22 @@ fn head_icon(model: &Model, lifeline: Id) -> HeadIcon {
     } else {
         HeadIcon::Box
     }
+}
+
+/// Whether `lifeline` stands for something with an icon, an actor or a robustness class, so
+/// that it can be drawn as that icon.
+pub fn has_head_icon(model: &Model, lifeline: Id) -> bool {
+    head_icon(model, lifeline) != HeadIcon::Box
+}
+
+/// Whether a lifeline standing for `represented` can be drawn as an icon.
+pub fn type_has_icon(model: &Model, represented: Id) -> bool {
+    type_icon(model, represented) != HeadIcon::Box
+}
+
+/// Whether `lifeline` stands for an actor, whose lifeline is drawn as a stick figure.
+pub fn represents_actor(model: &Model, lifeline: Id) -> bool {
+    head_icon(model, lifeline) == HeadIcon::Actor
 }
 
 /// Where a lifeline's dashed line starts, and its name: inside a box head, below an icon.

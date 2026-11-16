@@ -215,6 +215,7 @@ tool:
   include: Include
   extend: Extend
   noteAnchor: Notizanker
+  constraint: Einschränkung
   combinedFragment: Fragment
   message: Nachricht
   asyncMessage: Asynchron
@@ -302,6 +303,7 @@ tool_tip:
   termination: "Beendet eine Lebenslinie mit einem Kreuz: auf die Lebenslinie klicken. Darunter sind keine Nachrichten mehr möglich"
   durationConstraint: "Wie lange es von einer Nachricht zu einer anderen dauern darf: von der ersten Nachricht zur zweiten ziehen"
   timeConstraint: "Wann eine Nachricht ankommen darf: auf die Nachricht klicken"
+  constraint: "Eine Einschränkung zwischen zwei Assoziationen, zunächst {xor} (ein Objekt nimmt an einer teil, nie an beiden): von der Linie der einen Assoziation zur Linie der anderen ziehen"
   foundMessage: "Eine Nachricht von außerhalb des Diagramms, etwa der erste Aufruf einer Sequenz: auf die Lebenslinie klicken, die sie empfängt. Den Punkt ziehen ändert Länge und Seite"
   lostMessage: "Eine Nachricht, deren Empfänger das Diagramm nicht zeigt, zunächst eine Antwort: auf die Lebenslinie klicken, die sie sendet. Den Punkt ziehen ändert Länge und Seite"
   part: "Ein Part einer Klasse: in die Klasse klicken. Er wird ein Attribut der Klasse; sein Typ sagt, was er ist"
@@ -630,6 +632,7 @@ export_dropped:
   stubState: Stummelzustände (Astahs API kann sie nicht anlegen)
   durationConstraint: Dauerbedingungen (Astahs API kann sie nicht anlegen)
   timeConstraint: Zeitbedingungen (Astahs API kann sie nicht anlegen)
+  constraint: Einschränkungen zwischen Assoziationen wie {xor}
   submachine: Unterautomatenzustände, deren Zustandsautomat kein Diagramm hat (als Zustände exportiert)
   nestedComponent: Komponenten, Artefakte und Knoten in anderen (ins Paket verschoben)
   instanceKind: Komponenten- und Knoteninstanzen (als Objekte exportiert)
@@ -836,6 +839,7 @@ kind:
   termination: Terminierung
   durationConstraint: Dauerbedingung
   timeConstraint: Zeitbedingung
+  constraint: Einschränkung
 error:
   pin_outside: Ein Pin gehört an eine Aktion. Auf oder nahe den Rand einer Aktion klicken.
   stub_outside: Ein Stummelzustand gehört in einen Unterautomatenzustand. In einen Unterautomatenzustand klicken.

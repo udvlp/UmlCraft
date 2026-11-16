@@ -596,6 +596,34 @@ pub fn add_lifeline(tx: &mut Tx<'_>, diagram: Id, lifeline: Id, x: f32, y: f32) 
     Ok(id)
 }
 
+/// Fits the heads of `lifeline` to its type once that changed: a lifeline that stands for an
+/// actor becomes a stick figure, one that stands for nothing with an icon a box. A robustness
+/// class keeps the head as it was.
+pub fn fit_head_to_type(tx: &mut Tx<'_>, lifeline: Id) -> Result<()> {
+    let model = tx.model();
+    let iconic = if crate::sequence::represents_actor(model, lifeline) {
+        true
+    } else if !crate::sequence::has_head_icon(model, lifeline) {
+        false
+    } else {
+        return Ok(());
+    };
+    let heads: Vec<(Id, Id)> = model
+        .shown_on(lifeline)
+        .into_iter()
+        .filter(|&(d, p)| {
+            model.view(d).and_then(|v| v.get(p)).is_some_and(|p| {
+                matches!(p.shape, Shape::Lifeline { .. }) && p.style.iconic != iconic
+            })
+        })
+        .collect();
+    for (diagram, head) in heads {
+        tx.update_presentation(diagram, head, |p| p.style.iconic = iconic)?;
+        tidy(tx, diagram)?;
+    }
+    Ok(())
+}
+
 fn add_bar(tx: &mut Tx<'_>, diagram: Id, lane: Id, top: f32, height: f32) -> Result<Id> {
     tx.add_presentation(diagram, Presentation::activation(lane, top, height))
 }

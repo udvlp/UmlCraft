@@ -194,16 +194,22 @@ pub fn classifier(model: &Model, args: &Value) -> Result<Option<Option<Id>>, Str
         .collect();
     match named[..] {
         [id] => Ok(Some(Some(id))),
-        [] => Err(format!("no class `{text}`; create it first, or give its id")),
+        [] => Err(format!(
+            "no class or actor `{text}`; create it first (`create_model_element`), or give its id"
+        )),
         _ => Err(format!("more than one class is named `{text}`; give its id")),
     }
 }
 
-/// Sets the classifier of the object `kind`.
+/// Sets the classifier of the object `kind`, or what the lifeline `kind` stands for.
 pub fn set_classifier(kind: &mut ElementKind, classifier: Option<Id>) -> Result<(), String> {
     match kind {
         ElementKind::Instance(p) => {
             p.classifier = classifier;
+            Ok(())
+        }
+        ElementKind::Lifeline(p) => {
+            p.represents = classifier;
             Ok(())
         }
         _ => Err(format!("a {} has no `classifier`", kind.type_name())),

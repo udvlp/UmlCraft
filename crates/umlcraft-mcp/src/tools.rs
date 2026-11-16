@@ -257,8 +257,10 @@ pub fn list() -> Vec<Value> {
     // The settings of classes and objects, which `create_element` and `update_element` take.
     let classes = json!({
         "abstract": flag("Classes, interfaces, operations: abstract (the name in italics)."),
-        "classifier": text("Objects: the class they are an instance of (`rex : Hund`), by id \
-                            or name; \"\" for none."),
+        "classifier": text("Objects: the class they are an instance of (`rex : Hund`); \
+                            lifelines: the class or actor they stand for (`k : Kunde`), an \
+                            actor drawing the lifeline as a stick figure. By id or name; \"\" \
+                            for none."),
         "slots": { "type": "object", "additionalProperties": { "type": "string" },
                    "description": "Objects: values of the attributes of their class, by \
                                    attribute name, e.g. {\"name\": \"\\\"Rex\\\"\", \"alter\": \
@@ -607,7 +609,9 @@ pub fn list() -> Vec<Value> {
              (`waypoints`, anchors, `line_shape`) instead of the one UmlCraft lays out, e.g. \
              a recursive relationship around its entity. An `extend` runs from the extending \
              use case to the extended one and may take its `condition` and \
-             `extension_points`.",
+             `extension_points`. A `constraint` (class diagrams) joins two associations, \
+             `source` and `target`, with a dashed line between the middles of their lines; \
+             `name` is the constraint, `xor` unless given (drawn `{xor}`).",
             with(
                 json!({
                     "diagram": id("The diagram."),
@@ -790,7 +794,10 @@ pub fn list() -> Vec<Value> {
                                                       (vertical style) or vertical line." },
                     "icon": { "type": "boolean",
                               "description": "Classes whose first stereotype is boundary, control \
-                                              or entity: drawn as the robustness icon." },
+                                              or entity: drawn as the robustness icon. \
+                                              Lifelines standing for an actor or such a \
+                                              class: the head drawn as its icon (an actor's \
+                                              is on by default)." },
                 }),
                 &with(
                     with(with(activity_node.clone(), &er), &sequence),
@@ -1174,7 +1181,18 @@ fn diagram_tool(model: &Model, diagram: Id, kind: DiagramKind, key: &str) -> Res
     let tools = tools_of(model, diagram, kind);
     tools.iter().copied().find(|t| t.key() == key).ok_or_else(|| {
         let keys: Vec<&str> = tools.iter().map(|t| t.key()).filter(|k| *k != "select").collect();
-        format!("a {} diagram has no tool `{key}`; it has: {}", diagram_key(kind), keys.join(", "))
+        let mut message = format!(
+            "a {} diagram has no tool `{key}`; it has: {}",
+            diagram_key(kind),
+            keys.join(", ")
+        );
+        if kind == DiagramKind::Sequence && key == "actor" {
+            message.push_str(
+                ". An actor takes part as a `lifeline` whose `classifier` is the actor \
+                 (`create_model_element` makes one): it is drawn as a stick figure",
+            );
+        }
+        message
     })
 }
 
@@ -1707,6 +1725,8 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
                     drop(uml::set_classifier(&mut data.kind, classifier));
                 }
             })?;
+            // A lifeline that stands for an actor is a stick figure.
+            sequence_edit::fit_head_to_type(tx, element)?;
         }
         if let Some(slots) = &slots {
             uml::set_slots(tx, element, slots)?;
@@ -1832,7 +1852,11 @@ fn show_element(host: &mut dyn Host, args: &Value) -> Outcome {
 fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     let (diagram, kind) = diagram_arg(host, args, "diagram")?;
     let tool = edge_tool(host.document().model(), diagram, kind, str_arg(args, "tool")?)?;
-    let name = opt_str(args, "name").map(str::to_owned);
+    // A constraint between associations is drawn in braces; given with them, they go.
+    let name = opt_str(args, "name").map(|n| match tool {
+        EdgeTool::Constraint => unbraced(n),
+        _ => n.to_owned(),
+    });
     let anyway = args.get("allow_invalid").and_then(Value::as_bool).unwrap_or(false);
     let with_ends = uml::END_KEYS.iter().any(|k| args.get(k).is_some());
     if with_ends {
@@ -1949,6 +1973,11 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
         "element": element,
         "kind": element.map_or("noteAnchor", |e| kind_name(model, e)),
     })))
+}
+
+/// A constraint as written without the braces it is drawn in: `{xor}` is `xor`.
+fn unbraced(text: &str) -> String {
+    text.trim().trim_start_matches('{').trim_end_matches('}').trim().to_owned()
 }
 
 /// Names the call `message` as written: `rechne(a, 2)` is the name `rechne` with the arguments
@@ -2122,7 +2151,10 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     }
     let model = host.document().model();
     let kind = model.get(id).ok_or_else(|| format!("no element {id}"))?.kind().clone();
-    let name = opt_str(args, "name").map(str::to_owned);
+    let name = opt_str(args, "name").map(|n| match kind {
+        ElementKind::Constraint(_) => unbraced(n),
+        _ => n.to_owned(),
+    });
     let text = opt_str(args, "text").map(str::to_owned);
     let documentation = opt_str(args, "documentation").map(str::to_owned);
     let stereotypes: Option<Vec<String>> = args
@@ -2157,12 +2189,6 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         return Err(format!("a {} has no `shared_style`", kind.type_name()));
     }
     let icon = args.get("icon").and_then(Value::as_bool);
-    let robustness = model.get(id).and_then(scene::robustness_icon).is_some();
-    if icon.is_some() && !robustness {
-        return Err("only classes whose first stereotype is boundary, control or entity take \
-                    `icon`"
-            .into());
-    }
     let shown = model.shown_on(id);
     // A line's route goes to the one drawing of it that `diagram` (or the only one) names.
     let route = line::Route::parse(args)?;
@@ -2206,6 +2232,22 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     if let Some(classifier) = uml::classifier(model, args)? {
         uml::set_classifier(&mut settings, classifier)?;
     }
+    // Robustness classes, and lifelines standing for an actor or a robustness class.
+    let has_icon = match &settings {
+        ElementKind::Lifeline(p) => {
+            p.represents.is_some_and(|r| umlcraft_notation::sequence::type_has_icon(model, r))
+        }
+        _ => model.get(id).and_then(scene::robustness_icon).is_some(),
+    };
+    if icon.is_some() && !has_icon {
+        return Err("only classes whose first stereotype is boundary, control or entity, and \
+                    lifelines standing for an actor or such a class take `icon`"
+            .into());
+    }
+    let represents_changed = match (&kind, &settings) {
+        (ElementKind::Lifeline(a), ElementKind::Lifeline(b)) => a.represents != b.represents,
+        _ => false,
+    };
     let slots = uml::slots(args)?;
     let empty_slots = uml::empty_slots(&kind, args)?;
     // `{static}` and `{abstract}` in a member's text, or given as flags. Set after the text,
@@ -2348,6 +2390,10 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         }
         if let Some(slots) = &slots {
             uml::set_slots(tx, id, slots)?;
+        }
+        // A lifeline that comes to stand for an actor becomes a stick figure.
+        if represents_changed {
+            sequence_edit::fit_head_to_type(tx, id)?;
         }
         for &(diagram, presentation) in &shown {
             if let Some(style) = shared {
@@ -8335,5 +8381,119 @@ mod tests {
         );
         let diagram = run(&mut host, "get_diagram", json!({ "diagram": r[0]["diagram"] }));
         assert_eq!(diagram["nodes"][0]["text"], "Bedingung: frei");
+    }
+
+    #[test]
+    fn lifelines_standing_for_an_actor_are_stick_figures() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "use_case", "name": "u" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "actor", "name": "Kunde" } },
+                { "tool": "create_diagram", "arguments": { "kind": "sequence", "name": "s" } },
+                { "tool": "create_element", "arguments": { "diagram": "$2.diagram",
+                    "tool": "lifeline", "name": "k", "classifier": "Kunde" } },
+                { "tool": "create_element", "arguments": { "diagram": "$2.diagram",
+                    "tool": "lifeline", "name": "b" } },
+                { "tool": "connect", "arguments": { "diagram": "$2.diagram",
+                    "tool": "message", "source": "$3.presentation", "target": "$4.presentation",
+                    "name": "bestellen" } },
+            ]),
+        );
+        let d: Id = id(&r[2]["diagram"]).parse().unwrap();
+        let iconic = |host: &Headless, node: &Value| {
+            let view = host.document().model().view(d).unwrap();
+            view.get(id(node).parse().unwrap()).unwrap().style.iconic
+        };
+        // An actor as the type: a stick figure, named `k : Kunde` below it (#92).
+        assert!(iconic(&host, &r[3]["presentation"]));
+        assert!(!iconic(&host, &r[4]["presentation"]));
+        let scene = drawn(&mut host, &r[2]["diagram"]);
+        let head = scene.nodes.iter().find(|n| n.id.to_string() == id(&r[3]["presentation"]));
+        let head = head.unwrap();
+        assert!(matches!(head.figure, Figure::Lifeline { icon: scene::HeadIcon::Actor, .. }));
+        assert_eq!(head.rows[0].text, "k : Kunde");
+        host.document().model().check().unwrap();
+
+        // No type, a box; the actor again, a stick figure; `icon` switches it off.
+        let k = &r[3]["element"];
+        run(&mut host, "update_element", json!({ "id": k, "classifier": "" }));
+        assert!(!iconic(&host, &r[3]["presentation"]));
+        let wrong = json!({ "id": k, "icon": true });
+        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+        run(&mut host, "update_element", json!({ "id": k, "classifier": "Kunde" }));
+        assert!(iconic(&host, &r[3]["presentation"]));
+        run(&mut host, "update_element", json!({ "id": k, "icon": false }));
+        assert!(!iconic(&host, &r[3]["presentation"]));
+
+        // There is no `actor` tool on a sequence diagram; the refusal says what to do.
+        let actor = json!({ "diagram": r[2]["diagram"], "tool": "actor", "name": "K" });
+        let refused = call(&mut host, &Access::default(), "create_element", &actor);
+        assert!(refused.is_error);
+        assert!(format!("{refused:?}").contains("classifier"), "{refused:?}");
+        host.document().model().check().unwrap();
+    }
+
+    #[test]
+    fn a_constraint_joins_two_associations() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "class", "name": "c" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "class", "name": "Regal", "x": 40, "y": 40 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "class", "name": "Leser", "x": 40, "y": 300 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "class", "name": "Buch", "x": 400, "y": 170 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                    "tool": "association", "source": "$1.element", "target": "$3.element" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                    "tool": "association", "source": "$2.element", "target": "$3.element" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram",
+                    "tool": "constraint", "source": "$4.element", "target": "$5.element" } },
+            ]),
+        );
+        // #91: `{xor}` beside a dashed line between the middles of the two lines.
+        assert_eq!(r[6]["kind"], "constraint");
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let edge = |at: &Value| {
+            let p = id(at);
+            scene.edges.iter().find(|e| e.id.to_string() == p).unwrap().clone()
+        };
+        let line = edge(&r[6]["presentation"]);
+        assert_eq!(line.line, scene::LineStyle::ShortDashed);
+        assert_eq!(line.labels.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["{xor}"]);
+        for (end, association) in [(0, &r[4]), (1, &r[5])] {
+            let a = edge(&association["presentation"]);
+            let (p, q) = umlcraft_notation::route::middle_segment(&a.points, false);
+            let middle = Point::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0);
+            let tip = if end == 0 { line.points[0] } else { *line.points.last().unwrap() };
+            assert!((tip.x - middle.x).abs() < 1.0 && (tip.y - middle.y).abs() < 1.0);
+        }
+        let svg = {
+            let (doc, measure) = host.parts();
+            let d = id(&r[0]["diagram"]).parse().unwrap();
+            svg::render(&scene::build(doc.model(), d, &Preview::default(), measure), measure)
+        };
+        assert!(svg.contains("{xor}"), "{svg}");
+
+        // Given in braces, the name loses them.
+        let renamed = json!({ "id": r[6]["element"], "name": "{or}" });
+        run(&mut host, "update_element", renamed);
+        let model = host.document().model();
+        assert_eq!(model.get(id(&r[6]["element"]).parse().unwrap()).unwrap().name(), "or");
+
+        // Only between associations; deleting one of them deletes the constraint.
+        let wrong = json!({ "diagram": r[0]["diagram"], "tool": "constraint",
+                            "source": r[1]["element"], "target": r[4]["element"] });
+        assert!(call(&mut host, &Access::default(), "connect", &wrong).is_error);
+        run(&mut host, "delete_element", json!({ "id": r[4]["element"] }));
+        let model = host.document().model();
+        assert!(model.get(id(&r[6]["element"]).parse().unwrap()).is_none());
+        model.check().unwrap();
     }
 }

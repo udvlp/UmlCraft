@@ -274,6 +274,12 @@ ICONS = {
     'extend': [circle(4.5, 9.5, 2), path('M7.5 9.5H12.5', dash(1.5, 1.5)),
                path('M9.5 7.5L7.5 9.5L9.5 11.5'), circle(15.5, 9.5, 2)],
     'noteAnchor': [path('M2.5 5.5H7.5L9.5 7.5V13.5H2.5Z'), dashed('M17.5 9.5H10')],
+    # Two associations, a dashed line between their middles and `{}` beside it.
+    'constraint': [path('M2.5 3.5H17.5'), path('M2.5 16.5H17.5'), dashed('M6.5 5V15'),
+                   path('M12.5 6.5C11.5 6.5 11.5 7 11.5 8V9C11.5 9.5 11 10 10.5 10'
+                        'C11 10 11.5 10.5 11.5 11V12C11.5 13 11.5 13.5 12.5 13.5'),
+                   path('M15.5 6.5C16.5 6.5 16.5 7 16.5 8V9C16.5 9.5 17 10 17.5 10'
+                        'C17 10 16.5 10.5 16.5 11V12C16.5 13 16.5 13.5 15.5 13.5')],
     'message': [path('M2.5 9.5H13'), MESSAGE_HEAD],
     'asyncMessage': NAVIGABLE,
     'reply': [dashed('M3 9.5H18'), path('M7.5 6L2.5 9.5L7.5 13')],

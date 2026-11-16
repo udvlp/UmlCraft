@@ -4410,6 +4410,11 @@ fn edge_for(
         }
         Some(ElementKind::ErSubtyping(_)) => {}
         Some(ElementKind::ErAttribute(_)) => label = None,
+        // A constraint between associations: `{xor}` beside a dashed line.
+        Some(ElementKind::Constraint(_)) => {
+            edge.line = LineStyle::ShortDashed;
+            label = label.map(|text| format!("{{{text}}}"));
+        }
         _ => edge.line = LineStyle::ShortDashed,
     }
 

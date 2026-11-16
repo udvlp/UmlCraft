@@ -463,6 +463,15 @@ pub struct DurationConstraintProps {
     pub to: Id,
 }
 
+/// A constraint between two associations (`{xor}`: an object takes part in one of them, never
+/// in both), drawn as a dashed line from the middle of one association's line to the middle of
+/// the other's, the constraint in braces beside it. The constraint is the element's name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConstraintProps {
+    pub constrained: [Id; 2],
+}
+
 /// When a message may arrive (`{t..t+3}`), written beside its arrowhead. The constraint is the
 /// element's name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1246,6 +1255,8 @@ pub enum ElementKind {
     Include(IncludeProps),
     Extend(ExtendProps),
     Comment(CommentProps),
+    /// A constraint between two associations, such as `{xor}`.
+    Constraint(ConstraintProps),
     Diagram(DiagramProps),
     /// A Nassi-Shneiderman diagram. It has no view: the structogram is its content.
     Structogram(StructogramProps),
@@ -1300,6 +1311,8 @@ pub enum RefRole {
     OnLifeline,
     /// The messages a duration or time constraint applies to.
     Constrained,
+    /// The associations a constraint between associations (`{xor}`) relates.
+    ConstrainedAssociation,
     /// The class of an association class.
     AssociationClass,
     /// The relationship (or associative entity) of an ER participation.
@@ -1339,6 +1352,7 @@ impl RefRole {
                 | Self::ConnectorEnd
                 | Self::OnLifeline
                 | Self::Constrained
+                | Self::ConstrainedAssociation
                 | Self::ErRelationship
                 | Self::ErParticipant
                 | Self::ErIsA
@@ -1364,6 +1378,7 @@ impl RefRole {
                 matches!(target, ElementKind::Lifeline(_))
             }
             Self::Constrained => matches!(target, ElementKind::Message(_)),
+            Self::ConstrainedAssociation => matches!(target, ElementKind::Association(_)),
             Self::Operation => matches!(target, ElementKind::Operation(_)),
             Self::ExtensionPoint => matches!(target, ElementKind::ExtensionPoint),
             Self::FlowEnd => matches!(target, ElementKind::ActivityNode(_)),
@@ -1559,6 +1574,7 @@ impl ElementKind {
             Self::Include(_) => "include",
             Self::Extend(_) => "extend",
             Self::Comment(_) => "comment",
+            Self::Constraint(_) => "constraint",
             Self::Diagram(_) => "diagram",
             Self::Structogram(_) => "structogram",
             Self::ErEntity(_) => "erEntity",
@@ -1679,6 +1695,7 @@ impl ElementKind {
             | K::Dependency(_)
             | K::Include(_)
             | K::Extend(_) => self.is_namespace() || self.is_classifier(),
+            K::Constraint(_) => self.is_namespace(),
             K::Comment(_) => !matches!(self, K::Diagram(_) | K::Structogram(_) | K::Comment(_)),
             K::Diagram(_) | K::Structogram(_) => {
                 self.is_namespace()
@@ -1787,6 +1804,9 @@ impl ElementKind {
                 f(p.to, RefRole::Constrained);
             }
             Self::TimeConstraint(p) => f(p.message, RefRole::Constrained),
+            Self::Constraint(p) => {
+                p.constrained.iter().for_each(|&id| f(id, RefRole::ConstrainedAssociation));
+            }
             Self::ActivityNode(p) => {
                 p.type_ref.iter().for_each(|t| types(t, f));
                 p.behavior.iter().for_each(|&id| f(id, RefRole::Calls));
@@ -1896,6 +1916,7 @@ impl ElementKind {
                 f(&mut p.to);
             }
             Self::TimeConstraint(p) => f(&mut p.message),
+            Self::Constraint(p) => p.constrained.iter_mut().for_each(f),
             Self::ActivityNode(p) => {
                 type_ref(&mut p.type_ref, &mut f);
                 p.behavior.iter_mut().for_each(f);

@@ -215,6 +215,7 @@ tool:
   include: Include
   extend: Extend
   noteAnchor: Note anchor
+  constraint: Constraint
   combinedFragment: Fragment
   message: Message
   asyncMessage: Asynchronous
@@ -302,6 +303,7 @@ tool_tip:
   termination: "Ends a lifeline with a cross: click the lifeline. Messages below it are not possible"
   durationConstraint: "How long it may take from one message to another: drag from the first message to the second"
   timeConstraint: "When a message may arrive: click the message"
+  constraint: "A constraint between two associations, at first {xor} (an object takes part in one of them, never in both): drag from one association's line to the other's"
   foundMessage: "A message from outside the diagram, such as the first call of a sequence: click the lifeline that receives it. Drag the dot to change its length and side"
   lostMessage: "A message whose receiver the diagram does not show, a reply at first: click the lifeline that sends it. Drag the dot to change its length and side"
   part: "A part of a class: click inside the class. It becomes an attribute of the class; its type says what it is"
@@ -630,6 +632,7 @@ export_dropped:
   stubState: Stub states (Astah's API cannot create them)
   durationConstraint: Duration constraints (Astah's API cannot create them)
   timeConstraint: Time constraints (Astah's API cannot create them)
+  constraint: Constraints between associations, such as {xor}
   submachine: Submachine states whose state machine has no diagram (exported as states)
   nestedComponent: Components, artifacts and nodes inside others (moved to the package)
   instanceKind: Component and node instances (exported as objects)
@@ -836,6 +839,7 @@ kind:
   termination: Termination
   durationConstraint: Duration constraint
   timeConstraint: Time constraint
+  constraint: Constraint
 error:
   pin_outside: A pin goes on an action. Click on or near the border of an action.
   stub_outside: A stub state goes into a submachine state. Click inside a submachine state.

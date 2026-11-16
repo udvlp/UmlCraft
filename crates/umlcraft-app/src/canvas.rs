@@ -954,7 +954,7 @@ impl DiagramCanvas {
     /// What a line drawn with `tool` connects to at `p`: a node, or for note anchors also a
     /// relationship's line (not another anchor), as in Astah. An activation bar, state
     /// invariant or termination stands for its lifeline. Duration and time constraints go on
-    /// messages only.
+    /// messages only, constraints between associations on association lines only.
     fn connect_target(&self, tool: EdgeTool, p: MPoint, cx: &App) -> Option<Id> {
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
@@ -966,6 +966,16 @@ impl DiagramCanvas {
         };
         if matches!(tool, EdgeTool::DurationConstraint | EdgeTool::TimeConstraint) {
             return scene::edge_at(&self.scene, p, self.hit_tolerance()).filter(|&e| is_message(e));
+        }
+        // A constraint such as {xor} goes between the lines of two associations.
+        if tool == EdgeTool::Constraint {
+            let is_association = |edge: Id| {
+                view.get(edge)
+                    .and_then(|p| model.get(p.element?))
+                    .is_some_and(|e| matches!(e.kind(), ElementKind::Association(_)))
+            };
+            return scene::edge_at(&self.scene, p, self.hit_tolerance())
+                .filter(|&e| is_association(e));
         }
         let line = (tool == EdgeTool::NoteAnchor)
             .then(|| scene::edge_at(&self.scene, p, self.hit_tolerance()))

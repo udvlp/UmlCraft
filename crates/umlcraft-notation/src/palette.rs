@@ -3,12 +3,13 @@
 
 use umlcraft_model::{
     ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd,
-    DiagramKind, DiagramProps, DirectedProps, DurationConstraintProps, ElementData, ElementKind,
-    ErAttributeProps, ErEntityProps, ErIsAProps, ErKey, ErRelationshipProps, ExtendProps, Id,
-    IncludeProps, InstanceKind, InstanceProps, InteractionOperandProps, InteractionOperator,
-    InteractionUseProps, LifelineProps, MessageGate, MessageSort, Model, ModelError, Point,
-    PseudostateKind, Rect, Result, Shape, Size, StateInvariantProps, StateProps, TerminationProps,
-    TimeConstraintProps, Tx, TypeRef, View, Visibility,
+    ConstraintProps, DiagramKind, DiagramProps, DirectedProps, DurationConstraintProps,
+    ElementData, ElementKind, ErAttributeProps, ErEntityProps, ErIsAProps, ErKey,
+    ErRelationshipProps, ExtendProps, Id, IncludeProps, InstanceKind, InstanceProps,
+    InteractionOperandProps, InteractionOperator, InteractionUseProps, LifelineProps, MessageGate,
+    MessageSort, Model, ModelError, Point, PseudostateKind, Rect, Result, Shape, Size,
+    StateInvariantProps, StateProps, TerminationProps, TimeConstraintProps, Tx, TypeRef, View,
+    Visibility,
 };
 
 use crate::sequence::{self, Slot};
@@ -123,6 +124,9 @@ pub enum EdgeTool {
     Include,
     Extend,
     NoteAnchor,
+    /// Class diagrams: a constraint such as `{xor}` between two associations, from the middle
+    /// of one line to the middle of the other.
+    Constraint,
     Message,
     AsyncMessage,
     Reply,
@@ -201,6 +205,7 @@ pub fn palette(kind: DiagramKind) -> Vec<Tool> {
                 E::Realization,
                 E::Dependency,
                 E::Link,
+                E::Constraint,
                 E::NoteAnchor,
             ],
         ),
@@ -745,6 +750,7 @@ impl EdgeTool {
             Self::Include => "include",
             Self::Extend => "extend",
             Self::NoteAnchor => "noteAnchor",
+            Self::Constraint => "constraint",
             Self::Message => "message",
             Self::AsyncMessage => "asyncMessage",
             Self::Reply => "reply",
@@ -838,6 +844,9 @@ impl EdgeTool {
                 !same && matches!((source, target), (K::Message(_), K::Message(_)))
             }
             Self::TimeConstraint => same && matches!(source, K::Message(_)),
+            Self::Constraint => {
+                !same && matches!((source, target), (K::Association(_), K::Association(_)))
+            }
             Self::Dependency => !same && is_dependable(source) && is_dependable(target),
             Self::Include | Self::Extend => {
                 !same && matches!(source, K::UseCase(_)) && matches!(target, K::UseCase(_))
@@ -929,6 +938,9 @@ impl EdgeTool {
             }
             Self::TimeConstraint => {
                 Some(ElementKind::TimeConstraint(TimeConstraintProps { message: source }))
+            }
+            Self::Constraint => {
+                Some(ElementKind::Constraint(ConstraintProps { constrained: [source, target] }))
             }
             Self::Message
             | Self::AsyncMessage
@@ -1394,7 +1406,9 @@ fn connect_as(
                 }
                 _ => Vec::new(),
             };
-            let element = tx.create(owner, ElementData::new("", kind))?;
+            // A constraint between associations is mostly an exclusive or.
+            let name = if tool == EdgeTool::Constraint { CONSTRAINT_NAME } else { "" };
+            let element = tx.create(owner, ElementData::new(name, kind))?;
             let edge = tx.add_edge(diagram, Some(element), source, target, waypoints)?;
             if tool == EdgeTool::AssociationClass {
                 let owner = tx.model().element(element)?.owner().unwrap_or(owner);
@@ -1417,6 +1431,9 @@ fn connect_as(
         }
     }
 }
+
+/// The constraint a new constraint between associations states.
+pub const CONSTRAINT_NAME: &str = "xor";
 
 /// The name a new association class gets before a number, as in Astah ("AssociationClass0").
 pub const ASSOCIATION_CLASS_NAME: &str = "AssociationClass";

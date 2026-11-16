@@ -3204,6 +3204,17 @@ impl PropertiesPanel {
                     p.id,
                     |s, v| s.hide_instance_type = v,
                 ));
+            // A lifeline that stands for an actor or a robustness class: its icon as the head.
+            if p.element.is_some_and(|l| umlcraft_notation::sequence::has_head_icon(model, l)) {
+                body = body.child(style_flag(
+                    "lifeline-icon",
+                    t!("prop.robustness_icon").into(),
+                    p.style.iconic,
+                    workspace.clone(),
+                    p.id,
+                    |s, v| s.iconic = v,
+                ));
+            }
         }
         if let Some(ElementKind::Instance(instance)) = &shown {
             body = body
