@@ -29,6 +29,9 @@ pub struct Settings {
     pub abstract_stereotype: bool,
     /// End read-only attributes in UML's `{readOnly}`. Off by default.
     pub read_only_constraint: bool,
+    /// Write stereotypes and keywords in guillemets, `«include»`, as UML does. Off by default:
+    /// `<<include>>`, as in Astah.
+    pub guillemets: bool,
     /// The language of new structograms' keywords (`de`, `en`); `None` follows the user
     /// interface.
     pub structogram_keywords: Option<String>,
@@ -83,6 +86,7 @@ impl Settings {
             visibility_column: field(&fields, "visibilityColumn"),
             abstract_stereotype: field(&fields, "abstractStereotype"),
             read_only_constraint: field(&fields, "readOnlyConstraint"),
+            guillemets: field(&fields, "guillemets"),
             structogram_keywords: field(&fields, "structogramKeywords"),
             ribbon_collapsed: field(&fields, "ribbonCollapsed"),
             update_check: field(&fields, "updateCheck"),
@@ -127,6 +131,7 @@ impl Settings {
             visibility_column: self.visibility_column,
             abstract_stereotype: self.abstract_stereotype,
             read_only_constraint: self.read_only_constraint,
+            guillemets: self.guillemets,
         }
     }
 

@@ -456,6 +456,7 @@ impl MainView {
             self.settings.visibility_column = display.visibility_column;
             self.settings.abstract_stereotype = display.abstract_stereotype;
             self.settings.read_only_constraint = display.read_only_constraint;
+            self.settings.guillemets = display.guillemets;
             self.apply_display(cx);
         }
         if let Some((id, selection)) = effects.structogram_selection {
@@ -1764,6 +1765,12 @@ impl MainView {
     /// Ends read-only attributes in `{readOnly}`, or not.
     pub fn set_read_only_constraint(&mut self, on: bool, cx: &mut Context<Self>) {
         self.settings.read_only_constraint = on;
+        self.apply_display(cx);
+    }
+
+    /// Writes stereotypes and keywords in guillemets (`«include»`), or as `<<include>>`.
+    pub fn set_guillemets(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.settings.guillemets = on;
         self.apply_display(cx);
     }
 

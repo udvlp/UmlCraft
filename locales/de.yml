@@ -663,6 +663,8 @@ settings:
   theme: Farbschema
   light: Hell
   dark: Dunkel
+  diagrams: Diagramme
+  guillemets: "Stereotype in Guillemets: «include» statt <<include>>"
   classes: Klassen
   visibility_column: Sichtbarkeit in eigener Spalte
   abstract: Abstrakte Klassen zusätzlich zur Kursivschrift kennzeichnen mit

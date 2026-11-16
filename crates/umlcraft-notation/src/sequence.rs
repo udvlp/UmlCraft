@@ -164,7 +164,7 @@ pub fn split_call(text: &str) -> (&str, Option<&str>) {
 
 /// The label of a message: `name(arguments)` for calls, the return value for replies.
 pub fn message_text(model: &Model, message: Id) -> String {
-    let (stereotype, text) = message_parts(model, message, &Style::default(), true);
+    let (stereotype, text) = message_parts(model, message, &Style::default(), true, false);
     match stereotype {
         Some(s) => format!("{s} {text}").trim_end().to_owned(),
         None => text,
@@ -175,12 +175,13 @@ pub fn message_text(model: &Model, message: Id) -> String {
 /// show their arguments in parentheses, as Astah does, unless the presentation's `style` hides
 /// them; a call without arguments shows the parameters of its operation instead. A reply shows
 /// its name; with `reply_value`, its return value instead if it has one (on the diagram, Astah
-/// shows that after the call).
+/// shows that after the call). The stereotypes stand in guillemets with `guillemets`.
 fn message_parts(
     model: &Model,
     message: Id,
     style: &Style,
     reply_value: bool,
+    guillemets: bool,
 ) -> (Option<String>, String) {
     let parameters = !style.hide_parameters;
     let Some(e) = model.get(message) else { return (None, String::new()) };
@@ -209,7 +210,8 @@ fn message_parts(
     {
         stereotypes.insert(0, keyword.to_owned());
     }
-    let stereotype = (!stereotypes.is_empty()).then(|| format!("<<{}>>", stereotypes.join(", ")));
+    let stereotype =
+        (!stereotypes.is_empty()).then(|| crate::scene::stereotype_text(&stereotypes, guillemets));
     (stereotype, text)
 }
 
@@ -1207,8 +1209,10 @@ fn message_edge(
         MessageSort::Reply | MessageSort::Create => (LineStyle::Dashed, EndMarker::OpenArrow),
     };
 
-    let (stereotype, text) =
-        m.element.map(|e| message_parts(model, e, &m.style, false)).unwrap_or_default();
+    let (stereotype, text) = m
+        .element
+        .map(|e| message_parts(model, e, &m.style, false, measure.guillemets()))
+        .unwrap_or_default();
     let guard = match m.element.and_then(|e| model.get(e)).map(|e| e.kind()) {
         Some(ElementKind::Message(p)) if !p.guard.trim().is_empty() => format!("[{}] ", p.guard),
         _ => String::new(),

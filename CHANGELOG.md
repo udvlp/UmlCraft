@@ -3,6 +3,18 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## 0.21.9 – 2026-11-16
+
+- **Stereotypes in guillemets**: a setting writes stereotypes and keywords as UML does,
+  `«include»`, `«interface»`, `«create»`, instead of `<<include>>`, on the canvas and in exported
+  images. Off by default, as in Astah.
+- **Extension points inside the use case**: a use case with extension points is wide and high
+  enough that "extension points" and every point stand inside its ellipse, also with a short
+  name.
+- **MCP: use cases and notes**: AI assistants add extension points to a use case, give an
+  «extend» its condition and extension points, and write the text of a note. `get_diagram`
+  lists the extension points of use cases and the text of notes.
+
 ## 0.21.8 – 2026-11-15
 
 - **New objects fit their content**: an object placed on a diagram is as wide as its name and

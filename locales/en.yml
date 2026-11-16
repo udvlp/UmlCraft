@@ -663,6 +663,8 @@ settings:
   theme: Theme
   light: Light
   dark: Dark
+  diagrams: Diagrams
+  guillemets: "Stereotypes in guillemets: «include» instead of <<include>>"
   classes: Classes
   visibility_column: Visibility in a column of its own
   abstract: Besides the italic name, abstract classes show

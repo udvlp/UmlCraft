@@ -76,6 +76,7 @@ pub fn app_display() -> Display {
         visibility_column: on("visibilityColumn"),
         abstract_stereotype: on("abstractStereotype"),
         read_only_constraint: on("readOnlyConstraint"),
+        guillemets: on("guillemets"),
     }
 }
 

@@ -33,6 +33,7 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
         let column = settings.visibility_column;
         let stereotype = settings.abstract_stereotype;
         let read_only = settings.read_only_constraint;
+        let guillemets = settings.guillemets;
         // 0 follows the user interface, then those of `LANGUAGES`.
         let keywords = settings
             .structogram_keywords
@@ -120,6 +121,13 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             });
         let classes =
             v_flex().gap_3().child(visibility_column).child(abstract_mark).child(read_only_mark);
+        let v8 = view.clone();
+        let diagrams = Switch::new("settings-guillemets")
+            .checked(guillemets)
+            .label(t!("settings.guillemets").to_string())
+            .on_change(move |&on, _, cx| {
+                v8.update(cx, |this, cx| this.set_guillemets(on, cx)).ok();
+            });
         let structograms = v_flex()
             .gap_1()
             .child(div().text_sm().child(t!("settings.keywords").to_string()))
@@ -174,6 +182,7 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                     .pb_1()
                     .child(section(t!("settings.language").to_string(), languages))
                     .child(section(t!("settings.theme").to_string(), theme))
+                    .child(section(t!("settings.diagrams").to_string(), diagrams))
                     .child(section(t!("settings.classes").to_string(), classes))
                     .child(section(t!("settings.structograms").to_string(), structograms))
                     .child(section(t!("settings.updates").to_string(), updates)),

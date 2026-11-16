@@ -182,7 +182,8 @@ visibility column lines up all names of a compartment instead. Per class box, th
 panel hides its attributes or operations, stereotypes, the members' visibility, attribute types,
 initial values, parameters, parameter types or return types. Abstract classes show
 `{abstract}` below their italic name, or «abstract» above it; read-only attributes can end in
-`{readOnly}`. Theme, language, the column, how abstract classes are marked, `{readOnly}` and
+`{readOnly}`. Stereotypes and keywords read `<<include>>` or, in UML's guillemets, `«include»`.
+Theme, language, the column, how abstract classes are marked, `{readOnly}`, the guillemets and
 the keywords of structograms are chosen in the settings (the gear in the title bar, or Ctrl+,).
 
 ## AI assistants (MCP)
@@ -203,7 +204,8 @@ While UmlCraft runs, the assistant works in the open project: every change shows
 named "AI: …" in the undo history, and Ctrl+Z takes it back. Without the app it works on a
 project of its own, which it can save. It creates diagrams, elements, lines and members,
 renames, moves and deletes, gives lines their route by hand, moves, stretches and joins
-activation bars, puts messages into fragments with their operands, writes and
+activation bars, writes notes, adds extension points to use cases and gives an «extend» its
+condition and extension points, puts messages into fragments with their operands, writes and
 rewrites structograms, arranges diagrams, renders them as images to look at, and exports PNG
 and SVG. Several changes can make one undo step. While the app runs, it can also take a
 screenshot of the UmlCraft window (on Windows), also when other windows cover it or it is

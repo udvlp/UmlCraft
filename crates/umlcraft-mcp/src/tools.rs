@@ -243,6 +243,17 @@ pub fn list() -> Vec<Value> {
                             around the nodes and again when they move (without the keys \
                             above); false keeps the route as it is."),
     });
+    // The condition and extension points of an «extend», which `connect` and
+    // `update_element` take.
+    let extend = json!({
+        "condition": text("Extends: when the extension applies, e.g. `device is lent`; \"\" \
+                           for none."),
+        "extension_points": { "type": "array", "items": { "type": "string" },
+                              "description": "Extends: the extension points of the extended \
+                                              use case (the target) where it applies, by id \
+                                              or name; `add_member` on the use case adds \
+                                              them." },
+    });
     // The settings of classes and objects, which `create_element` and `update_element` take.
     let classes = json!({
         "abstract": flag("Classes, interfaces, operations: abstract (the name in italics)."),
@@ -389,7 +400,8 @@ pub fn list() -> Vec<Value> {
              `create_element` and `connect`. Sequence diagrams: messages with their height \
              `y`, fragments with the range of each operand, and the activation bars of each \
              lifeline (`bars`: `presentation`, `lifeline`, `top`, `bottom`), which `move_node` \
-             moves and stretches and `remove_from_diagram` removes.",
+             moves and stretches and `remove_from_diagram` removes. Notes with their `text`, \
+             use cases with their `extension_points`.",
             json!({ "diagram": id("The diagram; the one shown if omitted.") }),
             &[],
         )),
@@ -456,6 +468,9 @@ pub fn list() -> Vec<Value> {
                 "abstract_stereotype": flag("Abstract classes show «abstract» above their \
                                              name instead of {abstract} below it."),
                 "read_only_constraint": flag("Read-only attributes end in {readOnly}."),
+                "guillemets": flag("Stereotypes and keywords stand in guillemets, as UML \
+                                    writes them: «include», «interface», «create» instead of \
+                                    <<include>>."),
             }),
             &[],
         ),
@@ -532,7 +547,8 @@ pub fn list() -> Vec<Value> {
                 json!({
                     "diagram": id("The diagram."),
                     "tool": text("The diagram tool."),
-                    "name": text("Its name; a free default name if omitted."),
+                    "name": text("Its name; a free default name if omitted. A `comment` \
+                                  (note) shows it as its text, lines joined with \\n."),
                     "x": number("Left edge."),
                     "y": number("Top edge."),
                     "on": id("Composite structure diagrams: the class (or part) a part goes into or \
@@ -551,7 +567,8 @@ pub fn list() -> Vec<Value> {
             "Creates an element in the model tree only, without showing it, e.g. a class or \
              package under `owner`. `tool` is a diagram tool name as for `create_element`, or \
              `erDomain` for a named column type of ER diagrams (a domain or enumeration, set \
-             with `update_element`), which columns take by its name as their datatype.",
+             with `update_element`), which columns take by its name as their datatype, or \
+             `extensionPoint` for an extension point of the use case `owner`.",
             json!({
                 "owner": id("The package or element to put it in."),
                 "tool": text("The kind, as a diagram tool name (`class`, `package`, …)."),
@@ -588,7 +605,9 @@ pub fn list() -> Vec<Value> {
              braces, e.g. `d..3*d`); a `timeConstraint` goes on the one message `source` \
              (e.g. `t..t+3`). A line other than a message may be given its route by hand \
              (`waypoints`, anchors, `line_shape`) instead of the one UmlCraft lays out, e.g. \
-             a recursive relationship around its entity.",
+             a recursive relationship around its entity. An `extend` runs from the extending \
+             use case to the extended one and may take its `condition` and \
+             `extension_points`.",
             with(
                 json!({
                     "diagram": id("The diagram."),
@@ -603,7 +622,7 @@ pub fn list() -> Vec<Value> {
                     "source_end": ends["source_end"],
                     "target_end": ends["target_end"],
                 }),
-                &route,
+                &with(route.clone(), &extend),
             ),
             &["diagram", "tool", "source"],
         ),
@@ -615,10 +634,12 @@ pub fn list() -> Vec<Value> {
              columns, `name` or `name : TYPE(length)`: rows of their tables in IE and IDEF1X. \
              States take their internal activities and transitions as listed in the state: \
              `entry / light on`, `do / blink`, `exit / light off` (each replaces the one \
-             before), else an internal transition `trigger [guard] / effect`.",
+             before), else an internal transition `trigger [guard] / effect`. Use cases take \
+             extension points, by name (`Device lent`), which they list below their name and \
+             «extend»s name in `extension_points`.",
             json!({
-                "owner": id("The class, interface, enumeration or data type, the ER entity, or \
-                             the state."),
+                "owner": id("The class, interface, enumeration or data type, the ER entity, \
+                             the state, or the use case."),
                 "text": text("The member as it reads in the box; `{static}` or \
                               `{abstract}` in it make it static or abstract."),
                 "key": flag("ER columns: part of the primary key."),
@@ -717,14 +738,16 @@ pub fn list() -> Vec<Value> {
              an object's class and the values of its slots; the settings of ER entities, attributes, relationships, IS-As and participations \
              (weak, key, cardinality, …); the route of a line (`waypoints`, anchors, \
              `line_shape`, `auto_route`, as `get_diagram` lists them), also of a line given \
-             by its presentation, such as a note anchor.",
+             by its presentation, such as a note anchor; the condition and extension points of \
+             an extend; the text of a comment (note).",
             with(
                 json!({
                     "id": id("The element."),
                     "name": text("New name."),
                     "text": text("Attributes and operations: the whole member as text; \
                                   transitions and internal transitions: `trigger [guard] / \
-                                  effect`."),
+                                  effect`; comments (notes): the text they show, lines \
+                                  joined with \\n (`name` sets it too)."),
                     "entry": text("States: the entry activity, without `entry /`; \"\" for none."),
                     "do": text("States: the do activity, without `do /`; \"\" for none."),
                     "exit": text("States: the exit activity, without `exit /`; \"\" for none."),
@@ -772,7 +795,7 @@ pub fn list() -> Vec<Value> {
                 &with(
                     with(with(activity_node.clone(), &er), &sequence),
                     &with(
-                        with(with(ends.clone(), &classes), &route),
+                        with(with(with(ends.clone(), &classes), &route), &extend),
                         &json!({
                             "static": flag("Attributes and operations: static (underlined)."),
                             "diagram": id("Lines: the diagram whose drawing of the line takes \
@@ -1440,6 +1463,11 @@ fn get_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
                     node["messages"] = json!([c.from, c.to])
                 }
                 Some(ElementKind::TimeConstraint(c)) => node["messages"] = json!([c.message]),
+                // What a note says, and the extension points a use case lists.
+                Some(ElementKind::Comment(c)) => node["text"] = json!(c.body),
+                Some(ElementKind::UseCase(_)) => {
+                    node["extension_points"] = json!(extension_points(model, p.element))
+                }
                 _ => {}
             }
             nodes.push(node);
@@ -1514,6 +1542,7 @@ fn set_display(host: &mut dyn Host, args: &Value) -> Outcome {
         ("visibility_column", &mut display.visibility_column),
         ("abstract_stereotype", &mut display.abstract_stereotype),
         ("read_only_constraint", &mut display.read_only_constraint),
+        ("guillemets", &mut display.guillemets),
     ] {
         if let Some(value) = args.get(key) {
             *setting = value.as_bool().ok_or_else(|| format!("`{key}` is true or false"))?;
@@ -1530,6 +1559,7 @@ fn display_json(display: Display) -> Value {
         "visibility_column": display.visibility_column,
         "abstract_stereotype": display.abstract_stereotype,
         "read_only_constraint": display.read_only_constraint,
+        "guillemets": display.guillemets,
     })
 }
 
@@ -1655,6 +1685,14 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
         {
             tx.rename(element, name.clone())?;
         }
+        // A comment's `name` is its text, which it shows.
+        if let Some(text) = &name {
+            tx.update(element, |d| {
+                if let ElementKind::Comment(p) = &mut d.kind {
+                    p.body = text.clone();
+                }
+            })?;
+        }
         if settings {
             let mut kind = tx.model().element(element)?.kind().clone();
             set_activity_node(tx.model(), element, &mut kind, args)
@@ -1704,12 +1742,16 @@ fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
     })?;
     host.show_diagram(diagram);
     let model = host.document().model();
-    Ok(Reply::json(json!({
+    let mut reply = json!({
         "element": element,
         "presentation": node,
         "kind": kind_name(model, element),
         "name": member::display_name(model, element),
-    })))
+    });
+    if let Some(ElementKind::Comment(p)) = model.get(element).map(|e| e.kind()) {
+        reply["text"] = json!(p.body);
+    }
+    Ok(Reply::json(reply))
 }
 
 /// The start of a free default name for `tool`, e.g. `Class` for `Class1`.
@@ -1723,12 +1765,17 @@ fn create_model_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let owner = id_arg(args, "owner")?;
     let key = str_arg(args, "tool")?;
     let name = str_arg(args, "name")?.to_owned();
-    if key == "erDomain" {
+    let own_kind = match key {
+        "erDomain" => Some(ElementKind::ErDomain(Default::default())),
+        "extensionPoint" => Some(ElementKind::ExtensionPoint),
+        _ => None,
+    };
+    if let Some(kind) = own_kind {
         let model = host.document().model();
         let owner_kind = model.get(owner).ok_or_else(|| format!("no element {owner}"))?.kind();
-        let data = ElementData::new(name, ElementKind::ErDomain(Default::default()));
+        let data = ElementData::new(name, kind);
         if !owner_kind.can_own(&data.kind) {
-            return Err(format!("a {} cannot own an erDomain", owner_kind.type_name()));
+            return Err(format!("a {} cannot own an {key}", owner_kind.type_name()));
         }
         let element = change(host, "create_model_element", |tx| tx.create(owner, data))?;
         return Ok(Reply::json(created(host.document().model(), element)));
@@ -1801,6 +1848,10 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
     let route = line::Route::parse(args)?;
     if route.is_some() && tool.message_sort().is_some() {
         return Err("a message has no route; `y` gives its height".into());
+    }
+    let extend = args.get("condition").is_some() || args.get("extension_points").is_some();
+    if extend && tool != EdgeTool::Extend {
+        return Err("only an extend has a `condition` and `extension_points`".into());
     }
     let model = host.document().model();
     let source = on_diagram(model, diagram, id_arg(args, "source")?)?;
@@ -1884,6 +1935,11 @@ fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
         if let Some(route) = &route {
             route.apply(tx, diagram, edge)?;
         }
+        if let Some(element) = element.filter(|_| extend) {
+            let mut kind = tx.model().element(element)?.kind().clone();
+            set_extend(tx.model(), &mut kind, args).map_err(ModelError::Invalid)?;
+            tx.update(element, |d| d.kind = kind)?;
+        }
         Ok(edge)
     })?;
     let model = host.document().model();
@@ -1915,6 +1971,20 @@ fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     let text = str_arg(args, "text")?.trim().to_owned();
     let model = host.document().model();
     let owner_kind = model.get(owner).ok_or_else(|| format!("no element {owner}"))?.kind();
+    // A use case lists its extension points, which «extend»s name.
+    if matches!(owner_kind, ElementKind::UseCase(_)) {
+        if text.is_empty() {
+            return Err("an extension point needs a name".into());
+        }
+        let data = ElementData::new(text.clone(), ElementKind::ExtensionPoint);
+        let point = change(host, "add_member", |tx| tx.create(owner, data))?;
+        return Ok(Reply::json(json!({
+            "id": point,
+            "element": point,
+            "kind": "extensionPoint",
+            "text": text,
+        })));
+    }
     let is_class_member = !matches!(
         owner_kind,
         ElementKind::State(_) | ElementKind::ErEntity(_) | ElementKind::ErRelationship(_)
@@ -2061,12 +2131,16 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         .map(|s| s.iter().filter_map(Value::as_str).map(str::to_owned).collect());
     let transition =
         matches!(kind, ElementKind::InternalTransition(_) | ElementKind::Transition(_));
+    // A comment shows its text, not a name: `name` sets the text too.
+    let comment = matches!(kind, ElementKind::Comment(_));
+    let (name, text) = if comment { (None, text.or(name)) } else { (name, text) };
     if text.is_some()
         && !transition
+        && !comment
         && !matches!(kind, ElementKind::Attribute(_) | ElementKind::Operation(_))
     {
         return Err(format!(
-            "only attributes, operations and transitions take `text`, not a {}",
+            "only attributes, operations, transitions and comments take `text`, not a {}",
             kind.type_name()
         ));
     }
@@ -2159,10 +2233,12 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         match &mut settings {
             ElementKind::InternalTransition(p) => *p = InternalTransitionProps::parse(text),
             ElementKind::Transition(p) => p.set_label(text),
+            ElementKind::Comment(p) => p.body = text.clone(),
             _ => {}
         }
     }
     set_er(&mut settings, args)?;
+    set_extend(model, &mut settings, args)?;
     // A message shows its parentheses once it is given arguments or a name written with them,
     // and none with `"arguments": null`, as a signal is mostly written.
     let call = matches!(&kind, ElementKind::Message(p) if p.sort != MessageSort::Reply);
@@ -2242,7 +2318,7 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
         if let Some(associative) = associative {
             er::set_associative(tx, id, associative)?;
         }
-        if let Some(text) = text.as_ref().filter(|_| !transition) {
+        if let Some(text) = text.as_ref().filter(|_| !transition && !comment) {
             member::apply_member_text(tx, id, text)?;
         }
         if let Some(name) = name {
@@ -2316,7 +2392,76 @@ fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     if regions.is_some() {
         reply["regions"] = json!(state_edit::regions_of(model, id));
     }
+    match model.get(id).map(|e| e.kind()) {
+        Some(ElementKind::Comment(p)) => reply["text"] = json!(p.body),
+        Some(ElementKind::Extend(p)) => {
+            reply["condition"] = json!(p.condition);
+            reply["extension_points"] = json!(p.extension_points);
+        }
+        _ => {}
+    }
     Ok(Reply::json(reply))
+}
+
+/// The condition and extension points of an «extend» from `args`.
+fn set_extend(model: &Model, kind: &mut ElementKind, args: &Value) -> Result<(), String> {
+    let condition = args.get("condition");
+    let points = args.get("extension_points");
+    if condition.is_none() && points.is_none() {
+        return Ok(());
+    }
+    let ElementKind::Extend(p) = kind else {
+        return Err(format!(
+            "only an extend has a `condition` and `extension_points`, not a {}",
+            kind.type_name()
+        ));
+    };
+    if let Some(condition) = condition {
+        p.condition = condition.as_str().ok_or("`condition` is text")?.trim().to_owned();
+    }
+    if let Some(points) = points {
+        p.extension_points = extension_points_arg(model, p.extended, points)?;
+    }
+    Ok(())
+}
+
+/// The extension points of the use case `use_case`, with their ids and names.
+fn extension_points(model: &Model, use_case: Option<Id>) -> Vec<Value> {
+    let Some(use_case) = use_case else { return Vec::new() };
+    model
+        .children(use_case)
+        .iter()
+        .filter(|&&c| matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::ExtensionPoint)))
+        .map(|&c| json!({ "id": c, "name": model.get(c).map_or("", |e| e.name()) }))
+        .collect()
+}
+
+/// The extension points `value` names (ids or names) among those of the use case `use_case`,
+/// for an «extend» into it.
+fn extension_points_arg(model: &Model, use_case: Id, value: &Value) -> Result<Vec<Id>, String> {
+    let items = value.as_array().ok_or("`extension_points` is a list of ids or names")?;
+    let points: Vec<Id> = model
+        .children(use_case)
+        .iter()
+        .copied()
+        .filter(|&c| matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::ExtensionPoint)))
+        .collect();
+    items
+        .iter()
+        .map(|item| {
+            let text = item.as_str().ok_or("`extension_points` is a list of ids or names")?;
+            let by_id = parse_id(text).ok().filter(|id| points.contains(id));
+            let by_name =
+                || points.iter().copied().find(|&p| model.get(p).is_some_and(|e| e.name() == text));
+            by_id.or_else(by_name).ok_or_else(|| {
+                let case = model.get(use_case).map_or("", |e| e.name());
+                format!(
+                    "the extended use case {case} has no extension point `{text}`; \
+                     `add_member` on it adds one"
+                )
+            })
+        })
+        .collect()
 }
 
 const SHARED_STYLES: [(&str, SharedStyle); 3] = [
@@ -7615,7 +7760,7 @@ mod tests {
         };
         // As in Astah until a client says otherwise.
         let off = json!({ "visibility_column": false, "abstract_stereotype": false,
-                          "read_only_constraint": false });
+                          "read_only_constraint": false, "guillemets": false });
         assert_eq!(run(&mut host, "get_document", json!({}))["display"], off);
         assert!(svg(&mut host).contains(">- stand : int<"));
         // Then the visibility in its own column, a minus as wide as a plus, and «abstract».
@@ -8013,5 +8158,182 @@ mod tests {
             assert!(call(&mut host, &Access::default(), "move_node", &args).is_error, "{args}");
         }
         assert_eq!(bars(&mut host), after);
+    }
+
+    #[test]
+    fn stereotypes_and_keywords_stand_in_guillemets_when_asked() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "use_case", "name": "u" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "useCase", "name": "Ausleihen" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "useCase", "name": "Ausweis prüfen" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "include",
+                    "source": "$1.element", "target": "$2.element" } },
+                { "tool": "create_diagram", "arguments": { "kind": "class", "name": "c" } },
+                { "tool": "create_element", "arguments": { "diagram": "$4.diagram",
+                    "tool": "interface", "name": "Zahlbar" } },
+                { "tool": "add_member", "arguments": { "owner": "$5.element",
+                    "text": "+ zahle() : void" } },
+                { "tool": "update_element", "arguments": { "id": "$6.id",
+                    "stereotypes": ["query"] } },
+                { "tool": "create_diagram", "arguments": { "kind": "sequence", "name": "s" } },
+                { "tool": "create_element", "arguments": { "diagram": "$8.diagram",
+                    "tool": "lifeline", "name": "a" } },
+                { "tool": "create_element", "arguments": { "diagram": "$8.diagram",
+                    "tool": "lifeline", "name": "b" } },
+                { "tool": "connect", "arguments": { "diagram": "$8.diagram",
+                    "tool": "createMessage", "source": "$9.element", "target": "$10.element" } },
+            ]),
+        );
+        let svg = |host: &mut Headless, d: &Value| {
+            let (doc, measure) = host.parts();
+            let d = id(d).parse().unwrap();
+            svg::render(&scene::build(doc.model(), d, &Preview::default(), measure), measure)
+        };
+        let texts = ["include", "interface", "query", "create"];
+        let drawn = |host: &mut Headless| {
+            [&r[0]["diagram"], &r[4]["diagram"], &r[8]["diagram"]].map(|d| svg(host, d)).join("")
+        };
+        // As in Astah by default.
+        let astah = drawn(&mut host);
+        for text in texts {
+            assert!(astah.contains(&format!("&lt;&lt;{text}&gt;&gt;")), "{text}: {astah}");
+        }
+        // In guillemets once asked for (#86).
+        let on = run(&mut host, "set_display", json!({ "guillemets": true }));
+        assert_eq!(on["guillemets"], true);
+        let uml = drawn(&mut host);
+        for text in texts {
+            assert!(uml.contains(&format!("«{text}»")), "{text}: {uml}");
+        }
+        assert!(!uml.contains("&lt;&lt;"), "{uml}");
+    }
+
+    #[test]
+    fn use_cases_take_extension_points_and_extends_name_them() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "use_case", "name": "u" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "useCase", "name": "Fach mieten", "x": 100, "y": 60 } },
+                { "tool": "add_member", "arguments": { "owner": "$1.element",
+                    "text": "Fachwahl" } },
+                { "tool": "create_model_element", "arguments": { "owner": "$1.element",
+                    "tool": "extensionPoint", "name": "Zahlung" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "useCase", "name": "Fach reservieren", "x": 100, "y": 260 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "extend",
+                    "source": "$4.element", "target": "$1.element",
+                    "condition": "Fach frei", "extension_points": ["Fachwahl"] } },
+            ]),
+        );
+        // An extension point, not a hidden attribute (#87).
+        assert_eq!(r[2]["kind"], "extensionPoint");
+        assert_eq!(r[3]["kind"], "extensionPoint");
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": r[0]["diagram"] }));
+        let case = diagram["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["element"] == r[1]["element"])
+            .unwrap()
+            .clone();
+        let names: Vec<&str> = case["extension_points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Fachwahl", "Zahlung"]);
+        // The extend's condition and points (#88).
+        let extend = |host: &mut Headless| {
+            let e: Id = id(&r[5]["element"]).parse().unwrap();
+            match host.document().model().get(e).unwrap().kind() {
+                ElementKind::Extend(p) => p.clone(),
+                other => panic!("{other:?}"),
+            }
+        };
+        let fachwahl: Id = id(&r[2]["id"]).parse().unwrap();
+        let zahlung: Id = id(&r[3]["id"]).parse().unwrap();
+        assert_eq!(extend(&mut host).condition, "Fach frei");
+        assert_eq!(extend(&mut host).extension_points, [fachwahl]);
+        let both = json!({ "id": r[5]["element"], "condition": "",
+                           "extension_points": [r[3]["id"], "Fachwahl"] });
+        let reply = run(&mut host, "update_element", both);
+        assert_eq!(reply["extension_points"], json!([zahlung, fachwahl]));
+        assert_eq!(extend(&mut host).condition, "");
+        for (tool, args) in [
+            ("update_element", json!({ "id": r[5]["element"], "extension_points": ["Kasse"] })),
+            ("update_element", json!({ "id": r[1]["element"], "condition": "x" })),
+            (
+                "connect",
+                json!({ "diagram": r[0]["diagram"], "tool": "include",
+                                "source": r[4]["element"], "target": r[1]["element"],
+                                "condition": "x" }),
+            ),
+            ("add_member", json!({ "owner": r[1]["element"], "text": " " })),
+        ] {
+            assert!(call(&mut host, &Access::default(), tool, &args).is_error, "{tool} {args}");
+        }
+        // The points stay inside the ellipse of a use case with a short name (#90).
+        let (doc, measure) = host.parts();
+        let d: Id = id(&r[0]["diagram"]).parse().unwrap();
+        let scene = scene::build(doc.model(), d, &Preview::default(), measure);
+        let node = scene.node(id(&r[1]["presentation"]).parse().unwrap()).unwrap();
+        let (c, a, b) = (node.rect.center(), node.rect.width / 2.0, node.rect.height / 2.0);
+        let inside = |x: f32, y: f32| ((x - c.x) / a).powi(2) + ((y - c.y) / b).powi(2) <= 1.0;
+        let points: Vec<_> =
+            node.rows.iter().filter(|row| row.align == scene::LabelAlign::Left).collect();
+        assert_eq!(points.len(), 3, "{:?}", node.rows);
+        for row in points {
+            let right = row.rect.x + measure.width(&row.text, scene::FONT_SIZE, false);
+            for (x, y) in [
+                (row.rect.x, row.rect.y),
+                (right, row.rect.y),
+                (row.rect.x, row.rect.bottom()),
+                (right, row.rect.bottom()),
+            ] {
+                assert!(inside(x, y), "{} at {x}, {y} out of {:?}", row.text, node.rect);
+            }
+        }
+    }
+
+    #[test]
+    fn comments_show_the_text_they_are_given() {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "use_case", "name": "u" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                    "tool": "comment", "name": "Hallo\nWelt", "x": 260, "y": 160 } },
+            ]),
+        );
+        // The name is the note's text (#89).
+        assert_eq!(r[1]["text"], "Hallo\nWelt");
+        let svg = |host: &mut Headless| {
+            let (doc, measure) = host.parts();
+            let d = id(&r[0]["diagram"]).parse().unwrap();
+            svg::render(&scene::build(doc.model(), d, &Preview::default(), measure), measure)
+        };
+        let drawn = svg(&mut host);
+        assert!(drawn.contains(">Hallo<") && drawn.contains(">Welt<"), "{drawn}");
+        let renamed =
+            run(&mut host, "update_element", json!({ "id": r[1]["element"], "name": "Neu" }));
+        assert_eq!(renamed["text"], "Neu");
+        assert!(svg(&mut host).contains(">Neu<"));
+        run(
+            &mut host,
+            "update_element",
+            json!({ "id": r[1]["element"], "text": "Bedingung: frei" }),
+        );
+        let diagram = run(&mut host, "get_diagram", json!({ "diagram": r[0]["diagram"] }));
+        assert_eq!(diagram["nodes"][0]["text"], "Bedingung: frei");
     }
 }

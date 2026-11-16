@@ -133,8 +133,8 @@ pub fn member_shown(model: &Model, id: Id, style: &Style) -> bool {
 
 /// The text of a member as a classifier box with `style` shows it: what the box leaves out is
 /// left out, and the member's stereotypes follow its visibility, as in Astah
-/// (`+ <<enum constant>> PLAIN : Terrain`).
-pub fn member_label(model: &Model, id: Id, style: &Style) -> String {
+/// (`+ <<enum constant>> PLAIN : Terrain`), in guillemets with `guillemets`.
+pub fn member_label(model: &Model, id: Id, style: &Style, guillemets: bool) -> String {
     let Some(e) = model.get(id) else { return String::new() };
     let mut text = member_body(model, id, style);
     let stereotypes = &e.data().stereotypes;
@@ -145,7 +145,8 @@ pub fn member_label(model: &Model, id: Id, style: &Style) -> String {
     };
     if shown && !stereotypes.is_empty() {
         let at = if style.hide_member_visibility { 0 } else { text.find(' ').map_or(0, |i| i + 1) };
-        text.insert_str(at, &format!("{} ", crate::scene::stereotype_text(stereotypes)));
+        let stereotypes = crate::scene::stereotype_text(stereotypes, guillemets);
+        text.insert_str(at, &format!("{stereotypes} "));
     }
     text
 }
@@ -1014,9 +1015,11 @@ mod tests {
         let label = |id, f: fn(&mut Style)| {
             let mut style = Style::default();
             f(&mut style);
-            member_label(model, id, &style)
+            member_label(model, id, &style, false)
         };
         assert_eq!(label(secret, |_| {}), "- <<id>> secret : String = \"x\"");
+        let style = Style::default();
+        assert_eq!(member_label(model, secret, &style, true), "- «id» secret : String = \"x\"");
         assert_eq!(
             label(swap, |_| {}),
             "# <<op>> swap(out x : int, inout y : int, z : int) : void"

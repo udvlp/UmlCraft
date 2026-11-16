@@ -961,16 +961,16 @@ fn round_trip_through_astah() {
     let expected_shown = diagram_contents(original);
     pretty_assertions::assert_eq!(shown.lines, expected_shown.lines);
     // Astah keeps UmlCraft's sizes, but may grow a node to fit its content (a use case with
-    // extension points, for example). Instances it sizes by itself.
+    // extension points, for example). Instances it sizes by itself. A use case goes as wide as
+    // UmlCraft draws it, which holds its extension points inside the ellipse.
     for (node, (width, height)) in expected_shown.sizes {
         if node.contains(": instance ") {
             continue;
         }
         let (w, h) = shown.sizes[&node];
-        assert!(
-            (w - width).abs() < 0.5 && h > height - 0.5,
-            "{node}: {w}x{h}, not {width}x{height}"
-        );
+        let wide =
+            if node.contains(": useCase ") { w > width - 0.5 } else { (w - width).abs() < 0.5 };
+        assert!(wide && h > height - 0.5, "{node}: {w}x{h}, not {width}x{height}");
     }
     // Anchors and labels set by hand come back; the importer fills in the others as well.
     for (edge, placed) in expected_shown.placements {

@@ -627,6 +627,10 @@ impl TextMeasure for FontMeasure<'_> {
     fn read_only_constraint(&self) -> bool {
         self.display.read_only_constraint
     }
+
+    fn guillemets(&self) -> bool {
+        self.display.guillemets
+    }
 }
 
 /// Measures text with the app's font system by adding up the advances of the characters, as
@@ -666,6 +670,10 @@ impl TextMeasure for AppMeasure {
 
     fn read_only_constraint(&self) -> bool {
         self.display.read_only_constraint
+    }
+
+    fn guillemets(&self) -> bool {
+        self.display.guillemets
     }
 }
 

@@ -52,6 +52,12 @@ pub trait TextMeasure {
     fn read_only_constraint(&self) -> bool {
         false
     }
+
+    /// Whether stereotypes and keywords stand in guillemets (`«include»`), as UML writes them,
+    /// a setting. Off, they look as in Astah (`<<include>>`).
+    fn guillemets(&self) -> bool {
+        false
+    }
 }
 
 pub struct ApproxMeasure;
@@ -72,6 +78,8 @@ pub struct Display {
     pub abstract_stereotype: bool,
     /// Read-only attributes end in `{readOnly}`.
     pub read_only_constraint: bool,
+    /// Stereotypes and keywords stand in guillemets: `«include»` instead of `<<include>>`.
+    pub guillemets: bool,
 }
 
 impl Display {
@@ -81,6 +89,7 @@ impl Display {
             visibility_column: measure.visibility_column(),
             abstract_stereotype: measure.abstract_stereotype(),
             read_only_constraint: measure.read_only_constraint(),
+            guillemets: measure.guillemets(),
         }
     }
 }
@@ -108,6 +117,10 @@ impl<T: TextMeasure + ?Sized> TextMeasure for Box<T> {
 
     fn read_only_constraint(&self) -> bool {
         (**self).read_only_constraint()
+    }
+
+    fn guillemets(&self) -> bool {
+        (**self).guillemets()
     }
 }
 
@@ -140,6 +153,10 @@ impl<M: TextMeasure> TextMeasure for Displayed<M> {
 
     fn read_only_constraint(&self) -> bool {
         self.display.read_only_constraint
+    }
+
+    fn guillemets(&self) -> bool {
+        self.display.guillemets
     }
 }
 
@@ -1200,9 +1217,15 @@ pub fn line_height(size: f32) -> f32 {
     size * LINE_SPACING
 }
 
-/// Stereotypes as Astah writes them: `<<entity, control>>`.
-pub fn stereotype_text(names: &[String]) -> String {
-    format!("<<{}>>", names.join(", "))
+/// Stereotypes as Astah writes them, `<<entity, control>>`, or with `guillemets` as UML does,
+/// `«entity, control»`.
+pub fn stereotype_text(names: &[String], guillemets: bool) -> String {
+    keyword_text(&names.join(", "), guillemets)
+}
+
+/// A keyword or stereotype: `<<include>>` as Astah writes it, `«include»` with `guillemets`.
+pub fn keyword_text(text: &str, guillemets: bool) -> String {
+    if guillemets { format!("«{text}»") } else { format!("<<{text}>>") }
 }
 
 /// The visibility symbol a member's text starts with, as drawn, and the rest of the text from
@@ -1536,7 +1559,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             }
             _ => None,
         });
-        let keyword = binding.is_some().then(|| "<<bind>>".to_owned());
+        let keyword = binding.is_some().then(|| keyword_text("bind", measure.guillemets()));
         // A line to a socket is its «use» already, as Astah draws it.
         let to_socket = sockets.contains(target) || sockets.contains(source);
         let label = element.and_then(|e| {
@@ -1551,7 +1574,7 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
             let stereotypes = stereotypes.join(", ");
             let name = name(e);
             let parts: Vec<String> = [
-                (!stereotypes.is_empty()).then(|| format!("<<{stereotypes}>>")),
+                (!stereotypes.is_empty()).then(|| keyword_text(&stereotypes, measure.guillemets())),
                 (!name.is_empty()).then_some(name),
                 binding.clone(),
             ]
@@ -2303,10 +2326,11 @@ fn layout_activity_node(
         _ => (PAD_X, 40.0, 0.0),
     };
     let keyword = match props.node {
-        ActivityNodeKind::SendSignal => Some("<<signal sending>>"),
-        ActivityNodeKind::AcceptEvent => Some("<<signal receipt>>"),
+        ActivityNodeKind::SendSignal => Some("signal sending"),
+        ActivityNodeKind::AcceptEvent => Some("signal receipt"),
         _ => None,
-    };
+    }
+    .map(|k| keyword_text(k, measure.guillemets()));
     let width = bounds.width.max(min_width);
     let names = wrap(&text, width - 2.0 * pad_x, FONT_SIZE, measure);
     // Object nodes in a state show it as `[state]` in a line of its own below the name; the
@@ -2314,7 +2338,6 @@ fn layout_activity_node(
     let state = (props.node.is_object() && !props.in_state.is_empty())
         .then(|| format!("[{}]", props.in_state));
     let widest = keyword
-        .map(str::to_owned)
         .iter()
         .chain(&names)
         .chain(&state)
@@ -2331,7 +2354,7 @@ fn layout_activity_node(
     // Astah puts a call behavior action's name 2.5 below the middle of what the rake leaves.
     let top = r.y + (r.height - icon - block) / 2.0 + if icon > 0.0 { 2.5 } else { 0.0 };
     let lines = keyword
-        .map(|k| (k.to_owned(), RowRole::Stereotype, None))
+        .map(|k| (k, RowRole::Stereotype, None))
         .into_iter()
         .chain(names.into_iter().map(|n| (n, RowRole::Name, Some(id))))
         .chain(state.map(|s| (s, RowRole::Member, None)));
@@ -2575,10 +2598,12 @@ fn stereotype_lines<'a>(
     sets: impl IntoIterator<Item = &'a Vec<String>>,
     size: f32,
     id: Id,
+    measure: &dyn TextMeasure,
 ) -> Vec<Line> {
+    let guillemets = measure.guillemets();
     sets.into_iter()
         .filter(|s| !s.is_empty())
-        .map(|s| Line::new(stereotype_text(s), size, RowRole::Stereotype, Some(id)))
+        .map(|s| Line::new(stereotype_text(s, guillemets), size, RowRole::Stereotype, Some(id)))
         .collect()
 }
 
@@ -2603,7 +2628,7 @@ fn layout_box(
     let classifier = instance_of.flatten().and_then(|c| model.get(c));
     let own = (!style.hide_stereotypes).then_some(&e.data().stereotypes);
     let base = classifier.map(|c| &c.data().stereotypes).filter(|_| !style.hide_stereotypes);
-    let mut lines = stereotype_lines([own, base].into_iter().flatten(), FONT_SIZE, id);
+    let mut lines = stereotype_lines([own, base].into_iter().flatten(), FONT_SIZE, id, measure);
     let mut name = match instance_of {
         Some(classifier) => {
             let (text, _) = instance_text(model, e, classifier, style);
@@ -2701,7 +2726,7 @@ fn layout_object(
         .and_then(|c| model.get(c))
         .map(|c| &c.data().stereotypes)
         .filter(|_| !style.hide_stereotypes);
-    let mut header = stereotype_lines([own, base].into_iter().flatten(), FONT_SIZE, id);
+    let mut header = stereotype_lines([own, base].into_iter().flatten(), FONT_SIZE, id, measure);
     let (text, colon_first) = instance_text(model, e, classifier, style);
     let mut name = Line::new(text, FONT_SIZE, RowRole::Name, Some(id));
     name.underline = true;
@@ -2861,7 +2886,7 @@ fn layout_state(
         return layout_submachine_state(model, props, name, activities, bounds, measure);
     }
     let own = (!style.hide_stereotypes).then_some(&e.data().stereotypes);
-    let mut head = stereotype_lines(own, FONT_SIZE, id);
+    let mut head = stereotype_lines(own, FONT_SIZE, id, measure);
     head.push(name);
     let widest = activities.iter().chain(&head).map(|l| l.width(measure)).fold(0.0, f32::max);
     let header = h * head.len() as f32 + 2.0 * PAD_Y;
@@ -3530,6 +3555,15 @@ fn layout_use_case(
         paragraphs.into_iter().flat_map(|l| l.wrapped(r_width - NAME_PAD, measure)).collect();
     // Lines that still do not fit (Astah measures by the larger of two widths) widen it too.
     let r_width = names.iter().map(|l| width(l) + NAME_PAD).fold(r_width, f32::max);
+    // The points stand on the rectangle inscribed in the ellipse, 1/√2 of its width: the
+    // ellipse is wide enough that each of them fits there with a gap. Astah's own use cases
+    // keep its width.
+    let sqrt2 = std::f32::consts::SQRT_2;
+    let r_width = if auto_size {
+        r_width
+    } else {
+        points.iter().map(|l| sqrt2 * (width(l) + NAME_GAP)).fold(r_width, f32::max)
+    };
     let names_h = h * names.len() as f32;
     let block = if points.is_empty() {
         names_h
@@ -3548,7 +3582,13 @@ fn layout_use_case(
     } else if points.is_empty() {
         MIN_SIZE.height
     } else {
-        block + 2.0 * MARGIN
+        // And high enough that the rows of the points lie within that rectangle too, which
+        // reaches 1/√2 of the half height above and below the center.
+        let first = -block / 2.0 + names_h - h + SEPARATOR + FIRST_BASELINE
+            - crate::draw::baseline(FONT_SIZE);
+        let last = first + h * points.len() as f32;
+        let reach = first.abs().max(last.abs()) + NAME_GAP / 2.0;
+        (block + 2.0 * MARGIN).max(2.0 * sqrt2 * reach)
     };
     let x = if auto_size { bounds.center().x - r_width / 2.0 } else { bounds.x };
     let r = Rect::new(x, bounds.y, r_width, bounds.height.max(height));
@@ -3746,7 +3786,7 @@ fn layout_structured(
     let size = style.font_size.unwrap_or(FONT_SIZE);
     let stereotypes =
         if style.hide_stereotypes { Vec::new() } else { e.data().stereotypes.clone() };
-    let mut header = stereotype_lines([&stereotypes], size, id);
+    let mut header = stereotype_lines([&stereotypes], size, id, measure);
     let mut name = Line::new(crate::member::display_name(model, id), size, RowRole::Name, Some(id));
     name.bold = true;
     name.italic = matches!(e.kind(), ElementKind::Class(p) if p.is_abstract);
@@ -3908,7 +3948,7 @@ fn layout_classifier(
     if !style.hide_stereotypes {
         stereotypes.extend(e.data().stereotypes.iter().cloned());
     }
-    let mut header = stereotype_lines([&stereotypes], size, id);
+    let mut header = stereotype_lines([&stereotypes], size, id, measure);
     let mut name = Line::new(crate::member::display_name(model, id), size, RowRole::Name, Some(id));
     name.bold = true;
     name.italic = is_abstract;
@@ -3923,7 +3963,7 @@ fn layout_classifier(
             .filter_map(|&c| model.get(c))
             .filter(|c| pick(c.kind()) && member_shown(model, c.id(), style))
             .map(|c| {
-                let mut text = member_label(model, c.id(), style);
+                let mut text = member_label(model, c.id(), style, measure.guillemets());
                 if matches!(c.kind(), ElementKind::Attribute(p) if p.is_read_only)
                     && measure.read_only_constraint()
                 {
@@ -4282,13 +4322,13 @@ fn edge_for(
         Some(ElementKind::Include(_)) => {
             edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::OpenArrow;
-            keyword = Some("<<include>>".to_owned());
+            keyword = Some(keyword_text("include", measure.guillemets()));
         }
         Some(ElementKind::Extend(_)) => {
             // Astah shows an extend's condition in its properties only, not at the line.
             edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::OpenArrow;
-            keyword = Some("<<extend>>".to_owned());
+            keyword = Some(keyword_text("extend", measure.guillemets()));
         }
         Some(ElementKind::Message(p)) => match p.sort {
             MessageSort::Asynchronous => edge.target_marker = EndMarker::OpenArrow,
