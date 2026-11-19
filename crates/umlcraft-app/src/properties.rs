@@ -1383,8 +1383,7 @@ impl PropertiesPanel {
         let selected = |this: &Self, cx: &App| {
             let ws = this.workspace.read(cx);
             let presentation = selected_presentation(ws).map(|p| p.id);
-            let element = ws.selected_element.filter(|&id| ws.doc.model().contains(id));
-            (element, presentation, ws.doc.revision())
+            (ws.shown_element(), presentation, ws.doc.revision())
         };
         // The selection moved away while a field was being edited: save that edit first.
         let (before, ..) = selected(self, cx);
@@ -1901,7 +1900,7 @@ impl Render for PropertiesPanel {
             }
             _ => {}
         }
-        let Some(e) = ws.selected_element.and_then(|id| model.get(id)) else {
+        let Some(e) = ws.shown_element().and_then(|id| model.get(id)) else {
             return body
                 .child(div().text_sm().text_color(muted).child(t!("prop.nothing_selected")));
         };

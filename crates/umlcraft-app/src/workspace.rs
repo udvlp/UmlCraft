@@ -98,6 +98,19 @@ impl Workspace {
         self.selection.clear();
     }
 
+    /// What the properties panel shows: the selected element, or with nothing selected the
+    /// active diagram, so that its settings stay at hand after a click on an empty spot or on
+    /// the diagram in the model tree.
+    pub fn shown_element(&self) -> Option<Id> {
+        let model = self.doc.model();
+        match self.selected_element.filter(|&id| model.contains(id)) {
+            None if self.selection.is_empty() => self.active_diagram.filter(|&d| {
+                matches!(model.get(d).map(|e| e.kind()), Some(ElementKind::Diagram(_)))
+            }),
+            selected => selected,
+        }
+    }
+
     fn element_of(&self, presentation: Id) -> Option<Id> {
         let view = self.doc.model().view(self.active_diagram?)?;
         view.get(presentation)?.element
@@ -1860,6 +1873,18 @@ mod tests {
         };
         assert_eq!(umlcraft_nsd::Keywords::of(&p.structogram), umlcraft_nsd::Keywords::German);
         assert_eq!(p.structogram.header("preReturn"), Some("gib"));
+    }
+
+    #[test]
+    fn with_nothing_selected_the_panel_shows_the_diagram() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        ws.open_diagram(ids.class_diagram);
+        assert_eq!(ws.shown_element(), Some(ids.class_diagram));
+        ws.select_element(ids.customer);
+        assert_eq!(ws.shown_element(), Some(ids.customer));
+        ws.clear_selection();
+        assert_eq!(ws.shown_element(), Some(ids.class_diagram));
     }
 
     #[test]
