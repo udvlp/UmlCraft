@@ -2312,7 +2312,7 @@ impl MainView {
     /// The properties panel under a heading that names what it shows, like "CLASS".
     fn properties_area(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.read(cx);
-        let kind = ws.selected_element.and_then(|id| ws.doc.model().get(id)).map(|e| e.kind());
+        let kind = ws.shown_element().and_then(|id| ws.doc.model().get(id)).map(|e| e.kind());
         let structogram = self.properties.read(cx).structogram_heading(cx);
         let header = match kind {
             // The structogram's selected element, or the structogram itself.
