@@ -666,3 +666,46 @@ fn a_loop_to_the_same_entity_leaves_the_labels_of_a_straight_line_at_it() {
         assert!(off < 12.0, "{} at {drawn:?}, line at {y}", label.text);
     }
 }
+
+#[test]
+fn chen_ratios_show_the_maximum_of_each_cardinality() {
+    let mut host = Headless::new();
+    let r = build(
+        &mut host,
+        json!([
+            { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+              "name": "er" } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+              "tool": "erEntity", "name": "Kunde" } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+              "tool": "erEntity", "name": "Ticket" } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+              "tool": "erRelationship", "name": "bucht" } },
+            { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+              "source": "$3.element", "target": "$1.element" } },
+            { "tool": "update_element", "arguments": { "id": "$4.element",
+              "cardinality": "[1,1]" } },
+            { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+              "source": "$3.element", "target": "$2.element" } },
+            { "tool": "update_element", "arguments": { "id": "$0.diagram", "ratios": true } },
+        ]),
+    );
+    let scene = drawn(&mut host, &r[0]["diagram"]);
+    let texts = |edge: &Value| -> Vec<String> {
+        let edge = scene.edge(id(&edge["presentation"]).parse().unwrap()).unwrap();
+        edge.labels.iter().map(|l| l.text.clone()).collect()
+    };
+    assert_eq!((texts(&r[4]), texts(&r[6])), (vec!["1".into()], vec!["n".into()]));
+    let diagram = run(&mut host, "get_element", json!({ "id": r[0]["diagram"] }));
+    assert!(diagram["properties"].to_string().contains("\"ratios\":true"), "{diagram}");
+    // Reading at the entity turns ratios off; both at once are refused.
+    run(&mut host, "update_element", json!({ "id": r[0]["diagram"], "look_here": true }));
+    let diagram = run(&mut host, "get_element", json!({ "id": r[0]["diagram"] }));
+    assert!(!diagram["properties"].to_string().contains("\"ratios\":true"), "{diagram}");
+    let both = json!({ "id": r[0]["diagram"], "look_here": true, "ratios": true });
+    assert!(call(&mut host, &Access::default(), "update_element", &both).is_error);
+    // Only ER diagrams take it.
+    let class = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "c" }));
+    let args = json!({ "id": class["diagram"], "ratios": true });
+    assert!(call(&mut host, &Access::default(), "update_element", &args).is_error);
+}

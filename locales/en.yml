@@ -478,7 +478,10 @@ prop:
   er_display_keys: Primary keys only
   er_display_name: Names only
   er_physical_names: Physical names (database)
-  er_look_here: Read cardinalities at the entity (min,max)
+  er_cardinalities: Cardinalities
+  er_look_across: "[min,max]"
+  er_look_here: (min,max) at the entity
+  er_ratios: "1 : n (Chen)"
   er_default_value: Default value
   er_identifying: Identifying
   er_cardinality: Cardinality
@@ -931,6 +934,7 @@ error:
   port_on_untyped_part: "A port on a part belongs to the part's type: give the part a class as its type first (e.g. engine : Engine)."
   multiplicity: "\"%{text}\" is not a multiplicity. Examples: 1, 0..1, 1..*, *"
   cardinality: "\"%{text}\" is not a cardinality. Examples: [0,1], [1,n], 0..*, [*,m]"
+  cardinality_ratio: "\"%{text}\" is not a ratio. Examples: 1, n, m, 3 or in full [1,n]"
   malformed: "The file is damaged (line %{line}, column %{column})."
   not_a_project: The file is not an UmlCraft project.
   not_astah: The file is not an .asta project, or it is damaged.

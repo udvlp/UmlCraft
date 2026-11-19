@@ -10,6 +10,7 @@ use umlcraft_model::{
 use umlcraft_notation::autoroute;
 use umlcraft_notation::clipboard::{self, Clip};
 use umlcraft_notation::edit;
+use umlcraft_notation::er::CardinalityReading;
 use umlcraft_notation::layout;
 use umlcraft_notation::member;
 use umlcraft_notation::object;
@@ -777,13 +778,13 @@ impl Workspace {
                 Some(ElementKind::ErParticipation(_))
             )
         {
-            let look_here = self.reads_look_here();
+            let reading = self.cardinality_reading();
             if self.shown_cardinality(association) == c {
                 return;
             }
             let label = t!("edit.properties").to_string();
             let result = self.edit(label, |tx| {
-                umlcraft_notation::er::set_shown_cardinality(tx, association, c, look_here)
+                umlcraft_notation::er::set_shown_cardinality(tx, association, c, reading)
             });
             self.report(result);
             return;
@@ -808,16 +809,30 @@ impl Workspace {
         });
     }
 
-    /// Whether the active diagram reads ER cardinalities at their entity.
-    pub fn reads_look_here(&self) -> bool {
-        self.active_diagram
-            .is_some_and(|d| umlcraft_notation::er::reads_look_here(self.doc.model(), d))
+    /// How the active diagram writes ER cardinalities.
+    pub fn cardinality_reading(&self) -> CardinalityReading {
+        self.active_diagram.map_or(CardinalityReading::LookAcross, |d| {
+            umlcraft_notation::er::cardinality_reading(self.doc.model(), d)
+        })
     }
 
     /// The cardinality ER participation `participation` shows, as the active diagram reads it.
     pub fn shown_cardinality(&self, participation: Id) -> Option<Cardinality> {
-        let look_here = self.reads_look_here();
-        umlcraft_notation::er::shown_cardinality(self.doc.model(), participation, look_here)
+        let reading = self.cardinality_reading();
+        umlcraft_notation::er::shown_cardinality(self.doc.model(), participation, reading)
+    }
+
+    /// Reads `text` typed for what ER participation `participation` shows, as the active
+    /// diagram writes it; an error says what it takes.
+    pub fn read_cardinality(
+        &self,
+        participation: Id,
+        text: &str,
+    ) -> Result<Option<Cardinality>, String> {
+        let reading = self.cardinality_reading();
+        reading
+            .parse(text, self.shown_cardinality(participation))
+            .map_err(|err| crate::errors::cardinality_error(&err, reading))
     }
 
     /// Lets a lifeline of the active diagram end at `bottom`.
@@ -862,8 +877,8 @@ impl Workspace {
             .is_some_and(|e| matches!(e.kind(), ElementKind::ErParticipation(_)));
         if participation {
             let parsed = match multiplicity {
-                true if !text.is_empty() => text.parse::<Cardinality>().map(Some),
-                _ => Ok(None),
+                true => self.read_cardinality(association, text),
+                false => Ok(None),
             };
             match parsed {
                 Ok(c) if multiplicity => {
@@ -874,7 +889,7 @@ impl Workspace {
                         p.role = text.to_owned();
                     }
                 }),
-                Err(err) => self.complain(crate::errors::cardinality_error(&err)),
+                Err(message) => self.complain(message),
             }
             return;
         }
@@ -1919,6 +1934,41 @@ mod tests {
         assert_eq!(ws.shown_element(), Some(ids.customer));
         ws.clear_selection();
         assert_eq!(ws.shown_element(), Some(ids.class_diagram));
+    }
+
+    #[test]
+    fn chen_ratios_typed_on_the_diagram_keep_the_minimum() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        let mut chen = ElementKind::diagram(DiagramKind::EntityRelationship);
+        if let ElementKind::Diagram(p) = &mut chen {
+            p.ratios = true;
+        }
+        let (diagram, part) = ws
+            .doc
+            .edit("er", |tx| {
+                let d = tx.create(ids.domain, ElementData::new("ER", chen))?;
+                let node = |tx: &mut Tx<'_>, kind| {
+                    let e = tx.create(ids.domain, ElementData::new("x", kind))?;
+                    tx.add_node(d, Some(e), Rect::new(0.0, 0.0, 80.0, 40.0))
+                };
+                let entity = node(tx, ElementKind::ErEntity(Default::default()))?;
+                let relationship = node(tx, ElementKind::ErRelationship(Default::default()))?;
+                let edge = umlcraft_notation::er::connect(tx, d, entity, relationship)?;
+                Ok((d, tx.model().view(d).and_then(|v| v.get(edge)?.element).unwrap()))
+            })
+            .unwrap();
+        ws.open_diagram(diagram);
+        let shown = |ws: &Workspace| ws.shown_cardinality(part).map(|c| c.to_string());
+        ws.set_end_text(part, 0, true, "[1,1]");
+        ws.set_end_text(part, 0, true, "n");
+        assert_eq!(shown(&ws), Some("[1,n]".into()));
+        // Text that is no ratio is refused with a message.
+        ws.set_end_text(part, 0, true, "x");
+        assert!(ws.message.is_some());
+        assert_eq!(shown(&ws), Some("[1,n]".into()));
+        ws.set_end_text(part, 0, true, "");
+        assert_eq!(shown(&ws), None);
     }
 
     #[test]

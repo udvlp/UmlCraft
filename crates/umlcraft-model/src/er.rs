@@ -277,6 +277,53 @@ impl Cardinality {
         let text = self.to_string();
         format!("({})", &text[1..text.len() - 1])
     }
+
+    /// The maximum alone, as Chen's ratios write it: `1` for `[1,1]`, `n` for `[0,n]`, `m` for
+    /// `[0,m]`, `3` for `[0,3]`.
+    pub fn ratio(&self) -> String {
+        match self.max {
+            CardinalityMax::Count(n) => n.to_string(),
+            CardinalityMax::Many => "n".into(),
+            CardinalityMax::ManyM => "m".into(),
+        }
+    }
+
+    /// `current` with the maximum `max`, as setting a ratio changes it: the minimum stays,
+    /// lowered to `max` if it is above (`[2,5]` with `1` gives `[1,1]`); without `current` it
+    /// is 0.
+    pub fn with_ratio(current: Option<Self>, max: CardinalityMax) -> Self {
+        let min = match (current.map(|c| c.min), max) {
+            (None, _) => CardinalityMin::Count(0),
+            (Some(CardinalityMin::Count(min)), CardinalityMax::Count(max)) if min > max => {
+                CardinalityMin::Count(max)
+            }
+            (Some(min), _) => min,
+        };
+        Self { min, max }
+    }
+
+    /// Reads a ratio (`1`, `n` or `N`, `m` or `M`, a number) as the new maximum of `current`,
+    /// as [`with_ratio`](Self::with_ratio) sets it, and a whole cardinality (`[1,n]`, `0..1`)
+    /// as it is.
+    pub fn from_ratio(text: &str, current: Option<Self>) -> Result<Self, ParseCardinalityError> {
+        let ratio = text.trim();
+        if ratio.contains([',', '[', '(']) || ratio.contains("..") {
+            return text.parse();
+        }
+        match parse_max(ratio) {
+            Some(CardinalityMax::Count(0)) | None => Err(ParseCardinalityError(text.to_owned())),
+            Some(max) => Ok(Self::with_ratio(current, max)),
+        }
+    }
+}
+
+/// A maximum: `n`, `N` or `*` for many, `m` or `M` for the second many, or a number.
+fn parse_max(text: &str) -> Option<CardinalityMax> {
+    match text.trim() {
+        "n" | "N" | "*" => Some(CardinalityMax::Many),
+        "m" | "M" => Some(CardinalityMax::ManyM),
+        n => n.parse().ok().map(CardinalityMax::Count),
+    }
 }
 
 impl fmt::Display for Cardinality {
@@ -313,11 +360,7 @@ impl FromStr for Cardinality {
             .or_else(|| text.strip_prefix('(').and_then(|t| t.strip_suffix(')')))
             .unwrap_or(text);
         let count = |b: &str| b.trim().parse::<u32>().map_err(|_| err());
-        let max = |b: &str| match b.trim() {
-            "n" | "N" | "*" => Ok(CardinalityMax::Many),
-            "m" | "M" => Ok(CardinalityMax::ManyM),
-            n => count(n).map(CardinalityMax::Count),
-        };
+        let max = |b: &str| parse_max(b).ok_or_else(err);
         let cardinality = match text.split_once(',').or_else(|| text.split_once("..")) {
             Some((min, upper)) => {
                 let min = match min.trim() {
@@ -432,6 +475,31 @@ mod tests {
         assert_eq!(Cardinality::ZERO_MANY.parenthesized(), "(0,n)");
         for bad in ["", "[2,1]", "[0,0]", "x", "[n,1]", "[1,2", "[*,0]"] {
             assert!(bad.parse::<Cardinality>().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn ratios_are_the_maximum() {
+        let ratio = |s: &str| s.parse::<Cardinality>().unwrap().ratio();
+        assert_eq!(ratio("[1,1]"), "1");
+        assert_eq!(ratio("[0,n]"), "n");
+        assert_eq!(ratio("[1,m]"), "m");
+        assert_eq!(ratio("[0,3]"), "3");
+        // Setting one keeps the minimum, lowered to the new maximum if it is above.
+        let set = |s: &str, current: &str| {
+            Cardinality::from_ratio(s, current.parse().ok()).unwrap().to_string()
+        };
+        assert_eq!(set("n", "[1,1]"), "[1,n]");
+        assert_eq!(set("M", "[0,n]"), "[0,m]");
+        assert_eq!(set("1", "[0,n]"), "[0,1]");
+        assert_eq!(set("1", "[2,5]"), "[1,1]");
+        assert_eq!(set(" 3 ", "[*,n]"), "[*,3]");
+        assert_eq!(set("N", ""), "[0,n]");
+        // A whole cardinality is taken as it is.
+        assert_eq!(set("[1,n]", "[0,1]"), "[1,n]");
+        assert_eq!(set("0..1", "[1,n]"), "[0,1]");
+        for bad in ["", "0", "x", "[2,1]", "-1"] {
+            assert!(Cardinality::from_ratio(bad, None).is_err(), "{bad}");
         }
     }
 }

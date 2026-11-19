@@ -1042,9 +1042,14 @@ entity instead (`DiagramProps::look_here`): `(min,max)` of how often each instan
 `(0,n)` at `Kunde` there. The model keeps look-across; between two entities the value read at
 one is the other's cardinality, so the diagram only swaps the ends (`er::shown_cardinality`,
 `er::set_shown_cardinality`); for one or three and more entities it does not follow from the
-cardinalities and is kept on its own (`ErParticipationProps::look_here`). The shapes are Chen's as draw.io
-draws them; the text and lines follow UmlCraft's canvas. `umlcraft-erm-sql` makes such
-diagrams from SQL dumps and writes them back as SQL.
+cardinalities and is kept on its own (`ErParticipationProps::look_here`). With
+`DiagramProps::ratios` a Chen diagram shows Chen's ratios instead, the maximum of each
+participation's look-across cardinality alone (`1` at `Kunde`, `n` at `Ticket`: 1:n; `[0,m]`
+gives `m`, `[0,3]` gives `3`), ignoring `look_here`; typing `1`, `n`, `m` or a number sets the
+maximum and keeps the minimum, lowered to the maximum if it is above
+(`Cardinality::from_ratio`). `er::CardinalityReading` says which of the three a diagram
+shows. The shapes are Chen's as draw.io draws them; the text and lines follow UmlCraft's
+canvas. `umlcraft-erm-sql` makes such diagrams from SQL dumps and writes them back as SQL.
 
 - **Model** (`umlcraft-model/src/er.rs`, element kinds `erEntity`, `erAttribute`,
   `erRelationship`, `erIsA`, `erParticipation`, `erSubtyping`). An entity has `weak`,
@@ -1116,11 +1121,13 @@ diagrams from SQL dumps and writes them back as SQL.
   fixtures in all three notations).
 - **App.** The ribbon's diagram tab offers the palette (entity, weak and associative entity,
   the attribute kinds, relationship, identifying relationship, IS-A, the line, notes). The
-  properties panel has the switches of each kind, the key, the database properties, and for
-  a participation its cardinality, role and total participation; the canvas's context menu
-  sets a participation's cardinality (`[0,1]`, `[1,1]`, `[0,n]`, `[1,n]`) and total
-  participation and adds an attribute to an entity, relationship or attribute; a double
-  click on a cardinality or role edits it in place. The sample project has a "Database"
+  properties panel has the switches of each kind (for a Chen diagram how it shows the
+  cardinalities: `[min,max]`, `(min,max)` at the entity or `1 : n`), the key, the database
+  properties, and for a participation its cardinality, role and total participation; the
+  canvas's context menu sets a participation's cardinality (`[0,1]`, `[1,1]`, `[0,n]`,
+  `[1,n]`; with ratios `1`, `n`, `m`) and total participation and adds an attribute to an
+  entity, relationship or attribute; a double click on a cardinality or role edits it in
+  place. The sample project has a "Database"
   diagram. File › "Import SQL dump as ER diagram …" (`sql.rs`) reads the dump in the
   background, asks in a small dialog for the dialect (the detected one preselected), the
   attributes (all, keys only, none) and, if there are several, the schemas, and imports into

@@ -22,9 +22,10 @@
 
 use umlcraft_model::Refusal;
 use umlcraft_model::{
-    Cardinality, CardinalityMax, DiagramKind, ElementData, ElementKind, ErAttributeProps,
-    ErEntityProps, ErIsAProps, ErKey, ErNotation, ErParticipationProps, ErRelationshipProps,
-    ErSubtypingProps, Id, Model, ModelError, Point, Rect, Result, Tx,
+    Cardinality, CardinalityMax, DiagramKind, DiagramProps, ElementData, ElementKind,
+    ErAttributeProps, ErEntityProps, ErIsAProps, ErKey, ErNotation, ErParticipationProps,
+    ErRelationshipProps, ErSubtypingProps, Id, Model, ModelError, ParseCardinalityError, Point,
+    Rect, Result, Tx,
 };
 
 use crate::palette::{EdgeTool, NodeTool};
@@ -714,13 +715,60 @@ pub fn participations(
     })
 }
 
-/// Whether `diagram` reads cardinalities at their entity (`DiagramProps::look_here`): only ER
-/// diagrams in Chen do.
-pub fn reads_look_here(model: &Model, diagram: Id) -> bool {
-    matches!(model.get(diagram).map(|d| d.kind()), Some(ElementKind::Diagram(d))
-        if d.diagram == DiagramKind::EntityRelationship
-            && d.notation == ErNotation::Chen
-            && d.look_here)
+/// How a diagram writes the cardinality at the entity end of a participation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CardinalityReading {
+    /// Its own, look-across: `[1,1]` at `Kunde` on `Kunde – bucht – Ticket`.
+    LookAcross,
+    /// Read at the entity (`DiagramProps::look_here`): `(0,n)` at `Kunde`.
+    LookHere,
+    /// The maximum of its own as Chen's ratios (`DiagramProps::ratios`): `1` at `Kunde`.
+    Ratios,
+}
+
+impl CardinalityReading {
+    /// How a diagram with `props` writes cardinalities: only ER diagrams in Chen read them at
+    /// the entity or as ratios, and ratios win over `look_here`.
+    pub fn of(props: &DiagramProps) -> Self {
+        let chen =
+            props.diagram == DiagramKind::EntityRelationship && props.notation == ErNotation::Chen;
+        match (chen, props.ratios, props.look_here) {
+            (true, true, _) => Self::Ratios,
+            (true, false, true) => Self::LookHere,
+            _ => Self::LookAcross,
+        }
+    }
+
+    /// `cardinality` as written: `[0,n]`, `(0,n)` or `n`.
+    pub fn text(self, cardinality: Cardinality) -> String {
+        match self {
+            Self::LookAcross => cardinality.to_string(),
+            Self::LookHere => cardinality.parenthesized(),
+            Self::Ratios => cardinality.ratio(),
+        }
+    }
+
+    /// Reads `text` typed for a participation that shows `shown`: nothing when empty, a ratio
+    /// as [`Cardinality::from_ratio`] sets it, else a cardinality.
+    pub fn parse(
+        self,
+        text: &str,
+        shown: Option<Cardinality>,
+    ) -> std::result::Result<Option<Cardinality>, ParseCardinalityError> {
+        match self {
+            _ if text.trim().is_empty() => Ok(None),
+            Self::Ratios => Cardinality::from_ratio(text, shown).map(Some),
+            _ => text.parse().map(Some),
+        }
+    }
+}
+
+/// How `diagram` writes cardinalities.
+pub fn cardinality_reading(model: &Model, diagram: Id) -> CardinalityReading {
+    match model.get(diagram).map(|d| d.kind()) {
+        Some(ElementKind::Diagram(d)) => CardinalityReading::of(d),
+        _ => CardinalityReading::LookAcross,
+    }
 }
 
 /// The participations of `participation`'s relationship, by id, and which of them it is.
@@ -738,14 +786,21 @@ fn siblings(model: &Model, participation: Id) -> Option<(Vec<(Id, &ErParticipati
     Some((parts, at))
 }
 
-/// The cardinality the line of `participation` shows at its entity: its own (look-across), or
-/// read at the entity (`look_here`): the other end's of a binary relationship, else its own
+/// The cardinality the line of `participation` shows at its entity: its own (look-across and
+/// as a ratio), or read at the entity: the other end's of a binary relationship, else its own
 /// [`ErParticipationProps::look_here`].
-pub fn shown_cardinality(model: &Model, participation: Id, look_here: bool) -> Option<Cardinality> {
+pub fn shown_cardinality(
+    model: &Model,
+    participation: Id,
+    reading: CardinalityReading,
+) -> Option<Cardinality> {
+    if reading != CardinalityReading::LookHere {
+        let ElementKind::ErParticipation(p) = model.get(participation)?.kind() else { return None };
+        return p.cardinality;
+    }
     let (parts, at) = siblings(model, participation)?;
-    match () {
-        _ if !look_here => parts[at].1.cardinality,
-        _ if parts.len() == 2 => parts[1 - at].1.cardinality,
+    match parts.len() {
+        2 => parts[1 - at].1.cardinality,
         _ => parts[at].1.look_here,
     }
 }
@@ -756,9 +811,10 @@ pub fn set_shown_cardinality(
     tx: &mut Tx<'_>,
     participation: Id,
     cardinality: Option<Cardinality>,
-    look_here: bool,
+    reading: CardinalityReading,
 ) -> Result<()> {
     let Some((parts, at)) = siblings(tx.model(), participation) else { return Ok(()) };
+    let look_here = reading == CardinalityReading::LookHere;
     let binary = parts.len() == 2;
     let target = if look_here && binary { parts[1 - at].0 } else { participation };
     tx.update(target, |data| {
@@ -831,6 +887,7 @@ mod tests {
     };
 
     use super::*;
+    use CardinalityReading::{LookAcross, LookHere, Ratios};
 
     struct Diagram {
         doc: Document,
@@ -1024,7 +1081,7 @@ mod tests {
         // Every ticket has one customer: [1,1] at the customer, read look-across.
         d.doc
             .edit("customer", |tx| {
-                set_shown_cardinality(tx, customer_part, Some(Cardinality::ONE_ONE), false)
+                set_shown_cardinality(tx, customer_part, Some(Cardinality::ONE_ONE), LookAcross)
             })
             .unwrap();
         let shown = |d: &Diagram| {
@@ -1046,31 +1103,114 @@ mod tests {
                 })
             })
             .unwrap();
-        assert!(reads_look_here(d.doc.model(), diagram));
+        assert_eq!(cardinality_reading(d.doc.model(), diagram), LookHere);
         assert_eq!(shown(&d), ("(0,n)".into(), "(1,1)".into()));
         // Setting what an end shows sets the other end's cardinality.
         d.doc
             .edit("ticket", |tx| {
-                set_shown_cardinality(tx, ticket_part, Some(Cardinality::ZERO_ONE), true)
+                set_shown_cardinality(tx, ticket_part, Some(Cardinality::ZERO_ONE), LookHere)
             })
             .unwrap();
         let model = d.doc.model();
-        assert_eq!(shown_cardinality(model, customer_part, false), Some(Cardinality::ZERO_ONE));
-        assert_eq!(shown_cardinality(model, ticket_part, true), Some(Cardinality::ZERO_ONE));
+        assert_eq!(
+            shown_cardinality(model, customer_part, LookAcross),
+            Some(Cardinality::ZERO_ONE)
+        );
+        assert_eq!(shown_cardinality(model, ticket_part, LookHere), Some(Cardinality::ZERO_ONE));
         // A third entity: read at the entity, each end keeps a value of its own.
         let (_, flight) = d.add(entity(false));
         let at_flight = d.connect(rel_node, flight).unwrap();
         let flight_part = element(&d, at_flight);
         assert_eq!(participations(d.doc.model(), rel).count(), 3);
-        assert_eq!(shown_cardinality(d.doc.model(), flight_part, true), None);
+        assert_eq!(shown_cardinality(d.doc.model(), flight_part, LookHere), None);
         d.doc
             .edit("flight", |tx| {
-                set_shown_cardinality(tx, flight_part, Some(Cardinality::ONE_MANY), true)
+                set_shown_cardinality(tx, flight_part, Some(Cardinality::ONE_MANY), LookHere)
             })
             .unwrap();
         let model = d.doc.model();
-        assert_eq!(shown_cardinality(model, flight_part, true), Some(Cardinality::ONE_MANY));
-        assert_eq!(shown_cardinality(model, flight_part, false), Some(Cardinality::ZERO_MANY));
+        assert_eq!(shown_cardinality(model, flight_part, LookHere), Some(Cardinality::ONE_MANY));
+        assert_eq!(shown_cardinality(model, flight_part, LookAcross), Some(Cardinality::ZERO_MANY));
+    }
+
+    #[test]
+    fn chen_ratios_show_the_maximum() {
+        use crate::scene::{ApproxMeasure, Preview, build};
+        let mut d = diagram();
+        let (_, rel_node) = d.add(ElementKind::ErRelationship(ErRelationshipProps::default()));
+        let associative =
+            ElementKind::ErEntity(ErEntityProps { associative: true, ..Default::default() });
+        let (_, enrolment) = d.add(associative);
+        let (_, customer) = d.add(entity(false));
+        let (_, ticket) = d.add(entity(false));
+        let (_, student) = d.add(entity(false));
+        let at_customer = d.connect(customer, rel_node).unwrap();
+        let at_ticket = d.connect(rel_node, ticket).unwrap();
+        let at_student = d.connect(enrolment, student).unwrap();
+        let diagram = d.diagram;
+        let element = |d: &Diagram, edge: Id| {
+            d.doc.model().view(diagram).unwrap().get(edge).unwrap().element.unwrap()
+        };
+        let (customer_part, ticket_part) = (element(&d, at_customer), element(&d, at_ticket));
+        let set = |d: &mut Diagram, part: Id, c: Cardinality| {
+            d.doc.edit("set", |tx| set_shown_cardinality(tx, part, Some(c), LookAcross)).unwrap();
+        };
+        set(&mut d, customer_part, Cardinality::ONE_ONE);
+        // Ratios win over reading at the entity.
+        d.doc
+            .edit("ratios", |tx| {
+                tx.update(diagram, |data| {
+                    if let ElementKind::Diagram(p) = &mut data.kind {
+                        p.ratios = true;
+                        p.look_here = true;
+                    }
+                })
+            })
+            .unwrap();
+        assert_eq!(cardinality_reading(d.doc.model(), diagram), Ratios);
+        let shown = |d: &Diagram, edges: &[Id]| {
+            let scene = build(d.doc.model(), diagram, &Preview::default(), &ApproxMeasure);
+            let text = |edge: &Id| {
+                let edge = scene.edges.iter().find(|e| e.id == *edge).unwrap();
+                edge.labels.iter().map(|l| l.text.clone()).collect::<Vec<_>>().join(" ")
+            };
+            edges.iter().map(text).collect::<Vec<_>>()
+        };
+        assert_eq!(shown(&d, &[at_customer, at_ticket, at_student]), ["1", "n", "n"]);
+        // Setting a ratio changes the maximum of the participation itself.
+        let ratio = |d: &Diagram, part: Id, text: &str| {
+            let shown = shown_cardinality(d.doc.model(), part, Ratios);
+            Ratios.parse(text, shown).unwrap()
+        };
+        let m = ratio(&d, ticket_part, "m");
+        d.doc.edit("m", |tx| set_shown_cardinality(tx, ticket_part, m, Ratios)).unwrap();
+        let model = d.doc.model();
+        assert_eq!(
+            shown_cardinality(model, ticket_part, LookAcross),
+            Some(Cardinality::new(0, CardinalityMax::ManyM))
+        );
+        assert_eq!(shown_cardinality(model, customer_part, LookAcross), Some(Cardinality::ONE_ONE));
+        // Three entities: each shows its own maximum (1 : m : 3).
+        let (_, flight) = d.add(entity(false));
+        let at_flight = d.connect(rel_node, flight).unwrap();
+        let flight_part = element(&d, at_flight);
+        let three = ratio(&d, flight_part, "3");
+        d.doc.edit("3", |tx| set_shown_cardinality(tx, flight_part, three, Ratios)).unwrap();
+        assert_eq!(shown(&d, &[at_customer, at_ticket, at_flight]), ["1", "m", "3"]);
+        // No cardinality, no label.
+        d.doc.edit("none", |tx| set_shown_cardinality(tx, flight_part, None, Ratios)).unwrap();
+        assert_eq!(shown(&d, &[at_flight]), [""]);
+        // IE leaves ratios to Chen.
+        d.doc
+            .edit("ie", |tx| {
+                tx.update(diagram, |data| {
+                    if let ElementKind::Diagram(p) = &mut data.kind {
+                        p.notation = ErNotation::Ie;
+                    }
+                })
+            })
+            .unwrap();
+        assert_eq!(cardinality_reading(d.doc.model(), diagram), LookAcross);
     }
 
     #[test]
