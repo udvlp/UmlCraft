@@ -7,7 +7,7 @@ pub(super) const ER_NOTATIONS: [(&str, ErNotation); 3] =
 
 /// The settings of the elements of ER diagrams `update_element` takes; `notation` is set on
 /// its own, as switching converts the diagram.
-pub(super) const ER_KEYS: [&str; 30] = [
+pub(super) const ER_KEYS: [&str; 31] = [
     "unique",
     "foreign_key",
     "discriminator",
@@ -24,6 +24,7 @@ pub(super) const ER_KEYS: [&str; 30] = [
     "cardinality",
     "cardinality_here",
     "look_here",
+    "ratios",
     "role",
     "physical_name",
     "datatype",
@@ -163,10 +164,21 @@ pub(super) fn set_er(kind: &mut ElementKind, args: &Value) -> Result<(), String>
                     p.look_here = c;
                 }
             }
-            ("look_here", ElementKind::Diagram(p))
+            ("look_here" | "ratios", ElementKind::Diagram(p))
                 if p.diagram == DiagramKind::EntityRelationship =>
             {
-                p.look_here = flag()?
+                if args["look_here"] == true && args["ratios"] == true {
+                    return Err("`look_here` and `ratios` exclude each other".into());
+                }
+                // Turning one on turns the other off, as the properties panel does.
+                let on = flag()?;
+                if key == "look_here" {
+                    p.look_here = on;
+                    p.ratios &= !on;
+                } else {
+                    p.ratios = on;
+                    p.look_here &= !on;
+                }
             }
             _ => return Err(format!("a {type_name} has no `{key}`")),
         }

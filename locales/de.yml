@@ -478,7 +478,10 @@ prop:
   er_display_keys: Nur Primärschlüssel
   er_display_name: Nur Namen
   er_physical_names: Physische Namen (Datenbank)
-  er_look_here: Kardinalitäten beim Entity lesen (min,max)
+  er_cardinalities: Kardinalitäten
+  er_look_across: "[min,max]"
+  er_look_here: (min,max) beim Entity
+  er_ratios: "1 : n (Chen)"
   er_default_value: Standardwert
   er_identifying: Identifizierend
   er_cardinality: Kardinalität
@@ -931,6 +934,7 @@ error:
   port_on_untyped_part: "Ein Port auf einem Part gehört zum Typ des Parts: dem Part erst eine Klasse als Typ geben (etwa motor : Motor)."
   multiplicity: "„%{text}“ ist keine Multiplizität. Beispiele: 1, 0..1, 1..*, *"
   cardinality: "„%{text}“ ist keine Kardinalität. Beispiele: [0,1], [1,n], 0..*, [*,m]"
+  cardinality_ratio: "„%{text}“ ist kein Verhältnis. Beispiele: 1, n, m, 3 oder vollständig [1,n]"
   malformed: "Die Datei ist beschädigt (Zeile %{line}, Spalte %{column})."
   not_astah: Die Datei ist kein .asta-Projekt oder beschädigt.
   astah_no_model: Das .asta-Projekt enthält kein Modell.

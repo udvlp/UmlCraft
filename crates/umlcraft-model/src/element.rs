@@ -1148,6 +1148,11 @@ pub struct DiagramProps {
     /// of its instances takes part, instead of look-across (the default).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub look_here: bool,
+    /// ER diagrams in Chen: cardinalities as Chen's ratios, the maximum of the look-across
+    /// cardinality alone (`1` for `[1,1]`, `n` for `[0,n]`), instead of `[min,max]` or
+    /// `look_here`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ratios: bool,
     /// ER diagrams in IE or IDEF1X: what the entities list.
     #[serde(default, skip_serializing_if = "is_default")]
     pub er_display: ErDisplay,
@@ -1517,6 +1522,7 @@ impl ElementKind {
             objects: false,
             notation: ErNotation::Chen,
             look_here: false,
+            ratios: false,
             er_display: ErDisplay::Attributes,
             physical_names: false,
             simple_states: false,

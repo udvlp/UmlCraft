@@ -6,6 +6,7 @@ use umlcraft_format::FormatError;
 use umlcraft_model::{
     Id, Model, ModelError, ParseCardinalityError, ParseMultiplicityError, Refusal,
 };
+use umlcraft_notation::er::CardinalityReading;
 
 /// An element by its name; `model` is the one the error came from, if it is still at hand.
 fn named(model: Option<&Model>, id: Id) -> String {
@@ -188,8 +189,14 @@ pub fn multiplicity_error(err: &ParseMultiplicityError) -> String {
     t!("error.multiplicity", text = err.0).to_string()
 }
 
-pub fn cardinality_error(err: &ParseCardinalityError) -> String {
-    t!("error.cardinality", text = err.0).to_string()
+/// Why `err`'s text is no cardinality, with examples of what a diagram writing them as
+/// `reading` takes.
+pub fn cardinality_error(err: &ParseCardinalityError, reading: CardinalityReading) -> String {
+    match reading {
+        CardinalityReading::Ratios => t!("error.cardinality_ratio", text = err.0),
+        _ => t!("error.cardinality", text = err.0),
+    }
+    .to_string()
 }
 
 /// Why an `.nsd` file could not be read as a structogram.

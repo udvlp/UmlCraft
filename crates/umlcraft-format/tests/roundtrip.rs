@@ -53,10 +53,11 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
     let mut ids = (root, root, root, root);
     doc.edit("er", |tx| {
         let package = tx.create(root, ElementData::new("Flights", ElementKind::Package))?;
-        let diagram = tx.create(
-            package,
-            ElementData::new("Booking", ElementKind::diagram(DiagramKind::EntityRelationship)),
-        )?;
+        let mut chen = ElementKind::diagram(DiagramKind::EntityRelationship);
+        if let ElementKind::Diagram(p) = &mut chen {
+            p.ratios = true;
+        }
+        let diagram = tx.create(package, ElementData::new("Booking", chen))?;
         let mut ie = ElementKind::diagram(DiagramKind::EntityRelationship);
         if let ElementKind::Diagram(p) = &mut ie {
             p.notation = ErNotation::Idef1x;
@@ -153,6 +154,7 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
         "\"notation\": \"idef1x\"",
         "\"erDisplay\": \"keys\"",
         "\"physicalNames\": true",
+        "\"ratios\": true",
         "\"foreignKey\": ",
         "\"unique\": true",
     ] {

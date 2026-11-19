@@ -14,8 +14,8 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    Aggregation, AssociationEnd, Cardinality, Color, ElementKind, Id, LineShape, Model,
-    Multiplicity, Navigability, Point as MPoint, Rect, Shape, SharedStyle, TypeRef,
+    Aggregation, AssociationEnd, Cardinality, CardinalityMax, Color, ElementKind, Id, LineShape,
+    Model, Multiplicity, Navigability, Point as MPoint, Rect, Shape, SharedStyle, TypeRef,
 };
 use umlcraft_notation::draw::{self, Paint, Primitive};
 use umlcraft_notation::er;
@@ -187,14 +187,36 @@ fn multiplicity_choices(end: &AssociationEnd) -> Vec<(String, bool, EndChange)> 
     .collect()
 }
 
-/// The cardinalities the context menu offers for an ER participation.
-const CARDINALITIES: [Option<Cardinality>; 5] = [
-    None,
-    Some(Cardinality::ZERO_ONE),
-    Some(Cardinality::ONE_ONE),
-    Some(Cardinality::ZERO_MANY),
-    Some(Cardinality::ONE_MANY),
-];
+/// The cardinalities the context menu offers for an ER participation that shows `shown`,
+/// written as `reading` writes them: as ratios the maximum alone (`1`, `n`, `m`), which keeps
+/// the minimum.
+fn cardinality_choices(
+    shown: Option<Cardinality>,
+    reading: er::CardinalityReading,
+) -> Vec<(String, bool, Option<Cardinality>)> {
+    let offered: Vec<_> = match reading {
+        er::CardinalityReading::Ratios => {
+            [CardinalityMax::Count(1), CardinalityMax::Many, CardinalityMax::ManyM]
+                .into_iter()
+                .map(|max| {
+                    let c = Cardinality::with_ratio(shown, max);
+                    (c.ratio(), shown.is_some_and(|s| s.max == max), Some(c))
+                })
+                .collect()
+        }
+        _ => [
+            Cardinality::ZERO_ONE,
+            Cardinality::ONE_ONE,
+            Cardinality::ZERO_MANY,
+            Cardinality::ONE_MANY,
+        ]
+        .into_iter()
+        .map(|c| (reading.text(c), shown == Some(c), Some(c)))
+        .collect(),
+    };
+    let unspecified = (t!("menu.unspecified").to_string(), shown.is_none(), None);
+    std::iter::once(unspecified).chain(offered).collect()
+}
 
 /// Astah's submenus for an association: navigability, aggregation and multiplicity, each with
 /// a section per end.
@@ -1793,7 +1815,7 @@ impl DiagramCanvas {
                 _ => None,
             })
         };
-        let look_here = canvas.read(cx).workspace.read(cx).reads_look_here();
+        let reading = canvas.read(cx).workspace.read(cx).cardinality_reading();
         let mut menu = menu.action_context(focus);
         if er_owner {
             menu = menu.menu(t!("menu.add_attribute"), Box::new(AddAttribute)).separator();
@@ -1802,17 +1824,14 @@ impl DiagramCanvas {
             let set = move |change| {
                 Box::new(SetAssociationEnd { association: participation, end: 0, change })
             };
+            let choices = cardinality_choices(cardinality, reading);
             menu = menu
                 .submenu(t!("menu.cardinality"), window, cx, move |menu, _, _| {
-                    CARDINALITIES.into_iter().fold(menu, |menu, c| {
-                        let label = c.map_or_else(
-                            || t!("menu.unspecified").to_string(),
-                            |c| if look_here { c.parenthesized() } else { c.to_string() },
-                        );
+                    choices.iter().fold(menu, |menu, (label, checked, c)| {
                         menu.menu_with_check(
-                            label,
-                            cardinality == c,
-                            set(EndChange::Cardinality(c)),
+                            label.clone(),
+                            *checked,
+                            set(EndChange::Cardinality(*c)),
                         )
                     })
                 })
@@ -2360,10 +2379,7 @@ impl DiagramCanvas {
             }
             Some(ElementKind::ErParticipation(_)) if hit.multiplicity => {
                 let shown = ws.shown_cardinality(association);
-                let text = |c: Cardinality| {
-                    if ws.reads_look_here() { c.parenthesized() } else { c.to_string() }
-                };
-                shown.map(text).unwrap_or_default()
+                shown.map(|c| ws.cardinality_reading().text(c)).unwrap_or_default()
             }
             Some(ElementKind::ErParticipation(p)) => p.role.clone(),
             _ => return,

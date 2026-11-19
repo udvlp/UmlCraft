@@ -1446,7 +1446,7 @@ fn build_with(
     let Some(view) = model.view(diagram) else { return Scene::empty() };
     let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
     let listing = model.get(diagram).and_then(|d| ErListing::of(d.kind()));
-    let look_here = crate::er::reads_look_here(model, diagram);
+    let reading = crate::er::cardinality_reading(model, diagram);
     // IE and IDEF1X list the attributes in their owners' boxes.
     let listed = |p: &Presentation| {
         listing.is_some()
@@ -1636,10 +1636,10 @@ fn build_with(
             let entity = |node: &Id| view.get(*node).and_then(|n| n.element);
             er_ends(model, element?, entity(source), entity(target), l.idef1x)
         });
-        // In Chen, read at the entity, a participation shows what that reading gives.
-        let read_here = element.filter(|_| look_here).and_then(|e| match e.kind() {
+        // A participation shows its cardinality as the diagram writes it.
+        let cardinality = element.and_then(|e| match e.kind() {
             ElementKind::ErParticipation(_) => {
-                Some(crate::er::shown_cardinality(model, e.id(), true))
+                crate::er::shown_cardinality(model, e.id(), reading).map(|c| reading.text(c))
             }
             _ => None,
         });
@@ -1660,7 +1660,7 @@ fn build_with(
             labels,
             &p.style,
             er.as_ref(),
-            read_here,
+            cardinality,
             measure,
         );
         // A total IS-A has a double line to its supertype, in Chen.
@@ -4225,8 +4225,8 @@ fn edge_for(
     style: &Style,
     // ER diagrams in IE and IDEF1X: what the ends show.
     er: Option<&ErEnds>,
-    // ER diagrams in Chen read at the entity: the cardinality a participation shows there.
-    read_here: Option<Option<Cardinality>>,
+    // ER diagrams in Chen: the cardinality a participation shows at its entity, as written.
+    cardinality: Option<String>,
     measure: &dyn TextMeasure,
 ) -> EdgeShape {
     // The line runs from the source anchor through the waypoints to the target anchor; it is
@@ -4448,10 +4448,6 @@ fn edge_for(
             edge.association = true;
             edge.double = p.total;
             let role = (!p.role.is_empty()).then(|| p.role.clone());
-            let cardinality = match read_here {
-                Some(here) => here.map(|c| c.parenthesized()),
-                None => p.cardinality.map(|c| c.to_string()),
-            };
             ends = [(None, None, false), (role, cardinality, false)];
         }
         Some(ElementKind::ErSubtyping(_)) => {}

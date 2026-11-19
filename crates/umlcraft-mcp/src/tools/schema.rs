@@ -174,15 +174,13 @@ pub fn list() -> Vec<Value> {
         "disjoint": { "type": "string", "enum": ["", "disjoint", "overlapping"],
                       "description": "IS-A: whether the subtypes exclude each other (d, o)." },
         "cardinality": text("ER participations: how often the entity takes part, read \
-                             look-across, e.g. [0,1], [1,n], [0,m]; \"\" for none."),
+                             look-across, e.g. [0,1], [1,n], [0,m]; \"\" for none. Chen \
+                             diagrams with `ratios` show its maximum alone (1, n, m)."),
         "cardinality_here": text("ER participations of relationships of one or of three and \
                                   more entities: how often each instance of the entity takes \
                                   part, read at the entity, e.g. (1,n), as Chen diagrams with \
                                   `look_here` show it. Between two entities that is the other \
                                   participation's `cardinality`."),
-        "look_here": flag("ER diagrams in Chen: show cardinalities read at their entity, \
-                           (min,max) of how often each instance takes part, instead of \
-                           look-across."),
         "role": text("ER participations: the entity's role, when it takes part twice."),
         "physical_name": text("ER entities and attributes: the name in the database."),
         "unique": flag("ER attributes: the column is UNIQUE."),
@@ -190,14 +188,6 @@ pub fn list() -> Vec<Value> {
                              foreign key the column is (IE, IDEF1X: marked (FK)), or \"\"."),
         "discriminator": text("IS-A: the id of the supertype's attribute that tells the \
                                subtypes apart, or \"\"."),
-        "notation": { "type": "string", "enum": ["chen", "ie", "idef1x"],
-                      "description": "ER diagrams: how they are drawn. Switching converts what \
-                                      the diagram shows and keeps its entities in place: IE \
-                                      and IDEF1X list the attributes in the tables and draw \
-                                      relationships between two entities as lines." },
-        "er_display": { "type": "string", "enum": ["attributes", "keys", "name"],
-                        "description": "ER diagrams in IE or IDEF1X: what the tables list." },
-        "physical_names": flag("ER diagrams in IE or IDEF1X: the names in the database."),
         "datatype": text("ER attributes: the column's type, e.g. VARCHAR, or the name of an \
                           ER domain. ER domains: the type they are based on."),
         "length_precision": text("ER attributes and domains: length or precision, e.g. 10,2."),
@@ -229,6 +219,24 @@ pub fn list() -> Vec<Value> {
                          "columns": { "type": "array", "items": { "type": "string" } },
                          "unique": { "type": "boolean" } } },
                      "description": "ER entities: the table's indexes by column names." },
+    });
+    // The settings of ER diagrams, which `update_element` takes.
+    let er_diagram = json!({
+        "notation": { "type": "string", "enum": ["chen", "ie", "idef1x"],
+                      "description": "ER diagrams: how they are drawn. Switching converts what \
+                                      the diagram shows and keeps its entities in place: IE \
+                                      and IDEF1X list the attributes in the tables and draw \
+                                      relationships between two entities as lines." },
+        "er_display": { "type": "string", "enum": ["attributes", "keys", "name"],
+                        "description": "ER diagrams in IE or IDEF1X: what the tables list." },
+        "physical_names": flag("ER diagrams in IE or IDEF1X: the names in the database."),
+        "look_here": flag("ER diagrams in Chen: show cardinalities read at their entity, \
+                           (min,max) of how often each instance takes part, instead of \
+                           look-across. Turns `ratios` off."),
+        "ratios": flag("ER diagrams in Chen: show cardinalities as Chen's ratios (1:1, 1:n, \
+                        n:m), the maximum of each participation's `cardinality` alone \
+                        ([1,1] as 1, [0,n] as n, [0,m] as m), instead of [min,max]. Turns \
+                        `look_here` off."),
     });
     let structogram_schema = json!({
         "type": "object",
@@ -676,7 +684,7 @@ pub fn list() -> Vec<Value> {
                                               is on by default)." },
                 }),
                 &with(
-                    with(with(activity_node.clone(), &er), &sequence),
+                    with(with(with(activity_node.clone(), &er), &er_diagram), &sequence),
                     &with(
                         with(with(with(ends.clone(), &classes), &route), &extend),
                         &json!({

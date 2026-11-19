@@ -15,12 +15,13 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::{
-    ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Cardinality, Color,
-    DiagramKind, ElementData, ElementKind, ErAction, ErDisplay, ErIndex, ErKey, ErNotation, Id,
-    InstanceKind, InstanceProps, InteractionOperator, LifelineProps, LinkEnd, LinkProps,
-    MessageSort, Model, Multiplicity, Navigability, ObjectEffect, ObjectOrdering,
-    ParameterDirections, Presentation, Shape, Style, TemplateParameterKind, TypeRef, Visibility,
+    ActivityNodeKind, Aggregation, AssociationEnd, AssociationProps, Color, DiagramKind,
+    ElementData, ElementKind, ErAction, ErDisplay, ErIndex, ErKey, ErNotation, Id, InstanceKind,
+    InstanceProps, InteractionOperator, LifelineProps, LinkEnd, LinkProps, MessageSort, Model,
+    Multiplicity, Navigability, ObjectEffect, ObjectOrdering, ParameterDirections, Presentation,
+    Shape, Style, TemplateParameterKind, TypeRef, Visibility,
 };
+use umlcraft_notation::er::CardinalityReading;
 use umlcraft_notation::member::{self, member_text};
 use umlcraft_notation::object;
 use umlcraft_notation::sequence::operator_keyword;
@@ -184,9 +185,11 @@ pub struct PropertiesPanel {
     /// ER relationships: what their foreign keys do on deleting and updating.
     on_delete: Entity<Choice>,
     on_update: Entity<Choice>,
-    /// ER diagrams: Chen, IE or IDEF1X, and what IE and IDEF1X tables list.
+    /// ER diagrams: Chen, IE or IDEF1X, what IE and IDEF1X tables list, and how Chen writes
+    /// cardinalities.
     er_notation: Entity<Choice>,
     er_display: Entity<Choice>,
+    er_cardinalities: Entity<Choice>,
     parameter_kind: Entity<Choice>,
     sort: Entity<Choice>,
     operator: Entity<Choice>,
@@ -207,8 +210,9 @@ pub struct PropertiesPanel {
     /// Undo depth before a color was picked and after its last change: while the picker stays
     /// open, its further changes (dragging a slider) join that one undo step.
     color_step: Option<(usize, usize)>,
-    /// Element, selected presentation, document revision and locale the fields currently show.
-    shown: Option<(Id, Option<Id>, u64, String)>,
+    /// Element, selected presentation, document revision, how the active diagram writes ER
+    /// cardinalities and locale the fields currently show.
+    shown: Option<(Id, Option<Id>, u64, CardinalityReading, String)>,
     /// Text fields the user has typed into, each with the element shown at the first keystroke.
     /// An edit always goes back to that element, even if the selection has changed by the time
     /// the field loses focus; fields nobody typed into are never written back.
@@ -272,6 +276,15 @@ fn er_notation_items() -> Vec<SharedString> {
 
 fn er_display_items() -> Vec<SharedString> {
     ["prop.er_display_attributes", "prop.er_display_keys", "prop.er_display_name"]
+        .map(|k| t!(k).to_string().into())
+        .to_vec()
+}
+
+const CARDINALITY_READINGS: [CardinalityReading; 3] =
+    [CardinalityReading::LookAcross, CardinalityReading::LookHere, CardinalityReading::Ratios];
+
+fn er_cardinalities_items() -> Vec<SharedString> {
+    ["prop.er_look_across", "prop.er_look_here", "prop.er_ratios"]
         .map(|k| t!(k).to_string().into())
         .to_vec()
 }
@@ -518,6 +531,8 @@ impl PropertiesPanel {
         let on_update = cx.new(|cx| SelectState::new(er_action_items(), None, window, cx));
         let er_notation = cx.new(|cx| SelectState::new(er_notation_items(), None, window, cx));
         let er_display = cx.new(|cx| SelectState::new(er_display_items(), None, window, cx));
+        let er_cardinalities =
+            cx.new(|cx| SelectState::new(er_cardinalities_items(), None, window, cx));
         let parameter_kind =
             cx.new(|cx| SelectState::new(parameter_kind_items(), None, window, cx));
         let sort = cx.new(|cx| SelectState::new(sort_items(), None, window, cx));
@@ -779,6 +794,23 @@ impl PropertiesPanel {
             },
         ));
         subscriptions.push(cx.subscribe_in(
+            &er_cardinalities,
+            window,
+            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                let Some(r) =
+                    selected(state, cx).and_then(|ix| CARDINALITY_READINGS.get(ix).copied())
+                else {
+                    return;
+                };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::Diagram(p) = &mut data.kind {
+                        p.look_here = r == CardinalityReading::LookHere;
+                        p.ratios = r == CardinalityReading::Ratios;
+                    }
+                });
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
             &disjoint,
             window,
             |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
@@ -914,6 +946,7 @@ impl PropertiesPanel {
             on_update,
             er_notation,
             er_display,
+            er_cardinalities,
             parameter_kind,
             sort,
             operator,
@@ -1242,12 +1275,10 @@ impl PropertiesPanel {
             }
             Field::Cardinality => {
                 let text = Self::value(&self.cardinality, cx);
-                let parsed =
-                    if text.is_empty() { Ok(None) } else { text.parse::<Cardinality>().map(Some) };
                 self.workspace.update(cx, |ws, cx| {
-                    match parsed {
+                    match ws.read_cardinality(id, &text) {
                         Ok(c) => ws.set_association_end(id, 0, crate::EndChange::Cardinality(c)),
-                        Err(err) => ws.complain(crate::errors::cardinality_error(&err)),
+                        Err(message) => ws.complain(message),
                     }
                     cx.notify();
                 });
@@ -1396,7 +1427,7 @@ impl PropertiesPanel {
         let selected = |this: &Self, cx: &App| {
             let ws = this.workspace.read(cx);
             let presentation = selected_presentation(ws).map(|p| p.id);
-            (ws.shown_element(), presentation, ws.doc.revision())
+            (ws.shown_element(), presentation, ws.doc.revision(), ws.cardinality_reading())
         };
         // The selection moved away while a field was being edited: save that edit first.
         let (before, ..) = selected(self, cx);
@@ -1411,14 +1442,14 @@ impl PropertiesPanel {
             self.commit(field, id, cx);
         }
         // Those commits may have deleted the selection, e.g. a «bind» dependency.
-        let (selected, presentation, revision) = selected(self, cx);
+        let (selected, presentation, revision, reading) = selected(self, cx);
         let Some(id) = selected else {
             self.shown = None;
             cx.notify();
             return;
         };
         let locale = rust_i18n::locale().to_string();
-        let key = (id, presentation, revision, locale.clone());
+        let key = (id, presentation, revision, reading, locale.clone());
         if self.shown.as_ref() == Some(&key) {
             return;
         }
@@ -1432,9 +1463,7 @@ impl PropertiesPanel {
         let style = selected_presentation(ws).map(|p| p.style.clone()).unwrap_or_default();
         let declaration = member_text(model, id);
         // An ER participation's cardinality as the active diagram reads it.
-        let cardinality = ws.shown_cardinality(id).map_or_else(String::new, |c| {
-            if ws.reads_look_here() { c.parenthesized() } else { c.to_string() }
-        });
+        let cardinality = ws.shown_cardinality(id).map_or_else(String::new, |c| reading.text(c));
         // A template parameter's value type, bounds and default as text.
         let parameter_texts = match &data.kind {
             ElementKind::TemplateParameter(p) => {
@@ -1690,6 +1719,9 @@ impl PropertiesPanel {
                 choose(&self.er_notation, n, locale_changed.then(er_notation_items), window, cx);
                 let d = ER_DISPLAYS.iter().position(|&d| d == p.er_display);
                 choose(&self.er_display, d, locale_changed.then(er_display_items), window, cx);
+                let r = CARDINALITY_READINGS.iter().position(|&r| r == CardinalityReading::of(p));
+                let items = locale_changed.then(er_cardinalities_items);
+                choose(&self.er_cardinalities, r, items, window, cx);
             }
             ElementKind::ErIsA(p) => {
                 let d = DISJOINT.iter().position(|&d| d == p.disjoint);
@@ -2150,17 +2182,9 @@ impl PropertiesPanel {
                             },
                         ));
                 } else {
-                    body = body.child(flag(
-                        "er-look-here",
-                        t!("prop.er_look_here").into(),
-                        p.look_here,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Diagram(p) = &mut d.kind {
-                                p.look_here = v;
-                            }
-                        },
+                    body = body.child(field(
+                        t!("prop.er_cardinalities").into(),
+                        Select::new(&self.er_cardinalities).small().into_any_element(),
                     ));
                 }
             }
