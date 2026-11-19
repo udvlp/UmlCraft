@@ -1,6 +1,6 @@
 //! Diagrams and presentations: how elements are shown, independent of what they mean.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -220,7 +220,10 @@ impl Presentation {
             Shape::Text { bounds, .. } => rect(bounds),
             Shape::Line { from, to, .. } => point(from) && point(to),
         };
-        shape && numbers(&[self.style.font_size]) && points(&[self.style.name_offset])
+        shape
+            && numbers(&[self.style.font_size])
+            && points(&[self.style.name_offset])
+            && points(&self.style.constraint_offsets)
     }
 }
 
@@ -626,13 +629,55 @@ pub struct View {
     presentations: Vec<Presentation>,
     /// Where each presentation is in `presentations`, so lookups by id do not scan the list.
     positions: HashMap<Id, usize>,
+    /// How many presentations hang on each presentation (see [`Presentation::is_attached_to`]),
+    /// so that removing one need not look through the list for edges still attached.
+    attached: HashMap<Id, usize>,
 }
 
 impl View {
     pub(crate) fn new(presentations: Vec<Presentation>) -> Self {
-        let mut view = Self { presentations, positions: HashMap::new() };
+        let mut view = Self { presentations, positions: HashMap::new(), attached: HashMap::new() };
         view.reindex(0);
+        for i in 0..view.presentations.len() {
+            view.count_attached(i, true);
+        }
         view
+    }
+
+    /// What `presentation` hangs on: an edge's or message's ends, an activation's lifeline.
+    pub(crate) fn holders(presentation: &Presentation) -> [Option<Id>; 2] {
+        match presentation.shape {
+            Shape::Activation { lifeline, .. } => [Some(lifeline), None],
+            _ => match presentation.endpoints() {
+                Some((s, t)) if s == t => [Some(s), None],
+                Some((s, t)) => [Some(s), Some(t)],
+                None => [None, None],
+            },
+        }
+    }
+
+    /// Counts the presentation at `index` in (`add`) or out of `attached`.
+    fn count_attached(&mut self, index: usize, add: bool) {
+        Self::count(&mut self.attached, &self.presentations[index], add);
+    }
+
+    fn count(attached: &mut HashMap<Id, usize>, presentation: &Presentation, add: bool) {
+        for holder in Self::holders(presentation).into_iter().flatten() {
+            let count = attached.entry(holder).or_default();
+            if add {
+                *count += 1;
+            } else {
+                *count -= 1;
+                if *count == 0 {
+                    attached.remove(&holder);
+                }
+            }
+        }
+    }
+
+    /// Whether an edge, message or activation hangs on `presentation`.
+    pub fn has_attached(&self, presentation: Id) -> bool {
+        self.attached.contains_key(&presentation)
     }
 
     pub fn presentations(&self) -> &[Presentation] {
@@ -649,19 +694,65 @@ impl View {
 
     pub(crate) fn insert(&mut self, index: usize, presentation: Presentation) {
         self.presentations.insert(index, presentation);
+        self.count_attached(index, true);
         self.reindex(index);
     }
 
     pub(crate) fn remove(&mut self, index: usize) -> Presentation {
+        self.count_attached(index, false);
         let presentation = self.presentations.remove(index);
         self.positions.remove(&presentation.id);
         self.reindex(index);
         presentation
     }
 
+    /// Removes the presentations in `ids` in one pass over the list and returns them with the
+    /// indices they had, ascending.
+    pub(crate) fn remove_many(&mut self, ids: &HashSet<Id>) -> Vec<(usize, Presentation)> {
+        let old = std::mem::take(&mut self.presentations);
+        let mut removed = Vec::with_capacity(ids.len());
+        self.presentations.reserve(old.len().saturating_sub(ids.len()));
+        for (i, p) in old.into_iter().enumerate() {
+            if ids.contains(&p.id) {
+                removed.push((i, p));
+            } else {
+                self.presentations.push(p);
+            }
+        }
+        for (_, p) in &removed {
+            Self::count(&mut self.attached, p, false);
+            self.positions.remove(&p.id);
+        }
+        if let Some(&(first, _)) = removed.first() {
+            self.reindex(first);
+        }
+        removed
+    }
+
+    /// Puts presentations back at their indices, which ascend and are where each stands once
+    /// all are in (as [`Self::remove_many`] returns them). The caller checks the indices.
+    pub(crate) fn insert_many(&mut self, entries: Vec<(usize, Presentation)>) {
+        let Some(first) = entries.first().map(|&(i, _)| i) else { return };
+        let old = std::mem::take(&mut self.presentations);
+        let mut rest = old.into_iter();
+        self.presentations.reserve(rest.len() + entries.len());
+        for (index, p) in entries {
+            while self.presentations.len() < index {
+                self.presentations.extend(rest.next());
+            }
+            Self::count(&mut self.attached, &p, true);
+            self.presentations.push(p);
+        }
+        self.presentations.extend(rest);
+        self.reindex(first);
+    }
+
     /// Puts `presentation` in the place of the one with its id and returns that one.
     pub(crate) fn replace(&mut self, index: usize, presentation: Presentation) -> Presentation {
-        std::mem::replace(&mut self.presentations[index], presentation)
+        self.count_attached(index, false);
+        let old = std::mem::replace(&mut self.presentations[index], presentation);
+        self.count_attached(index, true);
+        old
     }
 
     pub(crate) fn reorder(&mut self, from: usize, to: usize) {

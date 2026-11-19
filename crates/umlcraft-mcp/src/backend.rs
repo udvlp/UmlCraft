@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::host::{Access, Headless};
 use crate::live::LiveClient;
 use crate::protocol::Backend;
-use crate::tools::{self, Reply};
+use crate::tools::{self, Content, Reply};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -62,7 +62,11 @@ impl Backend for Auto {
             let access = self.access.clone();
             if let Some(app) = self.find_app() {
                 match app.call(name, args, &access) {
-                    Ok(reply) => {
+                    Ok(mut reply) => {
+                        // An app of another version: said once, with the first reply.
+                        if let Some(note) = app.take_note() {
+                            reply.content.push(Content::Text(note));
+                        }
                         self.mode = Mode::Live;
                         return reply;
                     }
@@ -88,7 +92,8 @@ impl Backend for Auto {
                 );
             }
         }
-        let reply = tools::call(&mut self.headless, &self.access, name, args);
+        // A panicking tool is an error reply; the server and its project go on.
+        let reply = tools::call_guarded(&mut self.headless, &self.access, name, args);
         if self.headless.touched() {
             self.mode = Mode::Headless;
         }

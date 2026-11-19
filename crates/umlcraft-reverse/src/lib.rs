@@ -162,10 +162,18 @@ pub fn collect_sources_for(
 /// are filed by it.
 #[derive(Clone, Debug, Default)]
 pub struct Placed {
+    /// By file once the import is done ([`Placed::by_unit`]).
     pub(crate) operations: Vec<(usize, Range<usize>, Id)>,
-    /// With the package each type is in.
+    /// With the package each type is in; by file once the import is done.
     types: Vec<(usize, Vec<String>, Id, Id)>,
     free: Vec<(usize, Id)>,
+}
+
+/// The entries of `unit` in `entries` sorted by unit.
+fn of_unit<T>(entries: &[T], unit: usize, unit_of: impl Fn(&T) -> usize) -> &[T] {
+    let start = entries.partition_point(|e| unit_of(e) < unit);
+    let end = entries.partition_point(|e| unit_of(e) <= unit);
+    &entries[start..end]
 }
 
 impl Placed {
@@ -175,40 +183,62 @@ impl Placed {
         }
     }
 
+    /// Sorts the operations and types by file, keeping their order within a file, so that a
+    /// lookup only looks at one file's.
+    fn by_unit(&mut self) {
+        self.operations.sort_by_key(|o| o.0);
+        self.types.sort_by_key(|t| t.0);
+    }
+
     /// The operation whose declaration or definition in file `unit` overlaps `range`.
     pub fn operation(&self, unit: usize, range: Range<usize>) -> Option<Id> {
-        self.operations
+        of_unit(&self.operations, unit, |o| o.0)
             .iter()
-            .find(|(u, span, _)| *u == unit && span.start < range.end && range.start < span.end)
+            .find(|(_, span, _)| span.start < range.end && range.start < span.end)
             .map(|&(_, _, id)| id)
     }
 
     /// The type that file `unit` declares as `path`, outermost first (`shop::Cart` counts as
-    /// `shop`, `Cart`); where no type has that whole path, one whose path ends with it.
+    /// `shop`, `Cart`); where no type has that whole path, one whose path ends with it, else
+    /// the longest whose path `path` ends with (`shop::Cart` finds `Cart`: types have no
+    /// namespaces in their paths).
     pub fn type_at(&self, unit: usize, path: &[String]) -> Option<Id> {
         let wanted: Vec<&str> = path.iter().flat_map(|p| p.split("::")).collect();
         if wanted.is_empty() {
             return None;
         }
-        let of_unit = || self.types.iter().filter(move |t| t.0 == unit);
-        let exact = of_unit().find(|t| t.1.iter().map(String::as_str).eq(wanted.iter().copied()));
+        let types = of_unit(&self.types, unit, |t| t.0);
+        let is = |a: &[String], b: &[&str]| a.iter().map(String::as_str).eq(b.iter().copied());
+        let exact = || types.iter().find(|t| is(&t.1, &wanted));
         let ends = || {
-            of_unit().find(|t| {
-                t.1.len() >= wanted.len()
-                    && t.1[t.1.len() - wanted.len()..]
-                        .iter()
-                        .map(String::as_str)
-                        .eq(wanted.iter().copied())
+            types.iter().find(|t| {
+                t.1.len() >= wanted.len() && is(&t.1[t.1.len() - wanted.len()..], &wanted)
             })
         };
-        exact.or_else(ends).map(|t| t.2)
+        let within = || {
+            types
+                .iter()
+                .filter(|t| {
+                    !t.1.is_empty()
+                        && t.1.len() < wanted.len()
+                        && is(&t.1, &wanted[wanted.len() - t.1.len()..])
+                })
+                .max_by_key(|t| t.1.len())
+        };
+        exact().or_else(ends).or_else(within).map(|t| t.2)
     }
 
     /// The package of what file `unit` declares outside types: where its free functions stand,
     /// else the package of its first type.
     pub fn namespace(&self, unit: usize) -> Option<Id> {
         let free = self.free.iter().find(|f| f.0 == unit).map(|f| f.1);
-        free.or_else(|| self.types.iter().find(|t| t.0 == unit).map(|t| t.3))
+        free.or_else(|| of_unit(&self.types, unit, |t| t.0).first().map(|t| t.3))
+    }
+
+    /// Whether the import put a type of its files at `id`, or the declarations of a file
+    /// outside types (a package).
+    pub fn holds(&self, id: Id) -> bool {
+        self.types.iter().any(|t| t.2 == id || t.3 == id) || self.free.iter().any(|f| f.1 == id)
     }
 }
 
@@ -243,6 +273,7 @@ pub fn apply_placed(
         }
         placed.types.push((entry.unit, path, entry.id, entry.namespace));
     }
+    placed.by_unit();
     let mut report = importer.report;
     report.files = parsed.units.len();
     for (&skip, &n) in &parsed.skipped {
@@ -317,31 +348,79 @@ pub(crate) fn lower_scope(
 pub fn parse_sources(language: SourceLanguage, files: &[PathBuf]) -> Parsed {
     let mut parsed = Parsed::default();
     for path in files {
-        let decoded = match source::read(path) {
-            Ok(decoded) => decoded,
-            Err(err) => {
-                let problem = Problem::Read(err.to_string());
-                parsed.failed.push(FileProblem { path: path.clone(), problem });
-                continue;
-            }
-        };
-        if let Some(encoding) = decoded.guessed {
-            parsed.guessed_encodings.push((path.clone(), encoding));
-        }
-        // Counted only for files that are imported.
-        let mut skipped = Skipped::new();
-        match lower(&parse_tree(language, decoded.text), path, &mut skipped) {
-            Ok(unit) => {
-                parsed.units.push(unit);
-                for (skip, n) in skipped {
-                    *parsed.skipped.entry(skip).or_default() += n;
-                }
-            }
-            Err(error) => {
-                let problem = Problem::Syntax(error);
-                parsed.failed.push(FileProblem { path: path.clone(), problem });
-            }
-        }
+        parse_file(language, path, &mut parsed);
     }
     parsed
+}
+
+/// Reads and parses one file into `parsed` as [`parse_sources`] does, and gives its tree (for
+/// what else reads the file, such as structograms) with the index of its unit in
+/// [`Parsed::units`]: none for a file with a syntax error. A file that cannot be read gives
+/// nothing.
+pub fn parse_file(
+    language: SourceLanguage,
+    path: &Path,
+    parsed: &mut Parsed,
+) -> Option<(SourceTree, Option<usize>)> {
+    let decoded = match source::read(path) {
+        Ok(decoded) => decoded,
+        Err(err) => {
+            let problem = Problem::Read(err.to_string());
+            parsed.failed.push(FileProblem { path: path.to_owned(), problem });
+            return None;
+        }
+    };
+    if let Some(encoding) = decoded.guessed {
+        parsed.guessed_encodings.push((path.to_owned(), encoding));
+    }
+    let tree = parse_tree(language, decoded.text);
+    // Counted only for files that are imported.
+    let mut skipped = Skipped::new();
+    let unit = match lower(&tree, path, &mut skipped) {
+        Ok(unit) => {
+            parsed.units.push(unit);
+            for (skip, n) in skipped {
+                *parsed.skipped.entry(skip).or_default() += n;
+            }
+            Some(parsed.units.len() - 1)
+        }
+        Err(error) => {
+            let problem = Problem::Syntax(error);
+            parsed.failed.push(FileProblem { path: path.to_owned(), problem });
+            None
+        }
+    };
+    Some((tree, unit))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| (*n).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_type_is_found_by_a_path_with_namespaces() {
+        let (cart, inner, other, package) =
+            (Id::from_u128(1), Id::from_u128(2), Id::from_u128(3), Id::from_u128(9));
+        let mut placed = Placed::default();
+        placed.types.push((1, path(&["Other"]), other, package));
+        placed.types.push((0, path(&["Cart"]), cart, package));
+        placed.types.push((0, path(&["Cart", "Line"]), inner, package));
+        placed.operations.push((1, 0..10, other));
+        placed.operations.push((0, 5..8, cart));
+        placed.by_unit();
+        assert_eq!(placed.type_at(0, &path(&["Cart"])), Some(cart));
+        assert_eq!(placed.type_at(0, &path(&["Line"])), Some(inner));
+        // A C++ method's class as written: the namespace is no type.
+        assert_eq!(placed.type_at(0, &path(&["shop::Cart"])), Some(cart));
+        assert_eq!(placed.type_at(0, &path(&["shop::Cart::Line"])), Some(inner));
+        assert_eq!(placed.type_at(0, &path(&["shop::Other"])), None);
+        assert_eq!(placed.operation(0, 0..6), Some(cart));
+        assert_eq!(placed.operation(1, 0..6), Some(other));
+        assert_eq!(placed.operation(2, 0..6), None);
+        assert!(placed.holds(package) && placed.holds(inner) && !placed.holds(Id::from_u128(5)));
+    }
 }

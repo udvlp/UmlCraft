@@ -682,31 +682,66 @@ fn invariant_lines(text: &str, room: f32, measure: &dyn TextMeasure) -> Vec<Stri
             lines.push(String::new());
         }
         while !rest.is_empty() {
-            // Where a line may end: after a run of spaces, or at the end.
+            // How far the line reaches at most: where the longest start of the rest that fits
+            // ends, found without measuring the whole rest.
+            let limit = longest_start(rest, fits);
+            // Where a line may end: after a run of spaces, or at the end. As many words as fit.
             let ends = rest
                 .char_indices()
                 .zip(rest.chars().skip(1))
                 .filter(|&((_, c), next)| c == ' ' && next != ' ')
                 .map(|((i, _), _)| i + 1)
                 .chain([rest.len()]);
-            let mut end = None;
-            for at in ends {
-                if !fits(&rest[..at]) {
-                    break;
-                }
-                end = Some(at);
-            }
+            let end = ends.take_while(|&at| limit.is_some_and(|l| at <= l)).last();
             // A word wider than the line: as many characters as fit, at least one.
-            let end = end.unwrap_or_else(|| {
-                let mut chars = rest.char_indices().skip(1).map(|(i, _)| i).chain([rest.len()]);
-                let first = chars.next().unwrap_or(rest.len());
-                chars.take_while(|&at| fits(&rest[..at])).last().unwrap_or(first)
-            });
+            let first = rest.char_indices().nth(1).map_or(rest.len(), |(i, _)| i);
+            let end = end.unwrap_or(limit.unwrap_or(first));
             lines.push(rest[..end].trim_end().to_owned());
             rest = &rest[end..];
         }
     }
     lines
+}
+
+/// Where the longest start of `text` of at least one character that `fits` ends, as a byte
+/// index; `None` where not even the first character fits. A longer start is never narrower
+/// than a shorter one, so the length in characters doubles until a start no longer fits and
+/// is then halved down to the last that does: only starts about as long as the result are
+/// measured, never the whole of a long text.
+fn longest_start(text: &str, fits: impl Fn(&str) -> bool) -> Option<usize> {
+    // The ends of the starts of one, two, … characters, taken as far as needed.
+    let mut chars = text.char_indices().skip(1).map(|(i, _)| i).chain([text.len()]);
+    let mut ends: Vec<usize> = Vec::new();
+    let mut end = |k: usize| -> Option<usize> {
+        while ends.len() <= k {
+            ends.push(chars.next()?);
+        }
+        Some(ends[k])
+    };
+    let first = end(0)?;
+    if !fits(&text[..first]) {
+        return None;
+    }
+    // `low` fits; `high` does not, or lies past the end.
+    let (mut low, mut step) = (0, 1);
+    let mut high = loop {
+        let next = low + step;
+        match end(next) {
+            Some(at) if fits(&text[..at]) => {
+                low = next;
+                step *= 2;
+            }
+            _ => break next,
+        }
+    };
+    while high - low > 1 {
+        let middle = low + (high - low) / 2;
+        match end(middle) {
+            Some(at) if fits(&text[..at]) => low = middle,
+            _ => high = middle,
+        }
+    }
+    end(low)
 }
 
 /// The height Astah gives a state invariant `width` wide that reads `text`.
@@ -1503,5 +1538,79 @@ mod tests {
         let number = |id: u128| numbers[&Id::from_u128(id)].clone();
         assert_eq!(number(102), "1.1");
         assert!(!number(103).contains('-') && !number(104).contains('-'), "{numbers:?}");
+    }
+
+    /// Measures as [`crate::scene::ApproxMeasure`] and counts the characters measured.
+    struct Counting(std::cell::Cell<usize>);
+
+    impl TextMeasure for Counting {
+        fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
+            self.0.set(self.0.get() + text.chars().count());
+            crate::scene::ApproxMeasure.width(text, font_size, bold)
+        }
+    }
+
+    /// The lines [`invariant_lines`] gives, found by trying every word end and then every
+    /// character in turn.
+    fn lines_one_by_one(text: &str, room: f32, measure: &dyn TextMeasure) -> Vec<String> {
+        let fits = |s: &str| measure.width(s.trim_end(), FONT_SIZE, false) <= room;
+        let mut lines = Vec::new();
+        for paragraph in text.split('\n') {
+            let mut rest = paragraph.strip_suffix('\r').unwrap_or(paragraph);
+            if rest.is_empty() {
+                lines.push(String::new());
+            }
+            while !rest.is_empty() {
+                let ends = rest
+                    .char_indices()
+                    .zip(rest.chars().skip(1))
+                    .filter(|&((_, c), next)| c == ' ' && next != ' ')
+                    .map(|((i, _), _)| i + 1)
+                    .chain([rest.len()]);
+                let end = ends.take_while(|&at| fits(&rest[..at])).last().unwrap_or_else(|| {
+                    let mut chars = rest.char_indices().skip(1).map(|(i, _)| i).chain([rest.len()]);
+                    let first = chars.next().unwrap_or(rest.len());
+                    chars.take_while(|&at| fits(&rest[..at])).last().unwrap_or(first)
+                });
+                lines.push(rest[..end].trim_end().to_owned());
+                rest = &rest[end..];
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn invariants_break_after_words_or_between_characters() {
+        let measure = crate::scene::ApproxMeasure;
+        for room in [0.0, 8.0, 40.0, 75.0, 120.0, 300.0] {
+            for text in [
+                "ab cd ef gh ij kl",
+                "abcdefghijklmnop qr",
+                "ab\n\ncd  ef\r\nx",
+                "a very long condition with words of every length, and a hash 0f3a9c1d2e7b",
+                "Ünïcödé wörds änd ümläüts",
+                "   leading and trailing   ",
+            ] {
+                assert_eq!(
+                    invariant_lines(text, room, &measure),
+                    lines_one_by_one(text, room, &measure),
+                    "{text:?} in {room}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_word_is_broken_without_measuring_the_rest_for_each_line() {
+        let measure = Counting(std::cell::Cell::new(0));
+        let room = crate::scene::ApproxMeasure.width("abcdefghij", FONT_SIZE, false);
+        let text = "0123456789abcdef".repeat(250);
+        let lines = invariant_lines(&text, room, &measure);
+        assert_eq!(lines.concat(), text);
+        assert!(lines.len() > 300, "{}", lines.len());
+        // Each line measures starts about as long as itself a few times, not the 4,000
+        // characters left.
+        let per_line = measure.0.get() / lines.len();
+        assert!(per_line < 200, "{per_line} characters measured per line");
     }
 }

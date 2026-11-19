@@ -314,7 +314,18 @@ impl Importer<'_> {
                 }
                 continue;
             }
-            let Some(bounds) = rect(self, p) else { continue };
+            let shown = matches!(
+                class(p),
+                "ClassifierRolePresentation"
+                    | "CombinedFragmentPresentation"
+                    | "InteractionUsePresentation"
+            );
+            let Some(bounds) = rect(self, p) else {
+                if shown && self.shows_imported(p) {
+                    self.lost_presentations += 1;
+                }
+                continue;
+            };
             let presentation = match class(p) {
                 "FramePresentation" => Presentation::node(Some(diagram), bounds),
                 "ClassifierRolePresentation" => {
@@ -324,6 +335,9 @@ impl Importer<'_> {
                             Some(ElementKind::Lifeline(_))
                         )
                     }) else {
+                        if self.shows_imported(p) {
+                            self.lost_presentations += 1;
+                        }
                         continue;
                     };
                     let length = r.num(p, "lifelineLength").unwrap_or(0.0) as f32;
@@ -371,9 +385,25 @@ impl Importer<'_> {
             {
                 continue;
             }
-            let Some(bounds) = rect(self, p) else { continue };
+            // A bar whose lifeline came in but that cannot hang on it is lost.
+            let lost = |this: &mut Self| {
+                let lifeline = r.list(p, "servers").first().copied().map(|s| match class(s) {
+                    "ActivationPresentation" => r.list(s, "servers").first().copied(),
+                    _ => Some(s),
+                });
+                if lifeline.flatten().is_some_and(|l| this.shows_imported(l)) {
+                    this.lost_presentations += 1;
+                }
+            };
+            let Some(bounds) = rect(self, p) else {
+                lost(self);
+                continue;
+            };
             let Some(&server) = r.list(p, "servers").first() else { continue };
-            let Some(lifeline) = lane_of(self, server, &presentation_of) else { continue };
+            let Some(lifeline) = lane_of(self, server, &presentation_of) else {
+                lost(self);
+                continue;
+            };
             let mut presentation = Presentation::activation(lifeline, bounds.y, bounds.height);
             // Astah keeps bars of width 0 and draws them as a line.
             if let Shape::Activation { width, .. } = &mut presentation.shape {
@@ -424,7 +454,10 @@ impl Importer<'_> {
                 }
                 _ => continue,
             };
-            let Some(bounds) = bounds else { continue };
+            let Some(bounds) = bounds else {
+                self.lost_presentations += 1;
+                continue;
+            };
             let mut presentation = Presentation::node(Some(e), bounds);
             presentation.style = self.fill(p);
             presentation.style.name_offset = self.constraint_label(p, shift);
@@ -530,7 +563,11 @@ impl Importer<'_> {
         let (gate, props_sort) = (props.gate, props.sort);
         let points: Vec<Point> =
             r.points(p, "allPoints").into_iter().map(|pt| pt.offset(shift.x, shift.y)).collect();
-        let (Some(&first), Some(&last)) = (points.first(), points.last()) else { return };
+        // The message came in; a line without its points or lifelines is lost.
+        let (Some(&first), Some(&last)) = (points.first(), points.last()) else {
+            self.lost_presentations += 1;
+            return;
+        };
         let servers = r.list(p, "servers");
         let ends: Vec<Option<Id>> = servers.iter().map(|&s| lane(self, s)).collect();
         let (source, target, gate_x) =
@@ -538,7 +575,10 @@ impl Importer<'_> {
                 (MessageGate::None, Some(s), Some(t)) => (s, t, None),
                 (MessageGate::Found, _, Some(t)) => (t, t, Some(first.x)),
                 (MessageGate::Lost, Some(s), _) => (s, s, Some(last.x)),
-                _ => return,
+                _ => {
+                    self.lost_presentations += 1;
+                    return;
+                }
             };
         let center = self
             .model

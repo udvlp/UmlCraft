@@ -1,5 +1,6 @@
-//! Main window: menu bar, toolbar, model tree, diagram tabs with palette and canvas,
-//! properties panel and status bar. Also owns file handling (new, open, save, recent files).
+//! Main window: title bar, ribbon, model tree, the canvas with the diagram and structogram
+//! tabs, properties panel, floating cards and toasts. Also owns file handling (new, open, save,
+//! recent files, imports and exports).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -44,6 +45,7 @@ enum Busy {
     ExportingAstah,
     ImportingAstah,
     ImportingSource,
+    ImportingSql,
 }
 
 /// The check for a new version the user asked for in the About dialog.
@@ -164,7 +166,7 @@ impl MainView {
                 }
             }),
             cx.observe(&tree, |this, tree, cx| this.on_tree_changed(tree, cx)),
-            // Toolbar and status bar show the zoom.
+            // The zoom pill shows the zoom.
             cx.observe(&canvas, |_, _, cx| cx.notify()),
             cx.observe_in(&workspace, window, |this, _, window, cx| {
                 this.sync_from_workspace(window, cx);
@@ -241,6 +243,14 @@ impl MainView {
         self.workspace.update(cx, |ws, _| ws.validate());
         let ws = self.workspace.read(cx);
         let revision = (ws.doc.revision(), rust_i18n::locale().to_string());
+        // Typing into a structogram changes its content only, which the tree does not show.
+        if let (Some((shown, locale)), Some((before, after))) =
+            (&self.tree_revision, ws.content_edit)
+            && (*shown, after) == (before, revision.0)
+            && *locale == revision.1
+        {
+            self.tree_revision = Some(revision.clone());
+        }
         if self.tree_revision.as_ref() != Some(&revision) {
             let model = ws.doc.model();
             let mut meta = HashMap::new();
@@ -419,6 +429,14 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The CLI gave up waiting for it and told the client so: it must not run now.
+        if !request.take() {
+            return;
+        }
+        // Text the user is typing belongs to the project that is saved or replaced.
+        if matches!(request.name.as_str(), "save_file" | "open_file" | "new_document") {
+            self.flush_edits(window, cx);
+        }
         // These need the window, not the project; the first two answer later.
         match request.name.as_str() {
             "screenshot" => return crate::live::screenshot(request, window, cx),
@@ -432,7 +450,8 @@ impl MainView {
         let mut effects = crate::live::Effects::default();
         let reply = self.workspace.update(cx, |ws, cx| {
             let mut host = crate::live::AppHost { ws, effects: &mut effects };
-            let reply = umlcraft_mcp::tools::call(
+            // A panicking tool answers with an error; the app and its project go on.
+            let reply = umlcraft_mcp::tools::call_guarded(
                 &mut host,
                 &request.access,
                 &request.name,
@@ -682,6 +701,10 @@ impl MainView {
     /// Opens `path` once unsaved changes are saved or discarded, e.g. for a file the system
     /// hands over.
     pub fn ask_to_open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // Projects open in the background, one at a time; structograms open at once.
+        if !crate::nsd::is_structogram(&path) && self.refuse_while_busy(window, cx) {
+            return;
+        }
         self.confirm_discard(
             window,
             cx,
@@ -706,13 +729,14 @@ impl MainView {
             self.import(&path, window, cx);
             return;
         }
-        if self.busy.is_some() {
+        if self.refuse_while_busy(window, cx) {
             return;
         }
         // Read in the background, so a large file does not freeze the window.
         self.busy = Some(Busy::Opening);
         cx.notify();
         let generation = self.generation;
+        let revision = self.workspace.read(cx).doc.revision();
         cx.spawn_in(window, async move |this, cx| {
             let file = path.clone();
             let result = cx
@@ -728,16 +752,48 @@ impl MainView {
                 })
                 .await;
             this.update_in(cx, |this, window, cx| {
-                this.busy = None;
-                cx.notify();
-                // Another project opened meanwhile was the user's later choice.
-                if this.generation == generation {
-                    this.apply_open(path, result, window, cx);
-                }
+                let replaces = result.is_ok();
+                let then: Continuation =
+                    Box::new(move |this, window, cx| this.apply_open(path, result, window, cx));
+                this.finish_load(generation, revision, replaces, then, window, cx);
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Whether a file job runs in the background; then says so, as the next has to wait.
+    fn refuse_while_busy(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.busy.is_none() {
+            return false;
+        }
+        toast(Notification::warning(t!("status.busy").to_string()), window, cx);
+        true
+    }
+
+    /// Ends a load started at `generation` with the project at `revision`, and runs `then`
+    /// with what was loaded. Nothing happens if another project was opened meanwhile, the
+    /// user's later choice. The open project stays editable during a load, so if it was
+    /// edited meanwhile and the load would replace it (`replaces`), the user is asked again.
+    fn finish_load(
+        &mut self,
+        generation: u64,
+        revision: u64,
+        replaces: bool,
+        then: Continuation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.busy = None;
+        cx.notify();
+        if self.generation != generation {
+            return;
+        }
+        if replaces && self.workspace.read(cx).doc.revision() != revision {
+            self.confirm_discard(window, cx, then);
+        } else {
+            then(self, window, cx);
+        }
     }
 
     fn apply_open(
@@ -767,23 +823,22 @@ impl MainView {
     /// Imports an Astah project in the background as a new, not yet saved project. Says so
     /// when parts of it could not be carried over.
     fn import(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy.is_some() {
+        if self.refuse_while_busy(window, cx) {
             return;
         }
         self.busy = Some(Busy::ImportingAstah);
         cx.notify();
         let generation = self.generation;
+        let revision = self.workspace.read(cx).doc.revision();
         let path = path.to_owned();
         cx.spawn_in(window, async move |this, cx| {
             let result =
                 cx.background_executor().spawn(async move { umlcraft_asta::import(&path) }).await;
             this.update_in(cx, |this, window, cx| {
-                this.busy = None;
-                cx.notify();
-                // Another project opened meanwhile was the user's later choice.
-                if this.generation == generation {
-                    this.apply_import(result, window, cx);
-                }
+                let replaces = result.is_ok();
+                let then: Continuation =
+                    Box::new(move |this, window, cx| this.apply_import(result, window, cx));
+                this.finish_load(generation, revision, replaces, then, window, cx);
             })
             .ok();
         })
@@ -847,7 +902,7 @@ impl MainView {
             self.inform(PromptLevel::Info, &message, &detail, window, cx);
             return;
         };
-        if self.busy.is_some() {
+        if self.refuse_while_busy(window, cx) {
             return;
         }
         self.flush_edits(window, cx);
@@ -903,7 +958,7 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.busy.is_some() {
+        if self.refuse_while_busy(window, cx) {
             return;
         }
         let language = action.language;
@@ -947,21 +1002,85 @@ impl MainView {
         .detach();
     }
 
-    /// Imports the tables of an SQL dump into the project and opens their ER diagram. What
-    /// was found goes to the status bar; hints and problems also to a message.
+    /// Counts the projects opened, so background work can tell whether the one it started in
+    /// is still open.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Imports the tables of an SQL dump into the project and opens their ER diagram, unless
+    /// another project was opened since `generation`, when the import began. The tables are
+    /// mapped and laid out on a copy of the project in the background, which takes seconds for
+    /// hundreds of tables, and the result is applied as one step; if the project changed in the
+    /// meantime, the import runs again on it. What was found goes to a toast; hints and
+    /// problems to a message.
     pub fn import_sql(
         &mut self,
-        schema: &umlcraft_erm_sql::Schema,
-        options: &umlcraft_erm_sql::Options,
+        schema: umlcraft_erm_sql::Schema,
+        options: umlcraft_erm_sql::Options,
+        file: String,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.generation != generation {
+            let message = t!("dialog.import_sql_discarded");
+            let detail = t!("dialog.import_sql_discarded_detail");
+            self.inform(PromptLevel::Info, &message, &detail, window, cx);
+            return;
+        }
+        if self.refuse_while_busy(window, cx) {
+            return;
+        }
+        let ws = self.workspace.read(cx);
+        let model = ws.doc.model().clone();
+        let revision = ws.doc.revision();
+        let measure = AppMeasure::new(cx, self.settings.display());
+        self.busy = Some(Busy::ImportingSql);
+        cx.notify();
+        let (bg_schema, bg_options) = (schema.clone(), options.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            let planned =
+                cx.background_executor()
+                    .spawn(async move {
+                        crate::sql::plan_import(model, &bg_schema, &bg_options, &measure)
+                    })
+                    .await;
+            this.update_in(cx, |this, window, cx| {
+                this.busy = None;
+                if this.generation != generation {
+                    let message = t!("dialog.import_sql_discarded");
+                    let detail = t!("dialog.import_sql_discarded_detail");
+                    this.inform(PromptLevel::Info, &message, &detail, window, cx);
+                    return;
+                }
+                let result = this.workspace.update(cx, |ws, cx| {
+                    let result = match planned {
+                        Ok((import, ops)) if ws.doc.revision() == revision => {
+                            ws.apply_sql_import(import, ops)
+                        }
+                        // Changed meanwhile, or the copy refused: import into the project as
+                        // it is now.
+                        _ => ws.import_sql(&schema, &options),
+                    };
+                    cx.notify();
+                    result
+                });
+                this.sql_imported(result, &file, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Reports the outcome of an SQL import.
+    fn sql_imported(
+        &mut self,
+        result: Result<umlcraft_erm_sql::Import, umlcraft_model::ModelError>,
         file: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let result = self.workspace.update(cx, |ws, cx| {
-            let result = ws.import_sql(schema, options);
-            cx.notify();
-            result
-        });
         match result {
             Ok(import) => {
                 let (summary, mut lines) = crate::sql::report_text(&import.report, file);
@@ -1171,7 +1290,7 @@ impl MainView {
         }
     }
 
-    /// Says what a source import did: in the status bar if all went well, else in a message
+    /// Says what a source import did: in a toast if all went well, else in a message
     /// listing the files that failed and those whose encoding was guessed.
     fn report_source_import(
         &mut self,
@@ -1352,7 +1471,7 @@ impl MainView {
                 let mut lines: Vec<String> = report
                     .dropped
                     .iter()
-                    .map(|(key, n)| format!("{} ({n})", export_dropped_label(key)))
+                    .map(|(key, n)| format!("{} ({n})", labels::export_dropped(key)))
                     .collect();
                 lines.extend(report.problems);
                 let message = t!("dialog.export_partial", count = count);
@@ -2264,6 +2383,7 @@ impl MainView {
             Busy::ExportingAstah => t!("status.exporting"),
             Busy::ImportingSource => t!("status.importing"),
             Busy::ImportingAstah => t!("status.importing_astah"),
+            Busy::ImportingSql => t!("status.importing_sql"),
         };
         let cancel = (self.busy == Some(Busy::ExportingAstah)).then(|| {
             let cancel = self.cancel_export.clone();
@@ -2626,18 +2746,6 @@ fn astah() -> Option<&'static umlcraft_asta_export::Astah> {
     static ASTAH: std::sync::OnceLock<Option<umlcraft_asta_export::Astah>> =
         std::sync::OnceLock::new();
     ASTAH.get_or_init(umlcraft_asta_export::Astah::find).as_ref()
-}
-
-/// What the export reports as left out: an element kind, or something Astah cannot express.
-fn export_dropped_label(key: &str) -> String {
-    for prefix in ["export_dropped", "kind"] {
-        let path = format!("{prefix}.{key}");
-        let label = t!(path.as_str()).to_string();
-        if label != path {
-            return label;
-        }
-    }
-    key.to_owned()
 }
 
 /// "name.ucraft — C:\Users\…\folder": file name first, the folder shortened in the middle.

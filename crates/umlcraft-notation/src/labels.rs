@@ -79,15 +79,19 @@ const NEARER_OTHER_COST: f32 = 30.0;
 /// Moves the free labels of `edges` to where they cover least of `nodes`, the lines and the
 /// other labels.
 pub fn place(nodes: &[NodeShape], edges: &mut [EdgeShape], measure: &dyn TextMeasure) {
+    if edges.iter().all(|e| e.free_labels.is_empty()) {
+        return;
+    }
+    let lines = Lines::new(edges);
     let mut blocks = Vec::new();
     for (e, edge) in edges.iter().enumerate() {
         for (f, free) in edge.free_labels.iter().enumerate() {
             let mut block = Block::new(edge, e, f, free, measure);
             block.keep_outside(edge, free, edges);
             if free.kind == LabelKind::Name {
-                block.keep_near_own(e, edges);
+                block.keep_near_own(e, edges, &lines);
             }
-            block.keep_this_side(e, edges);
+            block.keep_this_side(e, edges, &lines);
             blocks.push(block);
         }
     }
@@ -95,11 +99,13 @@ pub fn place(nodes: &[NodeShape], edges: &mut [EdgeShape], measure: &dyn TextMea
         return;
     }
     let obstacles = Obstacles::new(nodes, edges, measure);
-    let nearby: Vec<Obstacles> = blocks.iter().map(|b| obstacles.near(b.hull())).collect();
+    let index = obstacles.index();
+    let hulls: Vec<Rect> = blocks.iter().map(Block::hull).collect();
+    let nearby: Vec<Obstacles> = hulls.iter().map(|&h| obstacles.near(&index, h)).collect();
     // The first round places each label among those placed before it, the second among all.
     for round in 0..2 {
         for k in 0..blocks.len() {
-            let hull = blocks[k].hull();
+            let hull = hulls[k];
             let others: Vec<Rect> = blocks
                 .iter()
                 .enumerate()
@@ -335,33 +341,24 @@ impl Block {
     }
 
     /// For a name: makes the spots closer to another line than to its own line (edge `own`)
-    /// cost more, so that the name reads as its own line's.
-    fn keep_near_own(&mut self, own: usize, edges: &[EdgeShape]) {
+    /// cost more, so that the name reads as its own line's. Only the stretches of other lines
+    /// within the distance to its own line can be closer.
+    fn keep_near_own(&mut self, own: usize, edges: &[EdgeShape], lines: &Lines) {
         let path = edges[own].path();
-        if path.len() < 2 {
-            return;
-        }
-        let distance = |r: Rect, points: &[Point]| {
-            points
-                .windows(2)
-                .map(|w| rect_segment_distance(r, w[0], w[1]))
-                .fold(f32::INFINITY, f32::min)
-        };
-        let others: Vec<Vec<Point>> = edges
-            .iter()
-            .enumerate()
-            .filter(|&(e, _)| e != own)
-            .map(|(_, e)| e.path().into_owned())
-            .filter(|p| p.len() >= 2)
-            .collect();
-        if others.is_empty() {
+        if path.len() < 2 || !lines.others_than(own) {
             return;
         }
         self.penalty.resize(self.spots.len(), 0.0);
         for i in 0..self.spots.len() {
             let r = self.rect(i);
-            let mine = distance(r, &path);
-            if others.iter().any(|p| distance(r, p) < mine - 0.5) {
+            let mine = path
+                .windows(2)
+                .map(|w| rect_segment_distance(r, w[0], w[1]))
+                .fold(f32::INFINITY, f32::min);
+            let nearer = lines.any_near(r.inflate(mine.max(0.0)), |(a, b, e)| {
+                e != own && rect_segment_distance(r, a, b) < mine - 0.5
+            });
+            if nearer {
                 self.penalty[i] += NEARER_OTHER_COST;
             }
         }
@@ -370,18 +367,9 @@ impl Block {
     /// Makes the spots from which the way to their own line (edge `own`) crosses another line
     /// cost more: a multiplicity beyond the neighbouring line reads as that line's. The way from
     /// any corner counts, so that a label another line runs through pays as well.
-    fn keep_this_side(&mut self, own: usize, edges: &[EdgeShape]) {
+    fn keep_this_side(&mut self, own: usize, edges: &[EdgeShape], lines: &Lines) {
         let path = edges[own].path();
-        if path.len() < 2 {
-            return;
-        }
-        let others: Vec<(Point, Point)> = edges
-            .iter()
-            .enumerate()
-            .filter(|&(e, _)| e != own)
-            .flat_map(|(_, e)| e.path().windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>())
-            .collect();
-        if others.is_empty() {
+        if path.len() < 2 || !lines.others_than(own) {
             return;
         }
         self.penalty.resize(self.spots.len(), 0.0);
@@ -399,7 +387,9 @@ impl Block {
                     .map(|w| closest_on_segment(corner, w[0], w[1]))
                     .min_by(|a, b| corner.distance(*a).total_cmp(&corner.distance(*b)));
                 near.is_some_and(|near| {
-                    others.iter().any(|&(a, b)| segments_cross(corner, near, a, b))
+                    lines.any_near(Rect::from_corners(corner, near), |(a, b, e)| {
+                        e != own && segments_cross(corner, near, a, b)
+                    })
                 })
             });
             if across {
@@ -654,17 +644,33 @@ impl Obstacles {
         obstacles
     }
 
-    /// The obstacles that reach into `area`.
-    fn near(&self, area: Rect) -> Self {
+    /// Buckets of the boxes, segments and labels, for [`Obstacles::near`].
+    fn index(&self) -> [Buckets; 3] {
+        let segments: Vec<Rect> =
+            self.segments.iter().map(|&(a, b)| Rect::from_corners(a, b)).collect();
+        [Buckets::new(&self.boxes), Buckets::new(&segments), Buckets::new(&self.labels)]
+    }
+
+    /// The obstacles that reach into `area`, in their order here; `index` is from
+    /// [`Obstacles::index`].
+    fn near(&self, index: &[Buckets; 3], area: Rect) -> Self {
+        let [boxes, segments, labels] = index;
         Self {
-            boxes: self.boxes.iter().filter(|b| b.intersects(&area)).copied().collect(),
-            segments: self
-                .segments
-                .iter()
-                .filter(|(a, b)| Rect::from_corners(*a, *b).intersects(&area))
-                .copied()
+            boxes: boxes
+                .query(area)
+                .map(|i| self.boxes[i])
+                .filter(|b| b.intersects(&area))
                 .collect(),
-            labels: self.labels.iter().filter(|l| l.intersects(&area)).copied().collect(),
+            segments: segments
+                .query(area)
+                .map(|i| self.segments[i])
+                .filter(|(a, b)| Rect::from_corners(*a, *b).intersects(&area))
+                .collect(),
+            labels: labels
+                .query(area)
+                .map(|i| self.labels[i])
+                .filter(|l| l.intersects(&area))
+                .collect(),
         }
     }
 
@@ -676,6 +682,113 @@ impl Obstacles {
         let r = r.inflate(1.0);
         let lines: f32 = self.segments.iter().map(|&(a, b)| inside_length(r, a, b)).sum();
         boxes * NODE_COST + labels * LABEL_COST + lines * LINE_COST
+    }
+}
+
+/// The smallest cell of [`Buckets`], and how many cells run either way at most: a long line
+/// then lies in few cells.
+const BUCKET_SIZE: f32 = 64.0;
+const MAX_BUCKETS: f32 = 128.0;
+
+/// Rectangles sorted into the cells of a coarse grid, to find those that may reach into an
+/// area without looking at all of them.
+struct Buckets {
+    origin: Point,
+    cell: f32,
+    columns: usize,
+    rows: usize,
+    cells: Vec<Vec<u32>>,
+}
+
+impl Buckets {
+    fn new(rects: &[Rect]) -> Self {
+        let bounds = rects.iter().copied().reduce(|a, b| a.union(&b)).unwrap_or_default();
+        let cell = (bounds.width.max(bounds.height) / MAX_BUCKETS).max(BUCKET_SIZE);
+        let count = |size: f32| (size / cell).clamp(0.0, MAX_BUCKETS) as usize + 1;
+        let (columns, rows) = (count(bounds.width), count(bounds.height));
+        let mut buckets = Self {
+            origin: bounds.origin(),
+            cell,
+            columns,
+            rows,
+            cells: vec![Vec::new(); columns * rows],
+        };
+        for (i, r) in rects.iter().enumerate() {
+            let ([x0, x1], [y0, y1]) = buckets.span(r);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    buckets.cells[y * columns + x].push(i as u32);
+                }
+            }
+        }
+        buckets
+    }
+
+    /// The first and last column and row that `r` reaches into; what lies outside the grid
+    /// counts as in its border cells.
+    fn span(&self, r: &Rect) -> ([usize; 2], [usize; 2]) {
+        let at = |v: f32, start: f32, count: usize| {
+            (((v - start) / self.cell).floor().max(0.0) as usize).min(count - 1)
+        };
+        let (x, y) = (self.origin.x, self.origin.y);
+        (
+            [at(r.x, x, self.columns), at(r.right(), x, self.columns)],
+            [at(r.y, y, self.rows), at(r.bottom(), y, self.rows)],
+        )
+    }
+
+    /// Whether `f` holds for one of the rectangles in the cells that `area` reaches into: all
+    /// that intersect it and some more, some of them more than once.
+    fn any(&self, area: Rect, mut f: impl FnMut(usize) -> bool) -> bool {
+        let ([x0, x1], [y0, y1]) = self.span(&area);
+        (y0..=y1).any(|y| {
+            (x0..=x1).any(|x| self.cells[y * self.columns + x].iter().any(|&i| f(i as usize)))
+        })
+    }
+
+    /// The rectangles in the cells that `area` reaches into, ascending and each once.
+    fn query(&self, area: Rect) -> std::vec::IntoIter<usize> {
+        let mut found = Vec::new();
+        self.any(area, |i| {
+            found.push(i);
+            false
+        });
+        found.sort_unstable();
+        found.dedup();
+        found.into_iter()
+    }
+}
+
+/// The stretches of all lines with the line each belongs to, in [`Buckets`].
+struct Lines {
+    segments: Vec<(Point, Point, usize)>,
+    /// How many stretches each line has.
+    counts: Vec<usize>,
+    buckets: Buckets,
+}
+
+impl Lines {
+    fn new(edges: &[EdgeShape]) -> Self {
+        let mut segments = Vec::new();
+        let mut counts = Vec::with_capacity(edges.len());
+        for (e, edge) in edges.iter().enumerate() {
+            let path = edge.path();
+            counts.push(path.len().saturating_sub(1));
+            segments.extend(path.windows(2).map(|w| (w[0], w[1], e)));
+        }
+        let rects: Vec<Rect> = segments.iter().map(|&(a, b, _)| Rect::from_corners(a, b)).collect();
+        Self { segments, counts, buckets: Buckets::new(&rects) }
+    }
+
+    /// Whether lines other than `own` have stretches.
+    fn others_than(&self, own: usize) -> bool {
+        self.segments.len() > self.counts[own]
+    }
+
+    /// Whether `f` holds for a stretch (from, to, line) that may reach into `area`: every
+    /// stretch whose bounding box intersects it comes.
+    fn any_near(&self, area: Rect, mut f: impl FnMut((Point, Point, usize)) -> bool) -> bool {
+        self.buckets.any(area, |i| f(self.segments[i]))
     }
 }
 
@@ -806,6 +919,38 @@ mod tests {
             below += usize::from(spot.x > 0.0 && r.y > 20.0 && crossed == 0.0);
         }
         assert!(above > 0 && below > 0, "{above} {below}");
+    }
+
+    #[test]
+    fn buckets_find_every_rectangle_an_area_meets() {
+        // Small and long ones, lines (no height), spread over 20,000 across.
+        let rects: Vec<Rect> = (0..400)
+            .map(|k| {
+                let (x, y) = ((k * 7919 % 20000) as f32, (k * 104_729 % 9000) as f32);
+                match k % 3 {
+                    0 => Rect::new(x, y, 30.0, 15.0),
+                    1 => Rect::new(x, y, 3000.0, 0.0),
+                    _ => Rect::new(x, y - 2000.0, 0.0, 2000.0),
+                }
+            })
+            .collect();
+        let buckets = Buckets::new(&rects);
+        let areas = [
+            Rect::new(5000.0, 3000.0, 100.0, 40.0),
+            Rect::new(-500.0, -500.0, 600.0, 600.0),
+            Rect::new(19_990.0, 8990.0, 5000.0, 5000.0),
+            Rect::new(0.0, 0.0, 20_000.0, 9000.0),
+            Rect::new(12_000.0, 4000.0, 0.0, 0.0),
+        ];
+        for area in areas {
+            let found: Vec<usize> = buckets.query(area).collect();
+            assert!(found.windows(2).all(|w| w[0] < w[1]), "ascending and once each");
+            for (i, r) in rects.iter().enumerate() {
+                if r.intersects(&area) {
+                    assert!(found.contains(&i), "{r:?} in {area:?}");
+                }
+            }
+        }
     }
 
     #[test]

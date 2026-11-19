@@ -4,9 +4,10 @@
 //! classes (`JP.co.esm.caddies.jomt.jmodel.*`). Only what UmlCraft can represent is imported:
 //! packages, classifiers with their features, use cases, components, nodes, artifacts,
 //! instances and links, the relationships between them, activities, interactions with their
-//! interaction uses, state machines, and the parts, ports and connectors of structured
-//! classes; class, use case, sequence, activity, state machine, component, deployment and
-//! composite structure diagrams. Everything else is counted in [`Imported::skipped`].
+//! interaction uses, state machines, the parts, ports and connectors of structured classes,
+//! and the ER model with its entities, relationships, subtypes and domains (`er`); class, use
+//! case, sequence, activity, state machine, component, deployment, composite structure and ER
+//! diagrams. Everything else is counted in [`Imported::skipped`].
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -44,10 +45,13 @@ pub struct Imported {
     /// they occurred. Presentations of skipped elements are left out silently.
     pub skipped: BTreeMap<String, usize>,
     /// Astah classes of elements UmlCraft knows but could not place in the model (no fitting
-    /// owner, or the model refused them), with how often.
+    /// owner, or the model refused them), with how often. An element UmlCraft makes without an
+    /// Astah object of its own (the association of an association class, an IS-A, a system
+    /// boundary) counts under its UmlCraft kind, such as `SystemBoundary`.
     pub failed: BTreeMap<String, usize>,
     /// Shapes on diagrams that were left out although their element was imported: the model
-    /// refused them, or their ends did not resolve.
+    /// refused them, the diagram cannot show the element, their ends or lifelines did not
+    /// resolve, or they had no place.
     pub lost_presentations: usize,
 }
 
@@ -320,6 +324,12 @@ fn is_default_node_name(name: &str) -> bool {
     )
 }
 
+/// `systemBoundary` as `SystemBoundary`, to stand among Astah's class names.
+fn capitalized(name: &str) -> String {
+    let mut chars = name.chars();
+    chars.next().map_or_else(String::new, |c| c.to_ascii_uppercase().to_string() + chars.as_str())
+}
+
 /// The name Astah gives a dimension of lanes it creates by itself.
 fn is_default_dimension_name(name: &str) -> bool {
     name.strip_prefix("Dimension").is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
@@ -505,6 +515,7 @@ impl Importer<'_> {
             .chain(self.model.ancestors(owner))
             .find(|&o| self.model.get(o).is_some_and(|e| e.kind().can_own(&data.kind)));
         let id = Id::generate();
+        let type_name = data.kind.type_name();
         let inserted = owner.map(|owner| {
             let index = self.model.children(owner).len();
             self.model.apply(Op::InsertElement { id, owner, index, data })
@@ -517,9 +528,13 @@ impl Importer<'_> {
                 Some(id)
             }
             _ => {
-                if let Some(object) = object {
-                    *self.failed.entry(self.r.class(object).to_owned()).or_default() += 1;
-                }
+                // An element made for no Astah object of its own (the association of an
+                // association class, an IS-A, a system boundary) counts by its kind.
+                let key = match object {
+                    Some(object) => self.r.class(object).to_owned(),
+                    None => capitalized(type_name),
+                };
+                *self.failed.entry(key).or_default() += 1;
                 None
             }
         }
@@ -2120,6 +2135,112 @@ mod tests {
         let Shape::Edge { source, target, waypoints, .. } = &edge.shape else { panic!() };
         assert_eq!((*source, *target), (shown(id("Order")), shown(id("Item"))));
         assert_eq!(*waypoints, [Point::new(150.0, 200.0), Point::new(250.0, 200.0)]);
+        assert_eq!(imported.lost_presentations, 0);
+    }
+
+    /// Astah keeps a column's key, NOT NULL, UNIQUE, default and check as constraints, in
+    /// whatever case they were typed; each becomes a property, and only other constraints stay.
+    #[test]
+    fn er_columns_read_their_constraints_in_any_case() {
+        use umlcraft_model::{ErAttributeProps, ErKey};
+        let mut b = Builder::default();
+        let model = named(&mut b, "UModelImp", "Model");
+        let er = named(&mut b, "UModelImp", "ER Model");
+        let tag = b.instance("UTaggedValueImp");
+        let key = b.string("jude.er.model");
+        b.set(tag, "tag", key);
+        let value = b.string("true");
+        b.set(tag, "value", value);
+        let tags = b.list(&[tag]);
+        b.set(er, "taggedValue", tags);
+        let schema = named(&mut b, "UPackageImp", "Default Schema");
+        let entity = named(&mut b, "EREntityImp", "Product");
+        b.own(model, &[er]);
+        b.own(er, &[schema]);
+        b.own(schema, &[entity]);
+        let constraint = |b: &mut Builder, body: &str| {
+            let c = b.instance("UConstraintImp");
+            let body = b.string(body);
+            b.set(c, "body", body);
+            c
+        };
+        let bodies =
+            ["primary key", "Not Null", "unique", "Default:0", "CHECK:price >= 0", "audited"];
+        let constraints: Vec<ObjId> = bodies.iter().map(|body| constraint(&mut b, body)).collect();
+        let price = named(&mut b, "ERAttributeImp", "price");
+        let list = b.list(&constraints);
+        b.set(price, "constraint", list);
+        let row_check = constraint(&mut b, "check:price < 1000");
+        let list = b.list(&[row_check]);
+        b.set(entity, "constraint", list);
+        let features = b.list(&[price]);
+        b.set(entity, "structuralFeature", features);
+
+        let imported = import(&b.0).unwrap();
+        let m = &imported.model;
+        m.check().unwrap();
+        let price = m.elements().find(|e| e.name() == "price").expect("the column");
+        let ElementKind::ErAttribute(props) = price.kind() else { panic!("{:?}", price.kind()) };
+        let expected = ErAttributeProps {
+            key: Some(ErKey::Primary),
+            not_null: true,
+            unique: true,
+            default_value: "0".into(),
+            check: "price >= 0".into(),
+            ..props.clone()
+        };
+        assert_eq!(props, &expected);
+        assert_eq!(price.data().constraints, ["audited"]);
+        let product = m.elements().find(|e| e.name() == "Product").expect("the table");
+        let ElementKind::ErEntity(props) = product.kind() else { panic!() };
+        assert_eq!(props.checks, ["price < 1000"]);
+        assert!(product.data().constraints.is_empty());
+    }
+
+    /// A line whose relationship came in but one of whose ends is not on the diagram, and a
+    /// class on a diagram that cannot show it, are reported as lost.
+    #[test]
+    fn shapes_of_imported_elements_that_cannot_be_placed_are_counted() {
+        let mut b = Builder::default();
+        let model = named(&mut b, "UModelImp", "Model");
+        let (order, item) =
+            (named(&mut b, "UClassifierImp", "Order"), named(&mut b, "UClassifierImp", "Item"));
+        let generalization = b.instance("UGeneralizationImp");
+        b.set(generalization, "subtype", Value::Object(order));
+        b.set(generalization, "supertype", Value::Object(item));
+        let diagram = named(&mut b, "UDiagramImp", "Overview");
+        let kind = b.string("Class Diagram");
+        b.set(diagram, "type", kind);
+        let uses = named(&mut b, "UDiagramImp", "Uses");
+        let kind = b.string("UseCase Diagram");
+        b.set(uses, "type", kind);
+        b.own(model, &[order, item, generalization, diagram, uses]);
+        let node = |b: &mut Builder, element: ObjId, x: f64| {
+            let p = b.instance("ClassifierPresentation");
+            b.set(p, "model", Value::Object(element));
+            let at = point(b, x, 40.0);
+            b.set(p, "location", Value::Object(at));
+            b.set(p, "width", Value::Double(100.0));
+            b.set(p, "height", Value::Double(60.0));
+            p
+        };
+        let (order_p, item_p) = (node(&mut b, order, 20.0), node(&mut b, item, 300.0));
+        let edge = b.instance("GeneralizationPresentation");
+        b.set(edge, "model", Value::Object(generalization));
+        let servers = b.list(&[item_p, order_p]);
+        b.set(edge, "servers", servers);
+        // Item's box is missing from the diagram.
+        let presentations = b.list(&[order_p, edge]);
+        b.set(diagram, "presentation", presentations);
+        // A use case diagram has no place for a class.
+        let class_on_uses = node(&mut b, order, 20.0);
+        let presentations = b.list(&[class_on_uses]);
+        b.set(uses, "presentation", presentations);
+
+        let imported = import(&b.0).unwrap();
+        imported.model.check().unwrap();
+        assert!(imported.failed.is_empty(), "{:?}", imported.failed);
+        assert_eq!(imported.lost_presentations, 2);
     }
 
     #[test]

@@ -176,6 +176,8 @@ impl Importer<'_> {
                 if container {
                     containers += 1;
                 }
+            } else {
+                self.lost_presentations += 1;
             }
         }
         // Generalizations in a shared group run over its common line.
@@ -241,6 +243,7 @@ impl Importer<'_> {
         };
         let element_kind = self.model.get(element)?.kind().clone();
         if element != diagram && !palette::can_show(kind, &element_kind) {
+            self.lost_presentations += 1;
             return None;
         }
         let r = self.r;
@@ -414,6 +417,21 @@ impl Importer<'_> {
         }
     }
 
+    /// Whether the presentation `p` shows an element that was imported, other than a message
+    /// (whose line on a sequence diagram is made from the model): leaving it out loses a shape.
+    pub(super) fn shows_imported(&self, p: ObjId) -> bool {
+        let Some(model) = self.r.obj(p, "model") else { return false };
+        if self.association_classes.contains_key(&model) {
+            return true;
+        }
+        self.ids.get(&model).and_then(|&id| self.model.get(id)).is_some_and(|e| {
+            !matches!(
+                e.kind(),
+                ElementKind::Message(_) | ElementKind::Model | ElementKind::Diagram(_)
+            )
+        })
+    }
+
     /// Adds the edge presentation `p`, between presentations added before; returns its id.
     pub(super) fn edge(
         &mut self,
@@ -430,7 +448,13 @@ impl Importer<'_> {
         }
         let ends: Vec<Id> =
             r.list(p, "servers").iter().filter_map(|s| presentation_of.get(s).copied()).collect();
-        let [mut source, mut target] = ends[..] else { return None };
+        let [mut source, mut target] = ends[..] else {
+            // The line's element came in, but not both shapes it joins.
+            if self.shows_imported(p) {
+                self.lost_presentations += 1;
+            }
+            return None;
+        };
         // Astah's "source" end and the A labels belong to the first server.
         let mut swapped = false;
         let element_of = |presentation: Id| {

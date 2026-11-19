@@ -45,8 +45,9 @@ pub fn import(path: &Path) -> Result<Imported, AstaError> {
 const STORE_MAGIC: [u8; 4] = [0x00, 0xEE, 0x00, 0x01];
 
 /// The largest entity store read, decompressed. Astah's own sample projects need a few MB;
-/// the limit only keeps a damaged or hostile size field from exhausting memory.
-const MAX_ENTITY_STORE: u64 = 1 << 30;
+/// the limit only keeps a damaged or hostile size field from exhausting memory. The graph read
+/// from it has a memory budget of its own (`jser::parse`).
+const MAX_ENTITY_STORE: u64 = 256 << 20;
 
 /// The raw `EntityStore` entry of an `.asta` file.
 pub fn read_entity_store(path: &Path) -> Result<Vec<u8>, AstaError> {
@@ -66,7 +67,10 @@ pub fn parse_entity_store(bytes: &[u8]) -> Result<jser::Graph, AstaError> {
     if bytes.get(4..8) != Some(&STORE_MAGIC[..]) {
         return Err(AstaError::BadHeader);
     }
-    deep(|| Ok(jser::parse(bytes, STORE_MAGIC.len())?))
+    deep(|| match jser::parse(bytes, STORE_MAGIC.len()) {
+        Err(jser::StreamError::TooLarge) => Err(AstaError::TooLarge),
+        result => Ok(result?),
+    })
 }
 
 /// Writes an object graph as an entity store. Tooling, not part of the import: the

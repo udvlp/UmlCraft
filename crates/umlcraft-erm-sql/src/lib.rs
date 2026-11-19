@@ -13,6 +13,7 @@
 pub mod ddl;
 pub mod dialect;
 pub mod ir;
+mod keywords;
 pub mod map;
 pub mod parse;
 pub mod split;

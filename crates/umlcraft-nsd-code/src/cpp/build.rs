@@ -1,17 +1,26 @@
 //! A C++ function body as structogram elements, the same mapping as Java's where the
 //! languages agree (`docs/plan-nsd-cpp.md`).
 
-use tree_sitter::Node;
-use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind, Sequence};
+use std::collections::BTreeSet;
 
-use super::methods::{Member, function_names};
+use tree_sitter::Node;
+use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind};
+
+use super::methods::Member;
 use super::{Cpp, declaration};
 use crate::core::{Builder, Catch, Group};
 use crate::pseudo;
 use crate::text::{condition, declared_name, lines, node_text, one_line, without_semicolon};
-use crate::{Made, NoteKind, Report};
+use crate::{Made, NoteKind, Report, Unbuilt};
 
-pub fn diagram(member: &Member, root: Node, src: &str, made: &Made) -> (Diagram, Report) {
+/// The diagram of `member`; `own` are the names of the functions the file declares
+/// (`function_names`).
+pub fn diagram(
+    member: &Member,
+    own: &BTreeSet<String>,
+    src: &str,
+    made: &Made,
+) -> Result<(Diagram, Report), Unbuilt> {
     let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
     let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
     d.set_keywords(made.keywords);
@@ -19,7 +28,7 @@ pub fn diagram(member: &Member, root: Node, src: &str, made: &Made) -> (Diagram,
         d.set_comment(doc);
     }
     let mut b = Builder::<Cpp>::new(src, d.clone());
-    b.own_functions = function_names(root, src);
+    b.own_functions = own;
     let mut body = Vec::new();
     if let Some(list) = member.initializers {
         // `: x_(x), Base(x)` run first, each as written.
@@ -29,8 +38,7 @@ pub fn diagram(member: &Member, root: Node, src: &str, made: &Made) -> (Diagram,
         }
     }
     body.extend(b.block(member.body));
-    d.children = Sequence::new(body);
-    (d, Report { notes: b.notes })
+    b.finish(d, body)
 }
 
 pub fn statement(b: &mut Builder<Cpp>, node: Node, out: &mut Vec<Element>) {
@@ -54,7 +62,12 @@ pub fn statement(b: &mut Builder<Cpp>, node: Node, out: &mut Vec<Element>) {
                 .named_children(&mut cursor)
                 .filter(|c| c.kind() != "attribute_declaration")
                 .collect();
-            out.extend(b.statements(&inner));
+            // `else` only wraps the statement of an alternative's branch, so an `else if`
+            // chain nests one level per `if`, as in the other languages.
+            match node.kind() {
+                "else_clause" => out.extend(b.statements_in_place(&inner)),
+                _ => out.extend(b.statements(&inner)),
+            }
         }
         "while_statement" => {
             b.clause(node, out);
@@ -122,10 +135,20 @@ pub fn statement(b: &mut Builder<Cpp>, node: Node, out: &mut Vec<Element>) {
 /// A declaration or expression without its statement: one instruction per assignment
 /// (`x := 1`, none for `int x;`), other expressions as written.
 pub fn simple(b: &Builder<Cpp>, node: Node) -> Vec<Element> {
-    // `i++, j--` (in a for loop's update): each part on its own.
+    // `i++, j--` (in a for loop's update): each part on its own; `a, b, c` nests as
+    // `a, (b, c)`.
     if node.kind() == "comma_expression" {
-        let mut cursor = node.walk();
-        let parts: Vec<Node> = node.named_children(&mut cursor).collect();
+        let mut parts = Vec::new();
+        let mut open = vec![node];
+        while let Some(n) = open.pop() {
+            if n.kind() == "comma_expression" {
+                let mut cursor = n.walk();
+                let children: Vec<Node> = n.named_children(&mut cursor).collect();
+                open.extend(children.into_iter().rev());
+            } else {
+                parts.push(n);
+            }
+        }
         return parts.into_iter().flat_map(|p| simple(b, p)).collect();
     }
     let texts = match node.kind() {

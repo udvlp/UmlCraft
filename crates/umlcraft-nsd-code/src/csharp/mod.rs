@@ -12,7 +12,7 @@ use crate::pseudo::assign;
 use crate::text::{lines_at, node_text};
 
 pub use build::diagram;
-pub use methods::{find, methods};
+pub use methods::{members, methods};
 
 pub struct CSharp;
 

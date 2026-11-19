@@ -62,3 +62,108 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+
+  # The SQL export of the test schemas (each dump written for both dialects, so MySQL to
+  # PostgreSQL and back as well) must load into real servers: UmlCraft's own parser takes SQL
+  # the servers refuse.
+  sql-servers:
+    name: SQL on real servers
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      MYSQL_PWD: root
+      PGPASSWORD: postgres
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Write the SQL of the test schemas for MySQL and PostgreSQL
+        run: >-
+          cargo run --locked -p umlcraft-erm-sql --example sql-export -- --out ddl
+          crates/umlcraft-erm-sql/tests/fixtures/dumps/*/no-data.sql
+          crates/umlcraft-erm-sql/tests/fixtures/dumps/*/schema.sql
+          crates/umlcraft-erm-sql/tests/fixtures/export/*.sql
+      - name: Load it into MySQL 8 and PostgreSQL 16
+        run: |
+          command -v mysql >/dev/null || sudo apt-get install -y mysql-client
+          command -v psql >/dev/null || sudo apt-get install -y postgresql-client
+          my() { mysql -h 127.0.0.1 -u root --default-character-set=utf8mb4 "$@"; }
+          status=0
+          # The PostgreSQL export fixture is written by hand: PostgreSQL itself must take it.
+          psql -q -c 'CREATE DATABASE fixture'
+          psql -q -v ON_ERROR_STOP=1 -d fixture \
+            -f crates/umlcraft-erm-sql/tests/fixtures/export/postgres.sql || status=1
+          for f in ddl/*-MySql.sql; do
+            my -e 'DROP DATABASE IF EXISTS t; CREATE DATABASE t CHARACTER SET utf8mb4'
+            if my t < "$f"; then
+              echo "MySQL 8 takes $f"
+            else
+              echo "::error::MySQL 8 refuses $f"
+              status=1
+            fi
+          done
+          for f in ddl/*-Postgres.sql; do
+            psql -q -c 'DROP DATABASE IF EXISTS t' -c 'CREATE DATABASE t'
+            if psql -q -v ON_ERROR_STOP=1 -d t -f "$f"; then
+              echo "PostgreSQL 16 takes $f"
+            else
+              echo "::error::PostgreSQL 16 refuses $f"
+              status=1
+            fi
+          done
+          exit $status
+
+  msrv:
+    # The oldest Rust that `rust-version` in Cargo.toml promises; keep the two in step.
+    name: Minimum Rust version (1.92)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install GPUI build dependencies
+        run: bash packaging/linux/install-build-deps.sh
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.92"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: msrv
+      - run: cargo check --workspace --all-targets --locked
+
+  asta-export:
+    name: Astah export tool
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      # The app runs the tool from source on Astah's JRE (Java 21 or newer), against Astah's
+      # API, which is not in the repository; stubs declare the part of it the tool uses.
+      - name: Compile AstaExport.java against the API stubs
+        run: |
+          mkdir -p "$RUNNER_TEMP/classes"
+          find tools/asta-export/stubs -name '*.java' > "$RUNNER_TEMP/sources"
+          javac --release 21 -proc:none -d "$RUNNER_TEMP/classes" @"$RUNNER_TEMP/sources" tools/asta-export/AstaExport.java

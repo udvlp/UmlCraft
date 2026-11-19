@@ -1,19 +1,25 @@
-//! Random edits as the mouse makes them (moving, resizing and aligning boxes, bending and
-//! drawing lines, moving messages, gates, lifeline ends, labels and region lines, putting
-//! fragments around messages and adding operands), with undo, redo and deletes in between, on
-//! the sample project, the order system and Astah's sample. After every edit the
-//! rules of [`invariants`] must hold as far as they held before, and undo and redo must give
-//! back exactly the model before and after it.
+//! Random edits as the mouse and keyboard make them (moving, resizing and aligning boxes,
+//! bending and drawing lines with the diagram's own palette, moving messages, gates, lifeline
+//! ends, labels and region lines, putting fragments around messages, adding and deleting
+//! operands and regions, creating nodes on and in others, copy and paste, showing elements,
+//! typing member text and names, ER notations and identifying relationships, removing from the
+//! diagram, changing a relationship's kind), with undo, redo and deletes in between, on the
+//! sample project, the order system and Astah's sample. After every edit the rules of
+//! [`invariants`] must hold as far as they held before, undo and redo must give back exactly
+//! the model before and after it, and member text must give back the member it shows.
 //!
 //! A failure names the seed and the step. To replay one seed, or to run longer:
 //! `UMLCRAFT_FUZZ_SEED=7 UMLCRAFT_FUZZ_STEPS=2000 cargo test -p umlcraft-app fuzz`.
 
+use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use umlcraft_model::{DiagramKind, Document, Id, LineShape, Model, Rect, Shape};
-use umlcraft_notation::invariants;
-use umlcraft_notation::palette::{self, EdgeTool, Tool};
+use umlcraft_model::{
+    DiagramKind, Document, ElementKind, ErNotation, Id, LineShape, Model, Point, Rect, Shape,
+};
+use umlcraft_notation::palette::{self, EdgeTool, NodeTool, Tool};
 use umlcraft_notation::scene::{self, Alignment, ApproxMeasure, Scene};
+use umlcraft_notation::{invariants, member, state_edit};
 
 use crate::workspace::Workspace;
 
@@ -83,6 +89,10 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
     ws.open_diagram(diagram);
     let model = ws.doc.model();
     let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let props = match model.get(diagram).map(|d| d.kind()) {
+        Some(ElementKind::Diagram(p)) => Some(p),
+        _ => None,
+    };
     let name = |id: Id| -> String {
         let view = model.view(diagram);
         let element = view.and_then(|v| v.get(id)).and_then(|p| p.element);
@@ -101,7 +111,7 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
     let lines: Vec<&scene::EdgeShape> = drawn.edges.iter().filter(|e| !e.fixed).collect();
     let messages: Vec<Id> = drawn.edges.iter().filter(|e| e.fixed).map(|e| e.id).collect();
 
-    match rng.below(18) {
+    match rng.below(28) {
         0..=3 => {
             let Some((node, _, _)) = rng.pick(&nodes) else { return "nothing".into() };
             let mut selection = vec![node];
@@ -232,8 +242,15 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
         12 if rng.chance(30) => {
             let ids: Vec<Id> = nodes.iter().map(|&(n, _, _)| n).chain(messages).collect();
             let Some(item) = rng.pick(&ids) else { return "nothing".into() };
-            let what = name(item);
-            ws.select(vec![item]);
+            let mut selection = vec![item];
+            if rng.chance(30)
+                && let Some(other) = rng.pick(&ids)
+                && other != item
+            {
+                selection.push(other);
+            }
+            let what: Vec<String> = selection.iter().map(|&n| name(n)).collect();
+            ws.select(selection);
             ws.delete_selection();
             format!("delete {what:?} {where_}")
         }
@@ -245,8 +262,9 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
         // Drawing new lines: messages at a height between two lifelines (or one, for found and
         // lost ones and calls to itself), other lines between two nodes.
         14 | 15 => {
-            let Some(kind) = kind else { return "nothing".into() };
-            let tools: Vec<EdgeTool> = palette::palette(kind)
+            // The diagram's own palette: IE and IDEF1X draw their own lines.
+            let Some(props) = props else { return "nothing".into() };
+            let tools: Vec<EdgeTool> = palette::diagram_palette(props)
                 .into_iter()
                 .filter_map(|t| match t {
                     Tool::Edge(e) => Some(e),
@@ -327,6 +345,214 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
             ws.select(selection);
             ws.align_selection(alignment);
             format!("align {names:?} {alignment:?} {where_}")
+        }
+        // New nodes from the diagram's palette, half of the time on or in a node, where parts,
+        // ports, pins, entry and exit points, state invariants and terminations go.
+        18 | 19 => {
+            let Some(props) = props else { return "nothing".into() };
+            let tools: Vec<NodeTool> = palette::diagram_palette(props)
+                .into_iter()
+                .filter_map(|t| match t {
+                    Tool::Node(n) => Some(n),
+                    _ => None,
+                })
+                .collect();
+            let Some(tool) = rng.pick(&tools) else { return "nothing".into() };
+            let at = match rng.pick(&nodes).filter(|_| rng.chance(60)) {
+                Some((_, r, _)) => {
+                    let (fx, fy) = (rng.below(5) as f32 / 4.0, rng.below(5) as f32 / 4.0);
+                    Point::new(r.x + r.width * fx - 7.0, r.y + r.height * fy - 7.0)
+                }
+                None => Point::new(rng.below(200) as f32 * 5.0, rng.below(160) as f32 * 5.0),
+            };
+            ws.create_node(tool, at);
+            format!("create {tool:?} at {at:?} {where_}")
+        }
+        // Copy and paste, as copies or as references, on this diagram or another.
+        20 => {
+            let mut selection: Vec<Id> = Vec::new();
+            for _ in 0..1 + rng.below(3) {
+                if let Some((n, _, _)) = rng.pick(&nodes) {
+                    selection.push(n);
+                }
+            }
+            selection.dedup();
+            let names: Vec<String> = selection.iter().map(|&n| name(n)).collect();
+            ws.select(selection);
+            let Some((_, clip)) = ws.copy_selection() else { return "nothing".into() };
+            let offset = Point::new(rng.offset(100.0), rng.offset(100.0));
+            let as_reference = rng.chance(30);
+            let mut target = diagram;
+            if rng.chance(30)
+                && let Some(other) = rng.pick(&diagrams(ws.doc.model()))
+            {
+                target = other;
+                ws.open_diagram(other);
+            }
+            let onto = ws.doc.model().get(target).map_or("", |d| d.name()).to_string();
+            ws.paste(&clip, offset, as_reference);
+            format!(
+                "paste {names:?} {where_} onto {onto:?} by {offset:?}, as reference: {as_reference}"
+            )
+        }
+        // Showing an element the diagram does not show yet.
+        21 => {
+            let Some(kind) = kind else { return "nothing".into() };
+            let shown: HashSet<Id> =
+                view.presentations().iter().filter_map(|p| p.element).collect();
+            let mut candidates: Vec<Id> = model
+                .elements()
+                .filter(|e| palette::can_show(kind, e.kind()) && !shown.contains(&e.id()))
+                .map(|e| e.id())
+                .collect();
+            candidates.sort();
+            let Some(element) = rng.pick(&candidates) else { return "nothing".into() };
+            let at = Point::new(rng.below(200) as f32 * 5.0, rng.below(160) as f32 * 5.0);
+            let what = model.get(element).map_or("", |e| e.name()).to_string();
+            ws.show_element(element, at);
+            format!("show {what:?} at {at:?} {where_}")
+        }
+        // Member text typed in place, among it parameters named like directions; what the box
+        // then offers for editing must give back the same member.
+        22 => {
+            let shown: HashSet<Id> =
+                view.presentations().iter().filter_map(|p| p.element).collect();
+            let mut members: Vec<Id> = model
+                .elements()
+                .filter(|e| {
+                    matches!(e.kind(), ElementKind::Attribute(_) | ElementKind::Operation(_))
+                })
+                .filter(|e| e.owner().is_some_and(|o| shown.contains(&o)))
+                .map(|e| e.id())
+                .collect();
+            members.sort();
+            let Some(member) = rng.pick(&members) else { return "nothing".into() };
+            let operation =
+                matches!(model.get(member).map(|e| e.kind()), Some(ElementKind::Operation(_)));
+            let current = member::member_text(model, member);
+            let texts: &[&str] = if operation {
+                &[
+                    "+ load(in : InputStream, out : OutputStream) : void",
+                    "# copy(inout buffer : byte[], out count : int = 0) : boolean",
+                    "- out(in in : int, out out : int)",
+                ]
+            } else {
+                &["- out : int = 1", "+ in : String", "# inout : double[]"]
+            };
+            let text = match rng.below(3) {
+                0 => current.replacen('(', "2(", 1).replacen(" :", "2 :", usize::from(!operation)),
+                _ => rng.pick(texts).expect("texts").to_string(),
+            };
+            ws.apply_text(member, &text);
+            let shown = member::member_text(ws.doc.model(), member);
+            let mut again = ws.doc.clone();
+            let same = again
+                .edit("again", |tx| member::apply_member_text(tx, member, &shown))
+                .is_ok_and(|()| again.model() == ws.doc.model());
+            assert!(same, "{shown:?} does not give back the member it shows");
+            format!("type {text:?} for {current:?} {where_}")
+        }
+        // Renaming what a node shows: boxes sized to their text grow or shrink.
+        23 => {
+            let named: Vec<Id> =
+                nodes.iter().filter_map(|&(n, _, _)| view.get(n).and_then(|p| p.element)).collect();
+            let Some(element) = rng.pick(&named) else { return "nothing".into() };
+            let old = model.get(element).map_or(String::new(), |e| e.name().to_string());
+            let new = if rng.chance(50) {
+                format!("{old} with a much longer name than before")
+            } else {
+                old.chars().take(1).collect()
+            };
+            if new.is_empty() {
+                return "nothing".into();
+            }
+            ws.update_element(element, |d| d.name = new.clone());
+            format!("rename {old:?} to {new:?} {where_}")
+        }
+        // Regions of states, and operands of fragments, added and deleted.
+        24 => {
+            let states: Vec<Id> = view
+                .presentations()
+                .iter()
+                .filter_map(|p| p.element)
+                .filter(|&e| matches!(model.get(e).map(|e| e.kind()), Some(ElementKind::State(_))))
+                .collect();
+            let operands: Vec<Id> = view
+                .presentations()
+                .iter()
+                .filter(|p| matches!(&p.shape, Shape::Fragment { separators, .. } if !separators.is_empty()))
+                .filter_map(|p| p.element)
+                .flat_map(|f| model.children(f).to_vec())
+                .filter(|&o| matches!(model.get(o).map(|e| e.kind()), Some(ElementKind::InteractionOperand(_))))
+                .collect();
+            if let Some(operand) = rng.pick(&operands).filter(|_| rng.chance(50)) {
+                ws.delete_element(operand);
+                return format!("delete operand {operand} {where_}");
+            }
+            let Some(state) = rng.pick(&states) else { return "nothing".into() };
+            let what = model.get(state).map_or("", |e| e.name()).to_string();
+            let regions = state_edit::regions_of(model, state);
+            if let Some(region) = rng.pick(&regions).filter(|_| rng.chance(30)) {
+                ws.delete_element(region);
+                return format!("delete a region of {what:?} {where_}");
+            }
+            let vertical = rng.chance(50);
+            ws.add_region(state, vertical);
+            format!("add a region to {what:?}, vertical: {vertical} {where_}")
+        }
+        // ER diagrams: another notation, or a relationship made identifying or not.
+        25 if kind == Some(DiagramKind::EntityRelationship) => {
+            if rng.chance(40) {
+                let notations = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
+                let notation = rng.pick(&notations).expect("notations");
+                ws.set_er_notation(diagram, notation);
+                return format!("draw {where_} in {notation:?}");
+            }
+            let mut relationships: Vec<(Id, bool)> = model
+                .elements()
+                .filter_map(|e| match e.kind() {
+                    ElementKind::ErRelationship(p) => Some((e.id(), p.identifying)),
+                    _ => None,
+                })
+                .collect();
+            relationships.sort();
+            let Some((relationship, identifying)) = rng.pick(&relationships) else {
+                return "nothing".into();
+            };
+            ws.set_er_identifying(relationship, !identifying);
+            format!("make {relationship} identifying: {} {where_}", !identifying)
+        }
+        // Removing nodes and lines from the diagram only.
+        26 => {
+            let ids: Vec<Id> = nodes
+                .iter()
+                .map(|&(n, _, _)| n)
+                .chain(messages)
+                .chain(lines.iter().map(|l| l.id))
+                .collect();
+            let mut selection = Vec::new();
+            for _ in 0..1 + rng.below(2) {
+                if let Some(item) = rng.pick(&ids) {
+                    selection.push(item);
+                }
+            }
+            selection.dedup();
+            let names: Vec<String> = selection.iter().map(|&n| name(n)).collect();
+            ws.select(selection);
+            ws.remove_selection_from_diagram();
+            format!("remove {names:?} from {where_}")
+        }
+        // "Change kind" of a relationship.
+        27 => {
+            let Some(line) = rng.pick(&lines) else { return "nothing".into() };
+            let Some((_, kinds)) = palette::relationship_kinds(model, diagram, line.id) else {
+                return "nothing".into();
+            };
+            let offered: Vec<EdgeTool> = kinds.into_iter().filter(|k| k.1).map(|k| k.0).collect();
+            let Some(tool) = rng.pick(&offered) else { return "nothing".into() };
+            let what = name(line.id);
+            ws.change_relationship(line.id, tool);
+            format!("make {what:?} a {tool:?} {where_}")
         }
         _ => "nothing".into(),
     }

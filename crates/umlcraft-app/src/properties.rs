@@ -472,22 +472,17 @@ impl PropertiesPanel {
         let name = input(window, cx);
         let declaration = input(window, cx);
         let condition = input(window, cx);
-        let stereotypes = cx
-            .new(|cx| InputState::new(window, cx).placeholder(t!("prop.stereotypes_placeholder")));
+        // Placeholders from the locales are set by `set_placeholders`, again after a language
+        // switch.
+        let stereotypes = input(window, cx);
         let text = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 12));
         let slots = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 12));
-        let constraints = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .auto_grow(1, 8)
-                .placeholder(t!("prop.element_constraints_placeholder"))
-        });
+        let constraints = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 8));
         let visibility = cx.new(|cx| SelectState::new(visibility_items(), None, window, cx));
         let end = |window: &mut Window, cx: &mut Context<Self>| EndFields {
             role: cx.new(|cx| InputState::new(window, cx)),
             multiplicity: cx.new(|cx| InputState::new(window, cx).placeholder("0..*")),
-            constraints: cx.new(|cx| {
-                InputState::new(window, cx).placeholder(t!("prop.constraints_placeholder"))
-            }),
+            constraints: cx.new(|cx| InputState::new(window, cx)),
             navigability: cx.new(|cx| SelectState::new(navigability_items(), None, window, cx)),
             aggregation: cx.new(|cx| SelectState::new(aggregation_items(), None, window, cx)),
         };
@@ -501,8 +496,7 @@ impl PropertiesPanel {
         let do_activity = input(window, cx);
         let exit = input(window, cx);
         let value_type = input(window, cx);
-        let in_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder(t!("prop.in_state_placeholder")));
+        let in_state = input(window, cx);
         let upper_bound = cx.new(|cx| InputState::new(window, cx).placeholder("*"));
         let ordering = cx.new(|cx| SelectState::new(ordering_items(), None, window, cx));
         let object_effect = cx.new(|cx| SelectState::new(effect_items(), None, window, cx));
@@ -514,15 +508,10 @@ impl PropertiesPanel {
         let datatype = cx.new(|cx| InputState::new(window, cx).placeholder("VARCHAR"));
         let length_precision = cx.new(|cx| InputState::new(window, cx).placeholder("10,2"));
         let cardinality = cx.new(|cx| InputState::new(window, cx).placeholder("[0,n]"));
-        let er_check = cx.new(|cx| InputState::new(window, cx).placeholder("preis >= 0"));
-        let er_values = cx.new(|cx| InputState::new(window, cx).placeholder("rot, grün, blau"));
-        let er_checks = cx
-            .new(|cx| TextareaState::new(window, cx).auto_grow(1, 8).placeholder("ende > beginn"));
-        let er_indexes = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .auto_grow(1, 8)
-                .placeholder(t!("prop.er_indexes_placeholder"))
-        });
+        let er_check = input(window, cx);
+        let er_values = input(window, cx);
+        let er_checks = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 8));
+        let er_indexes = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 8));
         let er_key = cx.new(|cx| SelectState::new(er_key_items(), None, window, cx));
         let disjoint = cx.new(|cx| SelectState::new(disjoint_items(), None, window, cx));
         let on_delete = cx.new(|cx| SelectState::new(er_action_items(), None, window, cx));
@@ -943,8 +932,32 @@ impl PropertiesPanel {
             structogram,
             _subscriptions: subscriptions,
         };
+        panel.set_placeholders(window, cx);
         panel.sync(window, cx);
         panel
+    }
+
+    /// Sets the placeholders that come from the locales, in the current language.
+    fn set_placeholders(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let inputs = [
+            (&self.stereotypes, "prop.stereotypes_placeholder"),
+            (&self.ends[0].constraints, "prop.constraints_placeholder"),
+            (&self.ends[1].constraints, "prop.constraints_placeholder"),
+            (&self.in_state, "prop.in_state_placeholder"),
+            (&self.er_check, "prop.er_check_placeholder"),
+            (&self.er_values, "prop.er_values_placeholder"),
+        ];
+        for (state, key) in inputs {
+            state.update(cx, |s, cx| s.set_placeholder(t!(key), window, cx));
+        }
+        let areas = [
+            (&self.constraints, "prop.element_constraints_placeholder"),
+            (&self.er_checks, "prop.er_checks_placeholder"),
+            (&self.er_indexes, "prop.er_indexes_placeholder"),
+        ];
+        for (state, key) in areas {
+            state.update(cx, |s, cx| s.set_placeholder(t!(key), window, cx));
+        }
     }
 
     /// Edits the structogram `editor` edits while it is shown.
@@ -1411,6 +1424,9 @@ impl PropertiesPanel {
             return;
         }
         let locale_changed = self.shown.as_ref().is_none_or(|(.., l)| *l != locale);
+        if locale_changed {
+            self.set_placeholders(window, cx);
+        }
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
         let data = model.get(id).expect("checked above").data().clone();

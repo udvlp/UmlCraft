@@ -1,7 +1,7 @@
 use pretty_assertions::assert_eq;
 use umlcraft_model::sample::order_system;
 use umlcraft_model::{
-    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Rect, TypeRef,
+    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Op, Rect, TypeRef,
 };
 
 fn class(name: &str) -> ElementData {
@@ -394,6 +394,60 @@ fn diagram_kind_and_metaclass_are_fixed() {
     assert!(matches!(result, Err(ModelError::KindChanged(_))));
 }
 
+/// An update keeps the metaclass but may change what decides where an element can be and what
+/// may refer to it; it is checked against its owner, its children and its referrers.
+#[test]
+fn updates_keep_owners_children_and_referrers_valid() {
+    use umlcraft_model::er::{ErEntityProps, ErParticipationProps};
+    use umlcraft_model::{ActivityNodeKind, PseudostateKind};
+    let mut doc = Document::new(Model::new("m"));
+    let root = doc.model().root();
+    let mut ids = (root, root, root);
+    doc.edit("build", |tx| {
+        let machine = tx.create(root, ElementData::new("sm", ElementKind::StateMachine))?;
+        let state =
+            tx.create(machine, ElementData::new("s", ElementKind::State(Default::default())))?;
+        let region = tx.create(state, ElementData::new("", ElementKind::Region))?;
+        let initial = ElementKind::pseudostate(PseudostateKind::Initial);
+        let initial = tx.create(region, ElementData::new("", initial))?;
+        let activity = tx.create(root, ElementData::new("a", ElementKind::Activity))?;
+        let action = ElementKind::activity_node(ActivityNodeKind::Action);
+        let action = tx.create(activity, ElementData::new("do", action))?;
+        let pin = ElementKind::activity_node(ActivityNodeKind::InputPin);
+        tx.create(action, ElementData::new("in", pin))?;
+        let associative = ErEntityProps { associative: true, ..Default::default() };
+        let order =
+            tx.create(root, ElementData::new("Order", ElementKind::ErEntity(associative)))?;
+        let item =
+            tx.create(root, ElementData::new("Item", ElementKind::ErEntity(Default::default())))?;
+        let part = ErParticipationProps::new(order, item);
+        tx.create(order, ElementData::new("", ElementKind::ErParticipation(part)))?;
+        ids = (initial, action, order);
+        Ok(())
+    })
+    .unwrap();
+    let (initial, action, order) = ids;
+    // A region holds no entry point: that sits on the state's border.
+    let result = doc.edit("entry", |tx| {
+        tx.update(initial, |d| d.kind = ElementKind::pseudostate(PseudostateKind::EntryPoint))
+    });
+    assert!(matches!(result, Err(ModelError::InvalidOwner { child, .. }) if child == initial));
+    // A decision has no pins.
+    let result = doc.edit("decision", |tx| {
+        tx.update(action, |d| d.kind = ElementKind::activity_node(ActivityNodeKind::Decision))
+    });
+    assert!(matches!(result, Err(ModelError::InvalidOwner { owner, .. }) if owner == action));
+    // Entities take part in an associative entity only.
+    let result = doc.edit("plain", |tx| {
+        tx.update(order, |d| d.kind = ElementKind::ErEntity(Default::default()))
+    });
+    assert!(matches!(result, Err(ModelError::InvalidReference { to, .. }) if to == order));
+    // What changes nothing of that goes through.
+    let weak = ErEntityProps { associative: true, weak: true, ..Default::default() };
+    doc.edit("weak", |tx| tx.update(order, |d| d.kind = ElementKind::ErEntity(weak))).unwrap();
+    doc.model().check().unwrap();
+}
+
 #[test]
 fn records_roundtrip() {
     let (doc, _) = order_system();
@@ -603,5 +657,204 @@ fn presentations_are_found_by_id_after_every_change() {
     assert!(all(&doc) && doc.model().view(d).unwrap().get(node).is_none());
     assert!(doc.undo() && doc.undo() && doc.undo());
     assert!(all(&doc) && doc.model().view(d).unwrap().get(node).is_none());
+    doc.model().check().unwrap();
+}
+
+/// Checking a loaded model, and undoing an import into one package, cost linear time: in a
+/// package of many children, along a long chain of dependencies naming dependencies, and along
+/// a long chain of edges ending on edges (as a damaged or hostile file may have them).
+#[test]
+fn large_packages_and_long_chains_stay_linear() {
+    use umlcraft_model::{DirectedProps, ElementRecord, ModelRecords, Presentation};
+    const N: usize = 30_000;
+    let mut doc = Document::new(Model::new("m"));
+    let root = doc.model().root();
+    let start = std::time::Instant::now();
+    doc.edit("import", |tx| {
+        for i in 0..N {
+            tx.create(root, class(&format!("C{i}")))?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(doc.undo() && doc.redo());
+    let elapsed = start.elapsed();
+    assert!(elapsed.as_secs() < 20, "import, undo and redo: {elapsed:?}");
+
+    let mut records = doc.model().to_records();
+    let first = records.elements[1].id;
+    let diagram = Id::generate();
+    let mut previous = first;
+    let mut dependencies = Vec::new();
+    for _ in 0..N {
+        let kind = ElementKind::Dependency(DirectedProps { client: previous, supplier: first });
+        let id = Id::generate();
+        records.elements.push(ElementRecord {
+            id,
+            data: ElementData::new("", kind),
+            children: Vec::new(),
+        });
+        dependencies.push(id);
+        previous = id;
+    }
+    records.elements.push(ElementRecord {
+        id: diagram,
+        data: ElementData::new("d", ElementKind::diagram(DiagramKind::Class)),
+        children: Vec::new(),
+    });
+    let node = Presentation::node(Some(first), Rect::new(0.0, 0.0, 10.0, 10.0));
+    let mut presentations = vec![node.clone()];
+    let mut end = node.id;
+    for _ in 0..N {
+        let edge = Presentation::edge(None, end, node.id, Vec::new());
+        end = edge.id;
+        presentations.push(edge);
+    }
+    records.views.insert(diagram, presentations);
+    let root_record = records.elements.iter_mut().find(|r| r.id == root).unwrap();
+    root_record.children.extend(dependencies.iter().copied().chain([diagram]));
+    let ModelRecords { root, elements, views } = records;
+    let start = std::time::Instant::now();
+    let model = Model::from_records(ModelRecords { root, elements, views }).unwrap();
+    let elapsed = start.elapsed();
+    assert!(elapsed.as_secs() < 20, "checking: {elapsed:?}");
+    assert_eq!(model.len(), 2 * N + 2);
+}
+
+/// Deleting a diagram with many presentations, undoing and redoing it take time linear in
+/// their number: each removal and each insertion used to shift and reindex the rest of the
+/// list and look through it for edges still attached.
+#[test]
+fn deleting_a_large_diagram_and_undoing_it_stay_fast() {
+    const NODES: usize = 10_000;
+    let mut doc = Document::new(Model::new("m"));
+    let root = doc.model().root();
+    let d = doc
+        .edit("setup", |tx| {
+            let d =
+                tx.create(root, ElementData::new("d", ElementKind::diagram(DiagramKind::Class)))?;
+            let nodes: Vec<Id> = (0..NODES)
+                .map(|i| tx.add_node(d, None, Rect::new(i as f32 * 10.0, 0.0, 5.0, 5.0)))
+                .collect::<Result<_, _>>()?;
+            for pair in nodes.windows(2) {
+                let edge = umlcraft_model::Presentation::edge(None, pair[0], pair[1], Vec::new());
+                tx.add_presentation(d, edge)?;
+            }
+            Ok(d)
+        })
+        .unwrap();
+    let all = doc.model().clone();
+    let start = std::time::Instant::now();
+    doc.edit("delete", |tx| tx.delete(d)).unwrap();
+    assert!(doc.model().view(d).is_none());
+    assert!(doc.undo());
+    assert_eq!(*doc.model(), all);
+    assert!(doc.redo());
+    let elapsed = start.elapsed();
+    assert!(elapsed.as_secs() < 10, "{elapsed:?}");
+    doc.model().check().unwrap();
+}
+
+/// Removing every other node of a large view, scattered through its list, with the edges
+/// between them, and undoing and redoing that, compacts the list once, not once per node.
+#[test]
+fn removing_scattered_presentations_stays_fast_and_undoes_exactly() {
+    const NODES: usize = 20_000;
+    let mut doc = Document::new(Model::new("m"));
+    let root = doc.model().root();
+    let (d, nodes) = doc
+        .edit("setup", |tx| {
+            let d =
+                tx.create(root, ElementData::new("d", ElementKind::diagram(DiagramKind::Class)))?;
+            let nodes: Vec<Id> = (0..NODES)
+                .map(|i| tx.add_node(d, None, Rect::new(i as f32 * 10.0, 0.0, 5.0, 5.0)))
+                .collect::<Result<_, _>>()?;
+            for pair in nodes.windows(2) {
+                let edge = umlcraft_model::Presentation::edge(None, pair[0], pair[1], Vec::new());
+                tx.add_presentation(d, edge)?;
+            }
+            Ok((d, nodes))
+        })
+        .unwrap();
+    let all = doc.model().clone();
+    let every_other: indexmap::IndexSet<Id> = nodes.iter().step_by(2).copied().collect();
+    let start = std::time::Instant::now();
+    doc.edit("remove", |tx| tx.remove_presentations(d, every_other)).unwrap();
+    // Every other node, and every edge (each touches one of them).
+    let left = doc.model().view(d).unwrap().presentations().len();
+    assert_eq!(left, NODES / 2);
+    doc.model().check().unwrap();
+    assert!(doc.undo());
+    assert_eq!(*doc.model(), all);
+    assert!(doc.redo());
+    let elapsed = start.elapsed();
+    assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+    assert_eq!(doc.model().view(d).unwrap().presentations().len(), NODES / 2);
+    doc.model().check().unwrap();
+}
+
+/// The batch operations check what they get like the single ones: nothing that stays may
+/// hang on what goes, and what is put back must fit.
+#[test]
+fn removing_presentations_at_once_keeps_the_rules() {
+    let mut doc = Document::new(Model::new("m"));
+    let root = doc.model().root();
+    let (d, a, b, edge) = doc
+        .edit("setup", |tx| {
+            let d =
+                tx.create(root, ElementData::new("d", ElementKind::diagram(DiagramKind::Class)))?;
+            let a = tx.add_node(d, None, Rect::new(0.0, 0.0, 5.0, 5.0))?;
+            let b = tx.add_node(d, None, Rect::new(20.0, 0.0, 5.0, 5.0))?;
+            let edge = umlcraft_model::Presentation::edge(None, a, b, Vec::new());
+            let edge_id = edge.id;
+            tx.add_presentation(d, edge)?;
+            Ok((d, a, b, edge_id))
+        })
+        .unwrap();
+    let mut model = doc.model().clone();
+    let refused = model.apply(Op::RemovePresentations { diagram: d, ids: vec![a] });
+    assert_eq!(refused, Err(ModelError::EdgesAttached(a)));
+    assert_eq!(model, *doc.model());
+    let inverse = model.apply(Op::RemovePresentations { diagram: d, ids: vec![edge, a] }).unwrap();
+    assert_eq!(model.view(d).unwrap().presentations().len(), 1);
+    // Putting the edge back without its end is refused, and changes nothing.
+    let Op::InsertPresentations { entries, .. } = &inverse else { panic!("{inverse:?}") };
+    let edge_alone: Vec<_> = entries.iter().filter(|(_, p)| p.id == edge).cloned().collect();
+    let before = model.clone();
+    let alone = model.apply(Op::InsertPresentations { diagram: d, entries: edge_alone });
+    assert!(alone.is_err(), "{alone:?}");
+    assert_eq!(model, before);
+    model.apply(inverse).unwrap();
+    assert_eq!(model, *doc.model());
+    model.check().unwrap();
+    let _ = b;
+}
+
+/// An edit made on a copy of the model applies to the original as one step that undoes and
+/// redoes like the edit itself.
+#[test]
+fn an_edit_made_on_a_copy_applies_to_the_original() {
+    let (mut doc, ids) = order_system();
+    let mut copy = Document::new(doc.model().clone());
+    let made = copy
+        .edit("on the copy", |tx| {
+            let class = tx.create(ids.domain, class("Invoice"))?;
+            tx.rename(ids.customer, "Client")?;
+            tx.delete(ids.order)?;
+            Ok(class)
+        })
+        .unwrap();
+    let expected = copy.model().clone();
+    let ops = copy.take_last_step().unwrap();
+    assert!(!copy.can_undo() && !copy.can_redo());
+    assert_eq!(*copy.model(), *doc.model());
+    let before = doc.model().clone();
+    doc.edit("replayed", |tx| ops.into_iter().try_for_each(|op| tx.apply(op))).unwrap();
+    assert_eq!(*doc.model(), expected);
+    assert!(doc.model().get(made).is_some());
+    assert!(doc.undo());
+    assert_eq!(*doc.model(), before);
+    assert!(doc.redo());
+    assert_eq!(*doc.model(), expected);
     doc.model().check().unwrap();
 }

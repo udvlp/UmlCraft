@@ -1,12 +1,40 @@
 use pretty_assertions::assert_eq;
 use umlcraft_format::{
-    FORMAT_VERSION, FormatError, from_str, from_str_versioned, load, save, to_string,
+    FORMAT_VERSION, FormatError, MAX_JSON_DEPTH, from_str, from_str_versioned, load, save,
+    to_string,
 };
 use umlcraft_model::sample::order_system;
 use umlcraft_model::{
     ElementData, ElementKind, MAX_TYPE_DEPTH, ModelError, Multiplicity, Point, Rect, Shape,
-    TypeExpr, TypeRef, Visibility,
+    StructogramProps, TypeExpr, TypeRef, Visibility,
 };
+use umlcraft_nsd::read::MAX_DEPTH;
+
+/// Runs `f` on a thread with a 1 MB stack, the main thread's on Windows.
+fn on_small_stack(f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new().stack_size(1 << 20).spawn(f).unwrap().join().unwrap();
+}
+
+/// A structogram nesting `depth` levels: alternatives (nested in their `else`) and loops in
+/// turn around an instruction.
+fn deep_structogram(depth: usize) -> umlcraft_nsd::Diagram {
+    use umlcraft_nsd::{Diagram, Element, Provenance, RootKind, Sequence, lines};
+    let made = Provenance { author: "", date: "", origin: "" };
+    let mut d = Diagram::new(RootKind::Program, &lines(&["deep"]), &made);
+    let mut body = vec![Element::instruction(&lines(&["x <- 1"]))];
+    for level in 1..depth {
+        let mut e = if level % 2 == 0 {
+            Element::while_loop(&lines(&["c"]))
+        } else {
+            Element::alternative(&lines(&["a"]))
+        };
+        let last = e.branches.len() - 1;
+        e.branches[last] = Sequence::new(body);
+        body = vec![e];
+    }
+    d.children = Sequence::new(body);
+    d
+}
 
 #[test]
 fn sample_roundtrips_byte_for_byte() {
@@ -284,6 +312,89 @@ fn structograms_survive_and_read_line_by_line() {
     assert!(!json.contains("\"author\"") && !json.contains("3.32-35"), "{json}");
 }
 
+/// Everything the model holds can be saved and opened again: also a structogram at the
+/// deepest nesting a file may have, far beyond serde_json's own limit of 128 JSON levels. On
+/// a 1 MB stack, in a debug build too.
+#[test]
+fn the_deepest_structogram_round_trips_on_a_small_stack() {
+    on_small_stack(|| {
+        let (mut doc, ids) = order_system();
+        let deepest = deep_structogram(MAX_DEPTH);
+        assert_eq!(deepest.depth(), MAX_DEPTH);
+        let props = StructogramProps::new(&deepest);
+        doc.edit("deep", |tx| {
+            tx.create(ids.order, ElementData::new("", ElementKind::Structogram(props)))
+        })
+        .unwrap();
+        let json = to_string(doc.model());
+        let model = from_str(&json).unwrap();
+        assert_eq!(model, *doc.model());
+        assert_eq!(to_string(&model), json);
+
+        let dir = std::env::temp_dir().join(format!("umlcraft-format-deep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("deep.ucraft");
+        save(&model, &path).unwrap();
+        assert_eq!(load(&path).unwrap(), model);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let props = StructogramProps::new(&deep_structogram(MAX_DEPTH + 1));
+        let deeper = doc.edit("deeper", |tx| {
+            tx.create(ids.order, ElementData::new("", ElementKind::Structogram(props)))
+        });
+        assert!(matches!(deeper, Err(ModelError::StructogramTooDeep(_))), "{deeper:?}");
+    });
+}
+
+/// A file nested deeper than any model could write is refused before it is parsed, without
+/// running out of stack.
+#[test]
+fn files_nested_too_deep_are_refused() {
+    on_small_stack(|| {
+        let head = r#"{"format":"umlcraft","formatVersion":7,"root":"#;
+        let file = format!("{head}{}{}}}", "[".repeat(100_000), "]".repeat(100_000));
+        let result = from_str(&file);
+        assert!(
+            matches!(result, Err(FormatError::TooDeep { line: 1, max: MAX_JSON_DEPTH, .. })),
+            "{:?}",
+            result.err()
+        );
+        // Just within the limit, the file is parsed (and refused for what it holds).
+        let depth = MAX_JSON_DEPTH - 1;
+        let file = format!("{head}{}{}}}", "[".repeat(depth), "]".repeat(depth));
+        assert!(matches!(from_str(&file), Err(FormatError::Json(_))));
+        // Deep inside an element, where the record buffers what it does not know, in the
+        // current version and in an older one, read as a JSON tree for the migrations.
+        let root = "00000000-0000-0000-0000-000000000000";
+        let depth = MAX_JSON_DEPTH - 3;
+        for version in [FORMAT_VERSION, 1] {
+            let file = format!(
+                r#"{{"format":"umlcraft","formatVersion":{version},"root":"{root}","elements":[{{"id":"{root}","name":"m","type":"model","deep":{}{}}}]}}"#,
+                "[".repeat(depth),
+                "]".repeat(depth)
+            );
+            let model = from_str(&file).unwrap();
+            assert_eq!(model.len(), 1);
+            let deeper = file.replacen("\"deep\":", "\"deep\":[", 1).replacen("]}]}", "]]}]}", 1);
+            assert!(matches!(from_str(&deeper), Err(FormatError::TooDeep { .. })));
+        }
+    });
+}
+
+/// A file of the previous version loads and is written as the current version, with nothing
+/// else changed.
+#[test]
+fn a_version_6_file_loads_unchanged() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/order-system-v6.ucraft");
+    let v6 = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    let (model, version) = from_str_versioned(&v6).unwrap();
+    assert_eq!(version, 6);
+    let current =
+        v6.replacen("\"formatVersion\": 6,", &format!("\"formatVersion\": {FORMAT_VERSION},"), 1);
+    assert_eq!(to_string(&model), current);
+}
+
 #[test]
 fn older_files_get_language_tags_under_umlcraft_names() {
     let (mut doc, ids) = order_system();
@@ -413,6 +524,22 @@ fn unreadable_states_are_refused() {
         ElementData::new("deeper", ElementKind::attribute(Some(nested(MAX_TYPE_DEPTH + 1))));
     let result = doc.edit("deeper", |tx| tx.create(ids.customer, deeper));
     assert!(matches!(result, Err(ModelError::TypeTooDeep(_))), "{result:?}");
+
+    // Constraint labels moved by hand are positions like any other.
+    let edge = doc.model().shown_on(ids.order_customer)[0].1;
+    let result = doc.edit("offset", |tx| {
+        tx.update_presentation(ids.class_diagram, edge, |p| {
+            p.style.constraint_offsets = vec![None, Some(Point::new(f32::NAN, 0.0))];
+        })
+    });
+    assert!(matches!(result, Err(ModelError::NotFinite(_))), "{result:?}");
+    // In a file, 1e39 is beyond what an f32 holds and reads as infinite.
+    let mut value: serde_json::Value = serde_json::from_str(&to_string(doc.model())).unwrap();
+    let views = value["views"][ids.class_diagram.to_string()].as_array_mut().unwrap();
+    let edge = views.iter_mut().find(|p| p["id"] == edge.to_string().as_str()).unwrap();
+    edge["style"]["constraintOffsets"] = serde_json::json!([{ "x": 1e39, "y": 0 }]);
+    let result = from_str(&value.to_string());
+    assert!(matches!(result, Err(FormatError::Model(ModelError::NotFinite(_)))), "{result:?}");
 }
 
 #[test]
@@ -462,6 +589,7 @@ fn damaged_files_load_consistently_or_are_refused() {
         other,
         serde_json::json!(-1),
         serde_json::json!(1e30),
+        serde_json::json!(1e39),
         serde_json::Value::Null,
         serde_json::json!(""),
     ];
@@ -500,6 +628,12 @@ fn damaged_files_load_consistently_or_are_refused() {
             match from_str(&damaged.to_string()) {
                 Ok(model) => {
                     model.check().unwrap_or_else(|e| panic!("{pointer} = {value}: {e}"));
+                    // What loads can be saved and loaded again: numbers out of range are
+                    // what could slip through (an f32 turned infinite is written as null).
+                    if value.is_number() {
+                        umlcraft_format::to_string_checked(&model)
+                            .unwrap_or_else(|e| panic!("{pointer} = {value}: {e}"));
+                    }
                     loaded += 1;
                 }
                 Err(_) => refused += 1,

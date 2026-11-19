@@ -10,7 +10,8 @@
 //! default value. Collections and arrays give the end `*` (lists and sorted sets `{ordered}`,
 //! sets `{unique}`), optionals (and types with the language's optional modifier, C#'s `Item?`)
 //! `0..1`; a map's key becomes a qualifier at the attribute's
-//! class, without a multiplicity. The attribute is deleted.
+//! class, without a multiplicity. The association gets the field's documentation and tags; the
+//! attribute is deleted.
 //!
 //! On a new import an association with the same role between the same classes is reused.
 //! Associations the import made or reused carry the tagged value [`IMPORTED_TAG`]; of those,
@@ -26,7 +27,7 @@ use umlcraft_model::{
 };
 
 use crate::lang::Container;
-use crate::merge::Importer;
+use crate::merge::{Importer, set_tags};
 use crate::resolve::is_type;
 
 /// Marks associations made from fields, which a new import may change or delete.
@@ -53,7 +54,10 @@ impl Importer<'_> {
         let fields = std::mem::take(&mut self.fields);
         // Associations kept or made by this import, by id.
         let mut used: HashSet<Id> = HashSet::new();
-        let sources: HashSet<Id> = self.entries.iter().map(|e| e.id).collect();
+        // Of a type declared in parts (C# `partial`), the import may hold only some: a field
+        // it does not find may stand in another part.
+        let sources: HashSet<Id> =
+            self.entries.iter().filter(|e| !e.decl.is_partial).map(|e| e.id).collect();
         // The associations there are, by participant.
         let mut by_participant: HashMap<Id, Vec<Id>> = HashMap::new();
         for e in tx.model().elements() {
@@ -64,9 +68,10 @@ impl Importer<'_> {
             }
         }
         let mut converted = Vec::new();
-        for (attribute, _, _) in &fields {
+        let prefix = self.tag_prefix;
+        for &(attribute, field, _) in &fields {
             let model = tx.model();
-            let Some(element) = model.get(*attribute) else { continue };
+            let Some(element) = model.get(attribute) else { continue };
             let ElementKind::Attribute(props) = element.kind() else { continue };
             let Some(owner) = element.owner() else { continue };
             let Some(target) = props.type_ref.as_ref().and_then(|t| self.target(model, t)) else {
@@ -103,9 +108,15 @@ impl Importer<'_> {
             let association = match existing {
                 Some((id, far_index)) => {
                     tx.update(id, |d| {
+                        // The field's documentation and tags, as on the attribute; one drawn
+                        // by hand keeps its own documentation while the field has none.
+                        if is_imported(d) || !field.documentation.is_empty() {
+                            d.documentation = field.documentation.clone();
+                        }
                         if !is_imported(d) {
                             d.tagged_values.push(imported_tag());
                         }
+                        set_tags(d, &field.tags, prefix);
                         if let ElementKind::Association(p) = &mut d.kind {
                             let near_index = 1 - far_index;
                             let keep_near = &p.ends[near_index];
@@ -130,12 +141,14 @@ impl Importer<'_> {
                     });
                     self.report.associations += 1;
                     let mut data = ElementData::new("", kind);
+                    data.documentation = field.documentation.clone();
                     data.tagged_values.push(imported_tag());
+                    set_tags(&mut data, &field.tags, prefix);
                     tx.create(owner, data)?
                 }
             };
             used.insert(association);
-            converted.push(*attribute);
+            converted.push(attribute);
         }
         tx.delete_many(&converted)?;
         // Ends of fields that are gone.

@@ -33,12 +33,16 @@ pub struct Workspace {
     /// Selected presentations of the active diagram; the first one is the alignment reference.
     pub selection: Vec<Id>,
     pub tool: Tool,
-    /// Last problem to show in the status bar, e.g. a refused connection.
+    /// Last problem to show the user (as a toast), e.g. a refused connection.
     pub message: Option<String>,
     /// Measures texts for boxes sized to their content.
     pub measure: Box<dyn TextMeasure>,
     /// The language of the keywords of new structograms.
     pub keywords: umlcraft_nsd::Keywords,
+    /// The document's revision before and after the last edit that changed only a
+    /// structogram's content: what shows the model's structure (the tree) need not be rebuilt
+    /// for it.
+    pub content_edit: Option<(u64, u64)>,
 }
 
 impl Workspace {
@@ -56,6 +60,7 @@ impl Workspace {
             message: None,
             measure: Box::new(ApproxMeasure),
             keywords: umlcraft_nsd::Keywords::English,
+            content_edit: None,
         }
     }
 
@@ -566,8 +571,11 @@ impl Workspace {
     ) -> Result<(umlcraft_reverse::Report, Vec<(Id, umlcraft_nsd_code::Report)>), ModelError> {
         let label = t!("edit.import_source").to_string();
         let result = self.edit(label, |tx| {
-            let (report, placed) =
+            let (mut report, placed) =
                 umlcraft_reverse::apply_placed(tx, found.language, &found.parsed)?;
+            for (skip, count) in crate::nsd::source::skipped(&built) {
+                *report.skipped.entry(skip).or_default() += count;
+            }
             let made = crate::nsd::source::file_structograms(tx, found, &placed, built)?;
             Ok((report, made))
         });
@@ -597,7 +605,22 @@ impl Workspace {
         result
     }
 
-    /// Reports a problem in the status bar.
+    /// Applies an SQL import made on a copy of the project (`sql::plan_import`) as one undo
+    /// step and opens its diagram; the project must be as it was when copied. The copy ran the
+    /// passes of `edit::apply` already.
+    pub fn apply_sql_import(
+        &mut self,
+        import: umlcraft_erm_sql::Import,
+        ops: Vec<umlcraft_model::Op>,
+    ) -> Result<umlcraft_erm_sql::Import, ModelError> {
+        let label = t!("edit.import_sql").to_string();
+        self.doc.edit(label, |tx| ops.into_iter().try_for_each(|op| tx.apply(op)))?;
+        self.message = None;
+        self.open_diagram(import.diagram);
+        Ok(import)
+    }
+
+    /// Reports a problem to the user (as a toast).
     pub fn complain(&mut self, message: impl Into<String>) {
         self.message = Some(message.into());
     }
@@ -704,9 +727,11 @@ impl Workspace {
         let scope = (!selected.is_empty()).then_some(&selected[..]);
         let label = t!("edit.arrange").to_string();
         let measure = &*self.measure;
-        let result = self
-            .doc
-            .edit(label, |tx| layout::arrange(tx, diagram, scope, direction, measure).map(|_| ()));
+        // Through `edit::apply` like every other edit (and the MCP tool), so boxes are refitted
+        // and lines, ports and lifelines follow what moved.
+        let result = edit::apply(&mut self.doc, label, measure, |tx| {
+            layout::arrange(tx, diagram, scope, direction, measure).map(|_| ())
+        });
         self.report(result);
     }
 
@@ -1425,9 +1450,18 @@ impl Workspace {
     }
 
     /// Replaces the content of structogram `id` as one undo step.
+    ///
+    /// A structogram has no diagram view and its content shows in none, so this skips
+    /// `edit::apply`'s passes over every view (refitting boxes, following lines, ports and
+    /// lifelines). They would find nothing to do but cost a measure of the whole project, on
+    /// every character typed into a structogram.
     pub fn edit_structogram(&mut self, id: Id, structogram: &umlcraft_nsd::Diagram) {
         let label = t!("edit.structogram").to_string();
-        let result = self.edit(label, |tx| tx.set_structogram(id, structogram));
+        let before = self.doc.revision();
+        let result = self.doc.edit(label, |tx| tx.set_structogram(id, structogram));
+        if result.is_ok() {
+            self.content_edit = Some((before, self.doc.revision()));
+        }
         self.report(result);
     }
 
@@ -1924,5 +1958,128 @@ mod tests {
         assert_eq!(p.extension_points, [point]);
         assert!(ws.doc.undo());
         assert!(ws.doc.model().get(point).is_none());
+    }
+
+    #[test]
+    fn every_class_diagram_tool_names_its_element_in_words() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        ws.open_diagram(ids.class_diagram);
+        for (i, tool) in palette::palette(DiagramKind::Class).into_iter().enumerate() {
+            let Tool::Node(tool) = tool else { continue };
+            let at = Point::new(2000.0 + 300.0 * i as f32, 2000.0);
+            let element = ws.create_node(tool, at).unwrap();
+            let name = ws.doc.model().get(element).unwrap().name().to_owned();
+            // A missing text would give "en.kind.boundary1".
+            assert!(!name.contains('.'), "{tool:?}: {name}");
+        }
+    }
+
+    #[test]
+    fn typing_into_a_structogram_does_not_measure_the_diagrams() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        let d = ids.class_diagram;
+        ws.open_diagram(d);
+        // A large class diagram, which every keystroke used to measure (twice).
+        ws.edit("classes".into(), |tx| {
+            (0..400).try_for_each(|i| {
+                let at = Point::new(2000.0 + 200.0 * (i % 20) as f32, 150.0 * (i / 20) as f32);
+                palette::create_node(tx, d, NodeTool::Class, at, "Class").map(|_| ())
+            })
+        })
+        .unwrap();
+        let id = ws.add_item(ids.domain, NewItem::Structogram).unwrap();
+        let ElementKind::Structogram(p) = ws.doc.model().get(id).unwrap().kind() else {
+            panic!("not a structogram")
+        };
+        let mut content = p.structogram.clone();
+        let view = format!("{:?}", ws.doc.model().view(d).unwrap().presentations());
+        let start = std::time::Instant::now();
+        for i in 0..200 {
+            content.set_text(&[format!("x = {i}")]);
+            let before = ws.doc.revision();
+            ws.edit_structogram(id, &content);
+            assert_eq!(ws.content_edit, Some((before, ws.doc.revision())));
+        }
+        // Through `edit::apply` this took about 14 s in a debug build, without it 6 ms.
+        let elapsed = start.elapsed();
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+        assert_eq!(format!("{:?}", ws.doc.model().view(d).unwrap().presentations()), view);
+        assert!(ws.doc.undo());
+    }
+
+    #[test]
+    fn arrange_from_the_ui_matches_arrange_over_mcp() {
+        let (doc, ids) = order_system();
+        let diagrams = [
+            ids.class_diagram,
+            ids.use_case_diagram,
+            ids.activity_diagram,
+            ids.state_diagram,
+            ids.component_diagram,
+            ids.deployment_diagram,
+            ids.object_diagram,
+        ];
+        for d in diagrams {
+            let kind = doc.model().get(d).unwrap().kind().as_diagram().unwrap();
+            let direction = layout::default_direction(kind);
+            let nodes: Vec<Id> = doc
+                .model()
+                .view(d)
+                .unwrap()
+                .presentations()
+                .iter()
+                .filter(|p| matches!(p.shape, Shape::Node { .. }))
+                .map(|p| p.id)
+                .collect();
+            // The whole diagram, and a selection of two boxes that others move aside for.
+            for scope in [None, Some(nodes[..2].to_vec())] {
+                let mut ws = Workspace::new(doc.clone(), None);
+                ws.open_diagram(d);
+                ws.selection = scope.clone().unwrap_or_default();
+                ws.arrange(None);
+                assert!(ws.message.is_none(), "{kind:?}: {:?}", ws.message);
+                // What the MCP tool `arrange_diagram` does.
+                let mut other = doc.clone();
+                edit::apply(&mut other, "arrange", &ApproxMeasure, |tx| {
+                    layout::arrange(tx, d, scope.as_deref(), direction, &ApproxMeasure)
+                })
+                .unwrap();
+                let shown =
+                    |doc: &Document| format!("{:?}", doc.model().view(d).unwrap().presentations());
+                assert_eq!(shown(&ws.doc), shown(&other), "{kind:?} {scope:?}");
+            }
+        }
+    }
+
+    /// The SQL import laid out on a copy in the background gives the project what importing
+    /// into it directly gives, as one undo step.
+    #[test]
+    fn an_sql_import_made_on_a_copy_is_the_import_made_here() {
+        let sql = b"CREATE TABLE customer (id int PRIMARY KEY, name varchar(40));\n\
+                    CREATE TABLE orders (id int PRIMARY KEY, customer_id int REFERENCES customer (id));";
+        let schema = umlcraft_erm_sql::read(sql, Some(umlcraft_erm_sql::Dialect::MySql)).unwrap();
+        let options = umlcraft_erm_sql::Options::default();
+        let (doc, _) = order_system();
+        let mut here = Workspace::new(doc.clone(), None);
+        let direct = here.import_sql(&schema, &options).unwrap();
+        let mut ws = Workspace::new(doc, None);
+        let before = ws.doc.model().clone();
+        let (import, ops) =
+            crate::sql::plan_import(ws.doc.model().clone(), &schema, &options, &*ws.measure)
+                .unwrap();
+        let applied = ws.apply_sql_import(import, ops).unwrap();
+        // The ids differ between the two imports; the rest does not.
+        let shape = |ws: &Workspace, diagram: Id| {
+            let view = ws.doc.model().view(diagram).unwrap();
+            view.presentations().iter().map(|p| p.bounds()).collect::<Vec<_>>()
+        };
+        assert_eq!(shape(&ws, applied.diagram), shape(&here, direct.diagram));
+        assert_eq!(ws.doc.model().len(), here.doc.model().len());
+        assert_eq!(ws.active_diagram, Some(applied.diagram));
+        ws.doc.model().check().unwrap();
+        assert!(ws.doc.undo());
+        assert_eq!(*ws.doc.model(), before);
     }
 }

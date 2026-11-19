@@ -652,6 +652,12 @@ impl AppMeasure {
     }
 }
 
+// The SQL import lays out its diagram on another thread, measuring with the app's fonts.
+const _: fn() = || {
+    fn on_any_thread<T: Send + 'static>() {}
+    on_any_thread::<AppMeasure>();
+};
+
 impl TextMeasure for AppMeasure {
     fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
         let font = if bold { self.bold } else { self.regular };

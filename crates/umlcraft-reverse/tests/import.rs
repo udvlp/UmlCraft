@@ -153,6 +153,31 @@ fn attributes_of_class_types_become_associations() {
     check("associations", model);
 }
 
+/// The documentation and tags of a field that becomes an association go to the association,
+/// on every import.
+#[test]
+fn an_association_keeps_its_fields_documentation_and_tags() {
+    let text = "class Order {\n  /** Who placed it. */\n  private transient Customer customer;\n}\nclass Customer { }\n";
+    let mut parsed = umlcraft_reverse::Parsed::default();
+    let path = std::path::Path::new("Order.java");
+    parsed
+        .units
+        .push(umlcraft_reverse::parse_text(JAVA, path, text, &mut Default::default()).unwrap());
+    let mut doc = Document::new(Model::new("t"));
+    for _ in 0..2 {
+        doc.edit("Import", |tx| umlcraft_reverse::apply(tx, JAVA, &parsed)).unwrap();
+        let model = doc.model();
+        let associations: Vec<&umlcraft_model::Element> =
+            model.elements().filter(|e| matches!(e.kind(), ElementKind::Association(_))).collect();
+        assert_eq!(associations.len(), 1);
+        let data = associations[0].data();
+        assert_eq!(data.documentation, "Who placed it.");
+        let tags: Vec<(&str, &str)> =
+            data.tagged_values.iter().map(|t| (t.key.as_str(), t.value.as_str())).collect();
+        assert_eq!(tags, [("umlcraft.imported", "true"), ("java.transient", "true")]);
+    }
+}
+
 #[test]
 fn syntax_errors_skip_only_their_file() {
     let (doc, report) = fresh("syntax_error");

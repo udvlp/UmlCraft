@@ -1,18 +1,18 @@
 //! A Java method body as structogram elements (the mapping of `docs/nsd-spec.md` § 4).
 
 use tree_sitter::Node;
-use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind, Sequence};
+use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind};
 
 use super::{Java, declaration, title};
 use crate::core::{Builder, Catch, Group, Sink};
 use crate::pseudo;
 use crate::text::{condition, documentation, lines, lines_at, node_text, without_semicolon};
-use crate::{Made, NoteKind, Report, SourceLanguage};
+use crate::{Made, NoteKind, Report, SourceLanguage, Unbuilt};
 
 const LOCAL_TYPES: [&str; 4] =
     ["class_declaration", "record_declaration", "enum_declaration", "interface_declaration"];
 
-pub fn diagram(method: Node, src: &str, made: &Made) -> (Diagram, Report) {
+pub fn diagram(method: Node, src: &str, made: &Made) -> Result<(Diagram, Report), Unbuilt> {
     let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
     let mut d = Diagram::new(RootKind::Sub, &[title(method, src)], &provenance);
     d.set_keywords(made.keywords);
@@ -21,8 +21,7 @@ pub fn diagram(method: Node, src: &str, made: &Made) -> (Diagram, Report) {
     }
     let mut b = Builder::<Java>::new(src, d.clone());
     let body = method.child_by_field_name("body").map(|n| b.block(n)).unwrap_or_default();
-    d.children = Sequence::new(body);
-    (d, Report { notes: b.notes })
+    b.finish(d, body)
 }
 
 pub fn statement(b: &mut Builder<Java>, node: Node, out: &mut Vec<Element>) {

@@ -466,6 +466,9 @@ prop:
   er_checks: Prüfungen (CHECK), eine je Zeile
   er_indexes: Indizes, einer je Zeile
   er_indexes_placeholder: "UNIQUE ix_name (spalte_a, spalte_b)"
+  er_check_placeholder: preis >= 0
+  er_checks_placeholder: ende > beginn
+  er_values_placeholder: rot, grün, blau
   er_values: Werte (Aufzählung), durch Kommas getrennt
   er_foreign_key: Fremdschlüssel von
   er_unnamed: (unbenannte Beziehung)
@@ -522,9 +525,11 @@ status:
   exporting: Export ins .asta-Format läuft …
   importing: Quellcode wird importiert …
   opening: Projekt wird geöffnet …
+  busy: Warte, bis der laufende Dateivorgang fertig ist.
   no_diagram_font: Weder Arial noch Liberation Sans ist installiert, deshalb nutzen Diagrammtexte eine andere Schrift und passen eventuell nicht in ihre Kästen.
   cancel: Abbrechen
   importing_astah: .asta-Projekt wird importiert …
+  importing_sql: Tabellen des SQL-Dumps werden angeordnet …
   imported: "%{files} Dateien importiert: %{created} neue Typen, %{updated} aktualisiert, %{associations} Assoziationen."
   imported_structograms: "%{count} Struktogramme erstellt oder erneuert."
 canvas:
@@ -558,6 +563,8 @@ dialog:
   import_source_none: Keine Quelldateien gefunden.
   import_source_discarded: Der Quellcode-Import wurde verworfen.
   import_source_discarded_detail: Während des Imports wurde ein anderes Projekt geöffnet. Bitte den Import in diesem Projekt wiederholen.
+  import_sql_discarded: Der SQL-Import wurde verworfen.
+  import_sql_discarded_detail: Während der Dump gelesen wurde, wurde ein anderes Projekt geöffnet. Bitte den Import in diesem Projekt wiederholen.
   import_source_none_detail: "Die Auswahl enthält keine Dateien mit der Endung %{extensions}."
   import_source_partial: "%{count} Dateien konnten nicht importiert werden, die übrigen schon."
   import_source_skipped: "Bewusst ausgelassen: %{items}"
@@ -620,6 +627,8 @@ export_dropped:
   erSubtyping: Subtypen, die sich nicht exportieren ließen
   erCardinality: Kardinalitäten, die Astah nicht annimmt
   erForeignKeyName: Namen von Fremdschlüsselspalten (Astahs eigene Namen bleiben)
+  erForeignKey: Fremdschlüssel, deren Beziehung sich nicht exportieren ließ (als einfache Spalten exportiert)
+  partialDiagram: Nur teilweise exportierte Diagramme
   erEntity: ER-Entities
   erAttribute: ER-Attribute
   port: Ports
@@ -658,6 +667,15 @@ export_dropped:
   constraintPosition: Lage von Einschränkungen an Linien (Astah nimmt eine Verschiebung für alle Einschränkungen einer Assoziation)
   instanceNameVisibility: Ausgeblendete Namen von Instanzen
   instanceTypeVisibility: Ausgeblendete Classifier von Instanzen
+  associationClassDetails: Namen, Stereotypen, Eigenschaftswerte und Dokumentation der Assoziationen von Assoziationsklassen (die der Klasse bleiben)
+  associationClassOwner: Besitzer von Assoziationsklassen (Astah legt sie neben ihr erstes Ende)
+  componentAttribute: Attribute von Komponenten, deren Typ keine Klasse ist
+  connectorEndMultiplicity: Multiplizitäten von Konnektorenden
+  diagramFrame: Rahmen von Kompositionsstrukturdiagrammen
+  sharedGeneralization: Gemeinsamer Stil von Generalisierungen (als getrennte Linien exportiert)
+  socket: Sockets von Schnittstellen (Astah zeichnet sie nur an Ports)
+  portOutsideHost: Ports, die nicht auf dem Rand einer Klasse oder eines Parts liegen
+  partOutsideClass: Parts, die nicht in ihrer Klasse gezeichnet sind
 settings:
   title: Einstellungen
   language: Sprache
@@ -734,6 +752,8 @@ skipped:
   deleted_function: gelöschte Funktionen (= delete)
   friend: friend-Deklarationen
   statement: Anweisungen, die nichts deklarieren
+  conditional_branch: "weggelassene Zweige von #if (#elif, #else, #if 0)"
+  deep_method: Methoden, zu tief verschachtelt für ein Struktogramm
 new_name:
   systemBoundary: System
 kind:
@@ -742,6 +762,9 @@ kind:
   package: Paket
   subsystem: Subsystem
   class: Klasse
+  boundary: Boundary
+  control: Control
+  entity: Entity
   interface: Schnittstelle
   enumeration: Aufzählung
   dataType: Datentyp
@@ -922,6 +945,7 @@ error:
   not_a_project: Die Datei ist kein UmlCraft-Projekt.
   too_new: "Die Datei stammt von einem neueren UmlCraft (Formatversion %{found}; diese Version liest bis %{supported})."
   migration: "Die Datei ließ sich nicht von Formatversion %{from} umstellen: %{reason}"
+  not_saved_unreadable: "Das Projekt wurde nicht gespeichert, weil sich die Datei nicht wieder öffnen ließe: %{reason}"
 nsd:
   untitled_stem: Unbenannt
   save_failed: Das Struktogramm konnte nicht exportiert werden.
@@ -993,6 +1017,8 @@ nsd:
   note_loop_else: das else der Schleife folgt ihr; dort läuft es auch nach einem break
   note_try_else: das else von try steht am Ende des try-Blocks
   note_nested_function: eine in der Funktion definierte Funktion ist weggelassen
+  note_conditional_branch: "#if: nur ein Zweig ist gelesen (der erste, oder der nach #if 0), die anderen sind weggelassen"
+  note_case_break: "break verlässt hier das switch; als Sprung beibehalten, der im Struktogramm eine Schleife verlässt"
 sql:
   title: SQL-Dump importieren
   found: "%{file}: %{count} Tabellen gefunden."
@@ -1031,3 +1057,4 @@ sql:
   export_check: "%{table}: CHECK (%{check}) lässt sich in diesem Dialekt nicht schreiben"
   export_generated: "%{table}.%{column}: im anderen Dialekt berechnet, hier eine gewöhnliche Spalte"
   export_auto_increment: "%{table}.%{column}: MySQL zählt nur eine Spalte, die den Schlüssel anführt oder eindeutig ist, also kein AUTO_INCREMENT"
+  export_default: "%{table}.%{column}: %{default} gibt es in diesem Dialekt nicht, es fehlt"

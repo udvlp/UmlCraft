@@ -7,8 +7,7 @@ version = "0.22.0"
 edition = "2024"
 # Named in the About dialog; the copyright holders behind "The UmlCraft authors" in LICENSE-MIT.
 authors = ["Ulf Haueisen", "Steven Gast"]
-# The dependencies need 1.92 (oo7); UmlCraft itself needs let chains (1.88).
-rust-version = "1.92"
+rust-version = "1.100"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -26,7 +25,7 @@ umlcraft-mcp = { path = "crates/umlcraft-mcp" }
 umlcraft-screenshot = { path = "crates/umlcraft-screenshot" }
 
 # gpui-kit pins the matching GPUI release (gpui-pre) together with gpui-component.
-gpui-kit = "=0.8.1"
+gpui-kit = "^0.10.0"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -68,6 +67,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 semver = "1"
 # Checks a downloaded update against the release's SHA256SUMS.txt.
 sha2 = "0.11"
+# Checks the release's signature of SHA256SUMS.txt (minisign, Ed25519; no dependencies).
+minisign-verify = "0.3"
 # Font metrics for comparing SVG exports with Astah's outside the app.
 ttf-parser = "0.25"
 # Source import parses declarations with tree-sitter grammars (built from C by `cc`).

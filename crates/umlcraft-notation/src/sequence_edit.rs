@@ -12,6 +12,7 @@
 //!   of the innermost fragment drawn around them, in the order they are drawn.
 
 use std::collections::{HashMap, HashSet};
+use umlcraft_model::Refusal;
 
 use umlcraft_model::{
     Document, DurationConstraintProps, ElementKind, Id, MessageGate, MessageSort, Model,
@@ -181,11 +182,6 @@ pub fn invariant_height(lines: usize) -> f32 {
 pub const TIME_TICK: f32 = 30.0;
 /// Edge labels' height, by which constraint labels are centered on their point.
 const CONSTRAINT_LABEL: f32 = 15.093_75;
-
-/// Refusals of the tools that put things on lifelines and messages.
-pub const NOT_ON_LIFELINE: &str = "a state invariant or termination goes on a lifeline";
-pub const LIFELINE_ENDED: &str = "the lifeline ends already";
-pub const NOT_ON_MESSAGE: &str = "a duration or time constraint goes on messages";
 
 /// The stored geometry of a sequence diagram.
 struct Geometry {
@@ -891,8 +887,8 @@ pub fn add_fragment(
 
 /// Creates a state invariant reading `name` (`termination` false) or a termination on the
 /// lifeline drawn at `at`, and shows it there (see [`add_mark`]). Refused off a lifeline
-/// ([`NOT_ON_LIFELINE`]) and for a termination on a lifeline that ends already
-/// ([`LIFELINE_ENDED`]). Returns (element, presentation).
+/// ([`Refusal::NotOnLifeline`]) and for a termination on a lifeline that ends already
+/// ([`Refusal::LifelineEnded`]). Returns (element, presentation).
 pub fn create_on_lifeline(
     tx: &mut Tx<'_>,
     diagram: Id,
@@ -903,7 +899,7 @@ pub fn create_on_lifeline(
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let g = Geometry::read(model, diagram)?;
-    let lane = g.lane_at(at.x).ok_or_else(|| ModelError::Invalid(NOT_ON_LIFELINE.into()))?;
+    let lane = g.lane_at(at.x).ok_or(ModelError::Refused(Refusal::NotOnLifeline))?;
     let lifeline =
         view.get(lane.id).and_then(|p| p.element).ok_or(ModelError::NotFound(lane.id))?;
     let interaction = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
@@ -926,14 +922,14 @@ pub fn spot_on_lifeline(
     y: Option<f32>,
 ) -> Result<umlcraft_model::Point> {
     let g = Geometry::read(model, diagram)?;
-    let lane = g.lane(lane).ok_or_else(|| ModelError::Invalid(NOT_ON_LIFELINE.into()))?;
+    let lane = g.lane(lane).ok_or(ModelError::Refused(Refusal::NotOnLifeline))?;
     let below = g.content_bottom().map_or(lane.line_top(), |b| b + MESSAGE_GAP);
     Ok(umlcraft_model::Point::new(lane.center(), y.unwrap_or(below)))
 }
 
 /// Shows the state invariant or termination `element` on its lifeline at height `y`: an
 /// invariant with its top there, centered on the line; a termination's cross ends the lifeline
-/// there, though not above what happens on it. A lifeline ends once ([`LIFELINE_ENDED`]).
+/// there, though not above what happens on it. A lifeline ends once ([`Refusal::LifelineEnded`]).
 pub fn add_mark(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<Id> {
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
@@ -941,15 +937,14 @@ pub fn add_mark(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<Id>
     let (lifeline, termination) = match e.kind() {
         ElementKind::StateInvariant(p) => (p.lifeline, false),
         ElementKind::Termination(p) => (p.lifeline, true),
-        _ => return Err(ModelError::Invalid(NOT_ON_LIFELINE.into())),
+        _ => return Err(ModelError::Refused(Refusal::NotOnLifeline)),
     };
-    let lane =
-        lane_of(view, lifeline).ok_or_else(|| ModelError::Invalid(NOT_ON_LIFELINE.into()))?;
+    let lane = lane_of(view, lifeline).ok_or(ModelError::Refused(Refusal::NotOnLifeline))?;
     let g = Geometry::read(model, diagram)?;
     let lane = *g.lane(lane).ok_or(ModelError::NotFound(lane))?;
     let bounds = if termination {
         if lane.destroyed || g.termination(lane.id).is_some() {
-            return Err(ModelError::Invalid(LIFELINE_ENDED.into()));
+            return Err(ModelError::Refused(Refusal::LifelineEnded));
         }
         // `fit_lifelines` keeps it below what is on the lifeline.
         let y = y.max(lane.line_top() + MESSAGE_GAP);
@@ -966,7 +961,7 @@ pub fn add_mark(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<Id>
 
 /// Puts a duration constraint between the message presentations `source` and `target`, or a
 /// time constraint on `source` when both are the same, and shows it. The element is unnamed:
-/// its name is the constraint. Refused for anything but messages ([`NOT_ON_MESSAGE`]). Returns
+/// its name is the constraint. Refused for anything but messages ([`Refusal::NotOnMessage`]). Returns
 /// the new presentation.
 pub fn constrain(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<Id> {
     let model = tx.model();
@@ -975,7 +970,7 @@ pub fn constrain(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result
         view.get(p)
             .filter(|p| matches!(p.shape, Shape::Message { .. }))
             .and_then(|p| p.element)
-            .ok_or_else(|| ModelError::Invalid(NOT_ON_MESSAGE.into()))
+            .ok_or(ModelError::Refused(Refusal::NotOnMessage))
     };
     let (from, to) = (message(source)?, message(target)?);
     let kind = if from == to {
@@ -993,7 +988,7 @@ pub fn constrain(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result
 pub fn add_constraint(tx: &mut Tx<'_>, diagram: Id, element: Id) -> Result<Id> {
     let model = tx.model();
     let g = Geometry::read(model, diagram)?;
-    let shown = |m: Id| g.message_of(m).ok_or_else(|| ModelError::Invalid(NOT_ON_MESSAGE.into()));
+    let shown = |m: Id| g.message_of(m).ok_or(ModelError::Refused(Refusal::NotOnMessage));
     let bounds = match model.element(element)?.kind() {
         ElementKind::DurationConstraint(p) => {
             let (a, b) = (*shown(p.from)?, *shown(p.to)?);
@@ -1006,7 +1001,7 @@ pub fn add_constraint(tx: &mut Tx<'_>, diagram: Id, element: Id) -> Result<Id> {
             duration_bounds(x, a.y, b.y)
         }
         ElementKind::TimeConstraint(p) => time_bounds(&g, shown(p.message)?),
-        _ => return Err(ModelError::Invalid(NOT_ON_MESSAGE.into())),
+        _ => return Err(ModelError::Refused(Refusal::NotOnMessage)),
     };
     let id = tx.add_presentation(diagram, Presentation::node(Some(element), bounds))?;
     tidy(tx, diagram)?;
@@ -1655,6 +1650,7 @@ fn end_at_reply(tx: &mut Tx<'_>, diagram: Id, bar: Bar, reply: Id) -> Result<()>
 /// Grows bars, lifelines and the diagram frame around their content and puts the
 /// interaction's messages and fragments in the order and operands they are drawn in.
 pub fn tidy(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+    drop_orphans(tx, diagram)?;
     drop_idle_bars(tx, diagram)?;
     fit_bars(tx, diagram)?;
     fit_invariants(tx, diagram)?;
@@ -1749,6 +1745,47 @@ pub fn tidy_all(tx: &mut Tx<'_>) -> Result<()> {
     Ok(())
 }
 
+/// The nodes of `diagram` left without what they hang on: state invariants and terminations
+/// whose lifeline is not shown, duration and time constraints whose messages are not all shown
+/// (after "remove from diagram" of a lifeline or a message, say).
+fn orphans(model: &Model, diagram: Id) -> Vec<Id> {
+    let Some(view) = model.view(diagram) else { return Vec::new() };
+    let messages: HashSet<Id> = view
+        .presentations()
+        .iter()
+        .filter(|p| matches!(p.shape, Shape::Message { .. }))
+        .filter_map(|p| p.element)
+        .collect();
+    let lifelines: HashSet<Id> = view
+        .presentations()
+        .iter()
+        .filter(|p| matches!(p.shape, Shape::Lifeline { .. }))
+        .filter_map(|p| p.element)
+        .collect();
+    view.presentations()
+        .iter()
+        .filter(|p| matches!(p.shape, Shape::Node { .. }))
+        .filter(|p| match p.element.and_then(|e| model.get(e)).map(|e| e.kind()) {
+            Some(
+                ElementKind::StateInvariant(StateInvariantProps { lifeline })
+                | ElementKind::Termination(TerminationProps { lifeline }),
+            ) => !lifelines.contains(lifeline),
+            Some(ElementKind::DurationConstraint(c)) => {
+                !messages.contains(&c.from) || !messages.contains(&c.to)
+            }
+            Some(ElementKind::TimeConstraint(c)) => !messages.contains(&c.message),
+            _ => false,
+        })
+        .map(|p| p.id)
+        .collect()
+}
+
+/// Removes what [`orphans`] finds: nothing is left to place it by.
+fn drop_orphans(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+    let orphans: indexmap::IndexSet<Id> = orphans(tx.model(), diagram).into_iter().collect();
+    if orphans.is_empty() { Ok(()) } else { tx.remove_presentations(diagram, orphans) }
+}
+
 /// Removes bars that no message reaches any more, as Astah removes a bar with the message that
 /// started it. A create message keeps the bar right below the head of the lifeline it made.
 fn drop_idle_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
@@ -1778,22 +1815,46 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     // Growing one bar can make room needed in a bar around it; a few rounds settle it.
     for _ in 0..16 {
         let g = Geometry::read(tx.model(), diagram)?;
+        // Bars and messages by lifeline, and messages by sender and receiver, so that each bar
+        // looks only at what happens on its own lifeline.
+        let mut bars_on: HashMap<Id, Vec<&Bar>> = HashMap::new();
+        for b in &g.bars {
+            bars_on.entry(b.lane).or_default().push(b);
+        }
+        let mut messages_on: HashMap<Id, Vec<&Msg>> = HashMap::new();
+        let mut between: HashMap<(Id, Id), Vec<&Msg>> = HashMap::new();
+        for m in &g.messages {
+            messages_on.entry(m.source).or_default().push(m);
+            if m.target != m.source {
+                messages_on.entry(m.target).or_default().push(m);
+            }
+            between.entry((m.source, m.target)).or_default().push(m);
+        }
+        let bar_at = |lane: Id, y: f32| -> Option<Id> {
+            bars_on
+                .get(&lane)?
+                .iter()
+                .filter(|b| b.top - 0.5 <= y && y <= b.bottom + 0.5)
+                .min_by(|a, b| (a.bottom - a.top).total_cmp(&(b.bottom - b.top)))
+                .map(|b| b.id)
+        };
+        let calls = |from: Id, to: Id| between.get(&(from, to)).into_iter().flatten().copied();
         let mut grown = Vec::new();
         for bar in &g.bars {
             let inside = |y: f32| bar.top + 0.5 < y && y <= bar.bottom + 0.5;
             let mut need = bar.bottom;
-            for b in g.bars.iter().filter(|b| b.lane == bar.lane && b.id != bar.id) {
+            for b in bars_on[&bar.lane].iter().filter(|b| b.id != bar.id) {
                 if inside(b.top) {
                     need = need.max(b.bottom + BAR_MARGIN);
                 }
             }
-            for m in &g.messages {
+            for &m in messages_on.get(&bar.lane).into_iter().flatten() {
                 // A reply leaves its own bar at the end; anything else on the lifeline inside
                 // the bar needs room below.
                 let own_reply = m.sort == MessageSort::Reply
                     && m.source == bar.lane
                     && (m.y - bar.bottom).abs() < 0.5
-                    && g.bar_at(bar.lane, m.y).is_some_and(|b| b.id == bar.id);
+                    && bar_at(bar.lane, m.y) == Some(bar.id);
                 if own_reply {
                     continue;
                 }
@@ -1809,28 +1870,19 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                     && m.source != m.target
                     && m.end() > bar.bottom
                 {
-                    let call = g
-                        .messages
-                        .iter()
+                    let call = calls(m.target, m.source)
                         .filter(|c| c.sort != MessageSort::Reply && c.y < m.y)
-                        .filter(|c| c.source == m.target && c.target == m.source)
                         .max_by(|a, b| a.y.total_cmp(&b.y));
-                    if call.is_some_and(|c| g.bar_at(bar.lane, c.y).is_some_and(|b| b.id == bar.id))
-                    {
+                    if call.is_some_and(|c| bar_at(bar.lane, c.y) == Some(bar.id)) {
                         need = need.max(m.end() + BAR_MARGIN);
                     }
                 }
                 // And it leaves the bar its call arrived in at its end, however far below.
                 if m.sort == MessageSort::Reply && m.source == bar.lane && m.y > bar.bottom {
-                    let call = g
-                        .messages
-                        .iter()
+                    let call = calls(m.target, m.source)
                         .filter(|c| c.sort != MessageSort::Reply && c.end() < m.y)
-                        .filter(|c| c.source == m.target && c.target == m.source)
                         .max_by(|a, b| a.y.total_cmp(&b.y));
-                    let arrived =
-                        |c: &&Msg| g.bar_at(bar.lane, c.end()).is_some_and(|b| b.id == bar.id);
-                    if call.as_ref().is_some_and(arrived) {
+                    if call.is_some_and(|c| bar_at(bar.lane, c.end()) == Some(bar.id)) {
                         need = need.max(m.y);
                     }
                 }
@@ -1839,9 +1891,12 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                 if m.sort == MessageSort::Synchronous
                     && m.source == bar.lane
                     && m.target != bar.lane
-                    && g.bar_at(bar.lane, m.y).is_some_and(|b| b.id == bar.id)
-                    && let Some(called) =
-                        g.bars.iter().find(|b| b.lane == m.target && (b.top - m.end()).abs() < 0.5)
+                    && bar_at(bar.lane, m.y) == Some(bar.id)
+                    && let Some(called) = bars_on
+                        .get(&m.target)
+                        .into_iter()
+                        .flatten()
+                        .find(|b| (b.top - m.end()).abs() < 0.5)
                 {
                     need = need.max(called.bottom);
                 }
@@ -2447,6 +2502,9 @@ pub(crate) fn violations(model: &Model, diagram: Id) -> Vec<String> {
                 None => found.push(format!("{} {end} on no lifeline", what(m.id))),
             }
         }
+    }
+    for p in orphans(model, diagram) {
+        found.push(format!("{} is drawn without what it belongs to", what(p)));
     }
     for f in &g.frames {
         let mut above = f.rect.y;
@@ -3131,6 +3189,37 @@ mod tests {
         ));
         let scene = scene_of(&doc, d);
         assert!(matches!(scene.node(cross).unwrap().figure, Figure::Termination));
+    }
+
+    /// Removed from the diagram, a lifeline takes its state invariants and termination along, and
+    /// a message its duration and time constraints; the elements stay.
+    #[test]
+    fn marks_and_constraints_go_with_what_they_hang_on() {
+        let (mut doc, d, a, b) = two_lifelines();
+        let first = draw(&mut doc, d, EdgeTool::AsyncMessage, a, b, 150.0);
+        let second = draw(&mut doc, d, EdgeTool::AsyncMessage, a, b, 250.0);
+        let (p1, p2) = (presentation_of(&doc, d, first), presentation_of(&doc, d, second));
+        let duration = doc.edit("duration", |tx| super::constrain(tx, d, p1, p2)).unwrap();
+        let time = doc.edit("time", |tx| super::constrain(tx, d, p1, p1)).unwrap();
+        let (center, _) = lane_of(&doc, d, a);
+        let (invariant, node) = on_lifeline(&mut doc, d, false, Point::new(center, 300.0));
+        let shown = |doc: &Document, p: Id| doc.model().view(d).unwrap().get(p).is_some();
+        doc.edit("remove", |tx| {
+            tx.remove_presentation(d, p2)?;
+            super::tidy(tx, d)
+        })
+        .unwrap();
+        assert!(!shown(&doc, duration) && shown(&doc, time), "the duration lost a message");
+        assert!(super::violations(doc.model(), d).is_empty());
+        doc.edit("remove", |tx| {
+            tx.remove_presentation(d, a)?;
+            super::tidy(tx, d)
+        })
+        .unwrap();
+        assert!(!shown(&doc, node) && !shown(&doc, time));
+        assert!(doc.model().get(invariant).is_some(), "the element stays");
+        assert!(super::violations(doc.model(), d).is_empty());
+        doc.model().check().unwrap();
     }
 
     #[test]

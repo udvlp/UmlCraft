@@ -568,7 +568,7 @@ const SIDE_LABEL_ROOM: f32 = 14.0;
 /// the router's margin at either end.
 fn crowded_sides(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> HashMap<Id, f32> {
     let Some(view) = model.view(diagram) else { return HashMap::new() };
-    let scene = scene::build(model, diagram, &scene::Preview::default(), measure);
+    let scene = scene::build_geometry(model, diagram, measure);
     let states: Vec<(Id, Rect)> = scene
         .nodes
         .iter()
@@ -748,14 +748,15 @@ fn arrange_grown(
             .filter(|&a| matches!(model.get(a).map(|e| e.kind()), Some(ElementKind::State(_))))
             .find_map(|a| by_element.get(&a).copied().filter(|&c| nodes[c].container))
     };
-    let parent: Vec<Option<usize>> = (0..nodes.len())
+    // Each node's container, and whether it comes from the model rather than the drawing.
+    let (mut parent, from_model): (Vec<Option<usize>>, Vec<bool>) = (0..nodes.len())
         .map(|i| {
             if kind == DiagramKind::StateMachine
                 && let Some(c) = owning_state(i)
             {
-                return Some(c);
+                return (Some(c), true);
             }
-            (0..nodes.len())
+            let drawn = (0..nodes.len())
                 .filter(|&c| {
                     c != i
                         && nodes[c].container
@@ -765,16 +766,21 @@ fn arrange_grown(
                 .min_by(|&a, &b| {
                     let area = |r: Rect| r.width * r.height;
                     area(nodes[a].bounds).total_cmp(&area(nodes[b].bounds))
-                })
+                });
+            (drawn, false)
         })
-        .collect();
+        .unzip();
+    break_cycles(&mut parent, &from_model);
     let actor = |i: usize| {
         let element = nodes[i].element.and_then(|e| model.get(e));
         element.is_some_and(|e| matches!(e.kind(), ElementKind::Actor(_)))
     };
     let ancestors = |mut i: usize| {
         let mut chain = vec![i];
-        while let Some(p) = parent[i] {
+        // `parent` has no cycles; the bound only keeps a slip there from hanging Arrange.
+        while let Some(p) = parent[i]
+            && chain.len() <= parent.len()
+        {
             chain.push(p);
             i = p;
         }
@@ -1437,6 +1443,26 @@ const SPECIFIC_GAP: f32 = 40.0;
 /// Room below an actor for its name.
 const ACTOR_NAME_ROOM: f32 = 20.0;
 
+/// Makes the container relation `parent` acyclic. A substate drawn around its parent state (a
+/// state shrunk over a substate keeps it) makes the drawn containment point back up the model's
+/// one; in each cycle the first link taken from the drawing rather than the model (`from_model`)
+/// is dropped, or the link that closes the cycle if all come from the model.
+fn break_cycles(parent: &mut [Option<usize>], from_model: &[bool]) {
+    for start in 0..parent.len() {
+        let mut chain = vec![start];
+        let mut i = start;
+        while let Some(p) = parent[i] {
+            if let Some(at) = chain.iter().position(|&c| c == p) {
+                let cut = chain[at..].iter().copied().find(|&c| !from_model[c]).unwrap_or(i);
+                parent[cut] = None;
+                break;
+            }
+            chain.push(p);
+            i = p;
+        }
+    }
+}
+
 /// The `actors` in groups related by generalization (`generals`: (specific, general)), each
 /// general one followed by those that specialize it; the groups with the most lines to use
 /// cases (`edges` to nodes that are not `actor`s) first.
@@ -1851,7 +1877,7 @@ fn pins_to_bottom(tx: &mut Tx<'_>, diagram: Id, hosts: Option<&[Id]>) -> Result<
 /// stays centered in its column and straight lines stay straight. Nodes drawn within their
 /// bounds are left out.
 fn outside_margins(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> HashMap<Id, [f32; 4]> {
-    let scene = scene::build(model, diagram, &scene::Preview::default(), measure);
+    let scene = scene::build_geometry(model, diagram, measure);
     let borne = crate::composite::borne_nodes(model, diagram);
     let rects: HashMap<Id, Rect> = scene.nodes.iter().map(|n| (n.id, n.rect)).collect();
     let mut extents: HashMap<Id, Rect> = HashMap::new();
@@ -1929,7 +1955,7 @@ fn transition_label_margins(
     measure: &dyn TextMeasure,
 ) -> HashMap<Id, [f32; 4]> {
     const LABEL_ROOM: f32 = 8.0;
-    let scene = scene::build(model, diagram, &scene::Preview::default(), measure);
+    let scene = scene::build_geometry(model, diagram, measure);
     let mut largest: HashMap<Id, Size> = HashMap::new();
     for edge in &scene.edges {
         let Some(p) = view.get(edge.id) else { continue };
@@ -1993,12 +2019,17 @@ fn share_generalization_trees(
         }
     }
     groups.retain(|general, _| !kept.contains(general));
+    // The general elements of `lines`.
+    let lines: HashSet<Id> = lines.iter().copied().collect();
+    let touched_generals: HashSet<Id> = view
+        .presentations()
+        .iter()
+        .filter(|p| lines.contains(&p.id))
+        .filter_map(|p| crate::shared::ends(model, view, p).map(|(g, _)| g))
+        .collect();
     let mut shared = Vec::new();
     for (general, specifics) in groups {
-        let touched = view.presentations().iter().any(|p| {
-            lines.contains(&p.id)
-                && crate::shared::ends(model, view, p).is_some_and(|(g, _)| g == general)
-        });
+        let touched = touched_generals.contains(&general);
         let Some(g) = bounds(general) else { continue };
         let beyond = specifics.iter().filter_map(|&s| bounds(s)).all(|s| match direction {
             Direction::Down => s.y >= g.bottom(),
@@ -2521,6 +2552,52 @@ mod tests {
         assert!(rect("Open").right() < rect("Submitted").x);
         assert!(rect("Submitted").right() < rect("Shipped").x);
         model.check().unwrap();
+    }
+
+    #[test]
+    fn a_substate_drawn_around_its_state_does_not_hang_arrange() {
+        use umlcraft_model::sample::order_system;
+        let (mut doc, ids) = order_system();
+        let d = ids.state_diagram;
+        let states = elements_of(doc.model(), d, |k| matches!(k, ElementKind::State(_)));
+        let open = *states.iter().find(|&&s| doc.model().get(s).unwrap().name() == "Open").unwrap();
+        let sub = *states
+            .iter()
+            .find(|&&s| s != open && doc.model().ancestors(s).contains(&open))
+            .expect("Open has a substate");
+        // The substate keeps its owner but is drawn around its state, as a state shrunk over
+        // its substate and then moved into it leaves them.
+        doc.edit("swap", |tx| {
+            let view = tx.model().view(d).unwrap();
+            let p_open = view.presentations_of(open).next().unwrap().id;
+            let p_sub = view.presentations_of(sub).next().unwrap().id;
+            tx.set_bounds(d, p_sub, Rect::new(40.0, 40.0, 400.0, 300.0))?;
+            tx.set_bounds(d, p_open, Rect::new(100.0, 100.0, 120.0, 80.0))
+        })
+        .unwrap();
+        doc.edit("arrange", |tx| {
+            arrange(
+                tx,
+                d,
+                None,
+                default_direction(DiagramKind::StateMachine),
+                &scene::ApproxMeasure,
+            )
+        })
+        .unwrap();
+        doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn container_cycles_are_broken_at_a_drawn_link() {
+        // 0 belongs to 1 in the model, 1 is drawn inside 0; 2 is drawn inside 0.
+        let mut parent = vec![Some(1), Some(0), Some(0)];
+        break_cycles(&mut parent, &[true, false, false]);
+        assert_eq!(parent, vec![Some(1), None, Some(0)]);
+        // A cycle of drawn links only loses one link.
+        let mut parent = vec![Some(1), Some(2), Some(0)];
+        break_cycles(&mut parent, &[false; 3]);
+        assert_eq!(parent.iter().filter(|p| p.is_none()).count(), 1);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Diagram tools: which elements a diagram offers, which connections are allowed, and the edits
 //! that create them.
 
+use umlcraft_model::Refusal;
 use umlcraft_model::{
     ActivityNodeKind, ClassifierProps, CombinedFragmentProps, CommentProps, ConnectorEnd,
     ConstraintProps, DiagramKind, DiagramProps, DirectedProps, DurationConstraintProps,
@@ -1083,6 +1084,10 @@ pub fn default_size_for(kind: &ElementKind) -> Size {
 
 /// Shows an existing element on `diagram` at `origin`, together with edges for its binary
 /// relationships to elements already on the diagram. Returns the new node.
+///
+/// ER diagrams in IE or IDEF1X list attributes in their boxes, so an attribute is refused; a
+/// relationship drawn there as a line ([`crate::er::is_line`]) is shown as that line between its
+/// entities (refused unless both are shown), and that line is returned instead.
 pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) -> Result<Id> {
     let model = tx.model();
     let diagram_kind =
@@ -1100,15 +1105,46 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
         return Err(ModelError::Refused(umlcraft_model::Refusal::OtherInteraction));
     }
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
-    if view.presentations_of(element).next().is_some() {
+    // The first presentation of each element the diagram shows.
+    let mut first: std::collections::HashMap<Id, Id> = std::collections::HashMap::new();
+    for p in view.presentations() {
+        if let Some(e) = p.element {
+            first.entry(e).or_insert(p.id);
+        }
+    }
+    if first.contains_key(&element) {
         return Err(ModelError::Refused(umlcraft_model::Refusal::AlreadyShown));
     }
+    let shown = |id: Id| first.get(&id).copied();
+    // IE and IDEF1X list attributes in their boxes and draw binary relationships as one line.
+    let listing =
+        crate::er::is_er(model, diagram) && crate::er::notation(model, diagram).lists_attributes();
+    if listing {
+        match &kind {
+            ElementKind::ErAttribute(_) => {
+                return Err(ModelError::Refused(umlcraft_model::Refusal::CannotShow(
+                    kind.type_name(),
+                )));
+            }
+            ElementKind::ErRelationship(_) if crate::er::is_line(model, element) => {
+                let [parent, child] =
+                    crate::er::parent_and_child(model, element).expect("a line has two ends");
+                let (Some(a), Some(b)) = (shown(parent.entity), shown(child.entity)) else {
+                    return Err(ModelError::Refused(umlcraft_model::Refusal::CannotShow(
+                        kind.type_name(),
+                    )));
+                };
+                return tx.add_edge(diagram, Some(element), a, b, Vec::new());
+            }
+            _ => {}
+        }
+    }
     // Relationships connecting the element to something shown, as (relationship, source, target)
-    // with `None` standing for the new node.
+    // with `None` standing for the new node. Messages need a place in the sequence; they are
+    // drawn, not shown.
     let mut edges = Vec::new();
-    // Messages need a place in the sequence; they are drawn, not shown.
-    let shows_edge = |k: &ElementKind| k.is_relationship();
-    for e in model.elements().filter(|e| shows_edge(e.kind())) {
+    for (r, _) in model.referrers(element) {
+        let Some(e) = model.get(r).filter(|e| e.kind().is_relationship()) else { continue };
         let ends: Vec<Id> = e
             .kind()
             .references()
@@ -1117,22 +1153,38 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
             .map(|(id, _)| *id)
             .collect();
         let [a, b] = ends[..] else { continue };
-        if view.presentations_of(e.id()).next().is_some() || (a != element && b != element) {
+        if shown(r).is_some() || edges.iter().any(|&(e, _, _)| e == r) {
             continue;
         }
         let end = |id: Id| -> Option<Option<Id>> {
-            if id == element {
-                Some(None)
-            } else {
-                view.presentations_of(id).next().map(|p| Some(p.id))
-            }
+            if id == element { Some(None) } else { shown(id).map(Some) }
         };
         if let (Some(source), Some(target)) = (end(a), end(b)) {
-            edges.push((e.id(), source, target));
+            edges.push((r, source, target));
+        }
+    }
+    // In IE and IDEF1X, an entity's relationships drawn as lines to what is shown.
+    if listing && matches!(kind, ElementKind::ErEntity(_)) {
+        for (participation, _) in model.referrers(element) {
+            let Some(ElementKind::ErParticipation(p)) = model.get(participation).map(|e| e.kind())
+            else {
+                continue;
+            };
+            let r = p.relationship;
+            if !crate::er::is_line(model, r) || shown(r).is_some() || edges.iter().any(|e| e.0 == r)
+            {
+                continue;
+            }
+            let Some([parent, child]) = crate::er::parent_and_child(model, r) else { continue };
+            let end = |id: Id| -> Option<Option<Id>> {
+                if id == element { Some(None) } else { shown(id).map(Some) }
+            };
+            if let (Some(source), Some(target)) = (end(parent.entity), end(child.entity)) {
+                edges.push((r, source, target));
+            }
         }
     }
     // An ER attribute's line runs from its owner and shows the attribute.
-    let shown = |id: Id| view.presentations_of(id).next().map(|p| p.id);
     let er_attribute =
         |id: Id| model.get(id).is_some_and(|e| matches!(e.kind(), ElementKind::ErAttribute(_)));
     if er_attribute(element)
@@ -1167,6 +1219,10 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
             target.unwrap_or(node),
             waypoints,
         )?;
+    }
+    // Lifelines, fragments, marks and notes take their place in the sequence's layout.
+    if diagram_kind == DiagramKind::Sequence {
+        sequence_edit::tidy(tx, diagram)?;
     }
     Ok(node)
 }
@@ -1325,7 +1381,15 @@ pub fn create_node(
     if tool.robustness_stereotype().is_some() {
         tx.update_presentation(diagram, node, |p| p.style.iconic = true)?;
     }
+    // A note on a sequence diagram: the frame grows around it.
+    if is_sequence(tx.model(), diagram) {
+        sequence_edit::tidy(tx, diagram)?;
+    }
     Ok((element, node))
+}
+
+fn is_sequence(model: &Model, diagram: Id) -> bool {
+    model.get(diagram).and_then(|d| d.kind().as_diagram()) == Some(DiagramKind::Sequence)
 }
 
 /// Connects two presentations of `diagram` with `tool`. Creates the relationship element in the
@@ -1369,7 +1433,7 @@ fn connect_as(
     }
     if matches!(tool, EdgeTool::DurationConstraint | EdgeTool::TimeConstraint) {
         if (source == target) != (tool == EdgeTool::TimeConstraint) {
-            return Err(ModelError::Invalid(sequence_edit::NOT_ON_MESSAGE.into()));
+            return Err(ModelError::Refused(Refusal::NotOnMessage));
         }
         return sequence_edit::constrain(tx, diagram, source, target);
     }
@@ -1534,6 +1598,22 @@ pub fn change_relationship(tx: &mut Tx<'_>, diagram: Id, edge: Id, tool: EdgeToo
     let new = tx.create(owner, data)?;
     for (diagram, presentation) in shown {
         tx.update_presentation(diagram, presentation, |p| p.element = Some(new))?;
+    }
+    // What refers to the old element without depending on it (a note annotating it, whose
+    // anchor stays drawn) refers to the new one, where it may.
+    let model = tx.model();
+    let new_kind = model.element(new)?.kind().clone();
+    let mut roles: indexmap::IndexMap<Id, Vec<umlcraft_model::RefRole>> = indexmap::IndexMap::new();
+    for (referrer, role) in model.referrers(old) {
+        if referrer != old && referrer != new && !model.is_ancestor(old, referrer) {
+            roles.entry(referrer).or_default().push(role);
+        }
+    }
+    let map = std::collections::HashMap::from([(old, new)]);
+    for (referrer, roles) in roles {
+        if roles.iter().all(|r| !r.is_strong() && r.accepts(&new_kind)) {
+            tx.update(referrer, |data| data.kind.remap(&map))?;
+        }
     }
     tx.delete(old)?;
     Ok(new)
@@ -2218,6 +2298,20 @@ mod tests {
             })
         })
         .unwrap();
+        // A note annotates the line.
+        let note = doc
+            .edit("note", |tx| {
+                let (note, nn) =
+                    create_node(tx, d, NodeTool::Note, Point::new(900.0, 80.0), "about it")?;
+                connect(tx, d, EdgeTool::NoteAnchor, nn, edge)?;
+                Ok(note)
+            })
+            .unwrap();
+        let annotated = |model: &Model| match model.get(note).unwrap().kind() {
+            ElementKind::Comment(p) => p.annotated.clone(),
+            _ => panic!("a note"),
+        };
+        assert_eq!(annotated(doc.model()), [association]);
 
         // The line's source becomes the specific end; the same line now shows the new element.
         let general = doc
@@ -2225,6 +2319,7 @@ mod tests {
             .unwrap();
         let model = doc.model();
         model.check().unwrap();
+        assert_eq!(annotated(model), [general], "the note annotates what the line shows");
         assert!(model.get(association).is_none());
         assert_eq!(model.view(d).unwrap().get(edge).unwrap().element, Some(general));
         assert_eq!(model.get(general).unwrap().name(), "uses");

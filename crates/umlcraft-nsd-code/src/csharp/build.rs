@@ -2,16 +2,16 @@
 //! agree (`docs/plan-nsd-csharp.md`).
 
 use tree_sitter::Node;
-use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind, Sequence};
+use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind};
 
 use super::methods::{Body, Member};
 use super::{CSharp, declaration, declarator_value};
 use crate::core::{Builder, Catch, Group, Sink, append_comment};
 use crate::pseudo;
 use crate::text::{condition, lines, node_text, one_line, without_semicolon};
-use crate::{Made, NoteKind, Report};
+use crate::{Made, NoteKind, Report, Unbuilt};
 
-pub fn diagram(member: &Member, src: &str, made: &Made) -> (Diagram, Report) {
+pub fn diagram(member: &Member, src: &str, made: &Made) -> Result<(Diagram, Report), Unbuilt> {
     let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
     let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
     d.set_keywords(made.keywords);
@@ -30,8 +30,7 @@ pub fn diagram(member: &Member, src: &str, made: &Made) -> (Diagram, Report) {
         Body::Expression(value) => body.extend(b.arrow(*value, member.returns)),
         Body::Statements(statements) => body.extend(b.statements(statements)),
     }
-    d.children = Sequence::new(body);
-    (d, Report { notes: b.notes })
+    b.finish(d, body)
 }
 
 pub fn statement(b: &mut Builder<CSharp>, node: Node, out: &mut Vec<Element>) {

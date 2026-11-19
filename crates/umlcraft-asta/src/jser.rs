@@ -44,6 +44,8 @@ pub enum StreamError {
     ClassChainTooLong(String),
     #[error("cannot write {0}")]
     Unwritable(&'static str),
+    #[error("the stream decodes to more data than it can hold")]
+    TooLarge,
 }
 
 type Result<T> = std::result::Result<T, StreamError>;
@@ -582,18 +584,36 @@ enum Handle {
     Object(ObjId),
 }
 
+/// What the graph may take in memory, in bytes per byte of stream, plus a fixed allowance.
+/// Every item the reader decodes costs at least one byte of stream, but its record takes 16 to
+/// 72 bytes, and a six-byte reference to a class brings a record for each class of its
+/// hierarchy. Astah's own projects and templates take 9.5 to 13 bytes per byte. The budget
+/// refuses a crafted stream (a long run of `null`s, instances of deep hierarchies) before it
+/// exhausts memory, which would abort the process instead of failing.
+const BUDGET_PER_BYTE: usize = 24;
+const BUDGET_BASE: usize = 64 << 20;
+
 struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
     handles: Vec<Handle>,
     graph: Graph,
     depth: usize,
+    /// Bytes the graph may still take; see [`BUDGET_PER_BYTE`].
+    budget: usize,
 }
 
 /// Parses a complete stream. `extra_header` is the number of bytes a custom
 /// `writeStreamHeader` wrote after the standard magic and version.
 pub fn parse(data: &[u8], extra_header: usize) -> Result<Graph> {
-    let mut r = Reader { data, pos: 0, handles: Vec::new(), graph: Graph::default(), depth: 0 };
+    let budget = data.len().saturating_mul(BUDGET_PER_BYTE).saturating_add(BUDGET_BASE);
+    parse_with_budget(data, extra_header, budget)
+}
+
+/// [`parse`] with `budget` bytes for the graph.
+fn parse_with_budget(data: &[u8], extra_header: usize, budget: usize) -> Result<Graph> {
+    let mut r =
+        Reader { data, pos: 0, handles: Vec::new(), graph: Graph::default(), depth: 0, budget };
     if r.u16()? != MAGIC || r.u16()? != VERSION {
         return Err(StreamError::BadMagic);
     }
@@ -606,6 +626,17 @@ pub fn parse(data: &[u8], extra_header: usize) -> Result<Graph> {
 }
 
 impl<'a> Reader<'a> {
+    /// Takes `bytes` from the budget, or refuses the stream.
+    fn charge(&mut self, bytes: usize) -> Result<()> {
+        self.budget = self.budget.checked_sub(bytes).ok_or(StreamError::TooLarge)?;
+        Ok(())
+    }
+
+    /// Charges `n` records of type `T`.
+    fn charge_for<T>(&mut self, n: usize) -> Result<()> {
+        self.charge(n.saturating_mul(std::mem::size_of::<T>()))
+    }
+
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.pos.checked_add(n).filter(|&e| e <= self.data.len());
         let end = end.ok_or(StreamError::Eof(self.pos))?;
@@ -640,13 +671,17 @@ impl<'a> Reader<'a> {
 
     fn utf(&mut self) -> Result<String> {
         let len = self.u16()? as usize;
-        Ok(decode_modified_utf8(self.take(len)?))
+        let s = decode_modified_utf8(self.take(len)?);
+        self.charge(s.len())?;
+        Ok(s)
     }
 
     fn long_utf(&mut self) -> Result<String> {
         let len = self.i64()?;
         let len = usize::try_from(len).map_err(|_| StreamError::Eof(self.pos))?;
-        Ok(decode_modified_utf8(self.take(len)?))
+        let s = decode_modified_utf8(self.take(len)?);
+        self.charge(s.len())?;
+        Ok(s)
     }
 
     /// A wire handle, and what it stands for.
@@ -657,33 +692,42 @@ impl<'a> Reader<'a> {
         Ok((raw, handle.ok_or(StreamError::BadHandle(raw))?))
     }
 
-    fn new_class(&mut self, desc: ClassDesc) -> ClassId {
+    fn new_class(&mut self, desc: ClassDesc) -> Result<ClassId> {
+        self.charge_for::<ClassDesc>(1)?;
+        self.charge_for::<Handle>(1)?;
         let id = ClassId(self.graph.classes.len());
         self.graph.classes.push(desc);
         self.handles.push(Handle::Class(id));
-        id
+        Ok(id)
     }
 
-    fn new_object(&mut self, placeholder: Object) -> ObjId {
+    fn new_object(&mut self, placeholder: Object) -> Result<ObjId> {
+        self.charge_for::<Object>(1)?;
+        self.charge_for::<Handle>(1)?;
         let id = ObjId(self.graph.objects.len());
         self.graph.objects.push(placeholder);
         self.handles.push(Handle::Object(id));
-        id
+        Ok(id)
     }
 
     /// One item of the stream or of an annotation.
     fn content(&mut self) -> Result<Content> {
+        self.charge_for::<Content>(1)?;
         match self.peek()? {
             TC_BLOCKDATA => {
                 self.pos += 1;
                 let len = self.u8()? as usize;
-                Ok(Content::Block(self.take(len)?.to_vec()))
+                let bytes = self.take(len)?;
+                self.charge(len)?;
+                Ok(Content::Block(bytes.to_vec()))
             }
             TC_BLOCKDATALONG => {
                 self.pos += 1;
                 let len = self.i32()?;
                 let len = usize::try_from(len).map_err(|_| StreamError::Eof(self.pos))?;
-                Ok(Content::Block(self.take(len)?.to_vec()))
+                let bytes = self.take(len)?;
+                self.charge(len)?;
+                Ok(Content::Block(bytes.to_vec()))
             }
             TC_RESET => {
                 self.pos += 1;
@@ -725,18 +769,19 @@ impl<'a> Reader<'a> {
             },
             TC_STRING => {
                 let s = self.utf()?;
-                self.new_object(Object::String(s))
+                self.new_object(Object::String(s))?
             }
             TC_LONGSTRING => {
                 let s = self.long_utf()?;
-                self.new_object(Object::String(s))
+                self.new_object(Object::String(s))?
             }
             TC_OBJECT => self.instance()?,
             TC_ARRAY => {
                 let class = self.class_desc()?.ok_or(StreamError::BadTypeCode { code, at })?;
-                let id = self.new_object(Object::Array { class, items: Vec::new() });
+                let id = self.new_object(Object::Array { class, items: Vec::new() })?;
                 let element = array_element(&self.graph.class(class).name)?;
                 let len = usize::try_from(self.i32()?).map_err(|_| StreamError::Eof(self.pos))?;
+                self.charge_for::<Value>(len)?;
                 let mut items = Vec::with_capacity(len.min(1 << 16));
                 for _ in 0..len {
                     items.push(self.typed(element)?);
@@ -748,7 +793,7 @@ impl<'a> Reader<'a> {
                 let class = self.class_desc()?.ok_or(StreamError::BadTypeCode { code, at })?;
                 let placeholder =
                     Object::Enum { class, constant: String::new(), name: Value::Null };
-                let id = self.new_object(placeholder);
+                let id = self.new_object(placeholder)?;
                 let name = self.value()?;
                 let constant = match name {
                     Value::Object(s) => self.graph.string(s).unwrap_or_default().to_owned(),
@@ -759,7 +804,7 @@ impl<'a> Reader<'a> {
             }
             TC_CLASS => {
                 let class = self.class_desc()?.ok_or(StreamError::BadTypeCode { code, at })?;
-                self.new_object(Object::Class(class))
+                self.new_object(Object::Class(class))?
             }
             _ => return Err(StreamError::BadTypeCode { code, at }),
         };
@@ -783,18 +828,19 @@ impl<'a> Reader<'a> {
     fn instance(&mut self) -> Result<ObjId> {
         let at = self.pos;
         let class = self.class_desc()?.ok_or(StreamError::BadTypeCode { code: TC_NULL, at })?;
-        let id = self.new_object(Object::Instance { class, data: Vec::new() });
+        let id = self.new_object(Object::Instance { class, data: Vec::new() })?;
         let mut hierarchy = Vec::new();
         let mut current = Some(class);
         while let Some(c) = current {
             hierarchy.push(c);
             current = self.graph.class(c).super_class;
         }
+        self.charge_for::<ClassData>(hierarchy.len())?;
         let mut data = Vec::with_capacity(hierarchy.len());
         for &c in hierarchy.iter().rev() {
             // Names are shared with the description, not copied into every instance.
             let desc = self.graph.class(c);
-            let flags = desc.flags;
+            let (flags, count) = (desc.flags, desc.fields.len());
             let mut class_data = ClassData { class: desc.name.clone(), ..Default::default() };
             if flags & SC_EXTERNALIZABLE != 0 {
                 if flags & SC_BLOCK_DATA == 0 {
@@ -802,7 +848,8 @@ impl<'a> Reader<'a> {
                 }
                 class_data.annotation = self.annotation()?;
             } else if flags & SC_SERIALIZABLE != 0 {
-                class_data.fields.reserve(desc.fields.len());
+                self.charge_for::<(Arc<str>, Value)>(count)?;
+                class_data.fields.reserve(count);
                 for i in 0..self.graph.class(c).fields.len() {
                     let field = &self.graph.class(c).fields[i];
                     let (name, ty) = (field.name.clone(), field.ty());
@@ -863,9 +910,10 @@ impl<'a> Reader<'a> {
                 let name = self.utf()?;
                 let serial_version_uid = self.i64()?;
                 // The handle is assigned before the rest of the description is read.
-                let id = self.new_class(ClassDesc::new(name, serial_version_uid, 0));
+                let id = self.new_class(ClassDesc::new(name, serial_version_uid, 0))?;
                 let flags = self.u8()?;
                 let count = self.u16()?;
+                self.charge_for::<FieldDesc>(count as usize)?;
                 let mut fields = Vec::with_capacity(count as usize);
                 for _ in 0..count {
                     let code = self.u8()?;
@@ -885,10 +933,11 @@ impl<'a> Reader<'a> {
                 Ok(Some(id))
             }
             TC_PROXYCLASSDESC => {
-                let id = self.new_class(ClassDesc::new("$Proxy", 0, SC_SERIALIZABLE));
+                let id = self.new_class(ClassDesc::new("$Proxy", 0, SC_SERIALIZABLE))?;
                 let count = self.i32()?;
                 let mut interfaces = Vec::new();
                 for _ in 0..count {
+                    self.charge_for::<String>(1)?;
                     interfaces.push(self.utf()?);
                 }
                 let annotation = self.annotation()?;
@@ -1077,6 +1126,30 @@ mod tests {
         }
         bytes.push(TC_NULL);
         assert!(matches!(parse(&bytes, 0), Err(StreamError::ClassChainTooLong(_))));
+    }
+
+    /// Instances of a class with a long hierarchy, each six bytes of stream after the first
+    /// and a record per class in memory: 600 kB that would take 400 MB are refused.
+    #[test]
+    fn streams_that_decode_to_too_much_are_refused() {
+        let mut bytes = vec![0xAC, 0xED, 0x00, 0x05, TC_OBJECT];
+        for _ in 0..MAX_CLASS_CHAIN - 1 {
+            class_desc_head(&mut bytes, b"C");
+        }
+        bytes.push(TC_NULL);
+        for _ in 0..100_000 {
+            bytes.extend([TC_OBJECT, TC_REFERENCE]);
+            bytes.extend(BASE_HANDLE.to_be_bytes());
+        }
+        assert!(matches!(parse(&bytes, 0), Err(StreamError::TooLarge)));
+        // A tenth of them, and the first, is within the budget.
+        let few = bytes.len() - 90_000 * 6;
+        assert_eq!(parse(&bytes[..few], 0).unwrap().roots.len(), 10_001);
+        // A run of `null`s, each a byte of stream and a record of 32 bytes.
+        let mut nulls = MAGIC.to_vec();
+        nulls.resize(MAGIC.len() + 100_000, TC_NULL);
+        assert!(matches!(parse_with_budget(&nulls, 0, 1 << 20), Err(StreamError::TooLarge)));
+        assert_eq!(parse_with_budget(&nulls, 0, 4 << 20).unwrap().roots.len(), 100_000);
     }
 
     #[test]

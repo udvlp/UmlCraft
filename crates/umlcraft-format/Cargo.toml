@@ -9,13 +9,16 @@ publish.workspace = true
 
 [dependencies]
 umlcraft-model.workspace = true
+# Only for its depth limit, which bounds how deep a project file may nest.
+umlcraft-nsd.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# Project files nest deeper than serde_json's default limit of 128 (structograms); the crate
+# bounds the depth itself.
+serde_json = { workspace = true, features = ["unbounded_depth"] }
 thiserror.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-umlcraft-nsd.workspace = true
 
 [lints]
 workspace = true

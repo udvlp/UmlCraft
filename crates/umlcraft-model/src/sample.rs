@@ -1,4 +1,6 @@
-//! A small example project with one diagram of each supported kind.
+//! A small example project with a diagram of each UML kind but composite structures (class,
+//! use case, sequence, activity, state machine, component, deployment); no ER diagram and no
+//! structogram.
 //! Used by tests and the format round trip; the app's sample project is its own
 //! (`umlcraft-app/src/demo.rs`).
 

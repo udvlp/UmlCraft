@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexSet;
 
-use crate::diagram::{Presentation, Shape};
+use crate::diagram::{Presentation, Shape, View};
 use crate::element::ElementData;
 use crate::error::{ModelError, Result};
 use crate::geometry::{Point, Rect};
@@ -139,6 +139,18 @@ impl Document {
             revert(&mut self.model, t.inverse);
             self.revision += 1;
         }
+    }
+
+    /// Takes the last step back and returns the operations that make it, in the order they
+    /// apply; it cannot be redone here. For running an edit on a copy of the model (on another
+    /// thread, while the original stays in use) and applying it to the original as one step
+    /// with [`Tx::apply`], as long as that is unchanged since the copy.
+    pub fn take_last_step(&mut self) -> Option<Vec<Op>> {
+        let t = self.undo.pop()?;
+        let mut ops = revert(&mut self.model, t.inverse);
+        ops.reverse();
+        self.revision += 1;
+        Some(ops)
     }
 
     pub fn can_undo(&self) -> bool {
@@ -317,6 +329,16 @@ impl Tx<'_> {
         for survivor in survivors_to_unlink {
             self.unlink_all(survivor, &doomed)?;
         }
+        // The removal below does not look for referrers again: nothing that stays may still
+        // refer to what goes (`ElementKind::unlink` covers every weak reference).
+        debug_assert!(
+            self.model.elements().filter(|e| !doomed.contains(&e.id())).all(|e| {
+                let mut dangling = false;
+                e.kind().visit_references(&mut |t, _| dangling |= doomed.contains(&t));
+                !dangling
+            }),
+            "a survivor still refers to a deleted element"
+        );
 
         // Leaves first, and nothing another doomed element still refers to.
         let mut remaining = doomed;
@@ -543,25 +565,11 @@ impl Tx<'_> {
     /// Removes the given presentations and, transitively, all edges attached to them.
     pub fn remove_presentations(&mut self, diagram: Id, ids: IndexSet<Id>) -> Result<()> {
         let view = self.view_of(diagram)?;
-        // What each presentation hangs on: an edge's or message's ends, an activation's lifeline.
-        let holds = |p: &Presentation| -> [Option<Id>; 2] {
-            match p.shape {
-                Shape::Activation { lifeline, .. } => [Some(lifeline), None],
-                _ => match p.endpoints() {
-                    Some((s, t)) if s == t => [Some(s), None],
-                    Some((s, t)) => [Some(s), Some(t)],
-                    None => [None, None],
-                },
-            }
-        };
         let mut hanging: HashMap<Id, Vec<Id>> = HashMap::new();
-        let mut holding: HashMap<Id, [Option<Id>; 2]> = HashMap::new();
         for p in view.presentations() {
-            let held = holds(p);
-            for &on in held.iter().flatten() {
+            for &on in View::holders(p).iter().flatten() {
                 hanging.entry(on).or_default().push(p.id);
             }
-            holding.insert(p.id, held);
         }
         // Whatever hangs on a removed presentation goes with it.
         let mut gone = ids;
@@ -571,26 +579,11 @@ impl Tx<'_> {
             gone.extend(extra);
             i += 1;
         }
-        // Then remove from the outside in: a presentation once nothing hangs on it any more.
-        let mut attached: HashMap<Id, usize> =
-            gone.iter().map(|&id| (id, hanging.get(&id).map_or(0, Vec::len))).collect();
-        let mut ready: VecDeque<Id> = gone.iter().copied().filter(|id| attached[id] == 0).collect();
-        let mut removed = 0;
-        while let Some(next) = ready.pop_front() {
-            self.apply(Op::RemovePresentation { diagram, id: next })?;
-            removed += 1;
-            for &on in holding.get(&next).into_iter().flatten().flatten() {
-                if let Some(count) = attached.get_mut(&on) {
-                    *count -= 1;
-                    if *count == 0 {
-                        ready.push_back(on);
-                    }
-                }
-            }
+        // All in one step, so the list is compacted once however many go and wherever they
+        // stand (one at a time, each removal shifted and reindexed what came after it).
+        if gone.is_empty() {
+            return Ok(());
         }
-        if removed < gone.len() {
-            return Err(ModelError::Invalid("edges attached in a cycle".into()));
-        }
-        Ok(())
+        self.apply(Op::RemovePresentations { diagram, ids: gone.into_iter().collect() })
     }
 }

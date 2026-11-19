@@ -380,21 +380,27 @@ impl<'p> Importer<'p> {
 
     /// Name, visibility, documentation, tags and flags of a type. Of a type declared in parts,
     /// the first part gives visibility and tags, the first documented part the documentation;
-    /// `abstract` and `sealed` on any part count for the type.
+    /// `abstract` and `sealed` on any part count for the type. As the import may hold only
+    /// some of the parts, these keep what the type has where its parts here say nothing.
     fn properties(&mut self, tx: &mut Tx<'_>, id: Id, entries: &[usize]) -> Result<()> {
         let decls: Vec<&TypeDecl> = entries.iter().map(|&e| self.entries[e].decl).collect();
         let decl = decls[0];
         let documentation = decls.iter().map(|d| &d.documentation).find(|d| !d.is_empty());
         let is_abstract = decls.iter().any(|d| d.is_abstract);
         let is_leaf = decls.iter().any(|d| d.is_leaf);
+        let partial = self.in_parts(entries);
         let prefix = self.tag_prefix;
         tx.update(id, |data| {
             data.visibility = decl.visibility;
-            data.documentation = documentation.cloned().unwrap_or_default();
+            match documentation {
+                Some(d) => data.documentation = d.clone(),
+                None if partial => {}
+                None => data.documentation.clear(),
+            }
             set_tags(data, &decl.tags, prefix);
             if let Some(props) = classifier_props_mut(&mut data.kind) {
-                props.is_abstract = is_abstract;
-                props.is_leaf = is_leaf;
+                props.is_abstract = is_abstract || (partial && props.is_abstract);
+                props.is_leaf = is_leaf || (partial && props.is_leaf);
             }
         })
     }
@@ -520,9 +526,11 @@ impl<'p> Importer<'p> {
                 Some((r, target, relation))
             })
             .collect();
+        // A type declared in parts may name a supertype in a part the import does not hold.
         let stale: Vec<Id> = current
             .iter()
             .filter(|&&(_, target, relation)| !wanted.contains(&(target, relation)))
+            .filter(|_| !self.in_parts(entries))
             .map(|&(r, _, _)| r)
             .collect();
         tx.delete_many(&stale)?;
@@ -572,6 +580,25 @@ impl<'p> Importer<'p> {
         // With the entry each definition resolves in.
         let mut definitions: Vec<Option<(&'p Operation, usize)>> = vec![None; operations.len()];
         let model = tx.model();
+        // A C# partial method declared in one part and implemented in another (or the same) is
+        // one operation: the second with the same signature counts as its definition.
+        let partial = self.in_parts(entries);
+        if partial {
+            let mut kept: Vec<(&'p Operation, usize)> = Vec::new();
+            let mut kept_definitions: Vec<Option<(&'p Operation, usize)>> = Vec::new();
+            for (o, e) in operations {
+                let key = self.signature(model, e, o);
+                let same = kept.iter().position(|(k, ke)| self.signature(model, *ke, k) == key);
+                match same {
+                    Some(i) if kept_definitions[i].is_none() => kept_definitions[i] = Some((o, e)),
+                    _ => {
+                        kept.push((o, e));
+                        kept_definitions.push(None);
+                    }
+                }
+            }
+            (operations, definitions) = (kept, kept_definitions);
+        }
         for &(member, entry) in defined {
             match member {
                 Member::Field(f) => field_definitions.push(f),
@@ -706,11 +733,22 @@ impl<'p> Importer<'p> {
             order.push(op);
         }
 
-        // What the sources no longer declare.
+        // What the sources no longer declare. Of a type declared in parts (C# `partial`), the
+        // import may hold only some of the parts: what it does not find may stand in another
+        // part, so it stays, and so does the order.
         let leftovers: Vec<Id> =
             attributes.into_iter().chain(existing_ops).chain(existing_literals).collect();
+        if partial && !leftovers.is_empty() {
+            return Ok(());
+        }
         tx.delete_many(&leftovers)?;
         reorder(tx, id, &order)
+    }
+
+    /// Whether the type of `entries` is declared in parts (C# `partial`), of which an import
+    /// may hold only some.
+    pub(crate) fn in_parts(&self, entries: &[usize]) -> bool {
+        !entries.is_empty() && entries.iter().all(|&e| self.entries[e].decl.is_partial)
     }
 
     /// The signature of `o`, declared in `entry`, with its aliases replaced as the model has
@@ -837,7 +875,7 @@ fn path_lookup_package(model: &Model, path: &[String]) -> bool {
 }
 
 /// Replaces the tagged values of this language (`prefix…`) with `tags`, keeping all others.
-fn set_tags(data: &mut ElementData, tags: &[(String, String)], prefix: &str) {
+pub(crate) fn set_tags(data: &mut ElementData, tags: &[(String, String)], prefix: &str) {
     data.tagged_values.retain(|t| !t.key.starts_with(prefix));
     data.tagged_values.extend(
         tags.iter().map(|(key, value)| TaggedValue { key: key.clone(), value: value.clone() }),

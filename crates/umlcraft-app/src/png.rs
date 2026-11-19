@@ -110,4 +110,12 @@ mod tests {
         assert!(dimension(16).abs_diff((v[2] * 2.0).round() as u32) <= 2);
         assert!(dimension(20).abs_diff((v[3] * 2.0).round() as u32) <= 2);
     }
+
+    #[test]
+    fn huge_diagrams_are_refused_before_their_pixels_are_allocated() {
+        // 80,000 × 80,000 pixels at twice the size, 25.6 GB to draw into.
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="40000" height="40000"
+            viewBox="0 0 40000 40000"><rect width="10" height="10"/></svg>"#;
+        assert!(super::from_svg(svg, super::SCALE).is_err());
+    }
 }

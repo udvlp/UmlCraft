@@ -9,4 +9,4 @@ namespace Conditional
 import System.*
 public class Program (line 7)
 skipped free_member × 2
-skipped preprocessor_branch × 3
+skipped conditional_branch × 3

@@ -1,4 +1,4 @@
-# Methods whose structogram from C# differs from the same method in Java on purpose.
+# Methods whose structogram from C#, Python or C++ differs from the same method in Java on purpose.
 python/Branches.logic: Python writes and/or and True/False
 python/Branches.ternary: Python writes the conditional expression as a if c else b
 python/Switches.classic: a case of two values is written 2 | 3 in Python

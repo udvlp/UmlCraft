@@ -1,43 +1,58 @@
 //! Conditional compilation (C#, C++): of `#if` … `#elif` … `#else`, only the first branch is
-//! read; nothing is evaluated. Include guards (`#ifndef X_H`) keep the whole file.
+//! read; nothing is evaluated, except that a condition that is a constant false (`#if 0`,
+//! `#if false`, `#elif 0`) leaves its branch out, so the next one is read: `#if 0` is how code
+//! is switched off. Include guards (`#ifndef X_H`) keep the whole file.
 
 /// The text as the first branches of its conditionals read it: the lines of `#if`, `#ifdef`,
 /// `#ifndef`, `#elif`, `#elifdef`, `#elifndef`, `#else` and `#endif`, and the branches after
-/// the first, blanked out, with the number of branches left out. Blanking keeps every byte's
-/// place, so lines and columns stay as written, and declarations that the conditionals cut
-/// apart parse as one. In C++ a blanked line that ends in `\` blanks the next one too; C# has
-/// no line continuation. Lines inside block comments and multi-line strings are no directives.
-pub fn first_branches(text: &str, dialect: Dialect) -> (String, usize) {
+/// the first, blanked out, with where each branch left out starts (the byte its directive's
+/// line starts at). A branch under a constant false condition (`#if 0`) is left out and does
+/// not count as the first. Blanking keeps every byte's place, so lines and columns stay as
+/// written, and declarations that the conditionals cut apart parse as one. In C++ a blanked
+/// line that ends in `\` blanks the next one too; C# has no line continuation. Lines inside
+/// block comments and multi-line strings are no directives.
+pub fn first_branches(text: &str, dialect: Dialect) -> (String, Vec<usize>) {
     let mut out = String::with_capacity(text.len());
-    // Per open `#if`: whether the branch read now is left out.
-    let mut open: Vec<bool> = Vec::new();
-    let mut branches = 0;
+    // Per open `#if`: whether a branch was read already, and whether the branch now is left
+    // out.
+    let mut open: Vec<Open> = Vec::new();
+    let mut branches = Vec::new();
     // Whether the line before was blanked and goes on in this one (`#if A || \`).
     let mut continued = false;
     let mut state = Lexical::Code;
+    let mut at = 0;
     for line in text.split_inclusive('\n') {
+        let start = at;
+        at += line.len();
         let in_code = state == Lexical::Code;
         state = scan(line, state, dialect);
         let directive = line.trim_start().strip_prefix('#').map(str::trim_start);
         let directive = directive.filter(|_| !continued && in_code);
         let word = directive.map(|d| d.split(|c: char| !c.is_ascii_alphabetic()).next());
-        let left_out = |open: &[bool]| open.iter().any(|&l| l);
-        let blank = match word.flatten() {
-            Some("if" | "ifdef" | "ifndef") => {
-                open.push(false);
+        let left_out = |open: &[Open]| open.iter().any(|o| o.left_out);
+        let blank = match (word.flatten(), directive) {
+            (Some(word @ ("if" | "ifdef" | "ifndef")), Some(directive)) => {
+                let off = word == "if" && constant_false(&directive[word.len()..]);
+                if off && !left_out(&open) {
+                    branches.push(start);
+                }
+                open.push(Open { read: !off, left_out: off });
                 true
             }
-            Some("elif" | "elifdef" | "elifndef" | "else") => {
+            (Some(word @ ("elif" | "elifdef" | "elifndef" | "else")), Some(directive)) => {
+                let off = word == "elif" && constant_false(&directive[word.len()..]);
                 let outer = open.len().saturating_sub(1);
-                if !open.is_empty() && !left_out(&open[..outer]) {
-                    branches += 1;
-                }
+                let outer_left_out = left_out(&open[..outer]);
                 if let Some(last) = open.last_mut() {
-                    *last = true;
+                    last.left_out = last.read || off;
+                    last.read |= !last.left_out;
+                    if last.left_out && !outer_left_out {
+                        branches.push(start);
+                    }
                 }
                 true
             }
-            Some("endif") => {
+            (Some("endif"), _) => {
                 open.pop();
                 true
             }
@@ -56,6 +71,26 @@ pub fn first_branches(text: &str, dialect: Dialect) -> (String, usize) {
         }
     }
     (out, branches)
+}
+
+/// An open conditional.
+struct Open {
+    /// Whether one of its branches was read.
+    read: bool,
+    /// Whether the branch now is left out.
+    left_out: bool,
+}
+
+/// Whether the condition of an `#if` or `#elif` (what follows the word) is a constant false:
+/// `0`, `false`, also in parentheses and with a comment after it.
+fn constant_false(condition: &str) -> bool {
+    let condition = condition.split("//").next().unwrap_or_default();
+    let condition = condition.split("/*").next().unwrap_or_default();
+    let mut condition = condition.trim();
+    while let Some(inner) = condition.strip_prefix('(').and_then(|c| c.strip_suffix(')')) {
+        condition = inner.trim();
+    }
+    matches!(condition, "0" | "false")
 }
 
 /// The language whose preprocessor rules apply.
@@ -186,7 +221,7 @@ mod tests {
         assert_eq!(lines, ["a", "b", "c", "i"]);
         assert_eq!(kept.len(), text.len());
         // `#else` of B, `#elif C` and `#else` of A; the `#else` of D is inside a branch left out.
-        assert_eq!(branches, 3);
+        assert_eq!(branches.len(), 3);
     }
 
     #[test]
@@ -195,7 +230,7 @@ mod tests {
         let (kept, branches) = first_branches(text, Dialect::Cpp);
         let lines: Vec<&str> = kept.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
         assert_eq!(lines, ["a", "d"]);
-        assert_eq!(branches, 1);
+        assert_eq!(branches.len(), 1);
     }
 
     #[test]
@@ -211,11 +246,11 @@ mod tests {
         let cs = "var a = @\"x\n#if A\n\"; var b = \"\"\"\n#else\n\"\"\";\n/* \n#endif\n*/ var c = '\"';\n#if B\nd\n#endif\n";
         let (kept, branches) = first_branches(cs, Dialect::CSharp);
         assert!(kept.contains("#if A") && kept.contains("#else") && kept.contains("#endif\n*/"));
-        assert!(kept.contains("d\n") && branches == 0);
+        assert!(kept.contains("d\n") && branches.is_empty());
         let cpp = "auto s = R\"x(\n#if A\n)x\"; auto t = u8R\"(\n#endif\n)\";\nint n = 1'000;\n#if B\nb\n#else\nc\n#endif\n";
         let (kept, branches) = first_branches(cpp, Dialect::Cpp);
         assert!(kept.contains("#if A") && kept.contains("\n#endif\n)"));
-        assert!(kept.contains("b\n") && !kept.contains("c\n") && branches == 1);
+        assert!(kept.contains("b\n") && !kept.contains("c\n") && branches.len() == 1);
     }
 
     #[test]
@@ -224,6 +259,31 @@ mod tests {
         let (kept, branches) = first_branches(text, Dialect::Cpp);
         let lines: Vec<&str> = kept.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
         assert_eq!(lines, ["#define A_H", "a", "b"]);
-        assert_eq!(branches, 1);
+        assert_eq!(branches.len(), 1);
+    }
+
+    #[test]
+    fn a_constant_false_condition_reads_the_next_branch() {
+        let read = |text: &str, dialect| {
+            let (kept, branches) = first_branches(text, dialect);
+            let lines: Vec<String> =
+                kept.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+            (lines, branches)
+        };
+        let text = "a\n#if 0 // off\nold(\n#else\nnew\n#endif\nb\n";
+        let (lines, branches) = read(text, Dialect::Cpp);
+        assert_eq!(lines, ["a", "new", "b"]);
+        // Where the branch left out starts: the line of `#if 0`.
+        assert_eq!(branches, [2]);
+        let (lines, branches) = read("#if (false)\nx\n#endif\ny\n", Dialect::CSharp);
+        assert_eq!((lines, branches.len()), (vec!["y".to_owned()], 1));
+        // `#elif 0` is left out too; the branch after it is read when none was before.
+        let text = "#if 0\na\n#elif 0\nb\n#elif C\nc\n#else\nd\n#endif\n";
+        let (lines, branches) = read(text, Dialect::Cpp);
+        assert_eq!((lines, branches.len()), (vec!["c".to_owned()], 3));
+        // Inside a branch left out nothing counts; `#if 01` or `#if 0 + 1` is no constant false.
+        let text = "#if A\n#else\n#if 0\nx\n#endif\n#endif\n#if 0 + 1\ny\n#endif\n";
+        let (lines, branches) = read(text, Dialect::Cpp);
+        assert_eq!((lines, branches.len()), (vec!["y".to_owned()], 1));
     }
 }

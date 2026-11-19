@@ -216,6 +216,18 @@ impl Drawing<'_> {
     }
 
     fn element(&mut self, e: &Element, b: &ElementBox) {
+        self.shape(e, b);
+        // Shown branches come first and in order (a case hides only its last).
+        for (k, sb) in b.branches.iter().enumerate() {
+            self.sequence(&e.branches[k], sb);
+        }
+        self.marks(e, b);
+    }
+
+    /// The element's own fill, lines and texts, without its branches. Kept apart from
+    /// [`Self::element`], which recurses, so that each level of nesting costs a small frame.
+    #[inline(never)]
+    fn shape(&mut self, e: &Element, b: &ElementBox) {
         let r = b.rect;
         self.fill(rect_area(r), Ink::Fill(e.color()));
         let text = e.text();
@@ -387,10 +399,12 @@ impl Drawing<'_> {
                 }
             }
         }
-        // Shown branches come first and in order (a case hides only its last).
-        for (k, sb) in b.branches.iter().enumerate() {
-            self.sequence(&e.branches[k], sb);
-        }
+    }
+
+    /// The comment bar and the hatching of a disabled element, drawn over its branches.
+    #[inline(never)]
+    fn marks(&mut self, e: &Element, b: &ElementBox) {
+        let r = b.rect;
         if !e.comment().iter().all(String::is_empty) {
             // A grey bar inside the left line: along the head of forking elements, along the
             // bands of parallel ones, else the whole height.

@@ -28,6 +28,7 @@ use umlcraft_notation::layout::Direction;
 use umlcraft_notation::palette::default_size_for;
 use umlcraft_notation::scene::TextMeasure;
 
+use crate::ddl::model_default;
 use crate::dialect::Dialect;
 use crate::ir::{Column, ForeignKey, Problem, Schema, Table, TableKey};
 
@@ -186,7 +187,11 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
             length_precision: length.unwrap_or_default(),
             values: t.values.clone(),
             not_null: t.not_null,
-            default_value: t.default.clone().unwrap_or_default(),
+            default_value: t
+                .default
+                .as_deref()
+                .map(|d| model_default(d, &t.datatype))
+                .unwrap_or_default(),
             check: t.check.clone().unwrap_or_default(),
         };
         let mut data = ElementData::new(key.to_string(), ElementKind::ErDomain(props));
@@ -506,7 +511,10 @@ impl Mapper<'_, '_> {
             .filter(|i| !fks.iter().any(|fk| fk.columns == i.columns))
             .map(|i| ErIndex { name: i.name.clone(), columns: i.columns.clone(), unique: false })
             .collect();
-        indexes.extend(t.uniques.iter().filter(|u| u.len() > 1).map(|u| ErIndex {
+        // A unique key of one column is the column's `unique`, unless it holds the column's
+        // start only (MySQL's `body(50)`).
+        let prefixed = |u: &Vec<String>| u.iter().any(|c| c.ends_with(')'));
+        indexes.extend(t.uniques.iter().filter(|u| u.len() > 1 || prefixed(u)).map(|u| ErIndex {
             name: String::new(),
             columns: u.clone(),
             unique: true,
@@ -525,6 +533,12 @@ impl Mapper<'_, '_> {
     /// What column `c` of `t` says about itself, as an attribute.
     fn column(&self, t: &Table, c: &Column) -> ErAttributeProps {
         let datatype = self.types.get(&c.datatype).cloned().unwrap_or_else(|| c.datatype.clone());
+        let mut default_value =
+            c.default.as_deref().map(|d| model_default(d, &c.datatype)).unwrap_or_default();
+        if let Some(on_update) = &c.on_update {
+            // As MySQL Workbench shows it: `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`.
+            default_value = format!("{default_value} ON UPDATE {on_update}").trim().to_owned();
+        }
         let (datatype, length) = split_type(&datatype);
         ErAttributeProps {
             derived: c.generated,
@@ -534,7 +548,7 @@ impl Mapper<'_, '_> {
             datatype,
             length_precision: length.unwrap_or_default(),
             not_null: c.not_null,
-            default_value: c.default.clone().unwrap_or_default(),
+            default_value,
             unique: t.uniques.iter().any(|u| *u == [c.name.as_str()]),
             check: c.check.clone().unwrap_or_default(),
             ..Default::default()

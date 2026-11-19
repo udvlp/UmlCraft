@@ -114,12 +114,10 @@ impl Model {
         let Some(set) = self.names.get(&owner).and_then(|n| n.get(name)) else {
             return Vec::new();
         };
-        let mut found: Vec<Id> = set.iter().copied().collect();
-        if found.len() > 1 {
-            let children = self.children(owner);
-            found.sort_by_key(|c| children.iter().position(|x| x == c));
+        if set.len() > 1 {
+            return self.children(owner).iter().copied().filter(|c| set.contains(c)).collect();
         }
-        found
+        set.iter().copied().collect()
     }
 
     fn index_name(&mut self, owner: Id, name: &str, id: Id, add: bool) {
@@ -296,6 +294,10 @@ impl Model {
     pub(crate) fn apply_recorded(&mut self, op: Op) -> Result<Op> {
         match op {
             Op::RemoveElement { id } => self.remove_unreferenced(id),
+            // Taken back from a removal of these presentations, which were valid in place.
+            Op::InsertPresentations { diagram, entries } => {
+                self.insert_presentations(diagram, entries, false)
+            }
             op => self.apply(op),
         }
     }
@@ -313,6 +315,10 @@ impl Model {
                 self.insert_presentation(diagram, index, presentation)
             }
             Op::RemovePresentation { diagram, id } => self.remove_presentation(diagram, id),
+            Op::RemovePresentations { diagram, ids } => self.remove_presentations(diagram, ids),
+            Op::InsertPresentations { diagram, entries } => {
+                self.insert_presentations(diagram, entries, true)
+            }
             Op::UpdatePresentation { diagram, presentation } => {
                 self.update_presentation(diagram, presentation)
             }
@@ -390,7 +396,8 @@ impl Model {
         let owner = element.owner.expect("non-root elements have an owner");
         self.index_name(owner, &element.data.name, id, false);
         let siblings = &mut self.elements[&owner].children;
-        let index = siblings.iter().position(|&c| c == id).expect("owner lists its children");
+        // Searched from the end: undoing an import removes the children created last first.
+        let index = siblings.iter().rposition(|&c| c == id).expect("owner lists its children");
         siblings.remove(index);
         Ok(Op::InsertElement { id, owner, index, data: element.data })
     }
@@ -404,6 +411,9 @@ impl Model {
             return Err(ModelError::KindChanged(id));
         }
         self.check_references(id, &data.kind)?;
+        if *old_kind != data.kind {
+            self.check_neighbours(id, old_kind, &data.kind)?;
+        }
         let specific = data.kind.as_generalization().map(|g| g.specific);
         let new_name = (self.elements[&id].data.name != data.name).then(|| data.name.clone());
         let old = std::mem::replace(&mut self.elements[&id].data, data);
@@ -416,6 +426,43 @@ impl Model {
             self.generalizations.entry(specific).or_default().insert(id);
         }
         Ok(Op::UpdateElement { id, data: old })
+    }
+
+    /// Whether element `id` may become `new` (of the metaclass of `old`) where it is: what may
+    /// own an element and what it may own also depend on some properties (an activity node's
+    /// kind, a pseudostate's kind), and so does what may refer to it (an entity's being
+    /// associative, see [`RefRole::accepts_alike`]).
+    fn check_neighbours(&self, id: Id, old: &ElementKind, new: &ElementKind) -> Result<()> {
+        let element = &self.elements[&id];
+        if let Some(owner) = element.owner.map(|o| &self.elements[&o])
+            && !owner.data.kind.can_own(new)
+        {
+            return Err(ModelError::InvalidOwner {
+                owner: owner.id,
+                owner_type: owner.data.kind.type_name(),
+                child: id,
+                child_type: new.type_name(),
+            });
+        }
+        for &child in &element.children {
+            let child_kind = &self.elements[&child].data.kind;
+            if !new.can_own(child_kind) {
+                return Err(ModelError::InvalidOwner {
+                    owner: id,
+                    owner_type: new.type_name(),
+                    child,
+                    child_type: child_kind.type_name(),
+                });
+            }
+        }
+        // Looking through the model for referrers only when a role could tell the two apart.
+        if !RefRole::accepts_alike(old, new)
+            && let Some((referrer, _)) =
+                self.referrers(id).into_iter().find(|&(_, role)| !role.accepts(new))
+        {
+            return Err(ModelError::InvalidReference { from: referrer, to: id });
+        }
+        Ok(())
     }
 
     fn move_element(&mut self, id: Id, owner: Id, index: usize) -> Result<Op> {
@@ -442,7 +489,7 @@ impl Model {
         }
 
         let siblings = &mut self.elements[&old_owner].children;
-        let old_index = siblings.iter().position(|&c| c == id).expect("owner lists its children");
+        let old_index = siblings.iter().rposition(|&c| c == id).expect("owner lists its children");
         siblings.remove(old_index);
         self.elements[&owner].children.insert(index, id);
         self.elements[&id].owner = Some(owner);
@@ -463,6 +510,28 @@ impl Model {
     }
 
     fn check_presentation(&self, view: &View, presentation: &Presentation) -> Result<()> {
+        self.check_presentation_alone(view, presentation)?;
+        if let Some((source, target)) = presentation.endpoints() {
+            // Edges may end on edges (note anchors on lines), but not around in a circle: the
+            // edges could not be removed one after the other.
+            let mut stack = vec![source, target];
+            let mut seen = HashSet::new();
+            while let Some(end) = stack.pop() {
+                if end == presentation.id {
+                    return Err(ModelError::EdgeCycle(presentation.id));
+                }
+                if seen.insert(end)
+                    && let Some((s, t)) = view.get(end).and_then(Presentation::endpoints)
+                {
+                    stack.extend([s, t]);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// What [`Self::check_presentation`] checks but cycles of edges ending on edges.
+    fn check_presentation_alone(&self, view: &View, presentation: &Presentation) -> Result<()> {
         if !presentation.is_finite() {
             return Err(ModelError::NotFinite(presentation.id));
         }
@@ -476,20 +545,6 @@ impl Model {
             for end in [source, target] {
                 if end == presentation.id || view.get(end).is_none() {
                     return Err(invalid(end));
-                }
-            }
-            // Edges may end on edges (note anchors on lines), but not around in a circle: the
-            // edges could not be removed one after the other.
-            let mut stack = vec![source, target];
-            let mut seen = HashSet::new();
-            while let Some(end) = stack.pop() {
-                if end == presentation.id {
-                    return Err(ModelError::EdgeCycle(presentation.id));
-                }
-                if seen.insert(end)
-                    && let Some((s, t)) = view.get(end).and_then(Presentation::endpoints)
-                {
-                    stack.extend([s, t]);
                 }
             }
         }
@@ -533,11 +588,64 @@ impl Model {
     fn remove_presentation(&mut self, diagram: Id, id: Id) -> Result<Op> {
         let view = self.view_of(diagram)?;
         let index = view.index_of(id).ok_or(ModelError::NotFound(id))?;
-        if view.edges_attached_to(id).next().is_some() {
+        if view.has_attached(id) {
             return Err(ModelError::EdgesAttached(id));
         }
         let presentation = self.views[&diagram].remove(index);
         Ok(Op::InsertPresentation { diagram, index, presentation })
+    }
+
+    fn remove_presentations(&mut self, diagram: Id, ids: Vec<Id>) -> Result<Op> {
+        let view = self.view_of(diagram)?;
+        let gone: HashSet<Id> = ids.iter().copied().collect();
+        if let Some(&missing) = ids.iter().find(|&&id| view.get(id).is_none()) {
+            return Err(ModelError::NotFound(missing));
+        }
+        // Nothing that stays may hang on what goes.
+        for p in view.presentations().iter().filter(|p| !gone.contains(&p.id)) {
+            if let Some(&held) = View::holders(p).iter().flatten().find(|h| gone.contains(h)) {
+                return Err(ModelError::EdgesAttached(held));
+            }
+        }
+        let entries = self.views[&diagram].remove_many(&gone);
+        Ok(Op::InsertPresentations { diagram, entries })
+    }
+
+    /// Puts presentations back (see [`Op::InsertPresentations`]); `check` validates them as
+    /// [`Self::insert_presentation`] does, which undo, putting back what was valid, skips.
+    fn insert_presentations(
+        &mut self,
+        diagram: Id,
+        entries: Vec<(usize, Presentation)>,
+        check: bool,
+    ) -> Result<Op> {
+        let view = self.view_of(diagram)?;
+        let total = view.presentations().len() + entries.len();
+        let mut ids = HashSet::new();
+        let mut last = None;
+        for (index, p) in &entries {
+            if *index >= total || last.is_some_and(|l| l >= *index) {
+                return Err(ModelError::IndexOutOfRange { index: *index });
+            }
+            if view.get(p.id).is_some() || !ids.insert(p.id) {
+                return Err(ModelError::DuplicateId(p.id));
+            }
+            last = Some(*index);
+        }
+        let ids: Vec<Id> = entries.iter().map(|(_, p)| p.id).collect();
+        self.views[&diagram].insert_many(entries);
+        if check {
+            let view = &self.views[&diagram];
+            let invalid = ids.iter().find_map(|&id| {
+                let p = view.get(id).expect("just inserted");
+                self.check_presentation(view, p).err()
+            });
+            if let Some(err) = invalid {
+                self.views[&diagram].remove_many(&ids.iter().copied().collect());
+                return Err(err);
+            }
+        }
+        Ok(Op::RemovePresentations { diagram, ids })
     }
 
     fn update_presentation(&mut self, diagram: Id, presentation: Presentation) -> Result<Op> {
@@ -667,8 +775,14 @@ impl Model {
                     ));
                 }
             }
+        }
+        // Every listed child names its lister as owner (above), so an element listed at all is
+        // listed by its owner.
+        let listed: HashSet<Id> =
+            self.elements.values().flat_map(|e| e.children.iter().copied()).collect();
+        for e in self.elements.values() {
             if let Some(owner) = e.owner
-                && !self.get(owner).is_some_and(|o| o.children.contains(&e.id))
+                && !listed.contains(&e.id)
             {
                 return invalid(format!("{} is not listed by its owner {owner}", e.id));
             }
@@ -678,12 +792,26 @@ impl Model {
         }
         for e in self.elements.values() {
             check_type_depth(e.id, &e.data.kind)?;
-            self.check_strong_cycle(e.id, &e.data.kind)?;
             for (target, role) in e.data.kind.references() {
                 if !self.get(target).is_some_and(|t| role.accepts(&t.data.kind)) {
                     return Err(ModelError::InvalidReference { from: e.id, to: target });
                 }
             }
+        }
+        // What `check_strong_cycle` refuses for one element, for all at once.
+        let strong = |id: Id| -> Vec<Id> {
+            let Some(e) = self.get(id) else { return Vec::new() };
+            let refs = e.data.kind.references().into_iter();
+            refs.filter(|(_, r)| r.is_strong()).map(|(t, _)| t).collect()
+        };
+        if let Some(id) = find_cycle(self.elements.keys().copied(), strong) {
+            return Err(ModelError::ReferenceCycle(id));
+        }
+        if self.generalizations != self.generalization_parents_index() {
+            return invalid("the generalization index is out of date".into());
+        }
+        if self.names != self.name_index() {
+            return invalid("the name index is out of date".into());
         }
         self.check_generalizations_acyclic()?;
 
@@ -705,19 +833,21 @@ impl Model {
                 if !ids.insert(p.id) {
                     return Err(ModelError::DuplicateId(p.id));
                 }
-                self.check_presentation(view, p)?;
+                self.check_presentation_alone(view, p)?;
+            }
+            let ends = |id: Id| -> Vec<Id> {
+                view.get(id)
+                    .and_then(Presentation::endpoints)
+                    .map_or(Vec::new(), |(s, t)| vec![s, t])
+            };
+            if let Some(id) = find_cycle(view.presentations().iter().map(|p| p.id), ends) {
+                return Err(ModelError::EdgeCycle(id));
             }
         }
         Ok(())
     }
 
     fn check_generalizations_acyclic(&self) -> Result<()> {
-        if self.generalizations != self.generalization_parents_index() {
-            return Err(ModelError::Invalid("the generalization index is out of date".into()));
-        }
-        if self.names != self.name_index() {
-            return Err(ModelError::Invalid("the name index is out of date".into()));
-        }
         let parents = self.generalization_parents();
         // Iterative DFS with colors: 1 = on stack, 2 = done.
         let mut color: HashMap<Id, u8> = HashMap::new();
@@ -807,6 +937,39 @@ impl Model {
         model.check()?;
         Ok(model)
     }
+}
+
+/// A node on a cycle of the graph whose edges `next` gives, looked for from each of `nodes`.
+/// Each node is visited once, without recursion, so that long chains in a damaged file cost
+/// linear time and no stack.
+fn find_cycle(nodes: impl IntoIterator<Item = Id>, next: impl Fn(Id) -> Vec<Id>) -> Option<Id> {
+    // false: on the path being followed; true: done, on no cycle.
+    let mut state: HashMap<Id, bool> = HashMap::new();
+    for start in nodes {
+        if state.contains_key(&start) {
+            continue;
+        }
+        state.insert(start, false);
+        let mut path = vec![(start, next(start))];
+        while let Some((node, pending)) = path.last_mut() {
+            let node = *node;
+            match pending.pop() {
+                Some(n) => match state.get(&n) {
+                    Some(false) => return Some(n),
+                    Some(true) => {}
+                    None => {
+                        state.insert(n, false);
+                        path.push((n, next(n)));
+                    }
+                },
+                None => {
+                    state.insert(node, true);
+                    path.pop();
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Types of `kind` must stay within [`crate::MAX_TYPE_DEPTH`] levels, so the project file can be

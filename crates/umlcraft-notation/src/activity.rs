@@ -8,6 +8,7 @@
 //! [`composite::follow`](crate::composite::follow) keeps both there after every edit.
 
 use std::collections::HashMap;
+use umlcraft_model::Refusal;
 
 use umlcraft_model::{
     ElementKind, Id, Model, ModelError, Point, Presentation, Rect, Result, Size, Tx, View,
@@ -15,13 +16,7 @@ use umlcraft_model::{
 
 use crate::composite::{border_distance, snap};
 use crate::palette::{NodeTool, owner_for, unique_name};
-use crate::scene::{
-    self, EXCEPTION_GAP, EXCEPTION_HEIGHT, EXCEPTION_WIDTH, PIN_SIZE, Preview, TextMeasure,
-};
-
-/// Why a pin could not be placed, as [`ModelError::Invalid`] says it; the app words it in the
-/// language of its user.
-pub const PIN_OUTSIDE: &str = "a pin goes on an action";
+use crate::scene::{self, EXCEPTION_GAP, EXCEPTION_HEIGHT, EXCEPTION_WIDTH, PIN_SIZE, TextMeasure};
 
 /// How close to an action's border a new pin must be dropped to go on it, when not dropped on
 /// the action itself.
@@ -99,8 +94,8 @@ pub fn create_node(
     let kind = tool.element_kind();
     let owner = match tool {
         NodeTool::InputPin | NodeTool::OutputPin => {
-            let action = action_at(model, view, at)
-                .ok_or_else(|| ModelError::Invalid(PIN_OUTSIDE.into()))?;
+            let action =
+                action_at(model, view, at).ok_or(ModelError::Refused(Refusal::PinOutside))?;
             let r = action.bounds().ok_or(ModelError::NotFound(action.id))?;
             bounds = snap(bounds, r.inflate(PIN_SIZE / 2.0));
             action.element.ok_or(ModelError::NotFound(action.id))?
@@ -402,7 +397,8 @@ pub(crate) fn spread_pins(
     measure: &dyn TextMeasure,
 ) -> Result<()> {
     let model = tx.model();
-    let scene = scene::build(model, diagram, &Preview::default(), measure);
+    // Only nodes are read: where line labels end up does not matter here.
+    let scene = scene::build_geometry(model, diagram, measure);
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let bounds = |id: Id| view.get(id).and_then(|p| p.bounds());
     let mut actions = Vec::new();
@@ -439,7 +435,7 @@ enum Clash {
 /// found within reach, another side. Run after the pin has its name and properties.
 pub fn place_pin(tx: &mut Tx<'_>, diagram: Id, pin: Id, measure: &dyn TextMeasure) -> Result<()> {
     let model = tx.model();
-    let scene = scene::build(model, diagram, &Preview::default(), measure);
+    let scene = scene::build_geometry(model, diagram, measure);
     let Some(host) = crate::composite::borne_nodes(model, diagram).get(&pin).copied().flatten()
     else {
         return Ok(());

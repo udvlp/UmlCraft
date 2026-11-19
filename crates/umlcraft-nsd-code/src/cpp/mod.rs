@@ -12,7 +12,7 @@ use crate::pseudo::assign;
 use crate::text::{declared_name, lines_at, node_text, one_line};
 
 pub use build::diagram;
-pub use methods::{find, methods};
+pub use methods::{function_names, members, methods};
 
 pub struct Cpp;
 
@@ -63,23 +63,33 @@ fn parameter_names(parameters: Option<Node>, src: &str) -> Vec<String> {
 }
 
 /// The assignments of a declaration, one per variable with a value: `int a = 1, b(2), c{3};`
-/// → `a := 1`, `b := 2`, `c := 3`; `Foo f(x, y);` → `f := Foo(x, y)`; `int d;` → none.
+/// → `a := 1`, `b := 2`, `c := 3`; `Foo f(x, y);` → `f := Foo(x, y)`, and so is a class
+/// with one argument: `std::vector<int> v(10);` → `v := std::vector<int>(10)`; `int d;` →
+/// none.
 pub fn declaration(node: Node, src: &str) -> Vec<Vec<String>> {
     let column = node.start_position().column;
-    let type_text = node.child_by_field_name("type").map(|t| one_line(node_text(t, src)));
-    let type_text = type_text.unwrap_or_default();
+    let type_node = node.child_by_field_name("type");
+    let type_text = type_node.map(|t| one_line(node_text(t, src))).unwrap_or_default();
+    // A value of a built-in type is just its value.
+    let built_in = type_node.is_some_and(|t| {
+        matches!(t.kind(), "primitive_type" | "sized_type_specifier" | "placeholder_type_specifier")
+    });
     let mut cursor = node.walk();
     let declarators: Vec<Node> = node.children_by_field_name("declarator", &mut cursor).collect();
     declarators
         .into_iter()
         .filter_map(|d| match d.kind() {
             "init_declarator" => {
-                let name = node_text(declared_name(d.child_by_field_name("declarator")?)?, src);
+                let declarator = d.child_by_field_name("declarator")?;
+                let name = node_text(declared_name(declarator)?, src);
                 let value = d.child_by_field_name("value")?;
                 let mut c = d.walk();
                 let copies = d.children(&mut c).any(|t| t.kind() == "=");
+                // A pointer or reference (`Foo* p(q)`) takes its one value as it is.
+                let plain = built_in || declarator.kind() != "identifier";
                 let value = match value.kind() {
-                    // `int x(1)`, `int x{1}`: one value is the value, several make an object.
+                    // `int x(1)`, `int x{1}`: one value is the value, several make an object;
+                    // so does one for a class (`std::vector<int> v(10)` holds ten zeros).
                     "argument_list" | "initializer_list" if !copies => {
                         let mut c = value.walk();
                         let items: Vec<Node> = value
@@ -87,7 +97,7 @@ pub fn declaration(node: Node, src: &str) -> Vec<Vec<String>> {
                             .filter(|i| i.kind() != "comment")
                             .collect();
                         match items.as_slice() {
-                            [one] => lines_at(*one, src, column),
+                            [one] if plain => lines_at(*one, src, column),
                             _ => vec![format!("{type_text}{}", one_line(node_text(value, src)))],
                         }
                     }

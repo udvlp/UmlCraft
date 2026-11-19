@@ -32,34 +32,64 @@ Like UML, `umlcraft-model` separates **elements** from **presentations**:
   name, members and constraints; the scene draws the name and constraints on the line and
   derives the dashed line from the class box to the line's middle. Any element may carry
   constraints (`ElementData::constraints`, texts without braces); members and lines show them.
+- A constraint between two associations (`ElementKind::Constraint`, `{xor}`) names them with
+  strong `RefRole::ConstrainedAssociation` references (deleting one deletes the constraint);
+  its name is the constraint's text. It lives in a package and is drawn as a dashed line
+  between the middles of the two association lines.
 
 ## Changes
 
 The model changes only through `Model::apply(Op) -> inverse Op`. Every operation is validated
 (ownership rules, reference targets, cycles in generalizations and in the ownership tree, attached
-edges).
+edges). An update that keeps the metaclass but changes its properties is checked against the
+element's owner and children too, and against what refers to it where a role looks at
+properties (`RefRole::accepts_alike`: whether an entity is associative). Two paths skip the
+look through the whole model for referrers and diagrams showing a removed element, because
+they have made sure of it themselves: undo and redo replay recorded inverses
+(`Model::apply_recorded`; a removal there undoes an insertion), and `Tx::delete_many` unlinks
+every survivor's weak references to what it deletes first (`ElementKind::unlink`, whose match
+names every kind; debug builds assert that nothing dangles). `Model::check` finds cycles of
+strong references and of edges ending on edges in one pass over the model and over each view.
 
 `Document::edit(label, |tx| …)` groups operations into one undo step. If the closure fails,
 everything is rolled back. `Tx` offers the composite edits:
 
 - `delete` deletes in cascade: subtree, strongly referencing elements, presentations and attached
   edges.
-- `remove_presentation` removes something from the diagram only.
+- `remove_presentation` removes something from the diagram only; `remove_presentations`
+  removes many with what hangs on them, the last in z-order first, so that removing a whole
+  diagram, and undoing that, does not shift and reindex the rest of the list per
+  presentation. A view counts what hangs on each presentation, so a removal does not look
+  through the view for attached edges.
 - `set_bounds`, `bring_to_front` etc. change presentations.
 
 `Document::is_dirty` compares the topmost undo step with the save point.
 
 `umlcraft_notation::invariants::check` lists the rules a model breaks that every edit should keep:
 finite coordinates, lines that start and end at their nodes, right-angled lines without slanted
-segments (beyond Astah's 2 px), substates inside the state they belong to (and its region), and
+segments (beyond Astah's 2 px), substates inside the state they belong to (and its region),
+ports, pins, activity parameter nodes and entry and exit points on the border they belong on (a
+port only on its class or on a part typed by it), and
 on sequence diagrams bars and messages on their lifelines,
-bars nested or apart, operand lines in order, and nothing left for `sequence_edit::tidy` to do.
+bars nested or apart, operand lines in order, no state invariant, termination or constraint
+drawn without its lifeline or messages, and nothing left for `sequence_edit::tidy` to do.
 Astah's files do not always keep them, so what counts is what an edit adds
 (`invariants::new_violations`). Debug builds check before and after every `edit::apply` and print
-what an edit broke to stderr. The app's `fuzz` test makes random edits the way the mouse makes
-them (moving and resizing boxes, bending lines, dragging messages, gates, lifeline ends, labels
-and region lines, deleting, undo and redo) on the sample project, the order system and Astah's
-sample, and checks the rules and that undo and redo restore the model exactly.
+what an edit broke to stderr. The app's `fuzz` test makes random edits the way the mouse and
+keyboard make them (moving, resizing and aligning boxes, bending and drawing lines with the
+diagram's own palette, dragging messages, gates, lifeline ends, labels and region lines,
+wrapping in fragments, adding and deleting operands and regions, creating nodes on and in
+others, copy and paste, showing elements, typing member text and names, switching ER notations
+and identifying relationships, removing from the diagram, changing a relationship's kind,
+deleting, undo and redo) on the sample project, the order system and Astah's sample, and checks
+the rules, that undo and redo restore the model exactly, and that a member's text gives back
+the member.
+
+`edit::apply` runs its follow-up passes in a fixed order: lifelines on sequence diagrams first,
+then boxes sized to their content, then borne nodes (`composite::follow`, after the sizes, since
+a state is both sized to its text and the host of entry and exit points), then the router. Its
+snapshots are kept by diagram and presentation, so following up is linear in what the diagrams
+show.
 `UMLCRAFT_FUZZ_SEED`, `UMLCRAFT_FUZZ_STEPS` and `UMLCRAFT_FUZZ_DUMP` (a folder for the projects
 before and after a failing step) replay and widen a run.
 
@@ -76,7 +106,26 @@ UmlCraft's keys (`java.`, `csharp.`, `cpp.`); the migration renames Astah's `jud
 Version 4 adds structograms; nothing changes in older files, so its migration does nothing,
 but a file with structograms does not open in UmlCraft 0.10 or earlier. A structogram is
 stored as structured JSON (`kind`, `text` as a list of lines, branches as lists of items) so
-that a diff shows which element changed.
+that a diff shows which element changed. Version 5 adds entity-relationship diagrams and 6 the
+IE and IDEF1X notations (see [Entity-relationship diagrams](#entity-relationship-diagrams)).
+Version 7 adds `{xor}` constraints, ER domains, keys, indexes, checks and column details, and
+the `simpleStates`, `lookHere` and `sharedChosen` settings; its migration does nothing either.
+Every addition to the schema gets a new version, even one older files need no migration for:
+an older UmlCraft ignores fields it does not know and would drop them on saving, but it
+refuses a file of a newer version. `tests/order-system.ucraft` is the golden file of the
+current version, `order-system-v6.ucraft` one of the previous version, which must load and
+write back as the current version with nothing else changed.
+
+What `save` writes must open again: `to_string_checked` reads the text back (with
+`Model::check`) before it replaces the file and refuses with `FormatError::NotReadable`
+otherwise, the file staying as it was. Files nest deeper than serde_json's own limit of 128
+levels: a structogram costs three JSON levels per level of nesting, and the model allows
+`umlcraft_nsd::read::MAX_DEPTH` (200). The reader therefore counts the depth itself first
+(`MAX_JSON_DEPTH`, 1024, outside strings) and then parses without serde_json's limit; reading
+and writing run on a thread of their own with a 64 MB stack (reserved, committed only as far
+as used), so that neither overflows the 1 MB main thread of Windows in a debug build. A file
+of the current version is read straight into its records; an older one as a JSON tree for the
+migrations. Writing serializes from the model's own data without copying it.
 
 ## User interface
 
@@ -84,11 +133,14 @@ that a diff shows which element changed.
 `gpui-component`:
 
 - `Workspace` (a GPUI entity) holds the document, file path, open diagrams (tabs), selection and
-  the active tool. All edits from the UI go through its methods. Each of them ends by fitting
+  the active tool. All edits from the UI go through its methods, and all of them through
+  `edit::apply`, as the MCP tools do. Each of them ends by fitting
   the classifier boxes sized to their content (`Style::auto_size`) whose texts the edit changed
   (`scene::fitted_box`); for that the workspace measures
   with the app's font system (`AppMeasure`, the advances summed like Java's). Resizing a box by
-  hand ends its automatic size.
+  hand ends its automatic size. The one exception is `edit_structogram`, which replaces a
+  structogram's content on every character typed: no diagram shows it, so it skips those
+  passes over every view, and the model tree is not rebuilt for it (`Workspace::content_edit`).
 - `canvas.rs` paints the scene's primitives (`umlcraft_notation::draw`) and texts with
   `paint_quad`/`PathBuilder`/`shape_line` and handles pan and
   zoom itself, separately for each diagram. Drag operations (move, resize, rubber band, connect)
@@ -97,7 +149,9 @@ that a diff shows which element changed.
   navigability, aggregation and multiplicity per end, for edges the line style, ends back to
   the centers and labels back to their default places, then deleting.
 - `properties.rs` commits text fields on Enter or when the field loses focus, always to the element
-  that was shown when the field got focus.
+  that was shown when typing into the field began (recorded at the first keystroke), and only
+  fields that were typed into. Placeholders and choices come from the locales and are set again
+  when the language changes.
 - `main_view.rs` lays out the window and holds the file operations: the title bar (gpui-component's
   `TitleBar` with the File menu, save, undo and redo; the window draws its own title bar), the
   ribbon, model tree and properties. The diagram view fills the window below the title bar and
@@ -105,7 +159,11 @@ that a diff shows which element changed.
   `shell::ClearArea` that the diagram views use to zoom, center and paste. There is no status
   line: `Workspace::message` (what went wrong in an edit) is taken by an observer and shown as
   a toast (`toast`, gpui-component's notifications), and running work as a card above the zoom
-  (`busy_card`). The platform menu bar (`cx.set_menus`) stays for macOS.
+  (`busy_card`). One file job runs at a time; another one asked for meanwhile is refused with a
+  toast. Opening and the Astah import read in the background while the open project stays
+  editable; if it was edited meanwhile, the user is asked about unsaved changes again before
+  it is replaced. Background imports remember `generation` and drop their result if another
+  project was opened meanwhile. The platform menu bar (`cx.set_menus`) stays for macOS.
 - The diagram views open their context menu themselves (`shell::MenuAt`) on releasing the
   right button without moving; held and moved, it pans. gpui-component's `context_menu`
   opens on the press and so cannot tell a click from a drag.
@@ -142,6 +200,23 @@ that a diff shows which element changed.
   below the title bar) and at most once a day; About UmlCraft checks on request. A newer
   version found (`latestVersion`) shows as a button in the title bar. `privacy_dialog.rs` shows
   what the check sends from the locales, so reading it stays offline.
+  Where UmlCraft can replace itself (`Install`: the Windows installer, an AppImage, the macOS
+  app bundle), a click on the update downloads the release's package and its
+  `SHA256SUMS.txt` from GitHub into a `.part` file, checks the checksum and renames it; a
+  package downloaded and checked before is taken again. Before installing, the file is opened
+  so that it cannot change (on Windows) and hashed once more. Then, once UmlCraft has asked
+  about unsaved changes and quits: on Windows the installer runs silently where UmlCraft is
+  installed and starts it again; an AppImage takes the old file's place and a shell starts it
+  after UmlCraft has ended; on macOS a shell script waits for UmlCraft to end, copies the app
+  from the disk image over the bundle (keeping the old one if that fails) and starts it. The
+  checksums come from the same release as the package, so by themselves they catch damage but
+  do not prove who published it. With `UPDATE_KEY` (a minisign public key) set, the download
+  also fetches `SHA256SUMS.txt.minisig` and takes the checksums only if they are signed with
+  that key and the signature's trusted comment is `umlcraft <version>`, so that an older
+  release's signed checksums cannot stand in. The release workflow signs them in its
+  `publish` job (`packaging/sign-checksums.sh`, secret `UPDATE_SIGNING_KEY` of the `release`
+  environment) and refuses to publish unsigned once `UPDATE_KEY` is set. While it is `None`,
+  as long as no key pair exists, the checksums alone count.
 - `prompt.rs` replaces the system's message dialogs on every platform (`cx.set_prompt_builder`):
   every `window.prompt` (errors, the question before unsaved changes are discarded) shows the
   app's own dialog, which wraps its text, scrolls a long detail, follows the theme and answers
@@ -161,8 +236,11 @@ that a diff shows which element changed.
   the same layout. Nodes grow with their content; text width is measured by a `TextMeasure` (the
   real font in the app, an estimate in tests). `scene` also places edge labels and provides
   resize handles, edge handles (waypoints), rubber-band selection and alignment. Containers (system
-  boundaries, packages, states, components) graphically contain whatever lies fully inside them (`with_contents`);
-  system boundaries are "hollow" and clickable only on their border and title.
+  boundaries, packages, partitions, states, nodes, components, structured classes and parts)
+  graphically contain whatever lies fully inside them (`with_contents`); a state also holds its
+  substates where they reach out of it. System boundaries are "hollow" and clickable only on
+  their border and title. Layout and routing, which need where things are but not where free
+  labels end up, build the scene without placing them (`build_geometry`).
 - `labels` places the edge labels that were not placed by hand (`EdgeShape::free_labels`). Each
   starts where Astah's rule puts it; if that covers a node, a line or another label, it moves to
   the spot nearby that covers least: the other side of its line, further along it (a role or
@@ -171,6 +249,9 @@ that a diff shows which element changed.
   away from Astah's spot. Arrowheads, diamonds and crosses count as obstacles. Nodes with others
   inside only count by their border and name. Two greedy rounds, the second among all labels.
   Labels placed by hand, and so all labels from `.asta` files, stay and count as obstacles.
+  The scene is placed anew on every frame of a drag, so the obstacles and the stretches of
+  lines are sorted into the cells of a coarse grid once per placement, and each label looks
+  only at what lies around its spots.
 - `route` runs edges in the line styles of `.asta` files (`Style::line_shape`): straight through the
   waypoints, at right angles with the waypoints as corners, or as one cubic Bézier curve whose
   control points are the first and the last waypoint. Right-angled lines are fitted when drawn,
@@ -196,7 +277,10 @@ that a diff shows which element changed.
   nodes) can be crossed, swimlanes are ignored, sequence diagrams are left alone. A routed
   edge is a right-angled line with `Style::auto_route` set; `Workspace::edit` takes
   `autoroute::snapshots` before every edit and routes such edges again afterwards where their
-  nodes moved or a node moved onto them (`autoroute::follow`). Editing the route by hand
+  nodes moved or a node moved onto them, anywhere from end to end, or away from beside a bent
+  one (`autoroute::follow`). Lines that stay keep their ports; the grid gets lines beside those
+  ports only on the nodes lines are routed to now, so that it does not grow with every line
+  of the diagram. Editing the route by hand
   (waypoints, line style, line ends) clears the flag. New lines but note anchors are routed
   when drawn. Shared generalizations (below) are left alone.
 - `shared` draws Astah's shared style of generalizations: all generalizations to one general
@@ -211,7 +295,9 @@ that a diff shows which element changed.
   places along each layer by isotonic regression toward the middle of the neighbors, ending
   bottom up so that generals are centered over theirs. Parts nothing connects are packed into
   rows, larger ones first. Containers are laid out inside out and sized around what they
-  hold. Generals with two or more specifics beyond them in the layout direction get the
+  hold: a node's container is the smallest drawn around it, on state machines the drawn state
+  it belongs to; where the two disagree in a circle (a substate drawn around its state), the
+  model wins. Generals with two or more specifics beyond them in the layout direction get the
   shared style, unless the stem, the common line or a drop to a specific would cross another
   node. Arranging a selection keeps its top left corner; nodes it grows into move right or
   down. All its lines are routed afterwards. The other kinds but sequence diagrams use the
@@ -235,7 +321,13 @@ that a diff shows which element changed.
   (instance, role, navigability, aggregation) and optionally the association they instantiate;
   they are drawn like associations, with plain role names.
 - `clipboard` copies the selection including subtrees and the relationships among them, and pastes
-  it as a duplicate (new IDs, free names) or as another presentation of the same elements.
+  it as a duplicate (new IDs, free names) or as another presentation of the same elements. The
+  nodes the diagram shows of what the copied elements own come along, selected or not
+  (substates, pins, parts and ports, attribute ellipses), and a node keeps its regions' layout.
+  On ER diagrams the lines of attributes and of IE relationships come along too; a copied IE
+  relationship brings its participations, and the copied child keeps its foreign key columns.
+  Pasted onto an ER diagram in the other kind of notation, the pasted part is redrawn in that
+  one (`er::fit_pasted`).
 - `palette` defines which tools a diagram type offers, which connections are allowed (e.g.
   realization only from class to interface) and where new elements land in the ownership tree.
 - `sequence` draws sequence diagrams, `sequence_edit` edits them (see below).
@@ -305,8 +397,9 @@ message moves it with the bar it starts and everything sent from that bar (`move
 sender's bar it leaves shrinks to what is still in it (`shrink_bar`), the only time a bar gets
 shorter. A message's label can be dragged on its own
 (`place_label`). Combined fragments grow to hold the bars and messages that start in them, and
-bars that no message reaches any more are removed. The layout's `Slot`s carry the height the
-user pointed at.
+bars that no message reaches any more are removed, as are state invariants and terminations
+whose lifeline and constraints whose messages are no longer on the diagram ("remove from
+diagram"). The layout's `Slot`s carry the height the user pointed at.
 
 ## State machines
 
@@ -332,7 +425,8 @@ the submachine icon (`Figure::State { submachine }`). A new one stands for the f
 machine of the project, else for a new machine with its own diagram
 (`state_edit::submachine_for`). Entry and exit points and stub states are `Pseudostate`s
 (`PseudostateKind::EntryPoint`, `ExitPoint`, `StubState`). `state_edit::create_node` puts a
-point on the border of the state at or within 20 of the click, owned by that state, else on the
+point on the border of the state whose border is nearest within 20 of the click, else on that of
+the innermost state around the click, owned by that state, else on the
 diagram's frame, owned by the machine (adding the frame when missing); a stub state goes into
 the submachine state around the click and is refused elsewhere (`STUB_OUTSIDE`). Points are
 borne nodes like pins (`composite::Borne::Point`, host from `composite::owner_host`), so
@@ -357,8 +451,10 @@ around the point) and to the class or the part's type. A connector's ends and ow
 from the nodes it joins. `edit::apply` takes a `composite::Snapshot` before every edit and
 `composite::follow` corrects the drawing afterwards: a class grows around a part that moved or
 changed size beyond it, a port that did not move keeps its side and its distance along it when
-its host moves or changes size, a port that moved snaps onto the nearest border, and a port
-goes along when its host is removed from the diagram. Lines on these diagrams start straight
+its host moves or changes size, a port that moved (or was shown or pasted) snaps onto the
+nearest border that may carry it, its class's or that of a part typed by its class
+(`composite::may_carry`; with neither shown it stays on its old host), and a port goes along
+when its host is removed from the diagram. Lines on these diagrams start straight
 and Arrange is not offered. An iconic interface with `Style::socket` is drawn as a socket
 (`Figure::Socket`), its opening turned away from its first line; the properties panel sets it
 for an interface shown as a circle, the `.asta` import for interfaces a port requires. The `.asta` import reads parts, ports, connectors, ball and socket;
@@ -387,7 +483,12 @@ puts the labels of top-side pins above them and gives pins without flows their a
 object serialization stream and turns it into a graph of objects addressed by class and field
 name; `map` translates that graph into a new `Model`, element by element through `Model::apply`,
 so every invariant is checked. What has no counterpart in UmlCraft is skipped and counted
-(`Imported::skipped`). Template parameters, bound templates (as type expressions), array
+(`Imported::skipped`), elements the model refused too (`Imported::failed`), and shapes of
+imported elements that could not be placed, whose ends or lifelines did not resolve or that the
+diagram cannot show (`Imported::lost_presentations`). The reader takes at most 256 MB of stream
+and refuses one whose objects would take more than 24 bytes of memory per byte of stream (plus
+64 MB): every value or field costs at least one byte of stream but 16 to 72 bytes in the graph,
+and Astah's projects need 10 to 13. Template parameters, bound templates (as type expressions), array
 modifiers, qualifiers and the tagged values of Astah's language profiles are imported too.
 Objects bring their slot values (`UAttributeLinkImp`, whose value is an instance named by the
 value text); links (`ULinkImp`) have no owner in Astah and go into the package of their first
@@ -398,8 +499,8 @@ datatype model is left out, its domains become `erDomain`s of that package (name
 physical name, with datatype, length, default and `NOT NULL`), and a column typed by a
 domain names it as its
 datatype. Entities and columns bring their logical and physical names, keys, `NOT NULL`,
-defaults, `UNIQUE` and lengths from the entity's constraints and tags (those constraints do
-not stay as constraints), entities their indexes other than Astah's own for keys and
+defaults, `UNIQUE`, `CHECK:` conditions and lengths from their constraints (in any case) and
+tags; those constraints do not stay as constraints. Entities bring their indexes other than Astah's own for keys and
 relationships (`erIndexes`, columns by physical name); relationships their
 participations from the ends' multiplicities, verb phrases as roles, `identifying` (the
 child weak); subtype relationships one IS-A per supertype and group (`conclusive` → total,
@@ -429,7 +530,10 @@ mapping for all languages puts the IR into the model.
   written. C# and C++ are parsed as the first branch of each `#if`/`#ifdef`/`#ifndef` …
   `#else` reads them (`preprocessor`): the other branches are blanked out before parsing,
   keeping every byte's place, so conditionals that cut a declaration apart still parse, and
-  the text as written still finds the left-out lines. Macros are not expanded, so a C++ file
+  the text as written still finds the left-out lines (`SourceTree::left_out_at`). Conditions
+  are not evaluated, except a constant false (`#if 0`, `#if false`, `#elif 0`, also in
+  parentheses): that branch is left out and the next one counts as the first, since `#if 0`
+  is how code is switched off and that code is often stale. Macros are not expanded, so a C++ file
   that uses one in a declaration (`class API Name`, `int x GUARDED_BY(mu);`) fails to parse and
   is reported. `comment` holds each language's documentation rules (`comment::documentation`:
   the Java block comment before a declaration, runs of `///` and `//!` in C# and C++, Python
@@ -495,24 +599,34 @@ mapping for all languages puts the IR into the model.
   realizations follow the sources, so one drawn by hand between types of the sources is
   deleted; dependencies drawn by hand stay. A type declared in parts
   (C# `partial`) is one element with the members of all parts, documented by the first part
-  that has documentation. A member defined outside its class joins the class's members: it fills
+  that has documentation; a partial method declared in one part and implemented in another is
+  one operation. As an import may hold only some of the parts (a single file imported again),
+  nothing of such a type is deleted: members, supertypes and association ends the import does
+  not find stay, and so do its documentation and `abstract` where the parts read say nothing;
+  the other side of this rule is that a member removed from all parts stays too, until it is
+  deleted by hand. A member defined outside its class joins the class's members: it fills
   in parameter names, documentation and a field's default the declaration leaves out, or adds
   an operation the class does not declare. Operations match by being a query too (C++'s
   `f() const`), so `f()` and `f() const` are two operations.
 - **Associations** (`associations`): attributes typed by a type of the model become
   associations, collections and maps included (`*`, `{ordered}`, `{unique}`, a qualifier for
-  the key, `0..1` for optionals). The import marks the associations it makes with the tagged
+  the key, `0..1` for optionals). The association takes the field's documentation and
+  language tags (`java.transient`). The import marks the associations it makes with the tagged
   value `umlcraft.imported`. On a new import an association with the same role is reused, and
   marked associations whose field is gone are removed; those drawn by hand stay.
 - **Where things went** (`Placed`, from `apply_placed`): per file, the operations by the bytes
   their declarations stand on (`ir::Operation::span`; a C++ definition outside its class
   counts for the operation it joins), the types by their names in the file, and the package of
   what the file declares outside types. A method's structogram finds its operation by the
-  overlap of those bytes with its own (`MethodRef::start..end`), so neither side has to name
+  overlap of those bytes with its own (`MethodRef::declaration`), so neither side has to name
   the method as the other does (`tests/placed.rs` in `umlcraft-nsd-code` checks every method
-  of its fixtures).
+  of its fixtures). The code of a module (Python's `__main__`, C#'s top-level statements) has
+  no declaration of its own and finds no operation, though its bytes enclose the classes
+  between its statements. A C++ method's class as written (`shop::Cart`) finds the type
+  `Cart`, as types have no namespaces in their paths (`Placed::type_at`). Lookups go by file.
 
-Parsing needs only the files, so the app runs it in the background (`parse_sources`); `apply`
+Parsing needs only the files, so the app runs it in the background (`parse_sources`, file by
+file `parse_file`, which also hands back the tree for the structograms); `apply`
 then runs on the UI thread inside one `Document::edit`, so one undo takes the import back.
 In the app one import serves classes and structograms (`umlcraft-app/src/nsd/source.rs`):
 `source::parse` reads and parses each file once and keeps its units and its methods, a file
@@ -522,9 +636,18 @@ locked); the structograms of the ticked ones are built in the background from th
 again, and one edit applies the classes (`apply_placed`) and files the structograms
 (`file_structograms`): under the class of their operation and linked to it, else under their
 class or their file's package, else in the project. They carry `umlcraft.imported` until edited
-by hand (`Tx::set_structogram` removes it) and `umlcraft.method` (file name, classes,
-signature) always; a new import renews the untouched ones ticked, deletes the untouched ones
-not ticked or whose method is gone, and leaves edited ones alone. For
+by hand (`Tx::set_structogram` removes it) and `umlcraft.method` always: the key of the
+method (`umlcraft_nsd_code::method_key`), its file's path from the folder above the files
+imported, its classes and its signature (`shop/orders/Order.java:Order:void add(Item item)`).
+A key names a file whose path ends with the key's (`umlcraft_nsd_code::pair`), so files of
+the same name in other folders keep their own structograms, and a project imported from
+another place or from a folder further up or down finds its structograms again; keys of
+UmlCraft 0.22.0, which held the file name only, are found the same way (where two methods fit
+one, the one linked to its operation wins) and replaced by the longer key. A new import
+renews the untouched ones ticked, deletes the untouched ones of its files not ticked or whose
+method is gone, and leaves edited ones and those of other files alone. A method nested too
+deeply for a structogram (`umlcraft_nsd::read::MAX_DEPTH`) gets none and keeps the one it has;
+the import counts it as left out (`lang::Skip::DeepMethod`, `source::skipped`). For
 large imports `Tx::delete_many` deletes in one pass what `Tx::delete` would look for one by
 one, and undo replays removals without looking through the model for references, which the
 recorded operations rule out; 6300 files (225,000 elements) import in about ten seconds.
@@ -551,8 +674,10 @@ changes between Astah versions. So `umlcraft-asta-export` has an installed Astah
 through its official API (`astah-api.jar`):
 
 - `Astah::find` looks for an installation (`ASTAH_HOME`, else `astah-professional`, `astah-uml`
-  or `astah-sysml` under "Program Files") with `astah-api.jar` and an edition jar. Without one,
-  File › Export › Astah project … shows a dialog saying what is needed.
+  or `astah-sysml` under "Program Files", else the folders Astah's installers use on macOS and
+  Linux) with `astah-api.jar` and an edition jar. Without a bundled JRE, a `java` on the PATH
+  runs the tool. Without an installation, File › Export › Astah project … shows a dialog saying
+  what is needed.
 - `Export::new` serializes the model as `.ucraft` and adds a layout sidecar: node bounds and
   edges as drawn (nodes grow with their content). Sequence diagrams need none; the tool reads
   their geometry from the project. The app prepares this on the UI thread and runs the rest in
@@ -560,11 +685,14 @@ through its official API (`astah-api.jar`):
 - `Export::run` writes both files and the Java tool [`tools/asta-export/AstaExport.java`](../tools/asta-export/README.md)
   (embedded with `include_str!`) to a temporary folder, and runs the tool with Astah's bundled
   JRE in source-file mode, so no JDK and no build step are needed. The tool creates packages,
-  classifiers, features and relationships with `BasicModelEditor` and `UseCaseModelEditor`, then
-  the diagrams with the class, use case, sequence and activity diagram editors, all in one
-  transaction. It
+  classifiers, features and relationships with `BasicModelEditor`, `UseCaseModelEditor`,
+  `CompositeStructureModelEditor` and `ERModelEditor`, then the diagrams with the class, use
+  case, composite structure, sequence, activity, state machine and ER diagram editors, in one
+  transaction; a second one only puts the substates of orthogonal states back (see below). It
   reports what the API cannot express (`Report::dropped`) and single failures
-  (`Report::problems`).
+  (`Report::problems`); a diagram that fails after it was created stays in the file as far as
+  it got and is reported as `partialDiagram`. CI compiles the tool against stubs of the API
+  classes it uses (`tools/asta-export/stubs`), so a slip in it shows before a user exports.
 
 ### How the model maps onto the API
 
@@ -651,15 +779,21 @@ through its official API (`astah-api.jar`):
   extension points of extends, return parameters, parameter multiplicity and default values.
   Structograms, which Astah does not have, are taken out of the model before writing
   (`without_structograms`) and counted as dropped.
-- ER diagrams: packages holding only ER content go into Astah's ER model
-  (`ERModelEditor.createERModel`, numbered when a UML package already has its name), entities
-  into its default schema, domains first (`createERDomain`: datatype, length, `NOT NULL`,
+- ER diagrams: packages holding only ER content (entities, relationships, IS-As, domains, ER
+  diagrams, such packages; comments do not count) go into Astah's ER model
+  (`ERModelEditor.createERModel`, numbered when a UML package already has its name), so an
+  imported ER model comes back as one, without an empty UML package beside it. Their content
+  goes into its default schema, and so does that of a package directly inside named like the
+  schema (the imported schema); other packages inside become ER packages
+  (`createERPackage`). Domains come first (`createERDomain`: datatype, length, `NOT NULL`,
   default), indexes last (`createERIndex`). Columns are created with their key, `NOT NULL`,
   default, length and datatype (a domain of that name, else Astah's datatype found by name,
   else a new one); foreign key columns are not created, Astah
   makes them when the relationship is (`createIdentifyingRelationship`,
   `createNonIdentifyingRelationship`, `createMultiToMultiRelationship`, with parent required,
-  cardinality and verb phrases), and the export gives them UmlCraft's names. Subtypes become
+  cardinality and verb phrases), and the export gives them UmlCraft's names. A foreign key
+  column whose relationship or subtype Astah did not make becomes a plain column
+  (`erForeignKey`). Subtypes become
   subtype relationships (`conclusive`, discriminator), several of one supertype a group
   (`createSubtypeRelationshipGroup`). Diagrams get notation, display level and model type;
   nodes are placed one name band higher and that much taller, as Astah's bounds include the
@@ -703,7 +837,12 @@ writes, and none of its code is used.
 - **Reading** (`read`) uses quick-xml. Attribute values are unescaped but not normalized: a
   tab Structorizer wrote stays a tab, where an XML parser (Structorizer's too) would read a
   space. Unknown attributes are kept; unknown elements, wrong branches and other encodings
-  than UTF-8 are errors with line and column.
+  than UTF-8 are errors with line and column. Elements nest at most `read::MAX_DEPTH` (200)
+  levels: the one limit for files, edits (`edit`), the project (`Model::check`) and generated
+  structograms. The reader keeps the open elements on a stack of its own instead of recursing,
+  and laying out and drawing recurse once per level with small frames (each kind in a
+  function of its own), so that the deepest diagram is read, laid out and drawn within a 1 MB
+  stack in a debug build (`tests/deep.rs`).
 - **Writing** (`write`) is done by hand, because Structorizer escapes differently from XML
   libraries (`&#34;`, `&#60;`, `&#62;`, `&amp;`, `&#10;`): the declaration, a tab per level,
   elements without branches on one line, branch tags on lines of their own, LF line ends and
@@ -721,12 +860,10 @@ writes, and none of its code is used.
   line per branch plus its selector, a parallel element's text is its branch count, an empty
   element text is written as `text=""`, and a for loop's attributes are derived from its text
   as Structorizer derives them when it loads a file (checked against a file it saved,
-  `fixtures/structorizer/for-headers.nsd`). `history::Editor` makes each change one undo step
-  over snapshots of the whole diagram (structograms are small) and tells whether the diagram
-  differs from the file. `save` stamps a changed diagram with version, user and date as
-  Structorizer does on saving; an unchanged one is written as read, byte for byte. `clip` puts
-  elements on the clipboard as a whole `.nsd` file, the form in which Structorizer puts a
-  diagram there; other text pastes as one instruction.
+  `fixtures/structorizer/for-headers.nsd`). Undo is the project's: the app hands each changed
+  diagram to `Document::edit` (see "In the app" below). `clip` puts elements on the clipboard
+  as a whole `.nsd` file, the form in which Structorizer puts a diagram there; other text
+  pastes as one instruction.
 - **Content form** (`content`). A project keeps only what a structogram says, not the file it
   came from: `normalize` drops the header (version, author, dates, licence, `origin`), unknown
   attributes and the parser keywords that equal Structorizer's defaults, and keeps the root's
@@ -743,7 +880,8 @@ writes, and none of its code is used.
   platform; `tools/nsd-metrics/DialogMetrics.java` writes a table per platform
   (`src/metrics/dialog12-<platform>.txt`). Linux (DejaVu Sans) and Windows (Arial, whole-pixel
   advances, title lines 16 px apart instead of 17) are measured; Linux uses its own, every
-  other platform the Windows table, Structorizer's most common one. The include list's box
+  other platform the Windows table, Structorizer's most common one. A tab counts as a space,
+  as Structorizer's XML parser reads it. The include list's box
   above the title uses a smaller font whose widths are not tabled: its height and caption
   width were measured in Structorizer's images and stand in each table (`includes`).
 - **Layout** (`layout`) works in whole pixels, with the rules read off Structorizer's images
@@ -803,7 +941,7 @@ writes, and none of its code is used.
 - **From source code** (`umlcraft-nsd-code`; `java`, `csharp`, `python`, `cpp`): a Java, C#,
   Python or C++ file is read and parsed by the base of the class import (see "Source import":
   `SourceLanguage`, `source::read`, `parse_tree`; C and headers with the C++ grammar, C# and C++
-  with only the first branch of each `#if`). A `Source` holds that `SourceTree`
+  with only one branch of each `#if`, the first unless it is `#if 0`). A `Source` holds that `SourceTree`
   (`Source::new`, `Source::parse` as a shortcut, `Source::tree` for `umlcraft_reverse::lower`),
   so one parse can give a file's classes and its methods' structograms; a method's
   documentation is the diagram's comment, found and cleaned by `comment::documentation` (or the
@@ -816,11 +954,20 @@ writes, and none of its code is used.
   the code of the module as `__main__`; in C++ free functions, methods defined in the class or
   outside it (grouped as written, `shop::Cart`, without template arguments), constructors with
   their initializer list as instructions, destructors, operators and templates;
-  `Source::diagram` builds one with the elements of `umlcraft-nsd` (`edit::new_element`, so
-  every rule of the editor holds). Each language reads its own nodes and hands the parts to a
-  shared builder (`core`: comments, conditions and loops, the cases of a switch, the parts of a
-  try), which a `Grammar` tells the node kinds that differ. Both languages give the same
-  structogram for the same method (`tests/parity.rs`, differences on purpose in
+  `Source::diagram` builds one with the elements of `umlcraft-nsd` (`edit::new_element`, which
+  gives each element the keywords and defaults the editor gives it), and `Source::diagrams`
+  the ones of several methods, finding the file's members once. Each language reads its own
+  nodes and hands the parts to a shared builder (`core`: comments, conditions and loops, the
+  cases of a switch, the parts of a try), which a `Grammar` tells the node kinds that differ.
+  A structogram nests at most `umlcraft_nsd::read::MAX_DEPTH` deep, as a file holds it (the
+  editor's rule): a deeper method gives none (`Unbuilt::TooDeep`). Every nested list of
+  statements goes through `Builder::statements` (and each Python `elif` through
+  `Builder::deeper`), which stops reading at twice that depth; the diagrams are built on a
+  thread of their own with a stack that holds that much, so a pathological body (thousands of
+  nested blocks, an `else if` chain of thousands) neither overflows the stack nor takes long
+  (`tests/deep.rs`, on a 1 MB stack). Other walks over method bodies keep explicit stacks.
+  The four languages give the same structogram for the same method (`tests/parity.rs`
+  compares C#, Python and C++ with Java, differences on purpose in
   `tests/parity_deviations.txt`). Texts are written as structograms write them (`pseudo`): no
   types (the root is `name(a, b)`, a declaration without a value has no element), assignments as
   `x := value` (`total += a` as `total := total + a`, `i++` as `i := i + 1`), no `;`;
@@ -844,12 +991,14 @@ writes, and none of its code is used.
   a `break` there leaves the loop around it), `with` assigns its contexts like C#'s `using`, and
   the `else` of a loop follows it, the `else` of a `try` ends the try block (both named in the
   report). C++ declarations assign whatever form they take (`int x(1)`, `int x{1}`,
-  `Foo f(a, b)` as `f := Foo(a, b)`), the initialization in `if (init; c)` comes before the
+  `Foo f(a, b)` as `f := Foo(a, b)`, and so a class with one argument:
+  `std::vector<int> v(10)` as `v := std::vector<int>(10)`), the initialization in `if (init; c)` comes before the
   alternative, and `catch (...)` is a label. Comments go to the element of the next statement,
   or of the one they end on. What has no element is kept as near as possible (`continue` and
   unreadable code as red, disabled instructions, a `synchronized` or `lock` body in place with
   the lock as a comment, a `using` resource assigned with `using` as a comment, `yield` and
-  `goto` as written; labels and local functions left out) and named in the `Report`.
+  `goto` as written, a `break` before the end of a case as a jump, which a structogram reads
+  as leaving a loop; labels and local functions left out) and named in the `Report`.
   `tests/snapshots.rs` holds every fixture method as a readable tree;
   `tests/structorizer_structure.rs` compares the nesting with Structorizer's own import of the
   same files (with `UMLCRAFT_NSD_REFS`), the deliberate differences listed in
@@ -1017,11 +1166,17 @@ diagrams from SQL dumps and writes them back as SQL.
   child `[0,n]`, many-to-many `[0,n]` both) and the edge, and copies the parent's primary key
   into the child as foreign key columns, into its key when identifying; a subtype line
   copies the supertype's key into the subtype's key. `set_identifying` moves those columns
-  into the child's key or out of it. `set_notation` converts a diagram in one `Tx`: Chen →
+  into the child's key or out of it; the child is weak while some identifying relationship
+  keys it (a child with two identifying parents stays weak while one is left). Deleting a
+  relationship leaves `weak` as it is: in Chen it is the user's to set. `set_notation`
+  converts a diagram in one `Tx`: Chen →
   IE/IDEF1X removes the attribute nodes and their lines and replaces each binary
   relationship node and its two participation edges by one edge; the way back puts the
-  relationship node between its entities and the attributes around their owners with
-  `er_layout`'s attribute pass. Entities and IS-As keep their places. `parse_column` reads a
+  relationship node between its entities (beside the entity, with both lines spread apart,
+  for a relationship of an entity with itself) and the attributes around their owners with
+  `er_layout`'s attribute pass. Entities and IS-As keep their places. Showing an element on
+  an IE or IDEF1X diagram follows the notation too: attributes are not shown, and a binary
+  relationship is shown as its line (`palette::show_element`). `parse_column` reads a
   row typed into a table (`name : TYPE(length)`).
 - **App.** The ribbon's diagram tab has a Notation group; the properties panel of an ER
   diagram the notation, and in IE and IDEF1X what the tables show and physical names; a
@@ -1044,15 +1199,18 @@ into ER elements of the model. Its rules are written down in the comments of `ma
   `$tag$` bodies, the data after `COPY … FROM stdin;` and psql's backslash commands.
 - **Parser** (`parse`, `ir`): its own small tokenizer instead of a full SQL parser, because
   only a few statements matter and a dump's many options must not cost a table. It reads
-  `CREATE TABLE` (columns with their type as written, NOT NULL, default, comment, generated;
-  inline and table keys and references; `PARTITION OF`), `ALTER TABLE … ADD` keys, references
-  and columns, `CHECK` on columns and tables, MySQL's `KEY`/`INDEX` lines, `CREATE [UNIQUE]
-  INDEX` on plain columns, `CREATE DOMAIN` and `CREATE TYPE … AS ENUM` (`Schema.types`),
-  `ATTACH PARTITION`, `COMMENT ON TABLE | COLUMN | TYPE | DOMAIN`, `USE`/`CREATE DATABASE`
-  for the name and `CREATE VIEW` (older mysqldumps write a
-  placeholder table for each view first). Everything else is counted by its first words;
-  what cannot be read becomes a `Problem` with its line and costs only itself. A statement
-  that is not UTF-8 is read as Windows-1252. Partitions are folded into their parent.
+  `CREATE TABLE` (columns with their type as written, NOT NULL, default, MySQL's `ON UPDATE`,
+  comment, generated; inline and table keys and references; `PARTITION OF`), `ALTER TABLE …
+  ADD` keys, references and columns, `CHECK` on columns and tables, MySQL's `KEY`/`INDEX`
+  lines, `CREATE [UNIQUE] INDEX` on plain columns (indexes and unique keys keep MySQL's prefix
+  lengths, `body(100)`), `CREATE DOMAIN` and `CREATE TYPE … AS ENUM` (`Schema.types`),
+  `ATTACH PARTITION`, `COMMENT ON TABLE | COLUMN | TYPE | DOMAIN` (not on a view's columns),
+  `USE`/`CREATE DATABASE` for the name and `CREATE VIEW` (older mysqldumps write a
+  placeholder table for each view first). A default is kept as SQL: a string in single
+  quotes, without its introducer (`_utf8mb4`) or cast. Everything else is counted by its
+  first words; what cannot be read becomes a `Problem` with its line and costs only itself.
+  A statement that is not UTF-8 is read as Windows-1252. Partitions are folded into their
+  parent.
 - **Mapping** (`map`): junction tables (key = two or more foreign keys, not referred to)
   become relationships between the tables they join, with their other columns as
   attributes; a table whose key is a foreign key plus columns of its own a weak entity with
@@ -1067,7 +1225,11 @@ into ER elements of the model. Its rules are written down in the comments of `ma
   it. Domains and enumerated types become `erDomain`s of the package, and columns of such a
   type name them; `CHECK`s become the column's `check` or the entity's `checks`, indexes the
   entity's `indexes` (except one that only repeats a foreign key's columns, which MySQL makes
-  on its own), a `UNIQUE` of several columns a unique index.
+  on its own), a `UNIQUE` of several columns (or of a column's start only) a unique index.
+  An attribute's default loses its quotes where it reads back as the same string (`'A1'` →
+  `A1`, but `'007'`, `'(none)'`, `'NULL'` and `''` keep them) and where it is a number of a
+  numeric column (mysqldump's `'0'`); MySQL's `ON UPDATE` follows it, as MySQL Workbench
+  shows it (`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`).
   Options: all attributes, keys only or none, and the schemas to take. The `Report` counts
   tables, entities, relationships, attributes and skipped statements and lists hints and
   problems. `map` creates a package named after the database (or the file) with an ER
@@ -1097,14 +1259,25 @@ counts the tables and foreign keys and lists what it `left_out`.
   composite attribute's parts instead of it; a multivalued one has no column. Types and
   lengths go together again as the import took them apart (`int(10) unsigned`,
   `timestamp(3) without time zone`); no type is `varchar(255)`. Keys and partial keys make
-  the primary key and are `NOT NULL`. Defaults that are numbers, keywords
-  (`CURRENT_TIMESTAMP` …) or calls stay as they are, others become strings; PostgreSQL's
-  `nextval(…)` of the dump's own sequence becomes an identity column. A derived attribute
-  with an expression (the import keeps a generated column's expression as its default) is a
-  generated column. Comments go inline in MySQL and as `COMMENT ON` in PostgreSQL. Names
-  are quoted only where they must be: not plain, a reserved word, and in PostgreSQL with
-  capitals. A column's `check` and the entity's `checks` are `CHECK`s, its `indexes`
-  `CREATE [UNIQUE] INDEX` statements after the tables.
+  the primary key and are `NOT NULL`. A default in single quotes is a string; without them,
+  numbers, MySQL's `b'0'`, keywords (`CURRENT_TIMESTAMP` …) and expressions (parentheses, a
+  cast, brackets) stay as they are, anything else becomes a string. MySQL gets a literal
+  default of a `text`, `blob`, `json` or spatial column and an expression other than the
+  current time in parentheses, and its zero dates are left out (strict mode refuses them);
+  MySQL's `ON UPDATE` goes to MySQL only. PostgreSQL's `nextval(…)` of the dump's own
+  sequence becomes an identity column, which is an integer type there (`bigint` for MySQL's
+  `bigint unsigned`). A derived attribute with an expression (the import keeps a generated
+  column's expression as its default) is a generated column. Comments go inline in MySQL and
+  as `COMMENT ON` in PostgreSQL. Names are quoted only where they must be: not plain, a
+  reserved word of the dialect (all of MySQL 9.7's and MariaDB's; PostgreSQL 16's reserved
+  and type or function names, `keywords`), and in PostgreSQL with capitals. A column's
+  `check` and the entity's `checks` are `CHECK`s, its `indexes` `CREATE [UNIQUE] INDEX`
+  statements after the tables, with MySQL's prefix lengths in MySQL. MySQL keys `text` and
+  `blob` only by their start: in a key, unique constraint, unique index or reference such a
+  column becomes `varchar(255)` or `varbinary(255)`, in a plain index it is indexed by its
+  first 255 characters; an index of a JSON column is left out there. Index names do not
+  repeat each other, and in PostgreSQL, where indexes and tables share a namespace, no
+  table's name.
 - **Domains.** The `erDomain`s in the packages of the shown entities and the packages around
   them that a column names go first: PostgreSQL gets `CREATE TYPE … AS ENUM` or `CREATE
   DOMAIN`, MySQL the domain's type (`enum(…)`), `NOT NULL`, default and check in each column
@@ -1117,8 +1290,14 @@ counts the tables and foreign keys and lists what it `left_out`.
   names both know.
   Conditions are translated where that is safe (`= ANY (ARRAY[…])` → `IN (…)`, casts and
   `~~` → `LIKE` to MySQL, backticks and `_utf8mb4` introducers to PostgreSQL); a condition
-  that keeps something foreign is left out (`LeftOut::Check`), and a generated column for
-  the other family becomes a plain one (`LeftOut::Generated`).
+  that keeps something foreign outside its strings is left out (`LeftOut::Check`), and a
+  generated column for the other family becomes a plain one (`LeftOut::Generated`).
+  Defaults: `0`/`1` of a `tinyint(1)` are `FALSE`/`TRUE`; keywords and expressions are
+  translated (`default_expression`: the current time with the column's precision in MySQL,
+  `curdate()` → `CURRENT_DATE`, `uuid()` ↔ `gen_random_uuid()`, introducers go) or left out
+  where the other family has nothing like them (`ARRAY[]`, other functions), as are
+  PostgreSQL's `infinity` in MySQL and MySQL's zero dates. A foreign key column takes the
+  type of the column it references.
 - **Foreign keys** come last as `ALTER TABLE … ADD CONSTRAINT`, so the order of the tables
   does not matter. Foreign key columns the model has (from a dump, Astah or the IE and IDEF1X
   tools) reference the columns of the other table they are named after (`gate_nummer` →
@@ -1136,26 +1315,42 @@ counts the tables and foreign keys and lists what it `left_out`.
   model again (`tests/ddl.rs`), types, conditions, uniqueness, indexes and domains included;
   PostgreSQL to MySQL and MySQL/MariaDB to PostgreSQL give the same tables, keys and
   relationships. A drawn Chen diagram without foreign key columns gets each kind of foreign
-  key (`ddl::tests`), and the SQL reads back without a problem. With `UMLCRAFT_DDL_OUT=DIR`
-  the tests of `tests/ddl.rs` write their SQL there, to load it into a real server: a
-  MySQL 9.7 started on its own (`mysqld --initialize-insecure` into an empty folder, then
-  on another port) takes all of them.
+  key (`ddl::tests`), and the SQL reads back without a problem. `tests/fixtures/export` holds
+  what servers refuse unless the export takes care (a mysqldump of MySQL 9.7 and a schema in
+  pg_dump 16's form: `tinyint(1)`, `bigint unsigned AUTO_INCREMENT`, string defaults that
+  look like numbers, keywords or expressions, expression defaults, a zero date, `ON
+  UPDATE`, reserved names, keys and indexes on `text`, prefix lengths, an index named like a
+  table, checks with strings, a comment on a view's column); `tests/ddl.rs` checks its SQL
+  for both dialects. Our parser takes SQL the servers refuse, so the CI job "SQL on real
+  servers" writes the SQL of every fixture system and of the export cases for both dialects
+  (`--example sql-export -- --out DIR DUMP…`) and loads it into MySQL 8 and PostgreSQL 16.
+  Locally, a MySQL started on its own (`mysqld --initialize-insecure` into an empty folder,
+  then on another port) takes `DIR/*-MySql.sql`; with `UMLCRAFT_DDL_OUT=DIR` the tests of
+  `tests/ddl.rs` write their SQL there as well.
 
 ## MCP server
 
 AI clients (Claude Code, Claude Desktop, Cursor) read and edit UML models through the Model
 Context Protocol. `umlcraft-cli mcp` is the server they start; it speaks JSON-RPC 2.0 on stdin
 and stdout, one message per line (`umlcraft_mcp::protocol::serve`: `initialize`, `ping`,
-`tools/list`, `tools/call`; protocol versions 2025-06-18, 2025-03-26 and 2024-11-05).
+`tools/list`, `tools/call`; protocol versions 2025-06-18, 2025-03-26 and 2024-11-05). A line
+that is not UTF-8 or not JSON gets a parse error (-32700), a request without a method name, a
+message that is no object and an empty batch get -32600; the server reads on either way.
 
 ### Tools and hosts
 
 `umlcraft_mcp::tools` lists 37 tools and runs them against a `Host`, which hands out the
-`Document`, a `TextMeasure`, the path and, in the app, the active diagram and the selection:
+`Document`, a `TextMeasure`, the path and, in the app, the active diagram and the selection.
+Its files go by area: `schema` (descriptions, input schemas, argument check), `args`,
+`lookup` (palette tools, `change`), `read`, `create`, `update` (with `update_er` and
+`update_activity`), `fragments`, `structograms`, `arrange`, `delete`, `batch`, `project`,
+`export`; the end-to-end tests are in `tools/tests/`, by diagram kind. The tools:
 
 - reading: `get_document`, `list_elements`, `get_element`, `get_structogram`, `get_diagram`,
   `render_diagram` (a PNG through resvg, as MCP image content, so the client sees what it
   drew; of a structogram too), `screenshot` (the app's window, see below);
+- the app's window and view: `set_window` (size, on screen, off screen or minimized),
+  `set_view` (theme, language, zoom), `select`;
 - editing: `create_diagram`, `create_element`, `create_model_element`, `show_element`,
   `connect`, `add_member`, `create_structogram`, `update_structogram`, `edit_structogram`,
   `wrap_in_fragment`,
@@ -1184,20 +1379,35 @@ properties panel does), fragments and operands from `palette::wrap_in_fragment` 
 `state_edit::delete_region` and `sequence_edit::delete_operand`, as the app does. A tool that fails rolls back and answers with the error, which
 for an unknown tool key lists the valid ones. Ids are UUID strings; kinds are the element
 kinds' `type_name`s. A node without a position goes to a free place right of the drawing
-(`free_origin`).
+(`free_origin`). `update_element` tidies the sequence diagrams that show the element, one of
+its owners or an element referring to it (`sequences_near`), not every sequence diagram of
+the project.
+
+Both callers run tools through `tools::call_guarded`, which turns a panic in a tool into an
+error reply: `Document::edit` has already taken back the edit that panicked, and
+`call_guarded` rolls back the steps the call made before it (a batch's earlier calls), so the
+app keeps the user's project and the headless server keeps running.
+
+`render_diagram` and `export_image` rasterize at most 40 million pixels (`MAX_PIXELS`); a
+larger drawing, say one node moved far away, comes out at a smaller scale instead of
+allocating gigabytes.
 
 `batch` runs a list of calls as one undo step, all or nothing. A string argument
 `$<index>.<field>` takes that field from the reply of an earlier call in the list, so a batch
-can create a class and add members to it. The tools run as they would alone; afterwards
-`Document::squash_since` joins their steps into one, and a failing call ends the batch with
-`Document::roll_back_to`, which takes the steps back without leaving them to redo. Undo, redo,
-nested batches and opening or starting a project are refused inside a batch.
+can create a class and add members to it; only strings of exactly that form are references
+(`$price : int` stays text), and a leading `$$` stands for a plain `$`. The tools run as they
+would alone; afterwards `Document::squash_since` joins their steps into one, and a failing
+call ends the batch with `Document::roll_back_to`, which takes the steps back without leaving
+them to redo. Undo, redo, nested batches, opening or starting a project, `save_file` and
+`set_display` are refused inside a batch, since a rollback could not take back the file or
+the user's settings; files exported before a failing call stay, and the error names them.
 
 Structograms travel as a JSON tree instead of Structorizer's XML (`umlcraft_mcp::structogram`):
 the root's title, kind and keywords, and a `body` of elements, each with a `kind` (`instruction`,
 `call`, `jump`, `if`, `case`, `for`, `while`, `repeat`, `forever`, `try`, `parallel`), its
 `text` (lines joined by `\n`) and its parts (`body`, `then`/`else`, `catch`/`finally`, labeled
-`branches` for a case, the last one the default). `get_structogram` writes what
+`branches` for a case, the last one the default; a parallel element has at most 99, as in the
+editor). `get_structogram` writes what
 `create_structogram` reads, so a client can read a structogram, change the tree and hand it to
 `update_structogram`, which keeps what the tree leaves out (title, kind, header) and goes
 through `Tx::set_structogram`, so an imported structogram counts as edited by hand. Elements
@@ -1212,7 +1422,8 @@ In sequence diagrams `connect` makes found and lost messages from one lifeline,
 at the scene's `slot_at`), so they change operands; `get_diagram` gives messages their `y`,
 fragments the range of each operand and lists the bars.
 
-Two hosts exist. `Headless` holds a project of its own, measured with `ApproxMeasure`; in the
+Two hosts exist. `Headless` holds a project of its own, measured in Arial
+(`Displayed<ArialMeasure>`, drawn as its `Display` says); in the
 app `AppHost` (`crates/umlcraft-app/src/live.rs`) wraps the `Workspace`, labels each step
 "AI: tool" and leaves opening another file or a new project to the window, which refuses it
 while the open project has unsaved changes.
@@ -1221,21 +1432,33 @@ while the open project has unsaved changes.
 
 When the app runs, the server forwards every call to it, so the user watches each change and
 undoes it with Ctrl+Z. The app listens on a free port of 127.0.0.1 (`live::LiveServer`) and
-writes `live-<pid>.json` with port, token (two random UUIDs), pid and version into
-`live::control_dir()`, and removes it when it closes; on start it also removes the files of
-apps that were killed and no longer answer. The folder is `~/.umlcraft/control` on Windows
-(not `%LOCALAPPDATA%`: clients installed as MSIX packages, and the servers they start, see a
-private copy of that), `~/Library/Application Support/UmlCraft/control` on macOS and
-`$XDG_RUNTIME_DIR/umlcraft/control` on Linux (else the state folder), readable by the user
-alone (0700 and 0600 on Unix). A request is a line `{token, name, arguments, access}`, the
-answer an MCP tool result; a wrong token closes the connection. The connection's thread hands
-the call over an `async-channel` to `MainView::serve_mcp`, which runs it on the main thread
-inside `Workspace::update` and so never races a user edit. `_ping` is answered on the server
-thread, and a call the app has not answered after 120 s (a modal dialog) comes back as an
-error.
+writes `live-<pid>.json` with port, token and proof (two random UUIDs each), pid and version
+into `live::control_dir()`, and removes it when it closes; on start it also removes the files
+of apps that were killed and no longer answer. The folder is `~/.umlcraft/control` on Windows
+(`%USERPROFILE%`, not `%LOCALAPPDATA%`: clients installed as MSIX packages, and the servers
+they start, see a private copy of that), `~/Library/Application Support/UmlCraft/control` on
+macOS and `$XDG_RUNTIME_DIR/umlcraft/control` on Linux (else the state folder). On Unix the
+folder and file are readable by the user alone (0700 and 0600); on Windows no access rights
+are set, and the files have those the user's profile passes on. A request is a line
+`{token, name, arguments, access}`, the answer an MCP tool result; a wrong token closes the
+connection. A connection has 5 s in all to show the token, however slowly its bytes come, and
+at most 16 connections may wait at once, so no other program can keep the CLI out. The first
+request is `_ping`, answered on the server thread with the app's version and the proof: the
+CLI only talks to an app that knows the proof of the file it read, and removes a file whose
+port another program holds. When the app is another version than the CLI, the first reply says
+so.
 
-`screenshot` is the one call `serve_mcp` does not hand to `tools::call`: it needs the window,
-not the project (`live::screenshot`). It takes the window's handle
+The connection's thread hands the call over an `async-channel` to `MainView::serve_mcp`, which
+runs it on the main thread inside `Workspace::update` and so never races a user edit. Before
+`save_file`, `open_file` and `new_document` it commits text the user is still typing
+(`flush_edits`), as the app's own commands do. A call the app has not taken up after 120 s (a
+modal dialog) comes back as an error saying it was not carried out: `Request::take` and the
+connection's thread agree through one atomic state, so the app skips a call given up this way
+and a client may safely try again. A call the app took up is waited for 120 s more.
+
+`screenshot`, `set_window` and `set_view` are the calls `serve_mcp` does not hand to
+`tools::call`: they need the window, not the project (`live::screenshot`, `live::set_window`,
+`MainView::set_view`). `screenshot` takes the window's handle
 (`umlcraft_screenshot::Target`) and captures on a background thread 100 ms later, so the
 window has drawn the last call's change and its own thread is free when Windows asks it to
 draw for the capture. `umlcraft-screenshot` calls `PrintWindow` with `PW_RENDERFULLCONTENT`,
@@ -1260,7 +1483,9 @@ The server opens and saves projects and writes images only in the folders it was
 `--allow-path DIR` (several times), `--allow-any-path`, and the folder of `--in`. `Access`
 travels with each live call, so the app keeps to the folders of the server that asked.
 Paths are canonicalized before the check; saving to the open project's own path is always
-allowed. `umlcraft-cli mcp setup` registers the server with each client it finds (Claude
+allowed. `save_file` always writes `.ucraft` and `export_sql` `.sql` (added to a path without
+it), and the exports replace an existing file only with `"overwrite": true`, so a call cannot
+write over a document in an allowed folder. `umlcraft-cli mcp setup` registers the server with each client it finds (Claude
 Code through `claude mcp add --scope user`, Claude Desktop's `claude_desktop_config.json`,
 Cursor's `~/.cursor/mcp.json`, merged into what is there) and allows the Documents folder
 unless told otherwise; `--dry-run` shows what it would do.

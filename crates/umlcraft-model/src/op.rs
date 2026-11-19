@@ -39,6 +39,18 @@ pub enum Op {
         diagram: Id,
         id: Id,
     },
+    /// Removes several presentations of one diagram at once; nothing outside them may be
+    /// attached to any of them. The list is compacted once, however many there are.
+    RemovePresentations {
+        diagram: Id,
+        ids: Vec<Id>,
+    },
+    /// Puts presentations back where [`Op::RemovePresentations`] took them from: each at its
+    /// index in the list once all are in, by ascending index.
+    InsertPresentations {
+        diagram: Id,
+        entries: Vec<(usize, Presentation)>,
+    },
     /// Replaces a presentation (bounds, waypoints, style); node stays node, edge stays edge.
     UpdatePresentation {
         diagram: Id,

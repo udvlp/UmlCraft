@@ -4,7 +4,10 @@
 //!
 //! Where UmlCraft can replace itself (the Windows installer, an AppImage, the macOS app), a click
 //! on the update downloads the new release's package from GitHub, checks it against the
-//! release's `SHA256SUMS.txt` and installs it once UmlCraft has quit.
+//! release's `SHA256SUMS.txt` and installs it once UmlCraft has quit. With [`UPDATE_KEY`] set,
+//! `SHA256SUMS.txt` itself counts only with the release workflow's signature of it
+//! (`SHA256SUMS.txt.minisig`) for this very version: a release, or a download, changed by
+//! someone without the secret key is then refused.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -17,6 +20,11 @@ use sha2::{Digest, Sha256};
 
 const LATEST: &str = "https://api.github.com/repos/udvlp/UmlCraft/releases/latest";
 const RELEASES: &str = "https://github.com/udvlp/UmlCraft/releases";
+/// The minisign public key (base64) the release workflow signs `SHA256SUMS.txt` with, or `None`
+/// while there is none: then the checksums alone count. The secret key is the secret
+/// `UPDATE_SIGNING_KEY` of the `release` environment on GitHub; the workflow refuses to
+/// publish without a signature once this is set.
+const UPDATE_KEY: Option<&str> = None;
 /// How long an automatic check waits after the last one.
 pub const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -202,6 +210,20 @@ fn checksum_of(sums: &str, name: &str) -> Option<String> {
     })
 }
 
+/// Whether `signature` signs `sums` with `key` (minisign, base64) and its trusted comment
+/// names `version`: else an older release's signed checksums could stand in for these.
+fn verify_sums(key: &str, sums: &str, signature: &str, version: &str) -> Result<(), String> {
+    let key = minisign_verify::PublicKey::from_base64(key).map_err(|e| e.to_string())?;
+    let signature = minisign_verify::Signature::decode(signature)
+        .map_err(|_| "the release's checksums carry no valid signature")?;
+    key.verify(sums.as_bytes(), &signature, false)
+        .map_err(|_| "the release's checksums are not signed with UmlCraft's key")?;
+    if signature.trusted_comment() != format!("umlcraft {version}") {
+        return Err("the release's checksums are signed for another version".into());
+    }
+    Ok(())
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -246,6 +268,11 @@ pub fn download(
     let agent = agent(Some(Duration::from_secs(30 * 60)));
     let mut sums = get(&agent, &download_url(version, "SHA256SUMS.txt"))?;
     let sums = sums.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    if let Some(key) = UPDATE_KEY {
+        let mut signature = get(&agent, &download_url(version, "SHA256SUMS.txt.minisig"))?;
+        let signature = signature.body_mut().read_to_string().map_err(|e| e.to_string())?;
+        verify_sums(key, &sums, &signature, version)?;
+    }
     let expected = checksum_of(&sums, &name).ok_or("the release lists no checksum for it")?;
     let file = fetch(&agent, version, &name, &dir, &expected, progress)?;
     Ok(Download { file, sha256: expected })
@@ -461,6 +488,42 @@ mod tests {
         assert_eq!(checksum_of(sums, "UmlCraft-0.16.0-windows-x64.zip").as_deref(), Some("abc123"));
         assert_eq!(checksum_of(sums, "UmlCraft-0.16.0-x86_64.AppImage"), None);
         assert_eq!(&hex(&Sha256::digest(b"abc"))[..8], "ba7816bf");
+    }
+
+    /// Made with a test key pair from fixed seeds, as `minisign -S -t "umlcraft 1.2.3"` would.
+    const TEST_KEY: &str = "RWQBAgMEBQYHCOpKbGPinFIKvvVQexMuxfmVR3auvr57kkIe6mkURtIs";
+    const OTHER_KEY: &str = "RWQLDA0ODxAREv0XJDhaoMdbZPt4zWAvodmR/ev3axPFjtcC6sg16fYY";
+    const SUMS: &str = "aaaa1111  UmlCraft-1.2.3-windows-x64-setup.exe\n\
+                        bbbb2222  UmlCraft-1.2.3-x86_64.AppImage\n";
+    const SIGNED: &str = "untrusted comment: signature from minisign secret key\n\
+        RUQBAgMEBQYHCFIWh3dbyxxoPIIXJ6tMuXEIFHXljew4gZkWxR8828CwfmBcAGIiHCQf4CEuARDyo1ARR6EieoKllFFvH5JC8wE=\n\
+        trusted comment: umlcraft 1.2.3\n\
+        V1xlZk6xlDI0KSlBXPtvhXJ/j7G8LQaVIkWVc5RCV6oD2i3bHO4Jq1+BQKODxZygReb/BRHiMlkU3KWKDV1+Cg==\n";
+    const SIGNED_FOR_1_2_2: &str = "untrusted comment: signature from minisign secret key\n\
+        RUQBAgMEBQYHCFIWh3dbyxxoPIIXJ6tMuXEIFHXljew4gZkWxR8828CwfmBcAGIiHCQf4CEuARDyo1ARR6EieoKllFFvH5JC8wE=\n\
+        trusted comment: umlcraft 1.2.2\n\
+        7UFuN5YMkoCCy53yLFlz92WEl7wd5KdZ70bV6TlwAoYYLBntoXX3d2rNd488bnFuAlIGS8hHqj+iKoBkkM7eCA==\n";
+
+    #[test]
+    fn signed_checksums_count_only_for_their_key_text_and_version() {
+        assert_eq!(verify_sums(TEST_KEY, SUMS, SIGNED, "1.2.3"), Ok(()));
+        // Changed checksums, another key, another version, no signature: refused.
+        let changed = SUMS.replace("aaaa1111", "aaaa1112");
+        assert!(verify_sums(TEST_KEY, &changed, SIGNED, "1.2.3").is_err());
+        assert!(verify_sums(OTHER_KEY, SUMS, SIGNED, "1.2.3").is_err());
+        assert!(verify_sums(TEST_KEY, SUMS, SIGNED_FOR_1_2_2, "1.2.3").is_err());
+        assert!(verify_sums(TEST_KEY, SUMS, SIGNED, "1.2.4").is_err());
+        assert!(verify_sums(TEST_KEY, SUMS, "<html>Not Found</html>", "1.2.3").is_err());
+        // A changed trusted comment breaks the global signature.
+        let relabeled = SIGNED.replace("umlcraft 1.2.3", "umlcraft 1.2.4");
+        assert!(verify_sums(TEST_KEY, SUMS, &relabeled, "1.2.4").is_err());
+    }
+
+    #[test]
+    fn the_update_key_is_a_minisign_key() {
+        if let Some(key) = UPDATE_KEY {
+            assert!(minisign_verify::PublicKey::from_base64(key).is_ok());
+        }
     }
 
     #[test]

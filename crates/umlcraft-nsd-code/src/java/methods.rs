@@ -57,6 +57,7 @@ fn method(node: Node, src: &str, class: &[String]) -> Option<MethodRef> {
         line: node.start_position().row + 1,
         start: node.start_byte(),
         end: node.end_byte(),
+        module_code: false,
     })
 }
 
@@ -78,12 +79,14 @@ pub fn signature(node: Node, src: &str) -> String {
     s
 }
 
-/// The declaration `method` names.
-pub fn find<'t>(root: Node<'t>, method: &MethodRef) -> Option<Node<'t>> {
+/// The declaration `method` names: where it starts, with its name (the file may have changed
+/// since it was listed).
+pub fn find<'t>(root: Node<'t>, src: &str, method: &MethodRef) -> Option<Node<'t>> {
     let mut node = root.descendant_for_byte_range(method.start, method.start)?;
     while node.start_byte() == method.start {
         if METHODS.contains(&node.kind()) {
-            return Some(node);
+            let name = node.child_by_field_name("name").map(|n| node_text(n, src));
+            return (name == Some(method.name.as_str())).then_some(node);
         }
         node = node.parent()?;
     }

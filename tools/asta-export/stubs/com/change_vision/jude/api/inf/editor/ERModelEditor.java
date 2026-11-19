@@ -1,0 +1,18 @@
+// Compile stub for CI: only the part of Astah's API that AstaExport.java uses, declared
+// as the API declares it (see tools/asta-export/README.md).
+package com.change_vision.jude.api.inf.editor;
+
+public interface ERModelEditor {
+    public abstract com.change_vision.jude.api.inf.model.IERModel createERModel(com.change_vision.jude.api.inf.model.IModel p0, java.lang.String p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IEREntity createEREntity(com.change_vision.jude.api.inf.model.IERPackage p0, java.lang.String p1, java.lang.String p2) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERAttribute createERAttribute(com.change_vision.jude.api.inf.model.IEREntity p0, java.lang.String p1, java.lang.String p2, com.change_vision.jude.api.inf.model.IERDatatype p3) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERAttribute createERAttribute(com.change_vision.jude.api.inf.model.IEREntity p0, java.lang.String p1, java.lang.String p2, com.change_vision.jude.api.inf.model.IERDomain p3) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERDatatype createERDatatype(com.change_vision.jude.api.inf.model.IERModel p0, java.lang.String p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERDomain createERDomain(com.change_vision.jude.api.inf.model.IERModel p0, com.change_vision.jude.api.inf.model.IERDomain p1, java.lang.String p2, java.lang.String p3, com.change_vision.jude.api.inf.model.IERDatatype p4) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERPackage createERPackage(com.change_vision.jude.api.inf.model.IERPackage p0, java.lang.String p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERRelationship createIdentifyingRelationship(com.change_vision.jude.api.inf.model.IEREntity p0, com.change_vision.jude.api.inf.model.IEREntity p1, java.lang.String p2, java.lang.String p3) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERRelationship createNonIdentifyingRelationship(com.change_vision.jude.api.inf.model.IEREntity p0, com.change_vision.jude.api.inf.model.IEREntity p1, java.lang.String p2, java.lang.String p3) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERRelationship createMultiToMultiRelationship(com.change_vision.jude.api.inf.model.IEREntity p0, com.change_vision.jude.api.inf.model.IEREntity p1, java.lang.String p2, java.lang.String p3) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERSubtypeRelationship createSubtypeRelationship(com.change_vision.jude.api.inf.model.IEREntity p0, com.change_vision.jude.api.inf.model.IEREntity p1, java.lang.String p2, java.lang.String p3) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.model.IERIndex createERIndex(java.lang.String p0, com.change_vision.jude.api.inf.model.IEREntity p1, boolean p2, boolean p3, com.change_vision.jude.api.inf.model.IERAttribute[] p4) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+}

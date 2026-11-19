@@ -57,6 +57,7 @@ import com.change_vision.jude.api.inf.model.IERDomain;
 import com.change_vision.jude.api.inf.model.IERDiagram;
 import com.change_vision.jude.api.inf.model.IEREntity;
 import com.change_vision.jude.api.inf.model.IERModel;
+import com.change_vision.jude.api.inf.model.IERPackage;
 import com.change_vision.jude.api.inf.model.IERRelationship;
 import com.change_vision.jude.api.inf.model.IERSchema;
 import com.change_vision.jude.api.inf.model.IERSubtypeRelationship;
@@ -308,10 +309,10 @@ public final class AstaExport {
         }
         erModel();
         for (String id : submachinesFirst(diagrams)) {
-            attempt(id, () -> diagram(id));
+            diagramStep(id, () -> diagram(id));
         }
         for (String id : erDiagrams) {
-            attempt(id, () -> erDiagram(id));
+            diagramStep(id, () -> erDiagram(id));
         }
         // Call behavior actions call activities, which exist once their diagrams do.
         for (Map.Entry<IAction, String> c : calls.entrySet()) {
@@ -379,34 +380,49 @@ public final class AstaExport {
     private IERModel erModelElement;
     private IERSchema erSchema;
 
-    private static final Set<String> ER_TYPES = Set.of("erEntity", "erRelationship", "erIsA");
+    private static final Set<String> ER_TYPES = Set.of("erEntity", "erRelationship", "erIsA", "erDomain");
 
-    /// Whether the package holds ER entities, relationships and diagrams and nothing else.
+    /// Whether the package holds ER entities, relationships, domains and diagrams and nothing
+    /// else. Comments do not count either way: Astah keeps them as notes on the diagrams that
+    /// show them, wherever their owner is.
     private boolean erOnly(String id) {
-        List<String> kids = children(id);
-        if (kids.isEmpty()) {
-            return false;
-        }
-        for (String c : kids) {
+        boolean any = false;
+        for (String c : children(id)) {
             Map<String, Object> e = elements.get(c);
             String type = type(e);
+            if ("comment".equals(type)) {
+                continue;
+            }
             boolean er = ER_TYPES.contains(type)
                 || ("diagram".equals(type) && "entityRelationship".equals(text(e, "diagram")))
                 || ("package".equals(type) && erOnly(c));
             if (!er) {
                 return false;
             }
+            any = true;
         }
-        return true;
+        return any;
     }
 
-    private void erStructure(String id) {
+    /// The packages inside the ER-only packages, each with the package it is in (`null` for a
+    /// package `structure` found), and the package of each ER element and diagram.
+    private final Map<String, String> erPackageOwners = new HashMap<>();
+    private final Map<String, String> erOwners = new HashMap<>();
+
+    private void erStructure(String id, String owner) {
+        erPackageOwners.put(id, owner);
         for (String c : children(id)) {
             Map<String, Object> e = elements.get(c);
             String type = type(e);
             if ("package".equals(type)) {
-                erStructure(c);
-            } else if ("diagram".equals(type)) {
+                erStructure(c, id);
+                continue;
+            }
+            if ("comment".equals(type)) {
+                continue;
+            }
+            erOwners.put(c, id);
+            if ("diagram".equals(type)) {
                 erDiagrams.add(c);
             } else {
                 erElements.add(c);
@@ -414,8 +430,37 @@ public final class AstaExport {
         }
     }
 
+    /// The Astah package for UmlCraft's ER package `id`: the schema for a package `structure`
+    /// found and for a package in it named like the schema (Astah's ER model, imported, holds
+    /// its schema as such a package); an ER package of the same name for the others. A package
+    /// Astah refuses leaves its content to the package around it.
+    private IERPackage erPackage(String id) throws Exception {
+        IERSchema schema = erSchema();
+        if (id == null) {
+            return schema;
+        }
+        if (created.get(id) instanceof IERPackage made) {
+            return made;
+        }
+        String owner = erPackageOwners.get(id);
+        if (owner == null
+            || (erPackageOwners.get(owner) == null && name(elements.get(id)).equals(schema.getName()))) {
+            created.put(id, schema);
+            return schema;
+        }
+        IERPackage parent = erPackage(owner);
+        Object made = attempt(id, () -> named(id, n -> erEditor.createERPackage(parent, n)));
+        if (!(made instanceof IERPackage p)) {
+            created.put(id, parent);
+            return parent;
+        }
+        created.put(id, p);
+        common(id, p, Set.of());
+        return p;
+    }
+
     /// The default schema of the project's ER model, made on first use. Astah has one ER model;
-    /// UmlCraft's packages are not kept there.
+    /// UmlCraft's ER-only packages map onto its schema and ER packages (see `erPackage`).
     private IERSchema erSchema() throws Exception {
         if (erSchema == null) {
             erEditor = accessor.getModelEditorFactory().getERModelEditor();
@@ -458,8 +503,35 @@ public final class AstaExport {
         }
         for (String id : erElements) {
             if ("erEntity".equals(type(elements.get(id))) && created.get(id) instanceof IEREntity entity) {
+                erForeignKeysLeft(id, entity);
+            }
+        }
+        for (String id : erElements) {
+            if ("erEntity".equals(type(elements.get(id))) && created.get(id) instanceof IEREntity entity) {
                 attempt(id, () -> erIndexes(id, entity));
             }
+        }
+    }
+
+    /// The relationships and subtypes whose foreign key columns `erForeignKeys` has handled.
+    private final Set<String> erForeignKeysMade = new HashSet<>();
+
+    /// Foreign key columns of `owner` that no relationship brought. Where Astah did not make
+    /// the relationship or subtype, the column becomes a plain one, without its foreign key;
+    /// where it did but stopped before the columns took UmlCraft's names, Astah's columns stand
+    /// in for them.
+    private void erForeignKeysLeft(String owner, IEREntity entity) {
+        for (String a : erChildren(owner, "erAttribute")) {
+            if (!created.containsKey(a) && elements.get(a).get("foreignKey") instanceof String by
+                    && elements.containsKey(by) && !erForeignKeysMade.contains(by)) {
+                if (created.containsKey(by)) {
+                    drop("erForeignKeyName");
+                } else {
+                    drop("erForeignKey");
+                    attempt(a, () -> erAttribute(a, entity));
+                }
+            }
+            erForeignKeysLeft(a, entity);
         }
     }
 
@@ -540,9 +612,9 @@ public final class AstaExport {
 
     private Object erEntity(String id) throws Exception {
         Map<String, Object> e = elements.get(id);
-        IERSchema schema = erSchema();
+        IERPackage container = erPackage(erOwners.get(id));
         String physical = text(e, "physicalName");
-        IEREntity entity = (IEREntity) named(id, n -> erEditor.createEREntity(schema, n, physical.isEmpty() ? n : physical));
+        IEREntity entity = (IEREntity) named(id, n -> erEditor.createEREntity(container, n, physical.isEmpty() ? n : physical));
         created.put(id, entity);
         common(id, entity, Set.of());
         if (flag(e, "associative")) {
@@ -728,6 +800,7 @@ public final class AstaExport {
     /// The foreign key columns Astah just made in `entity` take the names and details of
     /// UmlCraft's columns of `by`, in order.
     private void erForeignKeys(String by, String child, List<IERAttribute> before, IEREntity entity) {
+        erForeignKeysMade.add(by);
         List<IERAttribute> made = erColumns(entity);
         made.removeAll(before);
         List<String> ours = new ArrayList<>();
@@ -807,9 +880,9 @@ public final class AstaExport {
     /// them, the relationships and subtypes it shows between them.
     private Object erDiagram(String id) throws Exception {
         Map<String, Object> e = elements.get(id);
-        IERSchema schema = erSchema();
+        IERPackage container = erPackage(erOwners.get(id));
         ERDiagramEditor editor = accessor.getDiagramEditorFactory().getERDiagramEditor();
-        IERDiagram d = (IERDiagram) named(id, n -> editor.createERDiagram(schema, n));
+        IERDiagram d = (IERDiagram) begun(id, n -> editor.createERDiagram(container, n));
         String notation = text(e, "notation");
         if (!"ie".equals(notation) && !"idef1x".equals(notation)) {
             drop("erChenNotation");
@@ -901,7 +974,7 @@ public final class AstaExport {
             // A package of ER content only (Astah's ER model or a schema, imported) goes into
             // Astah's ER model.
             if ("package".equals(type) && erOnly(child)) {
-                erStructure(child);
+                erStructure(child, null);
                 continue;
             }
             switch (type) {
@@ -1422,7 +1495,7 @@ public final class AstaExport {
             case "compositeStructure" -> {
                 CompositeStructureDiagramEditor cs =
                     accessor.getDiagramEditorFactory().getCompositeStructureDiagramEditor();
-                diagram = (IDiagram) named(id, n -> cs.createCompositeStructureDiagram((INamedElement) owner, n));
+                diagram = (IDiagram) begun(id, n -> cs.createCompositeStructureDiagram((INamedElement) owner, n));
                 frame(id, diagram);
                 compositeDiagram(id, cs);
                 current = cs;
@@ -1436,11 +1509,11 @@ public final class AstaExport {
                         drop(kind + "Diagram");
                     }
                     ClassDiagramEditor cd = accessor.getDiagramEditorFactory().getClassDiagramEditor();
-                    diagram = (IDiagram) named(id, n -> cd.createClassDiagram((INamedElement) owner, n));
+                    diagram = (IDiagram) begun(id, n -> cd.createClassDiagram((INamedElement) owner, n));
                     editor = cd;
                 } else {
                     UseCaseDiagramEditor ud = accessor.getDiagramEditorFactory().getUseCaseDiagramEditor();
-                    diagram = (IDiagram) named(id, n -> ud.createUseCaseDiagram((INamedElement) owner, n));
+                    diagram = (IDiagram) begun(id, n -> ud.createUseCaseDiagram((INamedElement) owner, n));
                     editor = ud;
                 }
                 frame(id, diagram);
@@ -1453,7 +1526,7 @@ public final class AstaExport {
                 Object interactionOwner = created.get(owners.get(interaction));
                 SequenceDiagramEditor sd = accessor.getDiagramEditorFactory().getSequenceDiagramEditor();
                 ISequenceDiagram d =
-                    (ISequenceDiagram) named(id, n -> sd.createSequenceDiagram((INamedElement) interactionOwner, n));
+                    (ISequenceDiagram) begun(id, n -> sd.createSequenceDiagram((INamedElement) interactionOwner, n));
                 String interactionName = name(elements.get(interaction));
                 if (!interactionName.isEmpty()) {
                     d.getInteraction().setName(interactionName);
@@ -1487,7 +1560,7 @@ public final class AstaExport {
                 Object activityOwner = created.get(owners.get(activity));
                 ActivityDiagramEditor ad = accessor.getDiagramEditorFactory().getActivityDiagramEditor();
                 IActivityDiagram d =
-                    (IActivityDiagram) named(id, n -> ad.createActivityDiagram((INamedElement) activityOwner, n));
+                    (IActivityDiagram) begun(id, n -> ad.createActivityDiagram((INamedElement) activityOwner, n));
                 String activityName = name(elements.get(activity));
                 if (!activityName.isEmpty()) {
                     d.getActivity().setName(activityName);
@@ -1505,7 +1578,7 @@ public final class AstaExport {
                 Object machineOwner = created.get(owners.get(machine));
                 StateMachineDiagramEditor sm = accessor.getDiagramEditorFactory().getStateMachineDiagramEditor();
                 IStateMachineDiagram d =
-                    (IStateMachineDiagram) named(id, n -> sm.createStatemachineDiagram((INamedElement) machineOwner, n));
+                    (IStateMachineDiagram) begun(id, n -> sm.createStatemachineDiagram((INamedElement) machineOwner, n));
                 String machineName = name(elements.get(machine));
                 if (!machineName.isEmpty()) {
                     d.getStateMachine().setName(machineName);
@@ -1954,7 +2027,7 @@ public final class AstaExport {
                 Map<String, Object> e = elements.get(element);
                 INodePresentation node;
                 if ("comment".equals(type(e))) {
-                    node = note(editor, element, at);
+                    node = (INodePresentation) attempt(element, () -> note(editor, element, at));
                 } else if (pins) {
                     INodePresentation action = actionOf(element, presentations, shown);
                     if (action == null) {
@@ -1979,7 +2052,11 @@ public final class AstaExport {
                 if (!pins && !"connector".equals(text(e, "node"))) {
                     resize(node, num(r, "width"), num(r, "height"));
                 }
-                fill(node, p);
+                INodePresentation made = node;
+                attempt(null, () -> {
+                    fill(made, p);
+                    return null;
+                });
                 shown.put((String) p.get("id"), node);
             }
         }
@@ -2235,7 +2312,7 @@ public final class AstaExport {
             Map<String, Object> e = elements.get(element);
             INodePresentation node;
             if ("comment".equals(type(e))) {
-                node = note(editor, element, at);
+                node = (INodePresentation) attempt(element, () -> note(editor, element, at));
             } else if (unmade(e)) {
                 // The API makes no entry and exit points and no stub states; they are counted
                 // below, with what the diagram does not show.
@@ -2258,16 +2335,21 @@ public final class AstaExport {
             if (node == null) {
                 continue;
             }
-            node.setLocation(at);
-            // Astah keeps room for entry, do and exit, which makes a state at least 81 high;
-            // a state without them does not need it.
-            // Submachine states keep no such room.
-            if ("state".equals(type(e)) && text(e, "entry").isEmpty() && text(e, "doActivity").isEmpty()
-                    && text(e, "exit").isEmpty() && !(node.getModel() instanceof IState s && s.isSubmachineState())) {
-                node.setProperty("action_visibility", "false");
-            }
-            resize(node, num(r, "width"), num(r, "height"));
-            fill(node, p);
+            // The vertex is made: a place or look Astah refuses costs only that.
+            INodePresentation made = node;
+            attempt(null, () -> {
+                made.setLocation(at);
+                // Astah keeps room for entry, do and exit, which makes a state at least 81
+                // high; a state without them does not need it.
+                // Submachine states keep no such room.
+                if ("state".equals(type(e)) && text(e, "entry").isEmpty() && text(e, "doActivity").isEmpty()
+                        && text(e, "exit").isEmpty() && !(made.getModel() instanceof IState s && s.isSubmachineState())) {
+                    made.setProperty("action_visibility", "false");
+                }
+                resize(made, num(r, "width"), num(r, "height"));
+                fill(made, p);
+                return null;
+            });
             shown.put((String) p.get("id"), node);
             nodeOf.putIfAbsent(element, node);
             if ("state".equals(type(e))) {
@@ -2284,9 +2366,12 @@ public final class AstaExport {
                     && Set.of("state", "finalState", "pseudostate").contains(type(elements.get(element)))
                     && inOrthogonalState(element)) {
                 Map<String, Object> r = rect(diagram, p);
-                node.setLocation(new Point2D.Double(num(r, "x"), num(r, "y")));
-                resize(node, num(r, "width"), num(r, "height"));
-                replaced.put(node, r);
+                attempt(null, () -> {
+                    node.setLocation(new Point2D.Double(num(r, "x"), num(r, "y")));
+                    resize(node, num(r, "width"), num(r, "height"));
+                    replaced.put(node, r);
+                    return null;
+                });
             }
         }
         edges(editor, diagram, view(diagram), shown);
@@ -3617,6 +3702,27 @@ public final class AstaExport {
         }
     }
 
+    /// Diagrams made so far, also those whose content then failed.
+    private final Set<String> begunDiagrams = new HashSet<>();
+
+    /// Creates the diagram `id` under its UmlCraft name (see `named`) and notes it as begun.
+    private Object begun(String id, Creator creator) throws Exception {
+        Object made = named(id, creator);
+        begunDiagrams.add(id);
+        return made;
+    }
+
+    /// Makes one diagram. A failure before the diagram exists drops it; one after leaves what
+    /// was made of it in the project, and the report counts it as a partial diagram.
+    private void diagramStep(String id, Step step) {
+        try {
+            step.run();
+        } catch (Exception e) {
+            drop(begunDiagrams.contains(id) ? "partialDiagram" : "diagram");
+            problem("diagram \"" + name(elements.get(id)) + "\"", e);
+        }
+    }
+
     /// Creates an element under its UmlCraft name. Astah rejects empty names and duplicates
     /// among siblings, so those get a numbered name instead.
     private Object named(String id, Creator creator) throws Exception {
@@ -3662,47 +3768,58 @@ public final class AstaExport {
         if (e == null || target == null) {
             return;
         }
+        // Each detail on its own: one Astah refuses costs only that one.
+        // UmlCraft leaves out the default, public; Astah's default for attributes is private.
+        if (target instanceof INamedElement n && e.get("visibility") instanceof String v) {
+            detail(e, () -> n.setVisibility(v));
+        } else if (target instanceof INamedElement n && !(target instanceof IModel)) {
+            try {
+                n.setVisibility("public");
+            } catch (InvalidEditingException x) {
+                // Template parameters, for one, have no visibility of their own.
+            }
+        }
+        for (Object s : list(e.get("stereotypes"))) {
+            if (!implied.contains(s) && !target.hasStereotype((String) s)) {
+                detail(e, () -> target.addStereotype((String) s));
+            }
+        }
+        for (Object tv : list(e.get("taggedValues"))) {
+            Map<String, Object> tag = (Map<String, Object>) tv;
+            String key = text(tag, "key");
+            try {
+                basic.createTaggedValue(target, astahTag(key), text(tag, "value"));
+            } catch (InvalidEditingException x) {
+                // Astah keeps keys such as "jude.java.annotations" to itself; UmlCraft's
+                // own name keeps the value.
+                try {
+                    basic.createTaggedValue(target, key, text(tag, "value"));
+                } catch (InvalidEditingException y) {
+                    drop("details");
+                }
+            }
+        }
+        if (target instanceof INamedElement n && !text(e, "documentation").isEmpty()) {
+            detail(e, () -> n.setDefinition(text(e, "documentation")));
+        }
+        constraints(id, target);
+    }
+
+    @FunctionalInterface
+    private interface Edit {
+        void run() throws InvalidEditingException;
+    }
+
+    /// Sets one detail of the element `e`; one Astah refuses is reported as such.
+    private void detail(Map<String, Object> e, Edit edit) {
         try {
-            // UmlCraft leaves out the default, public; Astah's default for attributes is private.
-            if (target instanceof INamedElement n && e.get("visibility") instanceof String v) {
-                n.setVisibility(v);
-            } else if (target instanceof INamedElement n && !(target instanceof IModel)) {
-                try {
-                    n.setVisibility("public");
-                } catch (InvalidEditingException x) {
-                    // Template parameters, for one, have no visibility of their own.
-                }
-            }
-            for (Object s : list(e.get("stereotypes"))) {
-                if (!implied.contains(s) && !target.hasStereotype((String) s)) {
-                    target.addStereotype((String) s);
-                }
-            }
-            for (Object tv : list(e.get("taggedValues"))) {
-                Map<String, Object> tag = (Map<String, Object>) tv;
-                String key = text(tag, "key");
-                try {
-                    basic.createTaggedValue(target, astahTag(key), text(tag, "value"));
-                } catch (InvalidEditingException x) {
-                    // Astah keeps keys such as "jude.java.annotations" to itself; UmlCraft's
-                    // own name keeps the value.
-                    try {
-                        basic.createTaggedValue(target, key, text(tag, "value"));
-                    } catch (InvalidEditingException y) {
-                        drop("details");
-                    }
-                }
-            }
-            if (target instanceof INamedElement n && !text(e, "documentation").isEmpty()) {
-                n.setDefinition(text(e, "documentation"));
-            }
+            edit.run();
         } catch (InvalidEditingException x) {
             drop("details");
             if (problems.size() < 20) {
                 problems.add(oneLine(type(e) + " \"" + name(e) + "\": " + describe(x)));
             }
         }
-        constraints(id, target);
     }
 
     /// The element's constraints; Astah names each by its text and keeps the text as its

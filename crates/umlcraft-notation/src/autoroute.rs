@@ -268,12 +268,16 @@ struct Grid {
     straight_ys: Vec<f32>,
     hug_x: Vec<bool>,
     hug_y: Vec<bool>,
-    /// The boxes (with their margin) each vertex lies inside, by `j * nx + i`.
-    cells: Vec<Vec<u32>>,
-    /// The boxes each stretch from vertex `(i, j)` to `(i + 1, j)` runs through.
-    east: Vec<Vec<u32>>,
+    /// The boxes (with their margin) each vertex lies inside, by `j * nx + i`, as an index
+    /// into `sets`.
+    cells: Vec<u32>,
+    /// The boxes each stretch from vertex `(i, j)` to `(i + 1, j)` runs through, the same way.
+    east: Vec<u32>,
     /// The boxes each stretch from vertex `(i, j)` to `(i, j + 1)` runs through.
-    south: Vec<Vec<u32>>,
+    south: Vec<u32>,
+    /// The distinct lists of boxes of `cells`, `east` and `south`, the empty one first: most
+    /// vertices and stretches lie in no box, and the others share a few lists.
+    sets: BoxSets,
     /// What the stretch from vertex `(i, j)` to `(i + 1, j)` costs extra per unit of length:
     /// for running through a text or along a line that stays.
     text_east: Vec<f32>,
@@ -335,9 +339,10 @@ impl Grid {
         let (ys, hug_y) = grid_lines(ys);
         let (nx, ny) = (xs.len(), ys.len());
         let mut grid = Grid {
-            cells: vec![Vec::new(); nx * ny],
-            east: vec![Vec::new(); nx * ny],
-            south: vec![Vec::new(); nx * ny],
+            cells: vec![0; nx * ny],
+            east: vec![0; nx * ny],
+            south: vec![0; nx * ny],
+            sets: BoxSets::new(),
             text_east: vec![0.0; nx * ny],
             text_south: vec![0.0; nx * ny],
             text_cells: vec![0.0; nx * ny],
@@ -359,13 +364,13 @@ impl Grid {
                     let inside_x = x0 < i && i < x1;
                     let inside_y = y0 < j && j < y1;
                     if inside_x && inside_y {
-                        grid.cells[k].push(b);
+                        grid.cells[k] = grid.sets.with(grid.cells[k], b);
                     }
                     if i < x1 && inside_y {
-                        grid.east[k].push(b);
+                        grid.east[k] = grid.sets.with(grid.east[k], b);
                     }
                     if j < y1 && inside_x {
-                        grid.south[k].push(b);
+                        grid.south[k] = grid.sets.with(grid.south[k], b);
                     }
                 }
             }
@@ -396,6 +401,18 @@ impl Grid {
         self.xs.len()
     }
 
+    /// The boxes vertex `v` lies inside.
+    fn cell(&self, v: usize) -> &[u32] {
+        self.sets.get(self.cells[v])
+    }
+
+    /// The index of the stretch between the neighbouring vertices `v` and `w`: two per vertex,
+    /// the one to the east and the one to the south.
+    fn stretch(&self, v: usize, w: usize) -> usize {
+        let low = v.min(w);
+        if v / self.nx() == w / self.nx() { 2 * low } else { 2 * low + 1 }
+    }
+
     fn vertex(&self, p: Point) -> usize {
         line_index(&self.ys, p.y) * self.nx() + line_index(&self.xs, p.x)
     }
@@ -409,13 +426,45 @@ impl Grid {
     fn step(&self, v: usize, d: Dir) -> Option<(usize, &[u32], f32)> {
         let (nx, ny) = (self.nx(), self.ys.len());
         let (i, j) = (v % nx, v / nx);
-        match d {
-            Dir::East if i + 1 < nx => Some((v + 1, &self.east[v], self.text_east[v])),
-            Dir::West if i > 0 => Some((v - 1, &self.east[v - 1], self.text_east[v - 1])),
-            Dir::South if j + 1 < ny => Some((v + nx, &self.south[v], self.text_south[v])),
-            Dir::North if j > 0 => Some((v - nx, &self.south[v - nx], self.text_south[v - nx])),
-            _ => None,
+        let (w, set, text) = match d {
+            Dir::East if i + 1 < nx => (v + 1, self.east[v], self.text_east[v]),
+            Dir::West if i > 0 => (v - 1, self.east[v - 1], self.text_east[v - 1]),
+            Dir::South if j + 1 < ny => (v + nx, self.south[v], self.text_south[v]),
+            Dir::North if j > 0 => (v - nx, self.south[v - nx], self.text_south[v - nx]),
+            _ => return None,
+        };
+        Some((w, self.sets.get(set), text))
+    }
+}
+
+/// Distinct lists of box indices, each built by adding boxes one by one to an earlier one:
+/// [`BoxSets::with`] gives the same index for the same list.
+struct BoxSets {
+    lists: Vec<Vec<u32>>,
+    /// The list made by adding a box to a list, by both indices.
+    added: HashMap<(u32, u32), u32>,
+}
+
+impl BoxSets {
+    fn new() -> Self {
+        Self { lists: vec![Vec::new()], added: HashMap::new() }
+    }
+
+    fn get(&self, set: u32) -> &[u32] {
+        &self.lists[set as usize]
+    }
+
+    /// The list `set` with box `b` added at its end.
+    fn with(&mut self, set: u32, b: u32) -> u32 {
+        if let Some(&next) = self.added.get(&(set, b)) {
+            return next;
         }
+        let mut list = self.lists[set as usize].clone();
+        list.push(b);
+        let next = self.lists.len() as u32;
+        self.lists.push(list);
+        self.added.insert((set, b), next);
+        next
     }
 }
 
@@ -479,11 +528,17 @@ pub fn route_around(
 ) -> Vec<Option<Vec<Point>>> {
     let Around { texts, lines, loops, taken, dividers } = *around;
     let mut ports: Ports = HashMap::new();
+    // Grid lines beside the taken ports, where a line routed now can have its own: only on the
+    // boxes lines are routed to now. Elsewhere they would only make the grid larger, by four
+    // lines for every line that stays.
+    let routed_boxes: HashSet<usize> = requests.iter().flat_map(|r| [r.source, r.target]).collect();
     let mut beside = Vec::new();
     for &(b, p) in taken {
         let (side, port) = on_side(boxes[b], p);
         ports.entry((b, side)).or_default().push(side.along(port));
-        beside.push(port);
+        if routed_boxes.contains(&b) {
+            beside.push(port);
+        }
     }
     let mut texts: Vec<(Rect, f32)> = texts.iter().map(|&r| (r, THROUGH_TEXT)).collect();
     texts.extend(lines.iter().map(|&r| (r, ALONG_LINE)));
@@ -501,7 +556,9 @@ pub fn route_around(
         }
     }
     let grid = Grid::new(boxes, &texts, &beside, dividers, requests);
-    let mut used: HashMap<(usize, usize), u32> = HashMap::new();
+    // How many earlier routes run along each stretch of the grid, by `Grid::stretch`.
+    let mut used: IndexMap<u32> = IndexMap::default();
+    let mut search = Search::default();
     let mut order: Vec<usize> = (0..requests.len()).collect();
     let span = |r: &Request| {
         let (a, b) = (boxes[r.source].center(), boxes[r.target].center());
@@ -513,10 +570,10 @@ pub fn route_around(
     for i in order {
         let request = requests[i];
         if let Some((points, vertices, ends)) =
-            shortest(&grid, boxes, request, &used, &ports, dividers)
+            shortest(&grid, boxes, request, &used, &ports, dividers, &mut search)
         {
             for pair in vertices.windows(2) {
-                *used.entry((pair[0].min(pair[1]), pair[0].max(pair[1]))).or_default() += 1;
+                *used.entry(grid.stretch(pair[0], pair[1])).or_default() += 1;
             }
             let points = lengthen_ends(unjog(points, boxes, request), boxes, request, dividers);
             for (b, side, p) in [
@@ -688,6 +745,53 @@ fn on_side(r: Rect, p: Point) -> (Side, Point) {
     .expect("four sides")
 }
 
+/// Points grouped by the grid line they share (the exits through one side of a box lie on one),
+/// to find the distance to the nearest of them along x and y without looking at each.
+struct ExitRows {
+    /// Lines across holding two or more of the points: (y, the points' x, ascending).
+    rows: Vec<(f32, Vec<f32>)>,
+    /// Lines down holding the other points: (x, the points' y, ascending).
+    columns: Vec<(f32, Vec<f32>)>,
+}
+
+impl ExitRows {
+    fn new(points: impl Iterator<Item = Point>) -> Self {
+        let points: Vec<Point> = points.collect();
+        let mut by_y: HashMap<u32, Vec<f32>> = HashMap::new();
+        for p in &points {
+            by_y.entry(p.y.to_bits()).or_default().push(p.x);
+        }
+        let mut by_x: HashMap<u32, Vec<f32>> = HashMap::new();
+        for p in points.iter().filter(|p| by_y[&p.y.to_bits()].len() < 2) {
+            by_x.entry(p.x.to_bits()).or_default().push(p.y);
+        }
+        let sorted = |(at, mut values): (u32, Vec<f32>)| {
+            values.sort_by(f32::total_cmp);
+            (f32::from_bits(at), values)
+        };
+        Self {
+            rows: by_y.into_iter().filter(|(_, xs)| xs.len() >= 2).map(sorted).collect(),
+            columns: by_x.into_iter().map(sorted).collect(),
+        }
+    }
+
+    /// The least distance along x plus along y from `p` to one of the points.
+    fn nearest(&self, p: Point) -> f32 {
+        let closest = |values: &[f32], v: f32| {
+            let i = values.partition_point(|&a| a < v);
+            [i.checked_sub(1), Some(i)]
+                .into_iter()
+                .flatten()
+                .filter_map(|k| values.get(k))
+                .map(|&a| (v - a).abs())
+                .fold(f32::INFINITY, f32::min)
+        };
+        let rows = self.rows.iter().map(|(y, xs)| closest(xs, p.x) + (p.y - y).abs());
+        let columns = self.columns.iter().map(|(x, ys)| (p.x - x).abs() + closest(ys, p.y));
+        rows.chain(columns).fold(f32::INFINITY, f32::min)
+    }
+}
+
 /// A route found on the grid: its points, the grid vertices it passes and the sides it leaves
 /// and enters by.
 type Found = (Vec<Point>, Vec<usize>, (Side, Side));
@@ -702,14 +806,86 @@ fn crowd(ports: &Ports, b: usize, side: Side, at: f32) -> f32 {
     })
 }
 
-/// The cheapest route for `request`.
+/// Hashes grid indices (vertices, states, stretches) by one multiplication: they need no
+/// protection against chosen keys, and the default hasher would cost more than the search.
+#[derive(Clone, Copy, Default)]
+struct IndexHasher(u64);
+
+impl std::hash::Hasher for IndexHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+}
+
+/// A map from grid indices: as large as what was stored, not as the grid.
+type IndexMap<V> = HashMap<usize, V, std::hash::BuildHasherDefault<IndexHasher>>;
+
+/// What the search for a route keeps of the states it reached, kept from one route to the
+/// next so that its room is reused.
+#[derive(Default)]
+struct Search {
+    best: IndexMap<f32>,
+    came: IndexMap<usize>,
+    starts: IndexMap<()>,
+}
+
+impl Search {
+    /// Starts a new search.
+    fn begin(&mut self) {
+        self.best.clear();
+        self.came.clear();
+        self.starts.clear();
+    }
+
+    fn best(&self, state: usize) -> Option<f32> {
+        self.best.get(&state).copied()
+    }
+
+    fn set_best(&mut self, state: usize, cost: f32) {
+        self.best.insert(state, cost);
+    }
+
+    fn came(&self, state: usize) -> Option<usize> {
+        self.came.get(&state).copied()
+    }
+
+    fn set_came(&mut self, state: usize, from: usize) {
+        self.came.insert(state, from);
+    }
+
+    fn set_start(&mut self, state: usize) {
+        self.starts.insert(state, ());
+    }
+
+    fn is_start(&self, state: usize) -> bool {
+        self.starts.contains_key(&state)
+    }
+}
+
+/// The cheapest route for `request`. `used` counts the routes along each stretch of the grid
+/// (by [`Grid::stretch`]).
 fn shortest(
     grid: &Grid,
     boxes: &[Rect],
     request: Request,
-    used: &HashMap<(usize, usize), u32>,
+    used: &IndexMap<u32>,
     ports: &Ports,
     dividers: &[(usize, f32)],
+    search: &mut Search,
 ) -> Option<Found> {
     let dividers_of =
         |b: usize| dividers.iter().filter(|d| d.0 == b).map(|d| d.1).collect::<Vec<f32>>();
@@ -731,8 +907,10 @@ fn shortest(
     let blocked = |list: &[u32]| list.iter().any(|b| !passable.contains(b));
 
     // Facing sides that are shut lift the restriction.
-    let anywhere =
-        || shortest(grid, boxes, Request { facing: false, ..request }, used, ports, dividers);
+    let anywhere = |search: &mut Search| {
+        let request = Request { facing: false, ..request };
+        shortest(grid, boxes, request, used, ports, dividers, search)
+    };
     let (source_sides, target_sides) = request.sides(source, target);
 
     // States are (vertex, direction of arrival); the goal is one state past the target's
@@ -747,41 +925,41 @@ fn shortest(
                 (grid.vertex(exit), side, port, cost)
             })
         })
-        .filter(|&(v, _, _, _)| !blocked(&grid.cells[v]))
+        .filter(|&(v, _, _, _)| !blocked(grid.cell(v)))
         .collect();
     // Leaving or entering a node through a text costs as running through it.
     let stub = |v: usize| MARGIN * (1.0 + grid.text_cells[v]);
     if exits.is_empty() {
-        return if request.facing { anywhere() } else { None };
+        return if request.facing { anywhere(search) } else { None };
     }
-    let heuristic = |v: usize| {
-        let p = grid.point(v);
-        exits
-            .iter()
-            .map(|&(e, _, _, _)| {
-                let q = grid.point(e);
-                (p.x - q.x).abs() + (p.y - q.y).abs()
-            })
-            .fold(f32::INFINITY, f32::min)
-            + MARGIN
-    };
-    let mut best: HashMap<usize, f32> = HashMap::new();
-    let mut came: HashMap<usize, usize> = HashMap::new();
+    // The exits at each vertex, and the exits by the grid line they lie on, to find the
+    // nearest without looking at all of them.
+    let mut exits_at: IndexMap<Vec<usize>> = IndexMap::default();
+    for (k, &(e, ..)) in exits.iter().enumerate() {
+        exits_at.entry(e).or_default().push(k);
+    }
+    let rows = ExitRows::new(exits.iter().map(|&(e, ..)| grid.point(e)));
+    let heuristic = |v: usize| rows.nearest(grid.point(v)) + MARGIN;
+    search.begin();
+    // The goal states, one per exit.
+    let mut done_best: Vec<Option<f32>> = vec![None; exits.len()];
+    let mut done_came: Vec<usize> = vec![0; exits.len()];
     let mut queue = BinaryHeap::new();
     let mut starts: HashMap<usize, (Side, Point)> = HashMap::new();
     for side in source_sides {
         for (port, exit, off) in side.ports(source, grid, &source_dividers) {
             let v = grid.vertex(exit);
-            if blocked(&grid.cells[v]) {
+            if blocked(grid.cell(v)) {
                 continue;
             }
             let state = v * 4 + side.outward().index();
             let cost =
                 stub(v) + off * OFF_MIDDLE + crowd(ports, request.source, side, side.along(port));
-            if best.get(&state).is_some_and(|&b| b <= cost) {
+            if search.best(state).is_some_and(|b| b <= cost) {
                 continue;
             }
-            best.insert(state, cost);
+            search.set_best(state, cost);
+            search.set_start(state);
             starts.insert(state, (side, port));
             queue.push(Entry { estimate: cost + heuristic(v), cost, state });
         }
@@ -792,25 +970,23 @@ fn shortest(
             finish = Some(state - goal);
             break;
         }
-        if best.get(&state).is_some_and(|&b| cost > b + 1e-3) {
+        if search.best(state).is_some_and(|b| cost > b + 1e-3) {
             continue;
         }
         let (v, arrived) = (state / 4, Dir::ALL[state % 4]);
-        for (k, &(e, side, _, off)) in exits.iter().enumerate() {
-            if e == v {
-                let inward = side.outward().opposite();
-                let bend = match () {
-                    _ if arrived == inward => 0.0,
-                    _ if request.markers[1] => BEND + SHORT_END,
-                    _ => BEND,
-                };
-                let total = cost + stub(e) + off + bend;
-                let done = goal + k;
-                if best.get(&done).is_none_or(|&b| total < b) {
-                    best.insert(done, total);
-                    came.insert(done, state);
-                    queue.push(Entry { estimate: total, cost: total, state: done });
-                }
+        for &k in exits_at.get(&v).map_or(&[][..], Vec::as_slice) {
+            let (e, side, _, off) = exits[k];
+            let inward = side.outward().opposite();
+            let bend = match () {
+                _ if arrived == inward => 0.0,
+                _ if request.markers[1] => BEND + SHORT_END,
+                _ => BEND,
+            };
+            let total = cost + stub(e) + off + bend;
+            if done_best[k].is_none_or(|b| total < b) {
+                done_best[k] = Some(total);
+                done_came[k] = state;
+                queue.push(Entry { estimate: total, cost: total, state: goal + k });
             }
         }
         for d in Dir::ALL {
@@ -818,16 +994,16 @@ fn shortest(
                 continue;
             }
             let Some((w, through, text)) = grid.step(v, d) else { continue };
-            if blocked(through) || blocked(&grid.cells[w]) {
+            if blocked(through) || blocked(grid.cell(w)) {
                 continue;
             }
             let (a, b) = (grid.point(v), grid.point(w));
             let length = (a.x - b.x).abs() + (a.y - b.y).abs();
             let hugs =
                 if d.horizontal() { grid.hug_y[v / grid.nx()] } else { grid.hug_x[v % grid.nx()] };
-            let shared = used.get(&(v.min(w), v.max(w))).copied().unwrap_or(0) as f32;
+            let shared = used.get(&grid.stretch(v, w)).copied().unwrap_or(0) as f32;
             // Turning right after leaving the source.
-            let short_start = request.markers[0] && starts.contains_key(&state);
+            let short_start = request.markers[0] && search.is_start(state);
             let step = length * (1.0 + if hugs { HUG } else { 0.0 } + SHARED * shared + text)
                 + match () {
                     _ if d == arrived => 0.0,
@@ -836,19 +1012,19 @@ fn shortest(
                 };
             let next = w * 4 + d.index();
             let total = cost + step;
-            if best.get(&next).is_none_or(|&b| total < b - 1e-3) {
-                best.insert(next, total);
-                came.insert(next, state);
+            if search.best(next).is_none_or(|b| total < b - 1e-3) {
+                search.set_best(next, total);
+                search.set_came(next, state);
                 queue.push(Entry { estimate: total + heuristic(w), cost: total, state: next });
             }
         }
     }
     let Some(exit) = finish else {
-        return if request.facing { anywhere() } else { None };
+        return if request.facing { anywhere(search) } else { None };
     };
     let (_, entered, end_port, _) = exits[exit];
-    let mut states = vec![came[&(goal + exit)]];
-    while let Some(&previous) = came.get(states.last().expect("not empty")) {
+    let mut states = vec![done_came[exit]];
+    while let Some(previous) = search.came(*states.last().expect("not empty")) {
         states.push(previous);
     }
     states.reverse();
@@ -1289,12 +1465,7 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
     }
     // Widths as estimated, which is close enough to steer around texts; heights of rows are
     // as drawn.
-    let scene = crate::scene::build(
-        model,
-        diagram,
-        &crate::scene::Preview::default(),
-        &crate::scene::ApproxMeasure,
-    );
+    let scene = crate::scene::build_geometry(model, diagram, &crate::scene::ApproxMeasure);
     // On activity diagrams lines keep off the texts outside nodes (pin names, object node
     // properties).
     let texts: Vec<Rect> =
@@ -1512,19 +1683,28 @@ pub fn stale(tx: &Tx<'_>, diagram: Id, before: &Snapshot) -> Vec<Id> {
     if changed.is_empty() && now.edges.iter().all(|e| before.edges.contains(e)) {
         return Vec::new();
     }
-    let moved = |id: &Id| changed.iter().any(|(c, _)| c == id);
+    let moved: HashSet<Id> = changed.iter().map(|(c, _)| *c).collect();
     view.presentations()
         .iter()
         .filter(|p| p.style.auto_route)
         .filter_map(|p| match &p.shape {
-            Shape::Edge { source, target, waypoints, .. } => {
+            Shape::Edge { source, target, waypoints, source_anchor, target_anchor, .. } => {
                 let new = !before.edges.contains(&p.id);
-                let ends = moved(source) || moved(target);
-                // A node that moved onto the line, judged by its corners.
+                let ends = moved.contains(source) || moved.contains(target);
+                // The line as drawn: from its end on the source node over its corners to its
+                // end on the target node.
+                let end = |node: &Id, anchor: Option<Point>| {
+                    now.nodes.get(node).map(|&r| crate::route::anchor_point(r, anchor))
+                };
+                let mut path: Vec<Point> = Vec::with_capacity(waypoints.len() + 2);
+                path.extend(end(source, *source_anchor));
+                path.extend(waypoints.iter().copied());
+                path.extend(end(target, *target_anchor));
+                // A node that moved onto the line, judged by its stretches.
                 let crossed = changed.iter().any(|(c, r)| {
                     c != source && c != target && {
                         let r = r.inflate(MARGIN / 2.0);
-                        waypoints.windows(2).any(|w| segment_hits(w[0], w[1], r))
+                        path.windows(2).any(|w| segment_hits(w[0], w[1], r))
                     }
                 });
                 // A node that moved away from beside a bent line or from the margin of one of
@@ -1539,7 +1719,7 @@ pub fn stale(tx: &Tx<'_>, diagram: Id, before: &Snapshot) -> Vec<Id> {
                             && c != target
                             && before.nodes.get(c).is_some_and(|old| {
                                 let old = old.inflate(MARGIN);
-                                waypoints.windows(2).any(|w| segment_hits(w[0], w[1], old))
+                                path.windows(2).any(|w| segment_hits(w[0], w[1], old))
                                     || ends.iter().any(|e| e.intersects(&old))
                             })
                     })
@@ -1663,7 +1843,7 @@ pub(crate) fn segment_hits(a: Point, b: Point, r: Rect) -> bool {
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     nodes: HashMap<Id, Rect>,
-    edges: Vec<Id>,
+    edges: HashSet<Id>,
     loops: HashMap<Id, Vec<Point>>,
 }
 
@@ -1680,7 +1860,9 @@ pub fn snapshot(model: &umlcraft_model::Model, diagram: Id) -> Snapshot {
             Shape::Node { bounds, .. } => {
                 snapshot.nodes.insert(p.id, *bounds);
             }
-            Shape::Edge { .. } if p.style.auto_route => snapshot.edges.push(p.id),
+            Shape::Edge { .. } if p.style.auto_route => {
+                snapshot.edges.insert(p.id);
+            }
             _ => {}
         }
     }
@@ -1966,5 +2148,71 @@ mod tests {
             route(&boxes, &[Request { source: 1, target: 0, facing: false, markers: [false; 2] }]),
             vec![None]
         );
+    }
+
+    #[test]
+    fn the_nearest_exit_is_found_by_its_row_as_by_looking_at_each() {
+        // The exits of a box's top and bottom (rows) and of its sides (one per height).
+        let mut exits: Vec<Point> =
+            (0..12).map(|k| Point::new(100.0 + 9.5 * k as f32, 38.0)).collect();
+        exits.extend((0..12).map(|k| Point::new(100.0 + 9.5 * k as f32, 212.0)));
+        exits.extend((0..8).map(|k| Point::new(88.0, 60.0 + 13.0 * k as f32)));
+        exits.extend((0..8).map(|k| Point::new(232.0, 60.0 + 13.0 * k as f32)));
+        let rows = ExitRows::new(exits.iter().copied());
+        for (x, y) in [(0.0, 0.0), (150.0, 120.0), (400.0, 77.7), (-20.0, 300.0), (101.3, 38.0)] {
+            let p = Point::new(x, y);
+            let each = exits
+                .iter()
+                .map(|q| (p.x - q.x).abs() + (p.y - q.y).abs())
+                .fold(f32::INFINITY, f32::min);
+            assert_eq!(rows.nearest(p), each, "{p:?}");
+        }
+    }
+
+    /// The drawn path of the line `edge`, from end to end.
+    fn drawn(model: &Model, diagram: Id, edge: Id) -> Vec<Point> {
+        let view = model.view(diagram).unwrap();
+        let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, .. } =
+            &view.get(edge).unwrap().shape
+        else {
+            panic!("not a line")
+        };
+        let rect = |n: &Id| view.get(*n).unwrap().bounds().unwrap();
+        let mut path = vec![crate::route::anchor_point(rect(source), *source_anchor)];
+        path.extend(waypoints.iter().copied());
+        path.push(crate::route::anchor_point(rect(target), *target_anchor));
+        path
+    }
+
+    #[test]
+    fn a_straight_line_goes_around_a_node_moved_onto_it() {
+        use crate::palette::{self, EdgeTool, NodeTool};
+        use umlcraft_model::Document;
+        let measure = crate::scene::ApproxMeasure;
+        let mut doc = Document::new(Model::new("m"));
+        let root = doc.model().root();
+        let d = crate::edit::apply(&mut doc, "diagram", &measure, |tx| {
+            crate::edit::create_diagram(tx, root, DiagramKind::Class, "Classes")
+        })
+        .unwrap();
+        let (line, c) = crate::edit::apply(&mut doc, "nodes", &measure, |tx| {
+            let (_, a) = palette::create_node(tx, d, NodeTool::Class, Point::new(0.0, 100.0), "A")?;
+            let (_, b) =
+                palette::create_node(tx, d, NodeTool::Class, Point::new(500.0, 100.0), "B")?;
+            let (_, c) =
+                palette::create_node(tx, d, NodeTool::Class, Point::new(240.0, 400.0), "C")?;
+            let line = palette::connect(tx, d, EdgeTool::Association, a, b)?;
+            route_lines(tx, d, &[line])?;
+            Ok((line, c))
+        })
+        .unwrap();
+        let path = drawn(doc.model(), d, line);
+        assert_eq!(path.len(), 2, "a straight line: {path:?}");
+        // C dropped onto the middle of the line.
+        let y = path[0].y;
+        let to = Rect::new(240.0, y - 20.0, 60.0, 40.0);
+        crate::edit::apply(&mut doc, "move", &measure, |tx| tx.set_bounds(d, c, to)).unwrap();
+        let path = drawn(doc.model(), d, line);
+        assert!(path.windows(2).all(|w| !segment_hits(w[0], w[1], to)), "{path:?}");
     }
 }

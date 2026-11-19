@@ -38,6 +38,9 @@ const KINDS: [(&str, ElementKind); 11] = [
     ("parallel", ElementKind::Parallel),
 ];
 
+/// The most branches a parallel element has (the editor's `parallel_count` limit).
+const MAX_PARALLEL: usize = 99;
+
 /// The kinds' names, for the tool's schema.
 pub fn kind_names() -> Vec<&'static str> {
     KINDS.iter().map(|(name, _)| *name).collect()
@@ -197,17 +200,23 @@ fn element_of(d: &Diagram, v: &Value, at: &str) -> Result<Element, String> {
                 texts.push(b.get("label").and_then(Value::as_str).unwrap_or_default().to_owned());
             }
             let mut e = new_element(d, kind, &texts);
-            for (i, b) in branches.iter().enumerate() {
+            for (i, (b, slot)) in branches.iter().zip(e.branches.iter_mut()).enumerate() {
                 let body = b.get("body").unwrap_or(&Value::Null);
-                e.branches[i] = sequence_of(d, body, &format!("{at}.branches.{i}.body"))?;
+                *slot = sequence_of(d, body, &format!("{at}.branches.{i}.body"))?;
             }
             e
         }
         ElementKind::Parallel => {
+            if branches.len() > MAX_PARALLEL {
+                return Err(format!(
+                    "`{at}` has {} branches; a parallel element has at most {MAX_PARALLEL}",
+                    branches.len()
+                ));
+            }
             let count = branches.len().max(1);
             let mut e = new_element(d, kind, &[count.to_string()]);
-            for (i, b) in branches.iter().enumerate() {
-                e.branches[i] = sequence_of(d, b, &format!("{at}.branches.{i}"))?;
+            for (i, (b, slot)) in branches.iter().zip(e.branches.iter_mut()).enumerate() {
+                *slot = sequence_of(d, b, &format!("{at}.branches.{i}"))?;
             }
             e
         }
@@ -417,5 +426,15 @@ mod tests {
         assert!(bad(case).contains("body.0"));
         let kind = json!({ "title": "t", "body": [{ "kind": "goto" }] });
         assert!(bad(kind).contains("goto"));
+    }
+
+    #[test]
+    fn a_parallel_element_has_at_most_99_branches() {
+        let parallel = |n: usize| json!({ "title": "t", "body": [{ "kind": "parallel", "branches": vec![json!([]); n] }] });
+        let d = from_json(&parallel(MAX_PARALLEL), None).unwrap();
+        assert_eq!(d.children.elements[0].branches.len(), MAX_PARALLEL);
+        let err = from_json(&parallel(MAX_PARALLEL + 1), None).unwrap_err();
+        assert!(err.contains("at most 99"), "{err}");
+        assert!(from_json(&parallel(1000), None).is_err());
     }
 }

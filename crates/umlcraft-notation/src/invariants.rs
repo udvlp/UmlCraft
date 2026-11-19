@@ -1,5 +1,8 @@
 //! What should hold after every edit, as sentences naming the diagram and the presentations
-//! concerned. Tests check it after random edits; debug builds check it after each edit the app or
+//! concerned: lines start and end at their nodes, sequence diagrams keep their layout rules
+//! (including no state invariant, termination or constraint left without what it hangs on),
+//! substates lie in their state and region, and ports, pins, parameters and points sit on the
+//! border they belong on (a port on its class or a part typed by it). Tests check it after random edits; debug builds check it after each edit the app or
 //! the MCP server makes ([`edit::apply`](crate::edit::apply)) and print what the edit broke.
 //!
 //! Files from Astah do not always keep these rules, so what counts is what an edit adds: compare
@@ -87,6 +90,8 @@ fn check_diagram(
         Some(DiagramKind::StateMachine) => found.extend(state_violations(model, view)),
         _ => {}
     }
+    // Ports, pins, activity parameter nodes and entry and exit points on their borders.
+    found.extend(crate::composite::border_violations(model, diagram, view));
     found
 }
 

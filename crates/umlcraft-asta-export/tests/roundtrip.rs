@@ -310,6 +310,22 @@ fn type_text(model: &Model, t: &Option<TypeRef>) -> String {
     umlcraft_notation::member::type_label(model, t).unwrap_or_default()
 }
 
+/// The packages by their place in the ownership tree, below the root.
+fn packages(model: &Model) -> BTreeSet<String> {
+    model
+        .elements()
+        .filter(|e| matches!(e.kind(), ElementKind::Package) && e.id() != model.root())
+        .map(|e| {
+            let mut names: Vec<String> =
+                model.ancestors(e.id()).iter().map(|&a| name(model, a)).collect();
+            names.pop();
+            names.reverse();
+            names.push(e.name().to_owned());
+            names.join("/")
+        })
+        .collect()
+}
+
 /// Named elements with their place in the ownership tree and their essentials.
 fn tree(model: &Model) -> BTreeSet<String> {
     let mut lines = BTreeSet::new();
@@ -1968,6 +1984,14 @@ fn er_diagrams_through_astah() {
             ..Default::default()
         };
         tx.create(package, ElementData::new("money", ElementKind::ErDomain(money)))?;
+        // A package of its own becomes an ER package; a comment leaves "db" ER only.
+        let archive = tx.create(package, ElementData::new("archive", ElementKind::Package))?;
+        tx.create(
+            archive,
+            ElementData::new("Old order", ElementKind::ErEntity(Default::default())),
+        )?;
+        let comment = CommentProps { body: "Prices in euro.".into(), annotated: Vec::new() };
+        tx.create(package, ElementData::new("", ElementKind::Comment(comment)))?;
         let order = tx.model().elements().find(|e| e.name() == "Order").unwrap().id();
         let total = ErAttributeProps { datatype: "money".into(), ..Default::default() };
         tx.create(order, ElementData::new("total", ElementKind::ErAttribute(total)))?;
@@ -1984,7 +2008,22 @@ fn er_diagrams_through_astah() {
     })
     .unwrap();
     let Some((model, report)) = through_astah_reporting(doc.model(), "er") else { return };
-    assert!(report.dropped.is_empty(), "{:?}", report.dropped);
+    // Astah keeps comments as notes on diagrams only.
+    assert_eq!(
+        report.dropped.iter().map(|(k, v)| (k.as_str(), *v)).collect::<Vec<_>>(),
+        [("comment", 1)]
+    );
+    // "db" holds ER content only, so it goes into Astah's ER model and leaves no UML package.
+    assert_eq!(
+        packages(&model),
+        BTreeSet::from(
+            ["ER Model", "ER Model/Default Schema", "ER Model/Default Schema/archive"]
+                .map(String::from)
+        )
+    );
+    assert!(model.elements().any(|e| e.name() == "Old order"
+        && matches!(e.kind(), ElementKind::ErEntity(_))
+        && model.get(e.owner().unwrap()).is_some_and(|o| o.name() == "archive")));
     let entity = |name: &str| {
         model
             .elements()
@@ -2137,4 +2176,6 @@ fn sample_er_model_through_astah() {
     let (before, after) = (er(&original), er(&back));
     assert!(before.len() > 20, "{before:#?}");
     assert_eq!(before, after);
+    // The ER model comes back as the one it was, not next to an empty UML package of its name.
+    assert_eq!(packages(&original), packages(&back));
 }

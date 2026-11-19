@@ -232,7 +232,9 @@ mod records {
         }
     }
 
-    fn element<E: serde::de::Error>(root: &Diagram, item: Item) -> Result<Element, E> {
+    /// The element of `item` as read, put into normal form by the caller once for the whole
+    /// body (normalizing each element on the way up would redo its subtree at every level).
+    fn element<E: serde::de::Error>(item: Item) -> Result<Element, E> {
         let kind = ElementKind::from_tag(&item.kind)
             .ok_or_else(|| E::custom(format!("unknown structogram element `{}`", item.kind)))?;
         if !branches_fit(kind, item.branches.len()) {
@@ -244,8 +246,7 @@ mod records {
         }
         let mut e = Element { kind, attrs: Default::default(), branches: Vec::new() };
         for branch in item.branches {
-            let elements =
-                branch.into_iter().map(|i| element(root, i)).collect::<Result<_, E>>()?;
+            let elements = branch.into_iter().map(element).collect::<Result<_, E>>()?;
             e.branches.push(Sequence::new(elements));
         }
         e.set_text(&item.text);
@@ -258,7 +259,7 @@ mod records {
         }
         e.set_attr("branch_colors", item.branch_colors.join(","));
         e.set_disabled(item.disabled);
-        Ok(normal_element(root, &e))
+        Ok(e)
     }
 
     /// A colour, white when empty.
@@ -318,8 +319,8 @@ mod records {
             d.set_kind(kind);
             d.set_style(style);
             let mut d = normalize(&d);
-            let body = r.body.into_iter().map(|i| element(&d, i));
-            d.children = Sequence::new(body.collect::<Result<_, D::Error>>()?);
+            let body = r.body.into_iter().map(element).collect::<Result<_, D::Error>>()?;
+            d.children = normal_sequence(&d, &Sequence::new(body));
             Ok(d)
         }
     }

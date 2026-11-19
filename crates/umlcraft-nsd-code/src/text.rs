@@ -63,15 +63,20 @@ pub fn condition(node: Node, src: &str) -> Vec<String> {
 
 /// The name a C++ declarator declares, through pointers, references, arrays and an
 /// initialization (`*p = …` → `p`).
-pub fn declared_name(declarator: Node) -> Option<Node> {
-    match declarator.kind() {
-        "identifier" | "field_identifier" | "structured_binding_declarator" => Some(declarator),
-        _ => {
-            let inner = declarator.child_by_field_name("declarator").or_else(|| {
-                let mut cursor = declarator.walk();
-                declarator.named_children(&mut cursor).find(|c| !c.kind().ends_with("qualifier"))
-            })?;
-            declared_name(inner)
+pub fn declared_name(mut declarator: Node) -> Option<Node> {
+    loop {
+        match declarator.kind() {
+            "identifier" | "field_identifier" | "structured_binding_declarator" => {
+                return Some(declarator);
+            }
+            _ => {
+                declarator = declarator.child_by_field_name("declarator").or_else(|| {
+                    let mut cursor = declarator.walk();
+                    declarator
+                        .named_children(&mut cursor)
+                        .find(|c| !c.kind().ends_with("qualifier"))
+                })?;
+            }
         }
     }
 }

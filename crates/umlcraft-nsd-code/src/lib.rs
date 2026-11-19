@@ -18,12 +18,17 @@ mod core;
 mod cpp;
 mod csharp;
 mod java;
+mod key;
 mod pseudo;
 mod python;
 mod text;
 
+use std::collections::HashMap;
+
 use umlcraft_nsd::Diagram;
 use umlcraft_reverse::{SourceTree, parse_tree};
+
+pub use key::{better_key, file_path, key_base, key_path, method_key, names_file, pair};
 
 /// The languages whose methods become structograms: those of the class import, with the same
 /// file extensions (`SourceLanguage::of`).
@@ -49,12 +54,22 @@ pub struct MethodRef {
     pub start: usize,
     /// Where it ends: with `start` the bytes the class import's operation for it overlaps.
     pub end: usize,
+    /// The code of a module or file outside any declaration (Python's `__main__`, C#'s
+    /// top-level statements), whose bytes may enclose declarations of their own.
+    pub module_code: bool,
 }
 
 impl MethodRef {
     /// `Outer.Inner`.
     pub fn class_name(&self) -> String {
         self.class.join(".")
+    }
+
+    /// The bytes by which the class import's operation for it is found
+    /// (`umlcraft_reverse::Placed::operation`); none for module code, which has no operation
+    /// (the classes and functions between its statements have theirs).
+    pub fn declaration(&self) -> Option<std::ops::Range<usize>> {
+        (!self.module_code).then_some(self.start..self.end)
     }
 
     /// A file name for its diagram: `Class.method.nsd`, `function.nsd` outside classes;
@@ -160,7 +175,8 @@ pub enum NoteKind {
     Goto,
     /// A function declared in the method is left out.
     LocalFunction,
-    /// Of `#if` … `#else`, only the first branch is read.
+    /// Of `#if` … `#else`, only one branch is read: the first, unless it is switched off with
+    /// `#if 0`.
     Conditional,
     /// Python `with`: the context is assigned, the body stands in its place.
     With,
@@ -171,6 +187,18 @@ pub enum NoteKind {
     TryElse,
     /// A function defined in the function is left out.
     NestedFunction,
+    /// A `break` before the end of a `switch` case leaves the switch; it is kept as a jump,
+    /// which a structogram reads as leaving a loop.
+    CaseBreak,
+}
+
+/// Why a method gives no diagram.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unbuilt {
+    /// The file has no such method (any more).
+    NotFound,
+    /// Its statements nest deeper than a structogram may (`umlcraft_nsd::read::MAX_DEPTH`).
+    TooDeep,
 }
 
 /// What the import of one method did not show as written.
@@ -184,6 +212,11 @@ impl Report {
         self.notes.is_empty()
     }
 }
+
+/// The stack of the thread structograms are built on: about 10 KB per level of nesting in a
+/// debug build, a fraction of it in a release build, for up to 400 levels, with room to spare.
+/// Only what is used is taken from memory.
+const BUILD_STACK: usize = 32 << 20;
 
 /// A parsed source file: the tree the class import parses too ([`SourceTree`]), so that one
 /// parse serves both.
@@ -226,47 +259,107 @@ impl Source {
     }
 
     /// The diagram of `method` (one of [`Source::methods`]).
-    pub fn diagram(&self, method: &MethodRef, made: &Made) -> Option<(Diagram, Report)> {
-        let (root, text) = (self.tree.root(), self.tree.text());
-        match self.language() {
-            SourceLanguage::Java => {
-                let node = java::find(root, method)?;
-                Some(java::diagram(node, text, made))
-            }
-            SourceLanguage::CSharp => {
-                let member = csharp::find(root, text, method)?;
-                let (d, mut report) = csharp::diagram(&member, text, made);
-                if let Some(line) = self.left_out(member.range()) {
-                    report.notes.insert(0, Note { line, kind: NoteKind::Conditional });
+    pub fn diagram(&self, method: &MethodRef, made: &Made) -> Result<(Diagram, Report), Unbuilt> {
+        self.diagrams(std::slice::from_ref(method), made).pop().unwrap_or(Err(Unbuilt::NotFound))
+    }
+
+    /// The diagrams of `methods` (of [`Source::methods`]), in their order: what they share,
+    /// such as the file's members, is found once.
+    ///
+    /// They are built on a thread of their own whose stack holds the deepest nesting read
+    /// (statement lists nest up to twice `umlcraft_nsd::read::MAX_DEPTH` deep, see
+    /// `core::NESTING`), whatever the stack of the caller.
+    pub fn diagrams(
+        &self,
+        methods: &[MethodRef],
+        made: &Made,
+    ) -> Vec<Result<(Diagram, Report), Unbuilt>> {
+        std::thread::scope(|scope| {
+            let thread = std::thread::Builder::new()
+                .name("structograms".into())
+                .stack_size(BUILD_STACK)
+                .spawn_scoped(scope, || self.diagrams_here(methods, made));
+            match thread {
+                Ok(thread) => {
+                    thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
                 }
-                Some((d, report))
+                // No thread to be had: on this one, as deep as its stack goes.
+                Err(_) => self.diagrams_here(methods, made),
+            }
+        })
+    }
+
+    fn diagrams_here(
+        &self,
+        methods: &[MethodRef],
+        made: &Made,
+    ) -> Vec<Result<(Diagram, Report), Unbuilt>> {
+        let (root, text) = (self.tree.root(), self.tree.text());
+        // A member found again by where it starts and its name.
+        fn index<M>(
+            members: &[M],
+            reference: impl Fn(&M) -> &MethodRef,
+        ) -> HashMap<(usize, &str), &M> {
+            members.iter().map(|m| ((reference(m).start, reference(m).name.as_str()), m)).collect()
+        }
+        match self.language() {
+            SourceLanguage::Java => methods
+                .iter()
+                .map(|m| {
+                    java::diagram(java::find(root, text, m).ok_or(Unbuilt::NotFound)?, text, made)
+                })
+                .collect(),
+            SourceLanguage::CSharp => {
+                let members = csharp::members(root, text);
+                let found = index(&members, |m| &m.reference);
+                methods
+                    .iter()
+                    .map(|m| {
+                        let member =
+                            found.get(&(m.start, m.name.as_str())).ok_or(Unbuilt::NotFound)?;
+                        let (d, report) = csharp::diagram(member, text, made)?;
+                        Ok((d, self.with_left_out(report, member.range())))
+                    })
+                    .collect()
             }
             SourceLanguage::Python => {
-                let member = python::find(root, text, method)?;
-                Some(python::diagram(&member, root, text, made))
+                let members = python::members(root, text);
+                let found = index(&members, |m| &m.reference);
+                let own = python::function_names(root, text);
+                methods
+                    .iter()
+                    .map(|m| {
+                        let member =
+                            found.get(&(m.start, m.name.as_str())).ok_or(Unbuilt::NotFound)?;
+                        python::diagram(member, &own, text, made)
+                    })
+                    .collect()
             }
             SourceLanguage::Cpp => {
-                let member = cpp::find(root, text, method)?;
-                let (d, mut report) = cpp::diagram(&member, root, text, made);
-                if let Some(line) = self.left_out(member.range()) {
-                    report.notes.insert(0, Note { line, kind: NoteKind::Conditional });
-                }
-                Some((d, report))
+                let members = cpp::members(root, text);
+                let found = index(&members, |m| &m.reference);
+                let own = cpp::function_names(root, text);
+                methods
+                    .iter()
+                    .map(|m| {
+                        let member =
+                            found.get(&(m.start, m.name.as_str())).ok_or(Unbuilt::NotFound)?;
+                        let (d, report) = cpp::diagram(member, &own, text, made)?;
+                        Ok((d, self.with_left_out(report, member.range())))
+                    })
+                    .collect()
             }
         }
     }
 
-    /// The line of the first `#elif` or `#else` in `range`, whose branch was left out.
-    fn left_out(&self, range: std::ops::Range<usize>) -> Option<usize> {
-        if !self.tree.is_preprocessed() {
-            return None;
+    /// `report` with a note first on the first branch of a conditional in `range` that was
+    /// left out (`#elif`, `#else`, `#if 0`), if any.
+    fn with_left_out(&self, mut report: Report, range: std::ops::Range<usize>) -> Report {
+        let at = self.tree.left_out_at().iter().find(|&&at| range.contains(&at));
+        if let Some(&at) = at {
+            let line = self.tree.written()[..at].matches('\n').count() + 1;
+            report.notes.insert(0, Note { line, kind: NoteKind::Conditional });
         }
-        let written = self.tree.written();
-        let before = written[..range.start].matches('\n').count();
-        let at = written[range].lines().position(|line| {
-            let directive = line.trim_start().strip_prefix('#').map(str::trim_start);
-            directive.is_some_and(|d| d.starts_with("elif") || d.starts_with("else"))
-        })?;
-        Some(before + at + 1)
+        report
     }
 }

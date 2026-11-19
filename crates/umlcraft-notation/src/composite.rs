@@ -5,12 +5,16 @@
 //! belongs to the class drawn around it when it is created, and a port sits on the border of the
 //! class or part whose border is nearest. Ports stay on that border: when the class or part moves
 //! or changes its size, its ports keep their place along the border ([`follow`]); a port moved by
-//! itself goes onto the border nearest to where it was dropped.
+//! itself goes onto the nearest border that may carry it: its class's, or that of a part typed
+//! by its class ([`may_carry`]).
 //!
 //! Activity diagrams have nodes on borders too, which [`follow`] keeps there the same way: pins
 //! just outside the border of their action, and activity parameter nodes on the diagram's
 //! frame (see [`crate::activity`]). So do state machine diagrams: entry and exit points on the
 //! border of their state or of the frame (see [`crate::state_edit`]).
+
+use std::collections::HashMap;
+use umlcraft_model::Refusal;
 
 use umlcraft_model::{
     ActivityNodeKind, ConnectorEnd, DiagramKind, ElementData, ElementKind, Id, Model, ModelError,
@@ -21,12 +25,6 @@ use crate::palette::{NodeTool, unique_name};
 
 /// Width and height of a port's square.
 pub const PORT_SIZE: f32 = 14.0;
-
-/// Why a part or port could not be placed, as [`ModelError::Invalid`] says it; the app words
-/// these in the language of its user.
-pub const PART_OUTSIDE: &str = "a part goes inside a class";
-pub const PORT_OUTSIDE: &str = "a port goes on a class or a part";
-pub const PORT_ON_UNTYPED_PART: &str = "a port on a part needs a class as the part's type";
 
 /// Whether `diagram` is a composite structure diagram.
 pub fn is_composite(model: &Model, diagram: Id) -> bool {
@@ -88,19 +86,19 @@ pub(crate) fn border_distance(r: Rect, c: Point) -> f32 {
     }
 }
 
-/// The host (structured class or part) of `view` whose border is nearest to `c`, if one is
-/// within `reach` of it; ties go to the smaller one, so a port on a part sticking out of its
-/// class stays on the part.
+/// The host (structured class or part) of `view` that `accept` takes whose border is nearest to
+/// `c`, if one is within `reach` of it; ties go to the smaller one, so a port on a part sticking
+/// out of its class stays on the part.
 fn nearest_host<'v>(
     model: &Model,
     view: &'v View,
     c: Point,
     reach: f32,
-    skip: Option<Id>,
+    accept: impl Fn(&Presentation) -> bool,
 ) -> Option<&'v Presentation> {
     view.presentations()
         .iter()
-        .filter(|p| Some(p.id) != skip && element_kind(model, p).is_some_and(is_host))
+        .filter(|p| element_kind(model, p).is_some_and(is_host) && accept(p))
         .filter_map(|p| Some((p, p.bounds()?)))
         .map(|(p, r)| (p, border_distance(r, c), r.width * r.height))
         .filter(|(_, d, _)| *d <= reach)
@@ -108,14 +106,26 @@ fn nearest_host<'v>(
         .map(|(p, _, _)| p)
 }
 
-/// The host whose border the port node `port` of `view` sits on.
+/// The host whose border the port node `port` of `view` sits on: of those whose border it is
+/// on, one that may carry it ([`may_carry`]) first, so that a part drawn over the class's
+/// border where a port of the class sits does not take the port.
 pub fn port_host<'v>(
     model: &Model,
     view: &'v View,
     port: &Presentation,
 ) -> Option<&'v Presentation> {
     let c = port.bounds()?.center();
-    nearest_host(model, view, c, PORT_SIZE / 2.0 + 0.5, Some(port.id))
+    let reach = PORT_SIZE / 2.0 + 0.5;
+    let carries = |h: &Presentation| port.element.is_some_and(|e| may_carry(model, e, h));
+    nearest_host(model, view, c, reach, |h| h.id != port.id && carries(h))
+        .or_else(|| nearest_host(model, view, c, reach, |h| h.id != port.id))
+}
+
+/// Whether the node `host` may carry the port `port`: it shows the class that owns the port, or
+/// a part typed by that class.
+pub fn may_carry(model: &Model, port: Id, host: &Presentation) -> bool {
+    let Some(owner) = model.get(port).and_then(|e| e.owner()) else { return false };
+    host.element.is_some_and(|e| e == owner || part_type(model, e) == Some(owner))
 }
 
 /// Where along the border of `r` the point nearest to `c` lies: the side (0 top, 1 right,
@@ -267,7 +277,7 @@ pub fn create_node(
     let owner = match tool {
         NodeTool::Part => {
             let class = innermost_at(model, view, at, is_structured)
-                .ok_or_else(|| ModelError::Invalid(PART_OUTSIDE.into()))?;
+                .ok_or(ModelError::Refused(Refusal::PartOutside))?;
             if let Some(r) = class.bounds() {
                 let around = r.union(&bounds.inflate(MARGIN));
                 grow = (around != r).then_some((class.id, around));
@@ -277,17 +287,17 @@ pub fn create_node(
         _ => {
             // A border near the point first, so a port dropped on the edge of a part goes on
             // the part and not on the class around it.
-            let host = nearest_host(model, view, at, NEAR_BORDER, None)
+            let host = nearest_host(model, view, at, NEAR_BORDER, |_| true)
                 .or_else(|| innermost_at(model, view, at, is_host))
-                .or_else(|| nearest_host(model, view, at, f32::INFINITY, None))
-                .ok_or_else(|| ModelError::Invalid(PORT_OUTSIDE.into()))?;
+                .or_else(|| nearest_host(model, view, at, f32::INFINITY, |_| true))
+                .ok_or(ModelError::Refused(Refusal::PortOutside))?;
             let element = host.element.ok_or(ModelError::NotFound(host.id))?;
             if let Some(r) = host.bounds() {
                 bounds = snap(bounds, r);
             }
             match model.element(element)?.kind() {
                 ElementKind::Attribute(_) => part_type(model, element)
-                    .ok_or_else(|| ModelError::Invalid(PORT_ON_UNTYPED_PART.into()))?,
+                    .ok_or(ModelError::Refused(Refusal::PortOnUntypedPart))?,
                 _ => element,
             }
         }
@@ -391,7 +401,7 @@ fn borne_kind(model: &Model, kind: Option<DiagramKind>, p: &Presentation) -> Opt
 /// The node of `view` that the pin, activity parameter node, entry or exit point `p` keeps
 /// to: the node of the pin's action or the point's state nearest to it, or the diagram's
 /// frame for a parameter and a point of the state machine itself.
-fn owner_host(model: &Model, view: &View, diagram: Id, p: &Presentation) -> Option<Id> {
+fn owner_host(model: &Model, nodes: &Nodes, diagram: Id, p: &Presentation) -> Option<Id> {
     let element = model.get(p.element?)?;
     let c = p.bounds()?.center();
     let host = match element.kind() {
@@ -406,12 +416,25 @@ fn owner_host(model: &Model, view: &View, diagram: Id, p: &Presentation) -> Opti
         }
         _ => return None,
     };
-    view.presentations()
+    nodes
+        .get(&host)?
         .iter()
-        .filter(|h| h.element == Some(host))
-        .filter_map(|h| Some((h.id, h.bounds()?)))
         .min_by(|a, b| border_distance(a.1, c).total_cmp(&border_distance(b.1, c)))
-        .map(|(id, _)| id)
+        .map(|&(id, _)| id)
+}
+
+/// The nodes of a view by the element they show, each with its bounds, so that finding the node
+/// of an element does not scan the view.
+type Nodes = HashMap<Id, Vec<(Id, Rect)>>;
+
+fn nodes_of(view: &View) -> Nodes {
+    let mut nodes = Nodes::new();
+    for p in view.presentations() {
+        if let (Some(e), Some(r)) = (p.element, p.bounds()) {
+            nodes.entry(e).or_default().push((p.id, r));
+        }
+    }
+    nodes
 }
 
 /// The pins and activity parameter nodes of the activity diagram `diagram`, or the entry and
@@ -423,10 +446,11 @@ pub fn borne_nodes(model: &Model, diagram: Id) -> std::collections::HashMap<Id, 
     let Some(view) = model.view(diagram).filter(|_| bordered) else {
         return Default::default();
     };
+    let nodes = nodes_of(view);
     view.presentations()
         .iter()
         .filter(|p| borne_kind(model, kind, p).is_some())
-        .map(|p| (p.id, owner_host(model, view, diagram, p)))
+        .map(|p| (p.id, owner_host(model, &nodes, diagram, p)))
         .collect()
 }
 
@@ -434,34 +458,92 @@ pub fn borne_nodes(model: &Model, diagram: Id) -> std::collections::HashMap<Id, 
 fn track(
     model: &Model,
     view: &View,
+    nodes: &Nodes,
     diagram: Id,
     p: &Presentation,
     borne: Borne,
 ) -> Option<(Id, Rect)> {
     let host = match borne {
         Borne::Port => port_host(model, view, p)?.id,
-        Borne::Pin | Borne::Parameter | Borne::Point => owner_host(model, view, diagram, p)?,
+        Borne::Pin | Borne::Parameter | Borne::Point => owner_host(model, nodes, diagram, p)?,
     };
     Some((host, view.get(host)?.bounds()?.inflate(borne.reach())))
+}
+
+/// Where the border node `p` of `view` (of kind `borne`) belongs, and how far its center may be
+/// from that place: the track of its host if it has one shown, as [`follow`] keeps it. For a
+/// port, the host must show its class or a part typed by it ([`may_carry`]). `None` when
+/// nothing it could sit on is shown.
+fn expected_host(
+    model: &Model,
+    view: &View,
+    nodes: &Nodes,
+    diagram: Id,
+    p: &Presentation,
+    borne: Borne,
+) -> Option<(Id, Rect)> {
+    match borne {
+        Borne::Port => {
+            let port = p.element?;
+            let c = p.bounds()?.center();
+            let host = nearest_host(model, view, c, f32::INFINITY, |h| {
+                h.id != p.id && may_carry(model, port, h)
+            })?;
+            Some((host.id, host.bounds()?))
+        }
+        _ => track(model, view, nodes, diagram, p, borne),
+    }
+}
+
+/// Border nodes that are not on the border they belong to, as sentences for
+/// [`crate::invariants`]: ports on a class or part that does not carry them, or away from every
+/// border; pins, activity parameter nodes and entry and exit points away from their action,
+/// frame or state.
+pub(crate) fn border_violations(model: &Model, diagram: Id, view: &View) -> Vec<String> {
+    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let nodes = nodes_of(view);
+    let mut found = Vec::new();
+    for p in view.presentations() {
+        let Some(borne) = borne_kind(model, kind, p) else { continue };
+        let Some(r) = p.bounds() else { continue };
+        let what = || crate::invariants::describe(model, view, p.id);
+        if borne == Borne::Port
+            && let Some(host) = port_host(model, view, p)
+            && !p.element.is_some_and(|port| may_carry(model, port, host))
+        {
+            let on = crate::invariants::describe(model, view, host.id);
+            found.push(format!("{} sits on {on}, which does not have it", what()));
+            continue;
+        }
+        let Some((host, track)) = expected_host(model, view, &nodes, diagram, p, borne) else {
+            continue;
+        };
+        if border_distance(track, r.center()) > 1.0 {
+            let on = crate::invariants::describe(model, view, host);
+            found.push(format!("{} is off the border of {on}", what()));
+        }
+    }
+    found
 }
 
 /// Where a border node sat before an edit: on which host, where along its border, and where
 /// the node and the host's track were.
 #[derive(Clone, Debug)]
 pub struct PortPlace {
-    diagram: Id,
-    port: Id,
     borne: Borne,
     center: Point,
     host: Option<(Id, Rect)>,
+    /// For a port: whether its host carried it ([`may_carry`]).
+    carried: bool,
 }
 
 /// Where the ports and parts of composite structure diagrams and the pins and activity
-/// parameter nodes of activity diagrams were before an edit, to [`follow`] after it.
+/// parameter nodes of activity diagrams were before an edit, to [`follow`] after it; by
+/// diagram and presentation.
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
-    ports: Vec<PortPlace>,
-    parts: Vec<(Id, Id, Rect)>,
+    ports: HashMap<(Id, Id), PortPlace>,
+    parts: HashMap<(Id, Id), Rect>,
 }
 
 /// Whether `p` shows an entry or exit point of a state machine itself, which sits on the frame.
@@ -493,19 +575,19 @@ fn bordered_views(model: &Model) -> impl Iterator<Item = (Id, &View, Option<Diag
 pub fn snapshots(model: &Model) -> Snapshot {
     let mut snapshot = Snapshot::default();
     for (diagram, view, kind) in bordered_views(model) {
+        let nodes = nodes_of(view);
         for p in view.presentations() {
             let Some(r) = p.bounds() else { continue };
             if let Some(borne) = borne_kind(model, kind, p) {
-                let host = track(model, view, diagram, p, borne);
-                snapshot.ports.push(PortPlace {
-                    diagram,
-                    port: p.id,
-                    borne,
-                    center: r.center(),
-                    host,
-                });
+                let host = track(model, view, &nodes, diagram, p, borne);
+                let carried = borne == Borne::Port
+                    && host
+                        .and_then(|(h, _)| view.get(h))
+                        .is_some_and(|h| p.element.is_some_and(|port| may_carry(model, port, h)));
+                let place = PortPlace { borne, center: r.center(), host, carried };
+                snapshot.ports.insert((diagram, p.id), place);
             } else if kind == Some(DiagramKind::CompositeStructure) && is_part(model, p) {
-                snapshot.parts.push((diagram, p.id, r));
+                snapshot.parts.insert((diagram, p.id), r);
             }
         }
     }
@@ -518,31 +600,33 @@ pub fn snapshots(model: &Model) -> Snapshot {
 /// A class grows around a part moved or resized out of it. A port or pin that did not move
 /// keeps its place along the border of a host that moved or changed size, and goes along when
 /// its host is removed from the diagram; one that moved, or a new one, goes onto the nearest
-/// border: a port onto that of any class or part, a pin onto its own action's, an activity
-/// parameter node onto the frame.
+/// border it belongs on: a port onto that of its class or of a part typed by it (or back onto
+/// its old host when neither is shown), a pin onto its own action's, an activity parameter node
+/// onto the frame.
 pub fn follow(tx: &mut Tx<'_>, before: &Snapshot) -> Result<()> {
     hold_parts(tx, &before.parts)?;
     follow_ports(tx, &before.ports)
 }
 
 /// Grows the class shown around a part that moved or changed size so that it holds the part.
-fn hold_parts(tx: &mut Tx<'_>, before: &[(Id, Id, Rect)]) -> Result<()> {
+fn hold_parts(tx: &mut Tx<'_>, before: &HashMap<(Id, Id), Rect>) -> Result<()> {
     let model = tx.model();
     let mut grow: Vec<(Id, Id, Rect)> = Vec::new();
     for (diagram, view) in model.views().filter(|(d, _)| is_composite(model, *d)) {
+        let mut nodes: Option<Nodes> = None;
         for p in view.presentations().iter().filter(|p| is_part(model, p)) {
             let Some(r) = p.bounds() else { continue };
-            if before.iter().any(|&(d, id, was)| d == diagram && id == p.id && was == r) {
+            if before.get(&(diagram, p.id)) == Some(&r) {
                 continue;
             }
             let Some(owner) = p.element.and_then(|e| model.get(e)?.owner()) else { continue };
-            let class = view
-                .presentations()
-                .iter()
-                .filter(|c| c.element == Some(owner))
-                .filter_map(|c| Some((c.id, c.bounds()?)))
+            let nodes = nodes.get_or_insert_with(|| nodes_of(view));
+            let class = nodes
+                .get(&owner)
+                .into_iter()
+                .flatten()
                 .max_by(|a, b| overlap(a.1, r).total_cmp(&overlap(b.1, r)));
-            let Some((class, bounds)) = class else { continue };
+            let Some(&(class, bounds)) = class else { continue };
             let bounds =
                 grow.iter().find(|g| g.0 == diagram && g.1 == class).map_or(bounds, |g| g.2);
             if !bounds.contains_rect(&r) {
@@ -565,18 +649,33 @@ fn overlap(a: Rect, b: Rect) -> f32 {
     w.max(0.0) * h.max(0.0)
 }
 
-fn follow_ports(tx: &mut Tx<'_>, before: &[PortPlace]) -> Result<()> {
+fn follow_ports(tx: &mut Tx<'_>, before: &HashMap<(Id, Id), PortPlace>) -> Result<()> {
     let model = tx.model();
     let mut moves = Vec::new();
     let mut removed = Vec::new();
     let mut unplaced = Vec::new();
     for (diagram, view, kind) in bordered_views(model) {
+        let nodes = nodes_of(view);
         for p in view.presentations() {
             let Some(borne) = borne_kind(model, kind, p) else { continue };
             let Some(r) = p.bounds() else { continue };
             let c = r.center();
-            let old = before.iter().find(|b| b.diagram == diagram && b.port == p.id);
+            let old = before.get(&(diagram, p.id));
             let still = old.is_some_and(|o| o.center.distance(c) < 0.01 && o.borne == borne);
+            // A port on a part given another type: onto a host that carries it, else off the
+            // diagram, as with its host gone.
+            let carries = |host: Id| {
+                view.get(host).is_some_and(|h| p.element.is_some_and(|e| may_carry(model, e, h)))
+            };
+            let lost = still
+                && old.is_some_and(|o| o.carried && o.host.is_some_and(|(host, _)| !carries(host)));
+            if lost {
+                match expected_host(model, view, &nodes, diagram, p, borne) {
+                    Some((_, now)) => moves.push((diagram, p.id, snap(r, now))),
+                    None => removed.push((diagram, p.id)),
+                }
+                continue;
+            }
             let target = match old.and_then(|o| o.host).filter(|_| still) {
                 Some((host, was)) => {
                     match view.get(host).and_then(|h| h.bounds()).map(|h| h.inflate(borne.reach()))
@@ -593,13 +692,14 @@ fn follow_ports(tx: &mut Tx<'_>, before: &[PortPlace]) -> Result<()> {
                     }
                 }
                 None => {
-                    let host = match borne {
-                        Borne::Port => nearest_host(model, view, c, f32::INFINITY, Some(p.id))
-                            .and_then(|h| Some((h.id, h.bounds()?))),
-                        Borne::Pin | Borne::Parameter | Borne::Point => {
-                            track(model, view, diagram, p, borne)
-                        }
-                    };
+                    let host =
+                        expected_host(model, view, &nodes, diagram, p, borne).or_else(|| {
+                            // A port whose class is not shown, nor a part typed by it, stays on
+                            // the host it had.
+                            let (host, _) =
+                                old.and_then(|o| o.host).filter(|_| borne == Borne::Port)?;
+                            Some((host, view.get(host)?.bounds()?))
+                        });
                     match host {
                         Some((_, now)) => {
                             let target = snap(r, now);
@@ -776,7 +876,8 @@ mod tests {
         let shaft_bounds = doc.model().view(diagram).unwrap().get(shaft_node).unwrap().bounds();
         let shaft_bounds = shaft_bounds.unwrap();
 
-        // A port dragged away by itself lands on the nearest border.
+        // A port dragged away by itself lands on the nearest border it belongs on: the car's is
+        // nearer, but only the engine part carries the engine's port.
         let away = shaft_bounds.translate(0.0, -500.0);
         crate::edit::apply(&mut doc, "drag", &measure, |tx| {
             tx.set_bounds(diagram, shaft_node, away)
@@ -784,13 +885,51 @@ mod tests {
         .unwrap();
         let view = doc.model().view(diagram).unwrap();
         let landed = view.get(shaft_node).unwrap().bounds().unwrap().center();
-        assert!(border_distance(view.get(car_node).unwrap().bounds().unwrap(), landed) < 0.01);
+        assert!(border_distance(moved, landed) < 0.01, "{landed:?} on {moved:?}");
+        let host = port_host(doc.model(), view, view.get(shaft_node).unwrap()).unwrap();
+        assert_eq!(host.id, engine_node);
+        // The car's own port, dragged onto the part, goes back onto the car.
+        let outer = view.get(outer_node).unwrap().bounds().unwrap();
+        let onto = snap(outer, moved);
+        crate::edit::apply(&mut doc, "drag", &measure, |tx| {
+            tx.set_bounds(diagram, outer_node, onto)
+        })
+        .unwrap();
+        let view = doc.model().view(diagram).unwrap();
+        let host = port_host(doc.model(), view, view.get(outer_node).unwrap()).unwrap();
+        assert_eq!(host.id, car_node, "a port of the car stays on the car");
+        // A part drawn over the car's border where the port sits does not take it.
+        let at = view.get(outer_node).unwrap().bounds().unwrap().center();
+        let mut over = doc.clone();
+        let other = over
+            .edit("over", |tx| {
+                let part =
+                    tx.create(car, ElementData::new("other", ElementKind::attribute(None)))?;
+                tx.add_node(diagram, Some(part), Rect::new(at.x - 60.0, at.y - 20.0, 60.0, 40.0))
+            })
+            .unwrap();
+        let view = over.model().view(diagram).unwrap();
+        assert!(border_distance(view.get(other).unwrap().bounds().unwrap(), at) < 0.01);
+        let host = port_host(over.model(), view, view.get(outer_node).unwrap()).unwrap();
+        assert_eq!(host.id, car_node);
+        assert!(
+            crate::invariants::check(doc.model(), &measure).iter().all(|v| !v.contains("Port"))
+        );
 
         // Removing the part from the diagram takes the ports shown on it along.
         crate::edit::apply(&mut doc, "move back", &measure, |tx| {
             tx.set_bounds(diagram, shaft_node, snap(away, moved))
         })
         .unwrap();
+        // So does giving the part another type, which has no such port.
+        let mut retyped = doc.clone();
+        crate::edit::apply(&mut retyped, "retype", &measure, |tx| {
+            tx.update(engine, |d| {
+                d.kind = ElementKind::attribute(Some(TypeRef::Text("int".into())))
+            })
+        })
+        .unwrap();
+        assert!(retyped.model().view(diagram).unwrap().get(shaft_node).is_none());
         crate::edit::apply(&mut doc, "remove", &measure, |tx| {
             tx.remove_presentation(diagram, engine_node)
         })

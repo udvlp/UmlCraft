@@ -185,6 +185,52 @@ fn partial_types_are_one_type() {
     check("partial", model);
 }
 
+/// A new import of one file of a partial type leaves what the other parts declare: members,
+/// supertypes, documentation.
+#[test]
+fn importing_one_part_of_a_partial_type_keeps_the_others() {
+    let (mut doc, _) = fresh("partial");
+    let before = doc.model().clone();
+    for file in ["Order.cs", "Order.Lines.cs"] {
+        let path = common::fixture(CSHARP, "partial").join(file);
+        umlcraft_reverse::import_into(&mut doc, CSHARP, &[path], "Part").unwrap();
+        assert_eq!(*doc.model(), before, "{file}");
+    }
+}
+
+/// `partial void OnSaving();` and its implementation in another part are one operation, with
+/// the documentation of either.
+#[test]
+fn a_partial_method_is_one_operation() {
+    let files = [
+        ("Order.cs", "partial class Order { partial void OnSaving(); }"),
+        (
+            "Order.Save.cs",
+            "partial class Order {\n  /// <summary>Saves.</summary>\n  partial void OnSaving() { }\n}",
+        ),
+    ];
+    let mut parsed = umlcraft_reverse::Parsed::default();
+    for (name, text) in files {
+        let path = std::path::Path::new(name);
+        let unit = umlcraft_reverse::parse_text(CSHARP, path, text, &mut Default::default());
+        parsed.units.push(unit.unwrap());
+    }
+    let mut doc = Document::new(Model::new("t"));
+    for _ in 0..2 {
+        doc.edit("Import", |tx| umlcraft_reverse::apply(tx, CSHARP, &parsed)).unwrap();
+        let model = doc.model();
+        let order = at(model, "Order");
+        let operations: Vec<&umlcraft_model::Element> = model
+            .children(order)
+            .iter()
+            .map(|&c| model.get(c).unwrap())
+            .filter(|e| matches!(e.kind(), ElementKind::Operation(_)))
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].data().documentation, "<summary>Saves.</summary>");
+    }
+}
+
 #[test]
 fn names_resolve_through_usings_aliases_and_namespaces() {
     let (doc, _) = fresh("resolution");

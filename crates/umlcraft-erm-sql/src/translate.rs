@@ -162,15 +162,71 @@ pub fn enum_values(datatype: &str) -> Option<Vec<String>> {
     Some(values)
 }
 
+/// A default that is a keyword or an expression, of `from` (`None`: drawn) for `to`; `None`
+/// if `to` has nothing like it. `datatype` is the column's type in `to`: MySQL wants the
+/// current time with the column's fractional seconds. A literal in parentheses comes out as
+/// it is (`(_utf8mb4'x')` → `'x'` for PostgreSQL).
+pub fn default_expression(
+    expr: &str,
+    from: Option<Dialect>,
+    to: Dialect,
+    datatype: &str,
+) -> Option<String> {
+    let mut e = expr.trim().to_owned();
+    if !to.is_mysql() {
+        e = condition(&e, to)?;
+    }
+    while e.starts_with('(') && matching(&e, 0) == Some(e.len() - 1) {
+        e = e[1..e.len() - 1].trim().to_owned();
+    }
+    let lower: String = e.to_ascii_lowercase().split_whitespace().collect();
+    let (call, args) = match lower.split_once('(') {
+        Some((call, rest)) => (call, rest.strip_suffix(')')),
+        None => (lower.as_str(), None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let quoted = e.starts_with('\'') && e.ends_with('\'') && e.len() >= 2;
+    let number = e.parse::<f64>().is_ok() && e.bytes().any(|b| b.is_ascii_digit());
+    if quoted && !e[1..e.len() - 1].contains('\'') || number && !e.contains("::") {
+        return Some(e);
+    }
+    let now = matches!(call, "current_timestamp" | "now" | "localtimestamp" | "localtime");
+    let out = match (call, args) {
+        ("null" | "true" | "false", None) => e.to_ascii_uppercase(),
+        _ if now && args.is_none_or(|a| a.is_empty() || digits(a)) => {
+            // MySQL wants the column's precision, PostgreSQL takes the default's.
+            let precision = if to.is_mysql() {
+                let (_, length) = split(datatype);
+                length.filter(|l| digits(l) && l != "0")
+            } else {
+                args.filter(|a| digits(a)).map(str::to_owned)
+            };
+            match precision {
+                Some(p) => format!("CURRENT_TIMESTAMP({p})"),
+                None => "CURRENT_TIMESTAMP".to_owned(),
+            }
+        }
+        ("current_date" | "curdate", None | Some("")) => "CURRENT_DATE".to_owned(),
+        ("current_time" | "curtime", None | Some("")) => "CURRENT_TIME".to_owned(),
+        ("uuid" | "gen_random_uuid" | "uuid_generate_v4", Some("")) => {
+            if to.is_mysql() { "uuid()" } else { "gen_random_uuid()" }.to_owned()
+        }
+        // Drawn: the expression is the user's.
+        _ if from.is_none() => expr.trim().to_owned(),
+        _ => return None,
+    };
+    Some(out)
+}
+
 /// A condition (`CHECK`) for `to`, or `None` if it holds what `to` cannot read.
 pub fn condition(text: &str, to: Dialect) -> Option<String> {
     if to.is_mysql() {
-        let mut s = any_array(text);
-        s = without_casts(&s);
-        s = s.replace("!~~*", "NOT LIKE").replace("~~*", "LIKE");
-        s = s.replace("!~~", "NOT LIKE").replace("~~", "LIKE");
-        let foreign = ["::", "ARRAY[", "~", "E'", "$$"];
-        (!foreign.iter().any(|f| s.contains(f))).then_some(s)
+        let s = outside_strings(&any_array(text), |s| {
+            let s = without_casts(s);
+            let s = s.replace("!~~*", "NOT LIKE").replace("~~*", "LIKE");
+            s.replace("!~~", "NOT LIKE").replace("~~", "LIKE")
+        });
+        (!foreign_to_mysql(&s)).then_some(s)
     } else {
         // MySQL quotes names with backticks and marks strings with their character set.
         let mut s = String::new();
@@ -212,6 +268,59 @@ pub fn condition(text: &str, to: Dialect) -> Option<String> {
     }
 }
 
+/// `text` with `f` applied to each part outside its strings (`'…'`, quotes doubled inside).
+fn outside_strings(text: &str, f: impl Fn(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut part = String::new();
+    let mut in_string = false;
+    for c in text.chars() {
+        if c == '\'' {
+            if in_string {
+                part.push(c);
+                out.push_str(&part);
+                part.clear();
+            } else {
+                out.push_str(&f(&part));
+                part.clear();
+                part.push(c);
+            }
+            in_string = !in_string;
+            continue;
+        }
+        part.push(c);
+    }
+    if in_string {
+        out.push_str(&part);
+    } else {
+        out.push_str(&f(&part));
+    }
+    out
+}
+
+/// Whether a condition holds what MySQL cannot read, outside its strings: a cast (`::`), an
+/// array, a regular expression (`~`), a `$$` string or an `E'…'` string.
+fn foreign_to_mysql(text: &str) -> bool {
+    let mut in_string = false;
+    let mut part = String::new();
+    for c in text.chars() {
+        if c == '\'' {
+            if !in_string {
+                let mut before = part.chars().rev();
+                let e_string = matches!(before.next(), Some('E' | 'e'))
+                    && !before.next().is_some_and(|p| p.is_alphanumeric() || p == '_');
+                if e_string || ["::", "ARRAY[", "~", "$$"].iter().any(|f| part.contains(f)) {
+                    return true;
+                }
+            }
+            part.clear();
+            in_string = !in_string;
+            continue;
+        }
+        part.push(c);
+    }
+    !in_string && ["::", "ARRAY[", "~", "$$"].iter().any(|f| part.contains(f))
+}
+
 /// `x = ANY ((ARRAY['a'::text, 'b'::text])::text[])` → `x IN ('a'::text, 'b'::text)`.
 fn any_array(text: &str) -> String {
     let mut s = text.to_owned();
@@ -229,7 +338,7 @@ fn any_array(text: &str) -> String {
 }
 
 /// The `)` that closes the `(` at byte `open`, outside strings.
-fn matching(s: &str, open: usize) -> Option<usize> {
+pub(crate) fn matching(s: &str, open: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut in_string = false;
     for (k, c) in s.char_indices().skip_while(|&(k, _)| k < open) {
@@ -340,6 +449,13 @@ mod tests {
                    'first'::character varying])::text[])";
         assert_eq!(my(any).as_deref(), Some("(klasse) IN ('economy', 'first')"));
         assert_eq!(my("x ~ '^a'"), None);
+        assert_eq!(my("x = E'a\\'b'"), None);
+        // Only outside strings: `'MALE'` ends with `E'`, and strings may hold `~` and `::`.
+        let gender = "(gender)::text = ANY ((ARRAY['MALE'::character varying, \
+                      'FEMALE'::character varying])::text[])";
+        assert_eq!(my(gender).as_deref(), Some("(gender) IN ('MALE', 'FEMALE')"));
+        assert_eq!(my("(m)::text <> 'a::b~c'::text").as_deref(), Some("(m) <> 'a::b~c'"));
+        assert_eq!(my("x ~~ 'it''s ~~'").as_deref(), Some("x LIKE 'it''s ~~'"));
         let pg = |c: &str| condition(c, Dialect::Postgres);
         assert_eq!(pg("`a` > `b`").as_deref(), Some("a > b"));
         assert_eq!(pg("`Preis` >= 0").as_deref(), Some("\"Preis\" >= 0"));

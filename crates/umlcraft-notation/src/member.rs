@@ -456,13 +456,19 @@ pub fn parse_attribute(text: &str) -> Result<AttributeSpec, ParseError> {
 
 fn parse_parameter(text: &str) -> Result<ParameterSpec, ParseError> {
     let text = text.trim();
+    // `in`, `out` and `inout` are a direction only when a name follows; in `in : InputStream`
+    // or `out = 1` the word is the parameter's name (Java's `InputStream in`).
     let (direction, rest) = [
         ("inout ", ParameterDirection::InOut),
         ("out ", ParameterDirection::Out),
         ("in ", ParameterDirection::In),
     ]
     .into_iter()
-    .find_map(|(prefix, d)| text.strip_prefix(prefix).map(|r| (d, r)))
+    .find_map(|(prefix, d)| {
+        let rest = text.strip_prefix(prefix)?;
+        let next = rest.trim_start();
+        (!next.is_empty() && !next.starts_with([':', '='])).then_some((d, rest))
+    })
     .unwrap_or((ParameterDirection::In, text));
     let (head, default) = split_top(rest, '=');
     let (name, type_text) = split_top(head, ':');
@@ -1317,6 +1323,76 @@ mod tests {
         };
         assert!(t.is_variadic);
         assert_eq!(model.get(templates[0]).unwrap().name(), "Ts");
+    }
+
+    /// Parameters named like a direction keyword (`InputStream in`) keep name and direction
+    /// through the text the box shows, for every direction and every way of showing it.
+    #[test]
+    fn parameters_named_like_directions_roundtrip() {
+        let p = |text: &str| {
+            let o = parse_operation(&format!("f({text})")).unwrap();
+            let p = &o.parameters[0];
+            (p.direction, p.name.clone(), p.type_text.clone(), p.default.clone())
+        };
+        let ty = |t: &str| Some(t.to_owned());
+        use ParameterDirection::{In, InOut, Out};
+        assert_eq!(p("in : InputStream"), (In, "in".into(), ty("InputStream"), None));
+        assert_eq!(p("out : int"), (In, "out".into(), ty("int"), None));
+        assert_eq!(p("inout = 1"), (In, "inout".into(), None, ty("1")));
+        assert_eq!(p("out"), (In, "out".into(), None, None));
+        assert_eq!(p("out out : int"), (Out, "out".into(), ty("int"), None));
+        assert_eq!(p("inout in"), (InOut, "in".into(), None, None));
+        assert_eq!(p(" in  out : int"), (In, "out".into(), ty("int"), None));
+        // The C++ form without a name stays.
+        assert_eq!(p(": int"), (In, String::new(), ty("int"), None));
+
+        let mut doc = Document::new(Model::new("m"));
+        let root = doc.model().root();
+        let op = doc
+            .edit("setup", |tx| {
+                let c = tx.create(root, ElementData::new("C", ElementKind::class()))?;
+                tx.create(c, ElementData::new("f", ElementKind::operation(None)))
+            })
+            .unwrap();
+        for direction in [In, Out, InOut] {
+            for name in ["in", "out", "inout", "x"] {
+                for typed in [true, false] {
+                    let keyword = match direction {
+                        Out => "out ",
+                        InOut => "inout ",
+                        _ => "",
+                    };
+                    let ty = if typed { " : int" } else { "" };
+                    let text = format!("+ f({keyword}{name}{ty}) : void");
+                    doc.edit("edit", |tx| apply_member_text(tx, op, &text)).unwrap();
+                    let model = doc.model();
+                    let params = model.children(op);
+                    let ElementKind::Parameter(props) = model.get(params[0]).unwrap().kind() else {
+                        panic!()
+                    };
+                    assert_eq!(props.direction, direction, "{text}");
+                    assert_eq!(model.get(params[0]).unwrap().name(), name, "{text}");
+                    // What the box shows parses back to the same, in every style.
+                    for directions in [
+                        ParameterDirections::Explicit,
+                        ParameterDirections::All,
+                        ParameterDirections::Hidden,
+                    ] {
+                        let style = Style { parameter_directions: directions, ..Style::default() };
+                        let shown = member_body(model, op, &style);
+                        let parsed = parse_operation(&shown).unwrap();
+                        assert_eq!(parsed.parameters[0].name, name, "{shown}");
+                        if directions != ParameterDirections::Hidden {
+                            assert_eq!(parsed.parameters[0].direction, direction, "{shown}");
+                        }
+                    }
+                    // Renaming the operation keeps the parameter as it is.
+                    let renamed = member_text(model, op).replacen("f(", "g(", 1);
+                    doc.edit("rename", |tx| apply_member_text(tx, op, &renamed)).unwrap();
+                    assert_eq!(member_text(doc.model(), op), renamed);
+                }
+            }
+        }
     }
 
     #[test]

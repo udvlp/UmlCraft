@@ -16,8 +16,9 @@ pub struct SourceTree {
     text: String,
     /// As written, where it differs from `text`.
     written: Option<String>,
-    /// `#elif` and `#else` branches left out.
-    branches: usize,
+    /// Where the branches left out start (`#elif`, `#else`, `#if 0`): the byte their
+    /// directive's line starts at.
+    branches: Vec<usize>,
 }
 
 /// Parses a file's text (decoded, see [`crate::source::read`]) in `language`. C# and C++ are
@@ -37,7 +38,7 @@ pub fn parse_tree(language: SourceLanguage, text: impl Into<String>) -> SourceTr
             let written = (parsed != text).then_some(text);
             (parsed, written, branches)
         }
-        None => (text, None, 0),
+        None => (text, None, Vec::new()),
     };
     let grammar: tree_sitter::Language = match language {
         SourceLanguage::Java => tree_sitter_java::LANGUAGE.into(),
@@ -80,9 +81,15 @@ impl SourceTree {
         self.written.is_some()
     }
 
-    /// The number of `#elif` and `#else` branches left out (C#, C++).
+    /// The number of branches of conditionals left out (C#, C++): `#elif`, `#else`, `#if 0`.
     pub fn left_out_branches(&self) -> usize {
-        self.branches
+        self.branches.len()
+    }
+
+    /// Where the branches left out start, in file order: the byte their directive's line
+    /// (`#else`, `#elif …`, `#if 0`) starts at.
+    pub fn left_out_at(&self) -> &[usize] {
+        &self.branches
     }
 
     /// The first syntax error, if any.

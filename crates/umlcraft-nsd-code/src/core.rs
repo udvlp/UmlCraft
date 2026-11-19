@@ -2,6 +2,7 @@
 //! conditions and loops, the cases of a switch, the parts of a try. A language reads its own
 //! nodes and hands the parts over; its [`Grammar`] names the node kinds that differ.
 
+use std::collections::BTreeSet;
 use std::marker::PhantomData;
 
 use tree_sitter::Node;
@@ -10,10 +11,19 @@ use umlcraft_nsd::{Color, Diagram, Element, ElementKind, Keywords, Sequence};
 
 use crate::pseudo;
 use crate::text::{comment, condition, lines, lines_at, without_semicolon};
-use crate::{Note, NoteKind};
+use crate::{Note, NoteKind, Report, Unbuilt};
 
 /// Structorizer's colour for what its import could not express.
 const RED: Color = Color([0xff, 0x00, 0x00]);
+
+/// No function names, for languages that do not need them.
+static NO_FUNCTIONS: BTreeSet<String> = BTreeSet::new();
+
+/// How deeply statement lists may nest while a body is read: a level for each element that
+/// holds statements, and one for each block or label in between. Deeper bodies are not read
+/// on (which keeps the stack small however deep the code nests); the diagram itself may nest
+/// at most `umlcraft_nsd::read::MAX_DEPTH` deep, as a file can hold it.
+const NESTING: usize = 2 * umlcraft_nsd::read::MAX_DEPTH;
 
 /// A language's node kinds and its statements.
 pub trait Grammar: Sized {
@@ -94,7 +104,11 @@ pub struct Builder<'a, G> {
     sinks: Vec<Sink>,
     /// The names of the functions the file defines, where a call without an object only is
     /// a call of the program's own when it names one of them (Python).
-    pub own_functions: std::collections::BTreeSet<String>,
+    pub own_functions: &'a BTreeSet<String>,
+    /// How many statement lists are open (see [`NESTING`]).
+    nesting: usize,
+    /// Whether the body nests deeper than [`NESTING`].
+    too_deep: bool,
     grammar: PhantomData<G>,
 }
 
@@ -105,9 +119,37 @@ impl<'a, G: Grammar> Builder<'a, G> {
             header,
             notes: Vec::new(),
             sinks: Vec::new(),
-            own_functions: Default::default(),
+            own_functions: &NO_FUNCTIONS,
+            nesting: 0,
+            too_deep: false,
             grammar: PhantomData,
         }
+    }
+
+    /// The diagram with `body` as its elements, and its report; none for a body that nests
+    /// deeper than a structogram may (`umlcraft_nsd::read::MAX_DEPTH`).
+    pub fn finish(
+        self,
+        mut diagram: Diagram,
+        body: Vec<Element>,
+    ) -> Result<(Diagram, Report), Unbuilt> {
+        if self.too_deep || umlcraft_nsd::model::depth(&body) > umlcraft_nsd::read::MAX_DEPTH {
+            return Err(Unbuilt::TooDeep);
+        }
+        diagram.children = Sequence::new(body);
+        Ok((diagram, Report { notes: self.notes }))
+    }
+
+    /// Runs `build` one level deeper, or gives nothing when that is too deep.
+    pub fn deeper<T: Default>(&mut self, build: impl FnOnce(&mut Self) -> T) -> T {
+        if self.too_deep || self.nesting >= NESTING {
+            self.too_deep = true;
+            return T::default();
+        }
+        self.nesting += 1;
+        let result = build(self);
+        self.nesting -= 1;
+        result
     }
 
     pub fn note(&mut self, node: Node, kind: NoteKind) {
@@ -161,8 +203,15 @@ impl<'a, G: Grammar> Builder<'a, G> {
 
     /// Statements with their comments: a comment goes to the element made of the next
     /// statement; one on the line a statement ends on goes to that statement's element; at
-    /// the end of a block to its last element.
+    /// the end of a block to its last element. Every nested statement list is read through
+    /// here, one level deeper ([`Builder::deeper`]).
     pub fn statements(&mut self, nodes: &[Node]) -> Vec<Element> {
+        self.deeper(|b| b.statements_in_place(nodes))
+    }
+
+    /// [`Builder::statements`] on the level open now: for what only wraps a statement (C++'s
+    /// `else`), never for what may wrap itself.
+    pub fn statements_in_place(&mut self, nodes: &[Node]) -> Vec<Element> {
         let mut out: Vec<Element> = Vec::new();
         let mut pending: Vec<String> = Vec::new();
         let mut last_row: Option<(usize, usize)> = None;
@@ -358,6 +407,20 @@ impl<'a, G: Grammar> Builder<'a, G> {
         if let Some(c) = carried {
             merged.push(c);
         }
+        // A `break` before the end of a case leaves the switch; as a jump in a structogram it
+        // reads as leaving a loop.
+        if G::BREAK_ENDS_CASE {
+            for g in &merged {
+                let last = g.statements.iter().rposition(|s| !G::COMMENTS.contains(&s.kind()));
+                let before = match last {
+                    Some(at) if is_plain_break(g.statements[at]) => &g.statements[..at],
+                    _ => &g.statements[..],
+                };
+                for b in inner_breaks(before) {
+                    self.note(b, NoteKind::CaseBreak);
+                }
+            }
+        }
         // What runs for each case: its statements and, while they don't end the case, the
         // next case's.
         let mut bodies: Vec<Vec<Node>> = Vec::new();
@@ -372,11 +435,7 @@ impl<'a, G: Grammar> Builder<'a, G> {
                 self.note(g.node, NoteKind::Fallthrough);
             }
             // The last unlabelled `break` only ends the case.
-            if G::BREAK_ENDS_CASE
-                && body
-                    .last()
-                    .is_some_and(|s| s.kind() == "break_statement" && s.named_child(0).is_none())
-            {
+            if G::BREAK_ENDS_CASE && body.last().is_some_and(|s| is_plain_break(*s)) {
                 body.pop();
             }
             bodies.push(body);
@@ -506,19 +565,46 @@ fn for_parts(node: Node) -> (Vec<Node>, Vec<Node>) {
     (inits, updates)
 }
 
-/// A case's statements with a closing block opened up (`case 1: { f(); break; }`), so that
-/// its `break` ends the case like an unbraced one.
+/// A case's statements with a closing block opened up (`case 1: { f(); break; }`, also
+/// `{ { … } }`), so that its `break` ends the case like an unbraced one.
 fn unbraced<'t, G: Grammar>(mut statements: Vec<Node<'t>>) -> Vec<Node<'t>> {
-    let last = statements.iter().rposition(|s| !G::COMMENTS.contains(&s.kind()));
-    if let Some(at) = last
-        && G::BLOCKS.contains(&statements[at].kind())
-    {
+    loop {
+        let last = statements.iter().rposition(|s| !G::COMMENTS.contains(&s.kind()));
+        let Some(at) = last.filter(|&at| G::BLOCKS.contains(&statements[at].kind())) else {
+            return statements;
+        };
         let block = statements.remove(at);
         let mut cursor = block.walk();
         let inner: Vec<Node> = block.named_children(&mut cursor).collect();
-        statements.splice(at..at, unbraced::<G>(inner));
+        statements.splice(at..at, inner);
     }
-    statements
+}
+
+/// `break;` without a label.
+fn is_plain_break(node: Node) -> bool {
+    node.kind() == "break_statement" && node.named_child(0).is_none()
+}
+
+/// The unlabelled `break`s in `statements` that leave the switch they are in: not those in
+/// loops, switches, functions and classes inside them.
+fn inner_breaks<'t>(statements: &[Node<'t>]) -> Vec<Node<'t>> {
+    let mut found = Vec::new();
+    let mut open: Vec<Node> = statements.iter().rev().copied().collect();
+    while let Some(node) = open.pop() {
+        if is_plain_break(node) {
+            found.push(node);
+            continue;
+        }
+        let kind = node.kind();
+        let own_breaks = ["for", "while", "do_statement", "switch", "lambda", "function", "class"];
+        if own_breaks.iter().any(|k| kind.contains(k)) {
+            continue;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.named_children(&mut cursor).collect();
+        open.extend(children.into_iter().rev());
+    }
+    found
 }
 
 /// Whether the statements leave the case (comments aside).

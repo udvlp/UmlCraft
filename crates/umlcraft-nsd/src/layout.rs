@@ -366,53 +366,79 @@ impl Layouter<'_> {
         Size { w: tw + extra, h: self.text_box(n) }
     }
 
+    // Laying out recurses once per level of nesting. Each kind is sized and placed in a
+    // function of its own, so that a level costs only the stack that kind needs (an unoptimized
+    // build gives every local of a function its own slot).
+
     fn element_size(&self, e: &Element, rotate: bool) -> Size {
-        let (n, tw) = text_of(self.m, e);
         match e.kind {
             ElementKind::Instruction | ElementKind::Call | ElementKind::Jump => {
-                let s = self.plain_size(e);
-                if rotate && s.h < s.w {
-                    // Only the text turns: the bars of a call and the point of a jump keep
-                    // their room across, as Structorizer draws them.
-                    let sides = s.w - tw - PADDING;
-                    Size { w: s.h + sides, h: tw + PADDING }
-                } else {
-                    s
-                }
+                self.turned_size(e, rotate)
             }
-            ElementKind::Alternative => {
-                let (head, min_w, l, r) = self.alternative_parts(e, n);
-                Size { w: min_w.max(l.w + r.w), h: head + l.h.max(r.h) }
-            }
-            ElementKind::Case => {
-                let (columns, head, w, _) = self.case_columns(e);
-                let h = columns.iter().map(|(_, s)| s.h).max().unwrap_or(0);
-                Size { w, h: head + h }
-            }
-            ElementKind::For | ElementKind::While => {
-                let body = self.sequence_size(&e.branches[0], false);
-                Size { w: (tw + PADDING).max(body.w + PADDING), h: self.text_box(n) + body.h }
-            }
-            ElementKind::Repeat => {
-                let body = self.sequence_size(&e.branches[0], false);
-                Size { w: (tw + PADDING).max(body.w + PADDING), h: body.h + self.text_box(n) }
-            }
-            ElementKind::Forever => {
-                let body = self.sequence_size(&e.branches[0], false);
-                Size { w: body.w + PADDING, h: PADDING + body.h + BAND }
-            }
-            ElementKind::Try => {
-                let (rows, w) = self.try_parts(e);
-                Size { w, h: rows.iter().sum::<i32>() + BAND }
-            }
-            ElementKind::Parallel => {
-                let sizes: Vec<Size> =
-                    e.branches.iter().map(|b| self.sequence_size(b, false)).collect();
-                let w = (sizes.iter().map(|s| s.w).sum::<i32>() + 1).max(PARALLEL_MIN);
-                let h = sizes.iter().map(|s| s.h).max().unwrap_or(EMPTY.1);
-                Size { w, h: BAND + h + BAND }
-            }
+            ElementKind::Alternative => self.alternative_size(e),
+            ElementKind::Case => self.case_size(e),
+            ElementKind::For | ElementKind::While | ElementKind::Repeat => self.loop_size(e),
+            ElementKind::Forever => self.forever_size(e),
+            ElementKind::Try => self.try_size(e),
+            ElementKind::Parallel => self.parallel_size(e),
         }
+    }
+
+    /// An instruction, call or jump, turned in a case with many branches where that makes it
+    /// narrower.
+    fn turned_size(&self, e: &Element, rotate: bool) -> Size {
+        let s = self.plain_size(e);
+        if rotate && s.h < s.w {
+            // Only the text turns: the bars of a call and the point of a jump keep their room
+            // across, as Structorizer draws them.
+            let (_, tw) = text_of(self.m, e);
+            let sides = s.w - tw - PADDING;
+            Size { w: s.h + sides, h: tw + PADDING }
+        } else {
+            s
+        }
+    }
+
+    #[inline(never)]
+    fn alternative_size(&self, e: &Element) -> Size {
+        let (n, _) = text_of(self.m, e);
+        let (head, min_w, l, r) = self.alternative_parts(e, n);
+        Size { w: min_w.max(l.w + r.w), h: head + l.h.max(r.h) }
+    }
+
+    #[inline(never)]
+    fn case_size(&self, e: &Element) -> Size {
+        let (columns, head, w, _) = self.case_columns(e);
+        let h = columns.iter().map(|(_, s)| s.h).max().unwrap_or(0);
+        Size { w, h: head + h }
+    }
+
+    /// For, while and repeat loops: the text above the body, or below it (repeat).
+    #[inline(never)]
+    fn loop_size(&self, e: &Element) -> Size {
+        let (n, tw) = text_of(self.m, e);
+        let body = self.sequence_size(&e.branches[0], false);
+        Size { w: (tw + PADDING).max(body.w + PADDING), h: self.text_box(n) + body.h }
+    }
+
+    #[inline(never)]
+    fn forever_size(&self, e: &Element) -> Size {
+        let body = self.sequence_size(&e.branches[0], false);
+        Size { w: body.w + PADDING, h: PADDING + body.h + BAND }
+    }
+
+    #[inline(never)]
+    fn try_size(&self, e: &Element) -> Size {
+        let (rows, w) = self.try_parts(e);
+        Size { w, h: rows.iter().sum::<i32>() + BAND }
+    }
+
+    #[inline(never)]
+    fn parallel_size(&self, e: &Element) -> Size {
+        let sizes: Vec<Size> = e.branches.iter().map(|b| self.sequence_size(b, false)).collect();
+        let w = (sizes.iter().map(|s| s.w).sum::<i32>() + 1).max(PARALLEL_MIN);
+        let h = sizes.iter().map(|s| s.h).max().unwrap_or(EMPTY.1);
+        Size { w, h: BAND + h + BAND }
     }
 
     /// Head height, the head's minimum width (the condition fits into the triangle) and the
@@ -521,122 +547,122 @@ impl Layouter<'_> {
     }
 
     fn place_element(&self, e: &Element, r: Rect, path: Path, rotate: bool) -> ElementBox {
-        let (n, _) = text_of(self.m, e);
-
         let mut branches = Vec::new();
+        let b = &mut branches;
         let shape = match e.kind {
             ElementKind::Instruction | ElementKind::Call | ElementKind::Jump => {
                 // Turned only where that makes it narrower (as measured).
                 let s = self.plain_size(e);
                 Shape::Plain { rotated: rotate && s.h < s.w }
             }
-            ElementKind::Alternative => {
-                let (head, _, _, right) = self.alternative_parts(e, n);
-                let split = r.right() - right.w - 1;
-                let h = r.h - head;
-                branches.push(self.branch(
-                    &e.branches[0],
-                    Rect::new(r.x, r.y + head, split - r.x, h),
-                    &path,
-                    0,
-                ));
-                branches.push(self.branch(
-                    &e.branches[1],
-                    Rect::new(split, r.y + head, r.right() - split, h),
-                    &path,
-                    1,
-                ));
-                Shape::Alternative { head, split }
-            }
-            ElementKind::Case => {
-                let (columns, head, _, default) = self.case_columns(e);
-                let rotate = e.branches.len() > ROTATE_ABOVE;
-                let mut x = r.x;
-                let mut lefts = Vec::new();
-                for (k, (i, s)) in columns.iter().enumerate() {
-                    let w = if k + 1 == columns.len() { r.right() - x } else { s.w };
-                    lefts.push(x);
-                    let mut p = path.clone();
-                    p.push(*i);
-                    branches.push(self.place_sequence(
-                        &e.branches[*i],
-                        Rect::new(x, r.y + head, w, r.h - head),
-                        &p,
-                        rotate,
-                    ));
-                    x += w;
-                }
-                let apex = if default { *lefts.last().unwrap_or(&r.x) } else { r.right() };
-                Shape::Case { head, columns: lefts, apex, default }
-            }
-            ElementKind::For | ElementKind::While => {
-                let head = self.text_box(n);
-                branches.push(self.branch(
-                    &e.branches[0],
-                    Rect::new(r.x + BAR, r.y + head - 1, r.w - BAR, r.h - head + 1),
-                    &path,
-                    0,
-                ));
-                Shape::Head { head: head - 1 }
-            }
-            ElementKind::Repeat => {
-                let foot = r.bottom() - self.text_box(n);
-                branches.push(self.branch(
-                    &e.branches[0],
-                    Rect::new(r.x + BAR, r.y, r.w - BAR, foot - r.y),
-                    &path,
-                    0,
-                ));
-                Shape::Foot { foot }
-            }
-            ElementKind::Forever => {
-                branches.push(self.branch(
-                    &e.branches[0],
-                    Rect::new(r.x + BAR, r.y + BAR, r.w - BAR, r.h - BAR - BAND),
-                    &path,
-                    0,
-                ));
-                Shape::Forever
-            }
-            ElementKind::Try => {
-                let (heights, natural) = self.try_parts(e);
-                // Spare height goes to the bottom band. Given more width, the bodies end a
-                // pixel closer to the right line.
-                let right = if r.w > natural { TRY_INDENT - 1 } else { TRY_INDENT };
-                let mut y = r.y;
-                let mut rows = Vec::new();
-                for k in 0..heights.len() / 2 {
-                    rows.push(y);
-                    y += heights[2 * k];
-                    let h = heights[2 * k + 1];
-                    // Bodies in order: try, catch (indented further), finally.
-                    let left = if k == 1 { CATCH_INDENT } else { TRY_INDENT };
-                    let rect = Rect::new(r.x + left, y, r.w - left - right, h);
-                    branches.push(self.branch(&e.branches[k], rect, &path, k));
-                    y += h;
-                }
-                Shape::Try { rows, band: y }
-            }
-            ElementKind::Parallel => {
-                let sizes: Vec<Size> =
-                    e.branches.iter().map(|b| self.sequence_size(b, false)).collect();
-                let mut x = r.x;
-                let mut lefts = Vec::new();
-                for (i, s) in sizes.iter().enumerate() {
-                    let w = if i + 1 == sizes.len() { r.right() - x } else { s.w };
-                    lefts.push(x);
-                    branches.push(self.branch(
-                        &e.branches[i],
-                        Rect::new(x, r.y + BAND, w, r.h - 2 * BAND),
-                        &path,
-                        i,
-                    ));
-                    x += w;
-                }
-                Shape::Parallel { columns: lefts }
-            }
+            ElementKind::Alternative => self.place_alternative(e, r, &path, b),
+            ElementKind::Case => self.place_case(e, r, &path, b),
+            ElementKind::For | ElementKind::While => self.place_head_loop(e, r, &path, b),
+            ElementKind::Repeat => self.place_repeat(e, r, &path, b),
+            ElementKind::Forever => self.place_forever(e, r, &path, b),
+            ElementKind::Try => self.place_try(e, r, &path, b),
+            ElementKind::Parallel => self.place_parallel(e, r, &path, b),
         };
         ElementBox { path, kind: e.kind, rect: r, shape, branches }
+    }
+
+    #[inline(never)]
+    fn place_alternative(
+        &self,
+        e: &Element,
+        r: Rect,
+        path: &[usize],
+        b: &mut Vec<SeqBox>,
+    ) -> Shape {
+        let (n, _) = text_of(self.m, e);
+        let (head, _, _, right) = self.alternative_parts(e, n);
+        let split = r.right() - right.w - 1;
+        let h = r.h - head;
+        b.push(self.branch(&e.branches[0], Rect::new(r.x, r.y + head, split - r.x, h), path, 0));
+        let rect = Rect::new(split, r.y + head, r.right() - split, h);
+        b.push(self.branch(&e.branches[1], rect, path, 1));
+        Shape::Alternative { head, split }
+    }
+
+    #[inline(never)]
+    fn place_case(&self, e: &Element, r: Rect, path: &[usize], b: &mut Vec<SeqBox>) -> Shape {
+        let (columns, head, _, default) = self.case_columns(e);
+        let rotate = e.branches.len() > ROTATE_ABOVE;
+        let mut x = r.x;
+        let mut lefts = Vec::new();
+        for (k, (i, s)) in columns.iter().enumerate() {
+            let w = if k + 1 == columns.len() { r.right() - x } else { s.w };
+            lefts.push(x);
+            let mut p = path.to_vec();
+            p.push(*i);
+            let rect = Rect::new(x, r.y + head, w, r.h - head);
+            b.push(self.place_sequence(&e.branches[*i], rect, &p, rotate));
+            x += w;
+        }
+        let apex = if default { *lefts.last().unwrap_or(&r.x) } else { r.right() };
+        Shape::Case { head, columns: lefts, apex, default }
+    }
+
+    /// For and while loops: the text above the body.
+    #[inline(never)]
+    fn place_head_loop(&self, e: &Element, r: Rect, path: &[usize], b: &mut Vec<SeqBox>) -> Shape {
+        let (n, _) = text_of(self.m, e);
+        let head = self.text_box(n);
+        let rect = Rect::new(r.x + BAR, r.y + head - 1, r.w - BAR, r.h - head + 1);
+        b.push(self.branch(&e.branches[0], rect, path, 0));
+        Shape::Head { head: head - 1 }
+    }
+
+    #[inline(never)]
+    fn place_repeat(&self, e: &Element, r: Rect, path: &[usize], b: &mut Vec<SeqBox>) -> Shape {
+        let (n, _) = text_of(self.m, e);
+        let foot = r.bottom() - self.text_box(n);
+        let rect = Rect::new(r.x + BAR, r.y, r.w - BAR, foot - r.y);
+        b.push(self.branch(&e.branches[0], rect, path, 0));
+        Shape::Foot { foot }
+    }
+
+    #[inline(never)]
+    fn place_forever(&self, e: &Element, r: Rect, path: &[usize], b: &mut Vec<SeqBox>) -> Shape {
+        let rect = Rect::new(r.x + BAR, r.y + BAR, r.w - BAR, r.h - BAR - BAND);
+        b.push(self.branch(&e.branches[0], rect, path, 0));
+        Shape::Forever
+    }
+
+    #[inline(never)]
+    fn place_try(&self, e: &Element, r: Rect, path: &[usize], b: &mut Vec<SeqBox>) -> Shape {
+        let (heights, natural) = self.try_parts(e);
+        // Spare height goes to the bottom band. Given more width, the bodies end a pixel closer
+        // to the right line.
+        let right = if r.w > natural { TRY_INDENT - 1 } else { TRY_INDENT };
+        let mut y = r.y;
+        let mut rows = Vec::new();
+        for k in 0..heights.len() / 2 {
+            rows.push(y);
+            y += heights[2 * k];
+            let h = heights[2 * k + 1];
+            // Bodies in order: try, catch (indented further), finally.
+            let left = if k == 1 { CATCH_INDENT } else { TRY_INDENT };
+            let rect = Rect::new(r.x + left, y, r.w - left - right, h);
+            b.push(self.branch(&e.branches[k], rect, path, k));
+            y += h;
+        }
+        Shape::Try { rows, band: y }
+    }
+
+    #[inline(never)]
+    fn place_parallel(&self, e: &Element, r: Rect, path: &[usize], b: &mut Vec<SeqBox>) -> Shape {
+        let sizes: Vec<Size> = e.branches.iter().map(|b| self.sequence_size(b, false)).collect();
+        let mut x = r.x;
+        let mut lefts = Vec::new();
+        for (i, s) in sizes.iter().enumerate() {
+            let w = if i + 1 == sizes.len() { r.right() - x } else { s.w };
+            lefts.push(x);
+            let rect = Rect::new(x, r.y + BAND, w, r.h - 2 * BAND);
+            b.push(self.branch(&e.branches[i], rect, path, i));
+            x += w;
+        }
+        Shape::Parallel { columns: lefts }
     }
 }
 

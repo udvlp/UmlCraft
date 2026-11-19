@@ -1,17 +1,26 @@
 //! A Python function body as structogram elements, the same mapping as Java's where the
 //! languages agree (`docs/plan-nsd-python.md`).
 
+use std::collections::BTreeSet;
+
 use tree_sitter::Node;
 use umlcraft_nsd::{Diagram, Element, ElementKind, Keywords, Provenance, RootKind, Sequence};
 
 use super::Python;
-use super::methods::{Member, function_names};
+use super::methods::Member;
 use crate::core::{Builder, Catch, Group, append_comment};
 use crate::pseudo;
 use crate::text::{condition, lines, lines_at, node_text, one_line, without_semicolon};
-use crate::{Made, NoteKind, Report};
+use crate::{Made, NoteKind, Report, Unbuilt};
 
-pub fn diagram(member: &Member, root: Node, src: &str, made: &Made) -> (Diagram, Report) {
+/// The diagram of `member`; `own` are the names of the functions the file defines
+/// (`function_names`).
+pub fn diagram(
+    member: &Member,
+    own: &BTreeSet<String>,
+    src: &str,
+    made: &Made,
+) -> Result<(Diagram, Report), Unbuilt> {
     let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
     let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
     d.set_keywords(made.keywords);
@@ -19,9 +28,9 @@ pub fn diagram(member: &Member, root: Node, src: &str, made: &Made) -> (Diagram,
         d.set_comment(doc);
     }
     let mut b = Builder::<Python>::new(src, d.clone());
-    b.own_functions = function_names(root, src);
-    d.children = Sequence::new(b.statements(&member.statements));
-    (d, Report { notes: b.notes })
+    b.own_functions = own;
+    let body = b.statements(&member.statements);
+    b.finish(d, body)
 }
 
 pub fn statement(b: &mut Builder<Python>, node: Node, out: &mut Vec<Element>) {
@@ -30,10 +39,18 @@ pub fn statement(b: &mut Builder<Python>, node: Node, out: &mut Vec<Element>) {
         "pass_statement" => {}
         _ if node.has_error() => out.push(b.syntax_error(node)),
         "block" => out.extend(b.block(node)),
-        "expression_statement" => match node.named_child(0) {
-            Some(expr) => out.extend(b.expression(expr)),
-            None => out.push(b.instruction(node)),
-        },
+        // `f(), g()`: each expression on its own.
+        "expression_statement" => {
+            let mut cursor = node.walk();
+            let expressions: Vec<Node> =
+                node.named_children(&mut cursor).filter(|c| c.kind() != "comment").collect();
+            if expressions.is_empty() {
+                out.push(b.instruction(node));
+            }
+            for expr in expressions {
+                out.extend(b.expression(expr));
+            }
+        }
         "if_statement" => {
             let alternatives = alternatives(node);
             out.push(b.if_chain(node, &alternatives));
@@ -205,8 +222,10 @@ impl Builder<'_, Python> {
             e.branches[0] = Sequence::new(self.block(then));
         }
         match alternatives.split_first() {
+            // Each `elif` one level deeper, as nested statements are.
             Some((first, rest)) if first.kind() == "elif_clause" => {
-                e.branches[1] = Sequence::new(vec![self.if_chain(*first, rest)]);
+                let nested: Option<Element> = self.deeper(|b| Some(b.if_chain(*first, rest)));
+                e.branches[1] = Sequence::new(nested.into_iter().collect());
             }
             Some((first, _)) => e.branches[1] = self.body(*first),
             None => {}

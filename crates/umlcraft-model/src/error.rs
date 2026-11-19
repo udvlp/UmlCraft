@@ -112,6 +112,32 @@ pub enum Refusal {
     /// What follows the closing parenthesis of an operation.
     #[error("unexpected {0:?} after \")\"")]
     MemberUnexpected(String),
+    #[error("a part goes inside a class")]
+    PartOutside,
+    #[error("a port goes on a class or a part")]
+    PortOutside,
+    #[error("a port on a part needs a class as the part's type")]
+    PortOnUntypedPart,
+    #[error("a pin goes on an action")]
+    PinOutside,
+    #[error("a stub state goes into a submachine state")]
+    StubOutside,
+    #[error("a state invariant or termination goes on a lifeline")]
+    NotOnLifeline,
+    #[error("the lifeline ends already")]
+    LifelineEnded,
+    #[error("a duration or time constraint goes on messages")]
+    NotOnMessage,
+    /// Two ER elements that no line of the ER tool joins.
+    #[error("these two cannot be joined")]
+    ErNotJoined,
+    #[error("the attribute already belongs to something")]
+    ErAttributeOwned,
+    #[error("an identifying relationship has one weak entity")]
+    ErSecondWeak,
+    /// Making an entity non-associative while entities take part in it.
+    #[error("entities take part in the associative entity")]
+    ErAssociativeInUse,
 }
 
 pub type Result<T, E = ModelError> = std::result::Result<T, E>;

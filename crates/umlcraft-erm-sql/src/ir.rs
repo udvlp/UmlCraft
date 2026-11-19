@@ -109,6 +109,7 @@ pub struct Table {
     pub columns: Vec<Column>,
     /// Empty without a primary key.
     pub primary_key: Vec<String>,
+    /// Unique keys; a column with a prefix length (`body(50)`) is unique by its start only.
     pub uniques: Vec<Vec<String>>,
     pub foreign_keys: Vec<ForeignKey>,
     /// `CHECK` constraints of the table, their conditions as written.
@@ -148,9 +149,12 @@ pub struct Column {
     /// The type as written (`int unsigned`, `character varying(50)`, `enum('a','b')`).
     pub datatype: String,
     pub not_null: bool,
-    /// The default without quotes, the expression of a generated column; `None` also for
-    /// `DEFAULT NULL`.
+    /// The default as SQL, a string in single quotes (`'A1'`, `'it''s'`; introducers and
+    /// casts left out), or the expression of a generated column; `None` also for `DEFAULT
+    /// NULL`.
     pub default: Option<String>,
+    /// MySQL's `ON UPDATE CURRENT_TIMESTAMP`: what follows `ON UPDATE`.
+    pub on_update: Option<String>,
     pub comment: Option<String>,
     /// `GENERATED ALWAYS AS (…)` or MySQL's `AS (…)`; identity columns are not.
     pub generated: bool,
@@ -166,6 +170,7 @@ pub struct Column {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Index {
     pub name: String,
+    /// The columns; one indexed by its start only with MySQL's prefix length (`body(100)`).
     pub columns: Vec<String>,
 }
 
@@ -177,6 +182,7 @@ pub struct UserType {
     /// The values of an enumeration.
     pub values: Vec<String>,
     pub not_null: bool,
+    /// As SQL, as [`Column::default`].
     pub default: Option<String>,
     pub check: Option<String>,
     pub comment: Option<String>,

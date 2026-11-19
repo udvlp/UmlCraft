@@ -47,14 +47,8 @@ pub fn methods(root: Node, src: &str) -> Vec<MethodRef> {
     members(root, src).into_iter().map(|m| m.reference).collect()
 }
 
-/// The member `method` names.
-pub fn find<'t>(root: Node<'t>, src: &str, method: &MethodRef) -> Option<Member<'t>> {
-    members(root, src)
-        .into_iter()
-        .find(|m| m.reference.start == method.start && m.reference.name == method.name)
-}
-
-fn members<'t>(root: Node<'t>, src: &str) -> Vec<Member<'t>> {
+/// The members with a body, in file order.
+pub fn members<'t>(root: Node<'t>, src: &str) -> Vec<Member<'t>> {
     let mut out = Vec::new();
     top_level(root, &mut out);
     declarations(root, src, &mut Vec::new(), &mut out);
@@ -90,6 +84,7 @@ fn top_level<'t>(root: Node<'t>, out: &mut Vec<Member<'t>>) {
             line: first.start_position().row + 1,
             start: first.start_byte(),
             end: last.end_byte(),
+            module_code: true,
         },
         title: "Main(args)".to_owned(),
         doc: None,
@@ -163,7 +158,9 @@ fn operation<'t>(node: Node<'t>, src: &str, class: &[String]) -> Option<Member<'
             (operator_name(op, parameters.contains(',')), format!("operator {op}({parameters})"))
         }
         "conversion_operator_declaration" => {
-            let implicit = node_text(node, src).contains("implicit");
+            // The keyword, not a word in the body.
+            let mut cursor = node.walk();
+            let implicit = node.children(&mut cursor).any(|c| c.kind() == "implicit");
             let target = node.child_by_field_name("type").map(|t| node_text(t, src));
             let name = if implicit { "op_Implicit" } else { "op_Explicit" };
             (name.to_owned(), format!("operator {}({parameters})", target.unwrap_or_default()))
@@ -192,6 +189,7 @@ fn operation<'t>(node: Node<'t>, src: &str, class: &[String]) -> Option<Member<'
             line: node.start_position().row + 1,
             start: node.start_byte(),
             end: node.end_byte(),
+            module_code: false,
         },
         title,
         doc: doc(node, src),
@@ -242,6 +240,7 @@ fn accessors<'t>(node: Node<'t>, src: &str, class: &[String], out: &mut Vec<Memb
                 line: at.start_position().row + 1,
                 start: at.start_byte(),
                 end: at.end_byte(),
+                module_code: false,
             },
             title: format!("{name}({})", names.join(", ")),
             doc: doc.clone(),

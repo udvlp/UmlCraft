@@ -40,7 +40,7 @@ fn placed(language: &str) -> Vec<String> {
     for (unit, path, methods) in methods {
         let file = path.file_name().unwrap().to_string_lossy().into_owned();
         for m in methods {
-            let found = match places.operation(unit, m.start..m.end) {
+            let found = match m.declaration().and_then(|d| places.operation(unit, d)) {
                 Some(op) => {
                     let e = model.get(op).unwrap();
                     assert!(matches!(e.kind(), ElementKind::Operation(_)));
@@ -107,6 +107,36 @@ fn python_methods_find_their_operations() {
 #[test]
 fn cpp_methods_find_their_operations() {
     check("cpp");
+}
+
+/// The code of a module around its classes is no method of theirs: it finds no operation
+/// and stands in the module's package.
+#[test]
+fn module_code_around_classes_finds_no_operation() {
+    let text = "import logging
+log = logging.getLogger(__name__)
+
+class First:
+    def __init__(self):
+        self.n = 0
+
+if __name__ == \"__main__\":
+    First()
+";
+    let path = Path::new("tool.py");
+    let source = Source::parse(SourceLanguage::Python, text);
+    let unit = lower(source.tree(), path, &mut Default::default()).unwrap();
+    let parsed = Parsed { units: vec![unit], ..Default::default() };
+    let mut doc = Document::new(Model::new("t"));
+    let (_, places) =
+        doc.edit("Import", |tx| apply_placed(tx, SourceLanguage::Python, &parsed)).unwrap();
+    let methods = source.methods();
+    let main = methods.iter().find(|m| m.name == "__main__").unwrap();
+    assert!(main.module_code && main.declaration().is_none());
+    // Its bytes do overlap `__init__`'s.
+    assert!(places.operation(0, main.start..main.end).is_some());
+    let init = methods.iter().find(|m| m.name == "__init__").unwrap();
+    assert!(init.declaration().and_then(|d| places.operation(0, d)).is_some());
 }
 
 #[test]

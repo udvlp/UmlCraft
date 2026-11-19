@@ -37,6 +37,8 @@ use umlcraft_model::{
 };
 
 use crate::dialect::Dialect;
+use crate::keywords::{MYSQL_RESERVED, POSTGRES_RESERVED};
+use crate::parse::is_sequence;
 use crate::translate;
 
 /// The type of attributes that have none.
@@ -67,6 +69,9 @@ pub enum LeftOut {
     Generated { table: String, column: String },
     /// A counted column MySQL cannot count, as it does not lead the key or a unique index.
     AutoIncrement { table: String, column: String },
+    /// A default, or MySQL's `ON UPDATE`, the dialect has nothing like: the column goes
+    /// without it.
+    Default { table: String, column: String, default: String },
 }
 
 /// A domain of the model, and whether a column uses it.
@@ -83,8 +88,11 @@ struct Column {
     name: String,
     datatype: String,
     not_null: bool,
-    /// The default, or the expression of a generated column.
+    /// The default as the model keeps it, or the expression of a generated column.
     default: String,
+    /// The default as the dialect writes it: ` DEFAULT …`, MySQL's ` ON UPDATE …`, or
+    /// nothing.
+    default_sql: String,
     generated: bool,
     /// The generated column's value is computed when read.
     virtual_column: bool,
@@ -305,6 +313,7 @@ impl Builder<'_> {
                 datatype: datatype_of(p),
                 not_null: p.not_null || p.key.is_some(),
                 default: p.default_value.clone(),
+                default_sql: String::new(),
                 // The import keeps the expression of a generated column as its default.
                 generated: p.derived && !p.default_value.is_empty(),
                 virtual_column: p.virtual_column,
@@ -400,6 +409,183 @@ impl Builder<'_> {
         out
     }
 
+    /// Types the server would refuse where they stand: a PostgreSQL identity column of
+    /// another type than an integer (MySQL's `bigint unsigned`, `numeric(20)` there) becomes
+    /// `bigint`; in MySQL a `text` or `blob` column in a key, unique constraint, unique index
+    /// or reference becomes `varchar(255)` or `varbinary(255)`, as MySQL keys them only by a
+    /// prefix. Written for the other dialect, a foreign key column takes the type of the
+    /// column it references, as both servers want them alike.
+    fn fit_types(&mut self) {
+        let d = self.dialect;
+        for t in &mut self.tables {
+            for c in &mut t.columns {
+                let counted = c.auto_increment || is_sequence(&c.default);
+                let integer = matches!(
+                    base_type(&c.datatype).as_str(),
+                    "smallint" | "integer" | "int" | "bigint" | "int2" | "int4" | "int8"
+                );
+                if d == Dialect::Postgres && counted && !c.generated && !integer {
+                    c.datatype = "bigint".to_owned();
+                }
+            }
+        }
+        if d.is_mysql() {
+            let mut keyed: Vec<HashSet<String>> = self
+                .tables
+                .iter()
+                .map(|t| {
+                    let mut k: HashSet<String> = t.key.iter().cloned().collect();
+                    k.extend(t.uniques.iter().flatten().cloned());
+                    k.extend(t.columns.iter().filter(|c| c.unique).map(|c| c.name.clone()));
+                    let unique_indexes = t.indexes.iter().filter(|i| i.unique).flat_map(|i| {
+                        i.columns.iter().filter(|c| prefix_length(c).1.is_none()).cloned()
+                    });
+                    k.extend(unique_indexes);
+                    k
+                })
+                .collect();
+            for r in &self.refs {
+                keyed[r.table].extend(r.columns.iter().cloned());
+                keyed[r.target].extend(r.target_columns.iter().cloned());
+            }
+            for (t, keyed) in self.tables.iter_mut().zip(&keyed) {
+                for c in t.columns.iter_mut().filter(|c| keyed.contains(&c.name)) {
+                    match base_type(&c.datatype).as_str() {
+                        "tinytext" | "text" | "mediumtext" | "longtext" => {
+                            c.datatype = "varchar(255)".to_owned();
+                        }
+                        "tinyblob" | "blob" | "mediumblob" | "longblob" => {
+                            c.datatype = "varbinary(255)".to_owned();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if self.foreign() {
+            for r in &self.refs {
+                for (column, target) in r.columns.iter().zip(&r.target_columns) {
+                    let datatype = self.tables[r.target]
+                        .columns
+                        .iter()
+                        .find(|c| &c.name == target)
+                        .map(|c| c.datatype.clone());
+                    let column =
+                        self.tables[r.table].columns.iter_mut().find(|c| &c.name == column);
+                    if let (Some(datatype), Some(column)) = (datatype, column) {
+                        column.datatype = datatype;
+                    }
+                }
+            }
+        }
+    }
+
+    /// ` DEFAULT …` (and MySQL's ` ON UPDATE …`) of a column, or nothing.
+    /// A column's default clause, and what of its default the dialect has nothing for.
+    fn default_clause(&self, c: &Column) -> (String, Vec<String>) {
+        if c.generated || c.auto_increment || is_sequence(&c.default) {
+            return (String::new(), Vec::new());
+        }
+        let (value, on_update) = split_on_update(&c.default);
+        let mut out = String::new();
+        let mut dropped = Vec::new();
+        if !value.is_empty() {
+            match self.default_value(value, &c.datatype) {
+                Some(v) => {
+                    let _ = write!(out, " DEFAULT {v}");
+                }
+                None => dropped.push(value.to_owned()),
+            }
+        }
+        if let Some(u) = on_update {
+            if self.dialect.is_mysql() {
+                let _ = write!(out, " ON UPDATE {u}");
+            } else {
+                dropped.push(format!("ON UPDATE {u}"));
+            }
+        }
+        (out, dropped)
+    }
+
+    /// A default (as the model keeps it) for a column or domain of type `datatype` (in the
+    /// dialect), as SQL; `None` where the dialect has nothing like it.
+    ///
+    /// - For the other dialect, a keyword or expression is translated (`uuid()` ↔
+    ///   `gen_random_uuid()`, `curdate()` → `CURRENT_DATE`, MySQL's introducers go), or
+    ///   left out if it has no counterpart; strings and numbers stay.
+    /// - MySQL's zero dates are left out for MySQL (its strict mode refuses them) and
+    ///   PostgreSQL; PostgreSQL's `infinity` for MySQL.
+    /// - `0` and `1` are `FALSE` and `TRUE` for a PostgreSQL `boolean` (MySQL's
+    ///   `tinyint(1)`).
+    /// - MySQL takes a literal for a `text`, `blob`, `json` or spatial column and an
+    ///   expression other than the current time only in parentheses.
+    fn default_value(&self, value: &str, datatype: &str) -> Option<String> {
+        let d = self.dialect;
+        let base = base_type(datatype);
+        let mut v = Value::of(value);
+        if let Value::Word(e) | Value::Expr(e) = &v
+            && self.foreign()
+        {
+            v = Value::of(&translate::default_expression(e, self.from, d, datatype)?);
+        }
+        if let Value::Str(s) = &v {
+            let lower = s.to_ascii_lowercase();
+            if s.starts_with("0000-00-00") && d != Dialect::MariaDb
+                || d.is_mysql() && matches!(lower.as_str(), "infinity" | "-infinity")
+            {
+                return None;
+            }
+        }
+        if d == Dialect::Postgres && matches!(base.as_str(), "boolean" | "bool") {
+            let bit = match &v {
+                Value::Num(n) | Value::Str(n) => n.as_str(),
+                _ => "",
+            };
+            match bit {
+                "0" => return Some("FALSE".to_owned()),
+                "1" => return Some("TRUE".to_owned()),
+                _ => {}
+            }
+        }
+        let literal = matches!(v, Value::Str(_) | Value::Num(_) | Value::Bits(_));
+        let sql = match v {
+            Value::Str(s) => string(&s, d),
+            Value::Num(s) | Value::Bits(s) | Value::Word(s) | Value::Expr(s) => s,
+        };
+        if !d.is_mysql() {
+            return Some(sql);
+        }
+        const NO_LITERAL: [&str; 16] = [
+            "tinytext",
+            "text",
+            "mediumtext",
+            "longtext",
+            "tinyblob",
+            "blob",
+            "mediumblob",
+            "longblob",
+            "json",
+            "geometry",
+            "point",
+            "linestring",
+            "polygon",
+            "multipoint",
+            "multilinestring",
+            "multipolygon",
+        ];
+        let lower = sql.to_ascii_lowercase();
+        let call = lower.split('(').next().unwrap_or_default().trim();
+        let bare = if literal {
+            !NO_LITERAL.contains(&base.as_str()) && !base.starts_with("geom")
+        } else {
+            matches!(lower.as_str(), "null" | "true" | "false")
+                || matches!(call, "current_timestamp" | "now" | "localtime" | "localtimestamp")
+                    && matches!(base.as_str(), "timestamp" | "datetime")
+                || sql.starts_with('(') && translate::matching(&sql, 0) == Some(sql.len() - 1)
+        };
+        Some(if bare { sql } else { format!("({sql})") })
+    }
+
     /// The columns of an entity's table with the attributes they come from.
     fn columns_of_entity(&self, entity: Id) -> Vec<(Id, String)> {
         leaf_attributes(self.model, entity)
@@ -449,6 +635,7 @@ impl Builder<'_> {
                 datatype,
                 not_null: not_null || in_key,
                 default: String::new(),
+                default_sql: String::new(),
                 generated: false,
                 virtual_column: false,
                 auto_increment: false,
@@ -678,6 +865,18 @@ impl Builder<'_> {
                 }
             }
         }
+        self.fit_types();
+        for t in 0..self.tables.len() {
+            for c in 0..self.tables[t].columns.len() {
+                let (clause, dropped) = self.default_clause(&self.tables[t].columns[c]);
+                self.tables[t].columns[c].default_sql = clause;
+                for default in dropped {
+                    let table = self.tables[t].name.clone();
+                    let column = self.tables[t].columns[c].name.clone();
+                    self.left_out.push(LeftOut::Default { table, column, default });
+                }
+            }
+        }
         let mut domains = std::mem::take(&mut self.domains);
         domains.retain(|x| x.used);
         for x in &mut domains {
@@ -715,12 +914,12 @@ impl Builder<'_> {
                     length_precision: p.length_precision.clone(),
                     ..Default::default()
                 };
-                let mut s = format!(
-                    "CREATE DOMAIN {name} AS {}",
-                    translate::datatype(&datatype_of(&base), self.from, d)
-                );
-                if !p.default_value.is_empty() {
-                    let _ = write!(s, " DEFAULT {}", literal(&p.default_value, d));
+                let datatype = translate::datatype(&datatype_of(&base), self.from, d);
+                let mut s = format!("CREATE DOMAIN {name} AS {datatype}");
+                if !p.default_value.is_empty()
+                    && let Some(v) = self.default_value(&p.default_value, &datatype)
+                {
+                    let _ = write!(s, " DEFAULT {v}");
                 }
                 if p.not_null {
                     s.push_str(" NOT NULL");
@@ -777,39 +976,59 @@ impl Builder<'_> {
                 }
             }
         }
-        let mut names: HashSet<String> = HashSet::new();
-        let mut name_of = |base: String| {
+        // Names of indexes and constraints, by schema: PostgreSQL keeps indexes in one
+        // namespace with the tables, so a name from MySQL (where an index's name is the
+        // table's own) must not be a table's.
+        let mut names: HashSet<(String, String)> = HashSet::new();
+        if !d.is_mysql() {
+            names.extend(self.tables.iter().map(|t| (schema_of(t), t.name.clone())));
+        }
+        let mut name_of = |t: &Table, base: String| {
             let mut base = base;
             if base.len() > NAME_LIMIT {
                 let cut = (0..=NAME_LIMIT).rev().find(|&i| base.is_char_boundary(i)).unwrap_or(0);
                 base.truncate(cut);
             }
-            let name = if names.contains(&base) {
-                (2..).map(|n| format!("{base}{n}")).find(|n| !names.contains(n)).expect("unbounded")
+            let schema = schema_of(t);
+            let taken = |n: &String| names.contains(&(schema.clone(), n.clone()));
+            let name = if taken(&base) {
+                (2..).map(|n| format!("{base}{n}")).find(|n| !taken(n)).expect("unbounded")
             } else {
                 base
             };
-            names.insert(name.clone());
+            names.insert((schema, name.clone()));
             name
+        };
+        // MySQL indexes no JSON column.
+        let indexable = |t: &Table, i: &ErIndex| {
+            !d.is_mysql()
+                || i.columns.iter().all(|c| {
+                    let (name, _) = prefix_length(c);
+                    t.columns.iter().find(|x| x.name == name).is_none_or(|x| {
+                        !matches!(base_type(&x.datatype).as_str(), "json" | "jsonb")
+                    })
+                })
         };
         let indexes: Vec<(&Table, &ErIndex)> = self
             .tables
             .iter()
             .flat_map(|t| t.indexes.iter().map(move |i| (t, i)))
             .filter(|(t, i)| !i.columns.is_empty() && !(i.unique && i.columns == t.key))
+            .filter(|(t, i)| indexable(t, i))
             .collect();
         if !indexes.is_empty() {
             sql.push('\n');
         }
         for (t, i) in indexes {
-            let columns: Vec<String> = i.columns.iter().map(|c| quote(c, d)).collect();
+            let columns: Vec<String> = i.columns.iter().map(|c| index_column(t, c, d)).collect();
             let prefix = if i.unique { "uq" } else { "ix" };
             let base = if i.name.is_empty() {
-                format!("{prefix}_{}_{}", snake(&t.name), snake(&i.columns.join("_")))
+                let plain: Vec<&str> = i.columns.iter().map(|c| prefix_length(c).0).collect();
+                format!("{prefix}_{}_{}", snake(&t.name), snake(&plain.join("_")))
             } else {
                 i.name.clone()
             };
-            let name = name_of(base);
+            let name = name_of(t, base);
             let unique = if i.unique { "UNIQUE " } else { "" };
             let _ = writeln!(
                 sql,
@@ -826,7 +1045,7 @@ impl Builder<'_> {
             let (t, target) = (&self.tables[r.table], &self.tables[r.target]);
             let key: Vec<String> = r.target_columns.iter().map(|k| quote(k, d)).collect();
             let columns: Vec<String> = r.columns.iter().map(|c| quote(c, d)).collect();
-            let name = name_of(format!("fk_{}_{}", snake(&t.name), snake(&r.columns.join("_"))));
+            let name = name_of(t, format!("fk_{}_{}", snake(&t.name), snake(&r.columns.join("_"))));
             let mut actions = String::new();
             if let Some(a) = r.on_delete {
                 let _ = write!(actions, " ON DELETE {}", a.sql());
@@ -899,7 +1118,7 @@ fn column(c: &Column, t: &Table, d: Dialect) -> String {
     let mut out = format!("{} {}", quote(&c.name, d), c.datatype);
     // A counted column; a sequence of the dump's own (as models imported before kept it)
     // too: the table gets one of its own instead.
-    let sequence = c.auto_increment || c.default.trim_start().starts_with("nextval(");
+    let sequence = c.auto_increment || is_sequence(&c.default);
     if c.generated {
         let how = if c.virtual_column { "VIRTUAL" } else { "STORED" };
         let _ = write!(out, " GENERATED ALWAYS AS ({}) {how}", c.default);
@@ -916,8 +1135,8 @@ fn column(c: &Column, t: &Table, d: Dialect) -> String {
         if t.key.first() == Some(&c.name) || c.unique {
             out.push_str(" AUTO_INCREMENT");
         }
-    } else if !c.default.is_empty() {
-        let _ = write!(out, " DEFAULT {}", default_of(&c.default, d));
+    } else {
+        out.push_str(&c.default_sql);
     }
     if c.unique {
         out.push_str(" UNIQUE");
@@ -929,19 +1148,6 @@ fn column(c: &Column, t: &Table, d: Dialect) -> String {
         let _ = write!(out, " COMMENT {}", string(&c.comment, d));
     }
     out
-}
-
-/// A column's default: in MySQL a call other than the current time in parentheses, as it
-/// takes expressions only so.
-fn default_of(value: &str, d: Dialect) -> String {
-    let v = literal(value, d);
-    let lower = v.to_ascii_lowercase();
-    let time = lower.starts_with("now(") || lower.starts_with("current_timestamp");
-    if d.is_mysql() && v.contains('(') && !time && !v.starts_with('\'') {
-        format!("({v})")
-    } else {
-        v
-    }
 }
 
 /// A condition of a domain for one column: `VALUE` is the column (outside strings).
@@ -989,24 +1195,192 @@ fn table_name(t: &Table, d: Dialect) -> String {
     }
 }
 
-/// A default as SQL: numbers, `NULL`, `TRUE`, `CURRENT_TIMESTAMP` and calls as they are,
-/// everything else as a string (the import keeps defaults without their quotes).
-fn literal(value: &str, d: Dialect) -> String {
-    const KEYWORDS: [&str; 10] = [
-        "NULL",
-        "TRUE",
-        "FALSE",
-        "CURRENT_TIMESTAMP",
-        "CURRENT_DATE",
-        "CURRENT_TIME",
-        "LOCALTIMESTAMP",
-        "LOCALTIME",
-        "CURRENT_USER",
-        "NOW()",
-    ];
-    let v = value.trim();
-    let keyword = KEYWORDS.iter().any(|k| v.eq_ignore_ascii_case(k));
-    if keyword || v.parse::<f64>().is_ok() || v.contains('(') { v.to_owned() } else { string(v, d) }
+/// A default as the model keeps it (and the import writes it): a string in single quotes
+/// (`'007'`, `'it''s'`), or without them where it cannot be read as anything else; a
+/// number, MySQL's `b'0'` or `x'ff'`, a keyword (`NULL`, `CURRENT_TIMESTAMP` …) or an
+/// expression (anything with parentheses, a cast or brackets).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum Value {
+    /// A string's value.
+    Str(String),
+    Num(String),
+    Bits(String),
+    Word(String),
+    Expr(String),
+}
+
+impl Value {
+    pub(crate) fn of(text: &str) -> Value {
+        if let Some(s) = unquoted(text) {
+            return Value::Str(s);
+        }
+        let v = text.trim();
+        const KEYWORDS: [&str; 10] = [
+            "NULL",
+            "TRUE",
+            "FALSE",
+            "CURRENT_TIMESTAMP",
+            "CURRENT_DATE",
+            "CURRENT_TIME",
+            "LOCALTIMESTAMP",
+            "LOCALTIME",
+            "CURRENT_USER",
+            "SESSION_USER",
+        ];
+        let bits = v.len() >= 3
+            && matches!(v.as_bytes()[0], b'b' | b'B' | b'x' | b'X')
+            && unquoted(&v[1..]).is_some();
+        if bits {
+            Value::Bits(v.to_owned())
+        } else if is_number(v) {
+            Value::Num(v.to_owned())
+        } else if KEYWORDS.iter().any(|k| v.eq_ignore_ascii_case(k)) {
+            Value::Word(v.to_owned())
+        } else if v.contains('(') || v.contains("::") || v.contains('[') {
+            Value::Expr(v.to_owned())
+        } else {
+            Value::Str(v.to_owned())
+        }
+    }
+}
+
+/// The value of an SQL string in single quotes (doubled quotes inside), if `text` is one.
+fn unquoted(text: &str) -> Option<String> {
+    let inner = text.strip_prefix('\'')?.strip_suffix('\'')?;
+    let mut out = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\'' && chars.next() != Some('\'') {
+            return None;
+        }
+        out.push(c);
+    }
+    Some(out)
+}
+
+/// A number as SQL writes it: `12`, `-0.5`, `.5`, `1e3` (not Rust's `inf` or `NaN`).
+fn is_number(v: &str) -> bool {
+    let v = v.strip_prefix(['-', '+']).unwrap_or(v);
+    let (mantissa, exponent) = match v.find(['e', 'E']) {
+        Some(at) => (&v[..at], Some(&v[at + 1..])),
+        None => (v, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let mantissa_ok = match mantissa.split_once('.') {
+        Some((a, b)) => {
+            (digits(a) || a.is_empty()) && (digits(b) || b.is_empty()) && a.len() + b.len() > 0
+        }
+        None => digits(mantissa),
+    };
+    let exponent_ok = exponent.is_none_or(|e| digits(e.strip_prefix(['-', '+']).unwrap_or(e)));
+    mantissa_ok && exponent_ok
+}
+
+/// How the model keeps a default the import read as SQL (`sql`, strings in quotes) for a
+/// column of type `datatype`: a string without its quotes where it reads back as the same
+/// string (`'A1'` → `A1`, but `'007'`, `'(none)'`, `'NULL'`, `''` and `' '` keep them), a
+/// number in quotes for a numeric column without them (`'0'` → `0`, as mysqldump writes
+/// them); anything else as it is.
+pub(crate) fn model_default(sql: &str, datatype: &str) -> String {
+    let Some(s) = unquoted(sql) else { return sql.to_owned() };
+    let base = base_type(datatype);
+    let numeric = matches!(
+        base.split(' ').next().unwrap_or_default(),
+        "tinyint"
+            | "smallint"
+            | "mediumint"
+            | "int"
+            | "integer"
+            | "bigint"
+            | "int2"
+            | "int4"
+            | "int8"
+            | "decimal"
+            | "dec"
+            | "numeric"
+            | "fixed"
+            | "float"
+            | "float4"
+            | "float8"
+            | "double"
+            | "real"
+    );
+    let plain = !s.is_empty() && Value::of(&s) == Value::Str(s.clone());
+    if plain || numeric && is_number(&s) { s } else { sql.to_owned() }
+}
+
+/// The lower-case name of a type without its length and what follows: `varchar(20)` →
+/// `varchar`, `timestamp(3) without time zone` → `timestamp`, `int unsigned` → `int
+/// unsigned`.
+pub(crate) fn base_type(datatype: &str) -> String {
+    let t = datatype.split('(').next().unwrap_or_default();
+    t.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
+}
+
+/// A default and what MySQL's `ON UPDATE` sets the column to, as the model keeps them
+/// together (`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`, as MySQL Workbench shows them).
+fn split_on_update(default: &str) -> (&str, Option<&str>) {
+    let lower = default.to_ascii_lowercase();
+    let mut in_string = false;
+    for (k, c) in default.char_indices() {
+        if c == '\'' {
+            in_string = !in_string;
+        }
+        let boundary = k == 0 || default[..k].ends_with(char::is_whitespace);
+        if !in_string && boundary && lower[k..].starts_with("on update") {
+            let rest = default[k + "on update".len()..].trim();
+            if !rest.is_empty() {
+                return (default[..k].trim(), Some(rest));
+            }
+        }
+    }
+    (default.trim(), None)
+}
+
+/// A column with MySQL's prefix length split off: `body(100)` → (`body`, `100`).
+fn prefix_length(column: &str) -> (&str, Option<&str>) {
+    if let Some(rest) = column.strip_suffix(')')
+        && let Some((name, length)) = rest.rsplit_once('(')
+        && !name.is_empty()
+        && !length.is_empty()
+        && length.bytes().all(|b| b.is_ascii_digit())
+    {
+        return (name, Some(length));
+    }
+    (column, None)
+}
+
+/// A column of an index: in MySQL with its prefix length, one of a `text` or `blob` column
+/// without one with 255 (MySQL indexes those only by their start); PostgreSQL indexes all of
+/// it.
+fn index_column(t: &Table, column: &str, d: Dialect) -> String {
+    let (name, length) = prefix_length(column);
+    if !d.is_mysql() {
+        return quote(name, d);
+    }
+    let long = t.columns.iter().find(|c| c.name == name).is_some_and(|c| {
+        matches!(
+            base_type(&c.datatype).as_str(),
+            "tinytext"
+                | "text"
+                | "mediumtext"
+                | "longtext"
+                | "tinyblob"
+                | "blob"
+                | "mediumblob"
+                | "longblob"
+        )
+    });
+    match length {
+        Some(n) => format!("{}({n})", quote(name, d)),
+        None if long => format!("{}(255)", quote(name, d)),
+        None => quote(name, d),
+    }
+}
+
+/// The schema a table is in, for the names of its indexes.
+fn schema_of(t: &Table) -> String {
+    t.schema.clone().unwrap_or_else(|| "public".to_owned())
 }
 
 fn string(text: &str, d: Dialect) -> String {
@@ -1017,60 +1391,17 @@ fn string(text: &str, d: Dialect) -> String {
     format!("'{escaped}'")
 }
 
-/// Words that cannot be names without quotes in either dialect (the common ones).
-const RESERVED: [&str; 40] = [
-    "all",
-    "and",
-    "as",
-    "asc",
-    "between",
-    "by",
-    "case",
-    "check",
-    "column",
-    "constraint",
-    "create",
-    "default",
-    "delete",
-    "desc",
-    "distinct",
-    "drop",
-    "else",
-    "end",
-    "for",
-    "foreign",
-    "from",
-    "group",
-    "having",
-    "in",
-    "index",
-    "insert",
-    "into",
-    "key",
-    "limit",
-    "not",
-    "null",
-    "on",
-    "or",
-    "order",
-    "primary",
-    "references",
-    "select",
-    "table",
-    "to",
-    "user",
-];
-
 /// A name, quoted where it has to be: with backticks in MySQL, double quotes in PostgreSQL,
 /// where it is not a plain name (in PostgreSQL also where it has capitals, which only quotes
-/// keep) or a reserved word.
+/// keep) or a reserved word of the dialect.
 fn quote(name: &str, d: Dialect) -> String {
     let mut chars = name.chars();
     let plain_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || (d.is_mysql() && c == '$');
+    let reserved = if d.is_mysql() { MYSQL_RESERVED } else { POSTGRES_RESERVED };
     let plain = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && name.chars().all(plain_char)
         && (d.is_mysql() || !name.chars().any(|c| c.is_ascii_uppercase()))
-        && !RESERVED.contains(&name.to_ascii_lowercase().as_str());
+        && !reserved.contains(&name.to_ascii_lowercase().as_str());
     if plain {
         name.to_owned()
     } else if d.is_mysql() {
@@ -1283,6 +1614,8 @@ mod tests {
         assert!(sql.contains("CREATE TABLE Kunde ("), "{sql}");
         assert!(sql.contains(") ENGINE=InnoDB COMMENT='it''s';"), "{sql}");
         assert!(sql.contains("CREATE TABLE `enthält` ("), "{sql}");
+        // MySQL takes the current date as a default only in parentheses.
+        assert!(sql.contains("  datum date DEFAULT (CURRENT_DATE),"), "{sql}");
     }
 
     #[test]
@@ -1309,10 +1642,113 @@ mod tests {
         assert_eq!(quote("Kunde", Dialect::MySql), "Kunde");
         assert_eq!(quote("order", Dialect::MySql), "`order`");
         assert_eq!(quote("Fracht Stück", Dialect::MariaDb), "`Fracht Stück`");
-        assert_eq!(literal("0.00", Dialect::Postgres), "0.00");
-        assert_eq!(literal("current_timestamp", Dialect::MySql), "current_timestamp");
-        assert_eq!(literal("now()", Dialect::Postgres), "now()");
-        assert_eq!(literal("basis", Dialect::Postgres), "'basis'");
-        assert_eq!(literal(r"a\b'c", Dialect::MySql), r"'a\\b''c'");
+        let same = |value: &str, datatype: &str, d: Dialect| default(value, datatype, Some(d), d);
+        assert_eq!(same("0.00", "numeric", Dialect::Postgres).as_deref(), Some("0.00"));
+        let now = same("current_timestamp", "timestamp", Dialect::MySql);
+        assert_eq!(now.as_deref(), Some("current_timestamp"));
+        assert_eq!(same("now()", "timestamp", Dialect::Postgres).as_deref(), Some("now()"));
+        assert_eq!(same("basis", "varchar", Dialect::Postgres).as_deref(), Some("'basis'"));
+        assert_eq!(same(r"a\b'c", "varchar", Dialect::MySql).as_deref(), Some(r"'a\\b''c'"));
+    }
+
+    /// The default `value` of a column of type `datatype` (in `to`) from `from` for `to`.
+    fn default(value: &str, datatype: &str, from: Option<Dialect>, to: Dialect) -> Option<String> {
+        let model = Model::new("m");
+        let b = Builder {
+            model: &model,
+            dialect: to,
+            from,
+            domains: Vec::new(),
+            tables: Vec::new(),
+            of: HashMap::new(),
+            refs: Vec::new(),
+            left_out: Vec::new(),
+            pairs: HashMap::new(),
+        };
+        b.default_value(value, datatype)
+    }
+
+    #[test]
+    fn reserved_words_of_each_dialect_are_quoted() {
+        for (name, mysql, postgres) in [
+            ("read", "`read`", "read"),
+            ("rank", "`rank`", "rank"),
+            ("values", "`values`", "values"),
+            ("left", "`left`", r#""left""#),
+            ("offset", "`offset`", r#""offset""#),
+            ("window", "`window`", r#""window""#),
+            ("user", "user", r#""user""#),
+            ("array", "array", r#""array""#),
+            ("verbose", "verbose", r#""verbose""#),
+            ("Rank", "`Rank`", r#""Rank""#),
+            ("name", "name", "name"),
+        ] {
+            assert_eq!(quote(name, Dialect::MySql), mysql, "{name}");
+            assert_eq!(quote(name, Dialect::Postgres), postgres, "{name}");
+        }
+    }
+
+    #[test]
+    fn defaults_keep_strings_apart_from_numbers_keywords_and_expressions() {
+        let pg =
+            |value: &str| default(value, "varchar(20)", Some(Dialect::Postgres), Dialect::Postgres);
+        // Quoted, a string stays one, whatever it looks like.
+        assert_eq!(pg("'(none)'").as_deref(), Some("'(none)'"));
+        assert_eq!(pg("'007'").as_deref(), Some("'007'"));
+        assert_eq!(pg("'NULL'").as_deref(), Some("'NULL'"));
+        assert_eq!(pg("' '").as_deref(), Some("' '"));
+        assert_eq!(pg("''").as_deref(), Some("''"));
+        assert_eq!(pg("'it''s'").as_deref(), Some("'it''s'"));
+        // Without quotes: Rust's `inf` and `NaN` are no numbers in SQL.
+        assert_eq!(pg("infinity").as_deref(), Some("'infinity'"));
+        assert_eq!(pg("NaN").as_deref(), Some("'NaN'"));
+        assert_eq!(pg("1e3").as_deref(), Some("1e3"));
+        assert_eq!(pg("ARRAY[]::text[]").as_deref(), Some("ARRAY[]::text[]"));
+        // The import keeps quotes only where they are needed.
+        assert_eq!(model_default("'A1'", "varchar(8)"), "A1");
+        assert_eq!(model_default("'0'", "tinyint(1)"), "0");
+        assert_eq!(model_default("'0'", "varchar(8)"), "'0'");
+        assert_eq!(model_default("'(none)'", "varchar(8)"), "'(none)'");
+        assert_eq!(model_default("''", "text"), "''");
+        assert_eq!(model_default("now()", "timestamp"), "now()");
+    }
+
+    #[test]
+    fn defaults_for_the_other_dialect_are_ones_it_takes() {
+        let to_pg = |value: &str, datatype: &str| {
+            default(value, datatype, Some(Dialect::MySql), Dialect::Postgres)
+        };
+        assert_eq!(to_pg("0", "boolean").as_deref(), Some("FALSE"));
+        assert_eq!(to_pg("'1'", "boolean").as_deref(), Some("TRUE"));
+        assert_eq!(to_pg("(uuid())", "char(36)").as_deref(), Some("gen_random_uuid()"));
+        assert_eq!(to_pg("(_utf8mb4'x')", "varchar(20)").as_deref(), Some("'x'"));
+        assert_eq!(to_pg("(curdate())", "date").as_deref(), Some("CURRENT_DATE"));
+        assert_eq!(to_pg("current_timestamp()", "timestamp").as_deref(), Some("CURRENT_TIMESTAMP"));
+        assert_eq!(to_pg("'0000-00-00 00:00:00'", "timestamp"), None);
+        assert_eq!(to_pg("(rand())", "integer"), None);
+        let to_my = |value: &str, datatype: &str| {
+            default(value, datatype, Some(Dialect::Postgres), Dialect::MySql)
+        };
+        assert_eq!(to_my("''", "text").as_deref(), Some("('')"));
+        assert_eq!(to_my("{}", "json").as_deref(), Some("('{}')"));
+        assert_eq!(to_my("ARRAY[]::text[]", "json"), None);
+        assert_eq!(to_my("infinity", "datetime"), None);
+        assert_eq!(to_my("gen_random_uuid()", "char(36)").as_deref(), Some("(uuid())"));
+        assert_eq!(to_my("now()", "datetime(6)").as_deref(), Some("CURRENT_TIMESTAMP(6)"));
+        assert_eq!(to_my("CURRENT_DATE", "date").as_deref(), Some("(CURRENT_DATE)"));
+        assert_eq!(to_my("true", "boolean").as_deref(), Some("TRUE"));
+        // MySQL's zero date is a value MariaDB takes.
+        let maria = default("'0000-00-00'", "date", Some(Dialect::MySql), Dialect::MariaDb);
+        assert_eq!(maria.as_deref(), Some("'0000-00-00'"));
+    }
+
+    #[test]
+    fn on_update_goes_with_the_default_in_mysql_only() {
+        assert_eq!(
+            split_on_update("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+            ("CURRENT_TIMESTAMP", Some("CURRENT_TIMESTAMP"))
+        );
+        assert_eq!(split_on_update("ON UPDATE now()"), ("", Some("now()")));
+        assert_eq!(split_on_update("'on update x'"), ("'on update x'", None));
     }
 }

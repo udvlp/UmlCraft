@@ -9,6 +9,7 @@ package Docs
       doc "A block comment."
     association Docs.Order NonNavigable -- Docs.State Navigable Current Public
       @umlcraft.imported = "true"
+      doc "<summary>The state.</summary>"
   enumeration State Public
     literal Open
       doc "Not paid yet."

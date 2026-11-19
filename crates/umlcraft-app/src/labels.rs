@@ -119,9 +119,155 @@ pub fn visibility_label(v: Visibility) -> String {
     format!("{} {}", v.symbol(), t!(key))
 }
 
+/// What the Astah export reports as left out (`dropped <key>`): its own text, else the name of
+/// the element kind, else the key itself (a newer export tool may report keys this build does
+/// not know).
+pub fn export_dropped(key: &str) -> String {
+    export_dropped_in(&rust_i18n::locale(), key)
+}
+
+fn export_dropped_in(locale: &str, key: &str) -> String {
+    // `t!` answers a missing key with "<locale>.<key>", so ask whether there is a text instead.
+    ["export_dropped", "kind"]
+        .iter()
+        .find_map(|prefix| crate::_rust_i18n_try_translate(locale, format!("{prefix}.{key}")))
+        .map_or_else(|| key.to_owned(), |text| text.into_owned())
+}
+
 /// `text` with every line break turned into a space.
 fn one_line(text: &str) -> String {
     text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// Locale keys the app builds at runtime (`kind.{tool}`, `export_dropped.{key}`, …), which a
+/// comparison of the literal `t!("…")` keys cannot see. Each must have a text in both
+/// languages, or the UI shows (and a new element is named) "en.kind.boundary".
+#[cfg(test)]
+mod runtime_keys {
+    use std::collections::BTreeSet;
+
+    use super::export_dropped_in;
+
+    const LOCALES: [&str; 2] = ["de", "en"];
+    const PALETTE: &str = include_str!("../../umlcraft-notation/src/palette.rs");
+    const ELEMENT: &str = include_str!("../../umlcraft-model/src/element.rs");
+    const REVERSE: &str = include_str!("../../umlcraft-reverse/src/lang.rs");
+    const ASTA_EXPORT: &str = include_str!("../../../tools/asta-export/AstaExport.java");
+
+    /// Whether `locale` itself (not the fallback language) has a text for `key`.
+    fn has(locale: &str, key: &str) -> bool {
+        crate::_rust_i18n_backend().translate(locale, key).is_some()
+    }
+
+    /// The keys of `keys` that some language has no text for, with the language.
+    fn missing(keys: impl IntoIterator<Item = String>) -> Vec<String> {
+        let keys: Vec<String> = keys.into_iter().collect();
+        LOCALES
+            .iter()
+            .flat_map(|l| keys.iter().filter(|k| !has(l, k)).map(move |k| format!("{l}.{k}")))
+            .collect()
+    }
+
+    /// The string literals the match arms return in the function of `src` that starts with
+    /// `start`, e.g. every key of `NodeTool::key`.
+    fn returned(src: &str, start: &str) -> Vec<String> {
+        let body = &src[src.find(start).unwrap_or_else(|| panic!("{start} not found"))..];
+        let body = &body[..body.find("\n    }\n").expect("end of the function")];
+        let values: Vec<String> = body
+            .lines()
+            .filter_map(|l| l.split_once("=> \""))
+            .map(|(_, rest)| rest[..rest.find('"').expect("closing quote")].to_owned())
+            .collect();
+        assert!(values.len() > 10, "{start}: {values:?}");
+        values
+    }
+
+    fn node_tools() -> Vec<String> {
+        returned(PALETTE, "impl NodeTool {\n    pub fn key(self)")
+    }
+
+    fn type_names() -> Vec<String> {
+        returned(ELEMENT, "pub fn type_name(&self)")
+    }
+
+    #[test]
+    fn tools_and_element_kinds_have_names() {
+        // New elements are named `kind.{tool}` (`Workspace::create_node`, the tree's "New"
+        // menu); the ribbon and menus say `tool.{tool}`, the note tool `tool.note`.
+        let nodes = node_tools();
+        let mut keys: Vec<String> = nodes.iter().map(|k| format!("kind.{k}")).collect();
+        keys.extend(nodes.iter().filter(|k| *k != "comment").map(|k| format!("tool.{k}")));
+        let edges = returned(PALETTE, "impl EdgeTool {\n    pub fn key(self)");
+        keys.extend(edges.iter().map(|k| format!("tool.{k}")));
+        // The tree, the properties panel and error messages say `kind.{type_name}`.
+        keys.extend(type_names().iter().map(|k| format!("kind.{k}")));
+        assert_eq!(missing(keys), Vec::<String>::new());
+    }
+
+    #[test]
+    fn import_skips_and_structogram_kinds_have_names() {
+        let mut keys: Vec<String> =
+            returned(REVERSE, "impl Skip {").iter().map(|k| format!("skipped.{k}")).collect();
+        keys.extend(umlcraft_nsd::ElementKind::ALL.iter().map(|k| format!("nsd.kind_{}", k.tag())));
+        assert_eq!(missing(keys), Vec::<String>::new());
+    }
+
+    /// The keys `AstaExport.java` passes to `drop("…")` as literals. Keys it puts together
+    /// (`"er" + …`, `type + "Diagram"`) and receivers of a call (`"port".equals(…)`) are left
+    /// out; the test lists those itself.
+    fn dropped_literals() -> BTreeSet<String> {
+        let mut keys = BTreeSet::new();
+        for line in ASTA_EXPORT.lines() {
+            let Some((_, call)) = line.split_once("drop(") else { continue };
+            let pieces: Vec<&str> = call.split('"').collect();
+            for i in (1..pieces.len()).step_by(2) {
+                let before = pieces[i - 1].trim_end();
+                let after = pieces.get(i + 1).map_or("", |p| p.trim_start());
+                if before.ends_with('+') || after.starts_with('+') || after.starts_with('.') {
+                    continue;
+                }
+                assert!(pieces[i].chars().all(|c| c.is_ascii_alphanumeric()), "{line}");
+                keys.insert(pieces[i].to_owned());
+            }
+        }
+        assert!(keys.len() > 50, "{keys:?}");
+        keys
+    }
+
+    #[test]
+    fn everything_the_astah_export_leaves_out_has_a_label() {
+        let mut keys = dropped_literals();
+        // `"er" + Flag`, `type + "Diagram"` and `kind + "Diagram"`.
+        for built in ["erUnique", "erDerived", "erMultivalued"] {
+            keys.insert(built.to_owned());
+        }
+        for diagram in ["activity", "stateMachine", "component", "deployment"] {
+            keys.insert(format!("{diagram}Diagram"));
+        }
+        // `drop(type)`: any element kind.
+        keys.extend(type_names());
+        let unlabeled: Vec<String> = LOCALES
+            .iter()
+            .flat_map(|l| {
+                keys.iter()
+                    .filter(|k| {
+                        !has(l, &format!("export_dropped.{k}")) && !has(l, &format!("kind.{k}"))
+                    })
+                    .map(move |k| format!("{l}: {k}"))
+            })
+            .collect();
+        assert_eq!(unlabeled, Vec::<String>::new());
+    }
+
+    #[test]
+    fn export_labels_fall_back_to_the_kind_and_then_the_key() {
+        assert_eq!(export_dropped_in("en", "erUnique"), "UNIQUE of columns");
+        // Only `kind.slot` exists.
+        assert_eq!(export_dropped_in("en", "slot"), "Slot");
+        assert_eq!(export_dropped_in("de", "slot"), "Slot");
+        assert_eq!(export_dropped_in("de", "erUnique"), "UNIQUE von Spalten");
+        assert_eq!(export_dropped_in("en", "somethingNewer"), "somethingNewer");
+    }
 }
 
 #[cfg(test)]

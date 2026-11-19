@@ -1,13 +1,11 @@
 //! Error messages in the language of the UI, naming elements instead of showing their ids.
 
+use crate::labels::display_name;
 use rust_i18n::t;
 use umlcraft_format::FormatError;
 use umlcraft_model::{
     Id, Model, ModelError, ParseCardinalityError, ParseMultiplicityError, Refusal,
 };
-use umlcraft_notation::composite;
-
-use crate::labels::display_name;
 
 /// An element by its name; `model` is the one the error came from, if it is still at hand.
 fn named(model: Option<&Model>, id: Id) -> String {
@@ -61,6 +59,18 @@ fn refusal(refusal: &Refusal, locale: &str) -> String {
             t!("error.member_missing", locale = locale, missing = missing)
         }
         Refusal::MemberUnexpected(_) => t!("error.member_unexpected", locale = locale),
+        Refusal::PartOutside => t!("error.part_outside", locale = locale),
+        Refusal::PortOutside => t!("error.port_outside", locale = locale),
+        Refusal::PortOnUntypedPart => t!("error.port_on_untyped_part", locale = locale),
+        Refusal::PinOutside => t!("error.pin_outside", locale = locale),
+        Refusal::StubOutside => t!("error.stub_outside", locale = locale),
+        Refusal::NotOnLifeline => t!("error.not_on_lifeline", locale = locale),
+        Refusal::LifelineEnded => t!("error.lifeline_ended", locale = locale),
+        Refusal::NotOnMessage => t!("error.not_on_message", locale = locale),
+        Refusal::ErNotJoined => t!("error.er_not_joined", locale = locale),
+        Refusal::ErAttributeOwned => t!("error.er_attribute_owned", locale = locale),
+        Refusal::ErSecondWeak => t!("error.er_second_weak", locale = locale),
+        Refusal::ErAssociativeInUse => t!("error.er_associative_in_use", locale = locale),
     }
     .to_string()
 }
@@ -105,26 +115,12 @@ pub fn model_error(model: Option<&Model>, err: &ModelError) -> String {
             t!("error.structogram_too_deep", a = a(*id), max = umlcraft_nsd::read::MAX_DEPTH)
         }
         ModelError::Refused(r) => refusal(r, &rust_i18n::locale()).into(),
-        ModelError::Invalid(detail) => match detail.as_str() {
-            composite::PART_OUTSIDE => t!("error.part_outside"),
-            composite::PORT_OUTSIDE => t!("error.port_outside"),
-            composite::PORT_ON_UNTYPED_PART => t!("error.port_on_untyped_part"),
-            umlcraft_notation::activity::PIN_OUTSIDE => t!("error.pin_outside"),
-            umlcraft_notation::state_edit::STUB_OUTSIDE => t!("error.stub_outside"),
-            umlcraft_notation::sequence_edit::NOT_ON_LIFELINE => t!("error.not_on_lifeline"),
-            umlcraft_notation::sequence_edit::LIFELINE_ENDED => t!("error.lifeline_ended"),
-            umlcraft_notation::sequence_edit::NOT_ON_MESSAGE => t!("error.not_on_message"),
-            umlcraft_notation::er::NOT_JOINED => t!("error.er_not_joined"),
-            umlcraft_notation::er::ATTRIBUTE_OWNED => t!("error.er_attribute_owned"),
-            umlcraft_notation::er::SECOND_WEAK => t!("error.er_second_weak"),
-            umlcraft_notation::er::ASSOCIATIVE_IN_USE => t!("error.er_associative_in_use"),
-            detail => {
-                // A check of the model's own consistency: what failed is for the log, in
-                // English; the user learns that the edit was not made.
-                eprintln!("umlcraft: model inconsistent: {detail}");
-                t!("error.invalid")
-            }
-        },
+        ModelError::Invalid(detail) => {
+            // A check of the model's own consistency: what failed is for the log, in English;
+            // the user learns that the edit was not made.
+            eprintln!("umlcraft: model inconsistent: {detail}");
+            t!("error.invalid")
+        }
     }
     .to_string()
 }
@@ -145,6 +141,12 @@ pub fn format_error(err: &FormatError) -> String {
             t!("error.migration", from = from, reason = reason).to_string()
         }
         FormatError::Model(err) => model_error(None, err),
+        FormatError::TooDeep { line, column, .. } => {
+            t!("error.malformed", line = line, column = column).to_string()
+        }
+        FormatError::NotReadable(err) => {
+            t!("error.not_saved_unreadable", reason = format_error(err)).to_string()
+        }
     }
 }
 
@@ -255,6 +257,18 @@ mod tests {
             Refusal::EmptyName,
             Refusal::BindingWithoutTemplate,
             Refusal::HasAssociationClass,
+            Refusal::PartOutside,
+            Refusal::PortOutside,
+            Refusal::PortOnUntypedPart,
+            Refusal::PinOutside,
+            Refusal::StubOutside,
+            Refusal::NotOnLifeline,
+            Refusal::LifelineEnded,
+            Refusal::NotOnMessage,
+            Refusal::ErNotJoined,
+            Refusal::ErAttributeOwned,
+            Refusal::ErSecondWeak,
+            Refusal::ErAssociativeInUse,
             parse_attribute("x : int [a..b]").unwrap_err().0,
             parse_attribute(": int").unwrap_err().0,
             parse_operation("op(").unwrap_err().0,
@@ -284,6 +298,8 @@ mod tests {
             export_error(&ExportError::TimedOut { minutes: 10 }),
             export_error(&ExportError::Astah("boom".into())),
             export_error(&ExportError::Tool { status: "1".into(), output: "out".into() }),
+            format_error(&FormatError::TooDeep { line: 1, column: 2, max: 3 }),
+            format_error(&FormatError::NotReadable(Box::new(FormatError::NotAProject))),
         ];
         for text in texts {
             assert!(!text.is_empty() && !text.contains("error."), "{text}");

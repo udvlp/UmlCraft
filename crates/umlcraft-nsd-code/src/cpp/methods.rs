@@ -36,13 +36,6 @@ pub fn methods(root: Node, src: &str) -> Vec<MethodRef> {
     members(root, src).into_iter().map(|m| m.reference).collect()
 }
 
-/// The member `method` names.
-pub fn find<'t>(root: Node<'t>, src: &str, method: &MethodRef) -> Option<Member<'t>> {
-    members(root, src)
-        .into_iter()
-        .find(|m| m.reference.start == method.start && m.reference.name == method.name)
-}
-
 /// The names of the functions the file declares or defines (outside function bodies), for
 /// telling the program's own calls from the library's.
 pub fn function_names(root: Node, src: &str) -> BTreeSet<String> {
@@ -67,7 +60,8 @@ pub fn function_names(root: Node, src: &str) -> BTreeSet<String> {
     names
 }
 
-fn members<'t>(root: Node<'t>, src: &str) -> Vec<Member<'t>> {
+/// The functions with a body, in file order.
+pub fn members<'t>(root: Node<'t>, src: &str) -> Vec<Member<'t>> {
     let mut out = Vec::new();
     declarations(root, src, &mut Vec::new(), &mut out);
     out.sort_by_key(|m| m.reference.start);
@@ -169,6 +163,7 @@ fn function<'t>(node: Node<'t>, src: &str, scope: &[String]) -> Option<Member<'t
             line: node.start_position().row + 1,
             start: node.start_byte(),
             end: node.end_byte(),
+            module_code: false,
         },
         title,
         doc: doc(node, src),
@@ -203,15 +198,14 @@ fn parameter_count(parameters: Option<Node>, src: &str) -> usize {
 
 /// The function declarator inside a definition's declarator (`Cart& operator+=(…)` wraps it
 /// in a reference declarator).
-fn function_declarator(declarator: Node) -> Option<Node> {
-    if declarator.kind() == "function_declarator" {
-        return Some(declarator);
+fn function_declarator(mut declarator: Node) -> Option<Node> {
+    while declarator.kind() != "function_declarator" {
+        declarator = declarator.child_by_field_name("declarator").or_else(|| {
+            let mut cursor = declarator.walk();
+            declarator.named_children(&mut cursor).find(|c| !c.kind().ends_with("qualifier"))
+        })?;
     }
-    let inner = declarator.child_by_field_name("declarator").or_else(|| {
-        let mut cursor = declarator.walk();
-        declarator.named_children(&mut cursor).find(|c| !c.kind().ends_with("qualifier"))
-    })?;
-    function_declarator(inner)
+    Some(declarator)
 }
 
 /// A class or namespace name for grouping, without template arguments: `get_idx<Key, …>` →

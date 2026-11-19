@@ -2,5 +2,5 @@
 public class WinOnly (line 8)
 public class Service extends public Base (line 13)
   public operation fast() : void
-skipped preprocessor_branch × 3
+skipped conditional_branch × 3
 skipped macro × 3

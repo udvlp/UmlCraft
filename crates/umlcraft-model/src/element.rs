@@ -1411,6 +1411,17 @@ impl RefRole {
             ),
         }
     }
+
+    /// The roles whose [`accepts`](Self::accepts) looks at a target's properties, not only at
+    /// its metaclass. A role that starts to must be listed here.
+    const READING_PROPERTIES: [RefRole; 1] = [Self::ErRelationship];
+
+    /// Whether every role accepts `a` exactly if it accepts `b`, two kinds of the same
+    /// metaclass: then an element may change from one to the other without checking what
+    /// refers to it.
+    pub fn accepts_alike(a: &ElementKind, b: &ElementKind) -> bool {
+        Self::READING_PROPERTIES.iter().all(|role| role.accepts(a) == role.accepts(b))
+    }
 }
 
 impl ElementKind {
@@ -1747,7 +1758,52 @@ impl ElementKind {
                 let qualifiers = p.ends.iter().flat_map(|end| &end.qualifiers);
                 qualifiers.filter_map(|q| q.type_ref.as_ref()).for_each(f);
             }
-            _ => {}
+            // No type references.
+            Self::Model
+            | Self::Package
+            | Self::EnumerationLiteral
+            | Self::Instance(_)
+            | Self::Slot(_)
+            | Self::Connector(_)
+            | Self::ExtensionPoint
+            | Self::SystemBoundary
+            | Self::Interaction
+            | Self::Lifeline(_)
+            | Self::Message(_)
+            | Self::CombinedFragment(_)
+            | Self::InteractionOperand(_)
+            | Self::InteractionUse(_)
+            | Self::StateInvariant(_)
+            | Self::Termination(_)
+            | Self::DurationConstraint(_)
+            | Self::TimeConstraint(_)
+            | Self::Activity
+            | Self::ActivityEdge(_)
+            | Self::Partition
+            | Self::StateMachine
+            | Self::State(_)
+            | Self::Region
+            | Self::FinalState
+            | Self::Pseudostate(_)
+            | Self::Transition(_)
+            | Self::InternalTransition(_)
+            | Self::Link(_)
+            | Self::Generalization(_)
+            | Self::Realization(_)
+            | Self::Dependency(_)
+            | Self::Include(_)
+            | Self::Extend(_)
+            | Self::Comment(_)
+            | Self::Constraint(_)
+            | Self::Diagram(_)
+            | Self::Structogram(_)
+            | Self::ErEntity(_)
+            | Self::ErAttribute(_)
+            | Self::ErRelationship(_)
+            | Self::ErIsA(_)
+            | Self::ErParticipation(_)
+            | Self::ErSubtyping(_)
+            | Self::ErDomain(_) => {}
         }
     }
 
@@ -1859,7 +1915,25 @@ impl ElementKind {
             Self::ErIsA(p) => {
                 p.discriminator.iter().for_each(|&id| f(id, RefRole::ErDiscriminator))
             }
-            _ => {}
+            // No references.
+            Self::Model
+            | Self::Package
+            | Self::EnumerationLiteral
+            | Self::ExtensionPoint
+            | Self::SystemBoundary
+            | Self::Interaction
+            | Self::InteractionOperand(_)
+            | Self::Activity
+            | Self::Partition
+            | Self::StateMachine
+            | Self::Region
+            | Self::FinalState
+            | Self::Pseudostate(_)
+            | Self::InternalTransition(_)
+            | Self::Diagram(_)
+            | Self::ErEntity(_)
+            | Self::ErRelationship(_)
+            | Self::ErDomain(_) => {}
         }
     }
 
@@ -1966,7 +2040,25 @@ impl ElementKind {
             }
             Self::ErAttribute(p) => p.foreign_key.iter_mut().for_each(f),
             Self::ErIsA(p) => p.discriminator.iter_mut().for_each(f),
-            _ => {}
+            // No references.
+            Self::Model
+            | Self::Package
+            | Self::EnumerationLiteral
+            | Self::ExtensionPoint
+            | Self::SystemBoundary
+            | Self::Interaction
+            | Self::InteractionOperand(_)
+            | Self::Activity
+            | Self::Partition
+            | Self::StateMachine
+            | Self::Region
+            | Self::FinalState
+            | Self::Pseudostate(_)
+            | Self::InternalTransition(_)
+            | Self::Diagram(_)
+            | Self::ErEntity(_)
+            | Self::ErRelationship(_)
+            | Self::ErDomain(_) => {}
         }
     }
 
@@ -2055,7 +2147,39 @@ impl ElementKind {
             Self::Structogram(p) => unlink_opt(&mut p.operation),
             Self::ErAttribute(p) => unlink_opt(&mut p.foreign_key),
             Self::ErIsA(p) => unlink_opt(&mut p.discriminator),
-            _ => false,
+            // No weak references: strong ones are not unlinked, their holder goes instead.
+            Self::Model
+            | Self::Package
+            | Self::EnumerationLiteral
+            | Self::Slot(_)
+            | Self::ExtensionPoint
+            | Self::SystemBoundary
+            | Self::Interaction
+            | Self::InteractionOperand(_)
+            | Self::StateInvariant(_)
+            | Self::Termination(_)
+            | Self::DurationConstraint(_)
+            | Self::TimeConstraint(_)
+            | Self::Activity
+            | Self::ActivityEdge(_)
+            | Self::Partition
+            | Self::StateMachine
+            | Self::Region
+            | Self::FinalState
+            | Self::Pseudostate(_)
+            | Self::Transition(_)
+            | Self::InternalTransition(_)
+            | Self::Generalization(_)
+            | Self::Realization(_)
+            | Self::Dependency(_)
+            | Self::Include(_)
+            | Self::Constraint(_)
+            | Self::Diagram(_)
+            | Self::ErEntity(_)
+            | Self::ErRelationship(_)
+            | Self::ErParticipation(_)
+            | Self::ErSubtyping(_)
+            | Self::ErDomain(_) => false,
         }
     }
 
@@ -2145,10 +2269,104 @@ mod tests {
         assert!(!kind.unlink(target, "Customer"));
     }
 
+    /// One element of each kind that refers to others, every reference set: `a` and `b`
+    /// in turn where there are two.
+    fn kinds_with_references(a: Id, b: Id) -> Vec<ElementKind> {
+        let classifier = ClassifierProps { binding: Some(list_of(a, b)), ..Default::default() };
+        vec![
+            ElementKind::Class(classifier.clone()),
+            ElementKind::Interface(classifier.clone()),
+            ElementKind::Enumeration(classifier.clone()),
+            ElementKind::DataType(classifier.clone()),
+            ElementKind::Actor(classifier.clone()),
+            ElementKind::UseCase(classifier.clone()),
+            ElementKind::Component(classifier.clone()),
+            ElementKind::Artifact(classifier.clone()),
+            ElementKind::Node(classifier),
+            ElementKind::operation(Some(TypeRef::Element(a))),
+            ElementKind::Parameter(ParameterProps {
+                type_ref: Some(TypeRef::Element(a)),
+                ..Default::default()
+            }),
+            ElementKind::Lifeline(LifelineProps { represents: Some(a) }),
+            ElementKind::Slot(SlotProps { attribute: Some(a), ..Default::default() }),
+            ElementKind::Link(LinkProps {
+                ends: [LinkEnd::new(a), LinkEnd::new(b)],
+                association: Some(b),
+            }),
+            {
+                let mut message = ElementKind::message(MessageSort::Synchronous, a, b);
+                if let ElementKind::Message(p) = &mut message {
+                    p.operation = Some(b);
+                }
+                message
+            },
+            ElementKind::CombinedFragment(CombinedFragmentProps {
+                covered: vec![a, b],
+                ..Default::default()
+            }),
+            ElementKind::InteractionUse(InteractionUseProps {
+                refers_to: Some(a),
+                covered: vec![b],
+                ..Default::default()
+            }),
+            ElementKind::StateInvariant(StateInvariantProps { lifeline: a }),
+            ElementKind::Termination(TerminationProps { lifeline: a }),
+            ElementKind::DurationConstraint(DurationConstraintProps { from: a, to: b }),
+            ElementKind::TimeConstraint(TimeConstraintProps { message: a }),
+            ElementKind::Constraint(ConstraintProps { constrained: [a, b] }),
+            ElementKind::State(StateProps { submachine: Some(a), ..Default::default() }),
+            ElementKind::Realization(DirectedProps { client: a, supplier: b }),
+            ElementKind::Dependency(DirectedProps { client: a, supplier: b }),
+            ElementKind::Include(IncludeProps { including: a, addition: b }),
+            ElementKind::Extend(ExtendProps {
+                extension: a,
+                extended: b,
+                extension_points: vec![a],
+                condition: String::new(),
+            }),
+            ElementKind::Structogram(StructogramProps {
+                operation: Some(a),
+                ..StructogramProps::new(&umlcraft_nsd::Diagram::new(
+                    umlcraft_nsd::RootKind::Program,
+                    &[],
+                    &umlcraft_nsd::Provenance { author: "", date: "", origin: "" },
+                ))
+            }),
+            ElementKind::ErAttribute(crate::ErAttributeProps {
+                foreign_key: Some(a),
+                ..Default::default()
+            }),
+            ElementKind::ErIsA(crate::ErIsAProps { discriminator: Some(a), ..Default::default() }),
+        ]
+    }
+
+    /// `unlink` removes every weak reference to its target, of every kind: what it misses
+    /// would dangle after the target is deleted, as `delete_many` relies on it.
+    #[test]
+    fn unlink_removes_every_weak_reference() {
+        let (a, b) = (Id::from_u128(1), Id::from_u128(2));
+        let mut kinds = kinds_with_references(a, b);
+        kinds.extend(kinds_with_references(b, a));
+        for kind in kinds {
+            for (target, role) in kind.references() {
+                let mut unlinked = kind.clone();
+                let changed = unlinked.unlink(target, "T");
+                let still = unlinked.references().contains(&(target, role));
+                if role.is_strong() {
+                    assert!(still, "{role:?} of {kind:?} is strong");
+                } else {
+                    assert!(changed && !still, "{role:?} of {kind:?} is not unlinked");
+                }
+            }
+        }
+    }
+
     #[test]
     fn remap_visits_the_same_references() {
         let (a, b, c) = (Id::from_u128(1), Id::from_u128(2), Id::from_u128(3));
-        let mut kinds = vec![
+        let mut kinds = kinds_with_references(a, b);
+        kinds.extend(vec![
             ElementKind::association(a, b),
             ElementKind::generalization(a, b),
             ElementKind::attribute(Some(TypeRef::Element(a))),
@@ -2192,7 +2410,7 @@ mod tests {
                 }
                 kind
             },
-        ];
+        ]);
         let map = std::collections::HashMap::from([(a, c)]);
         for kind in &mut kinds {
             let mut seen = Vec::new();

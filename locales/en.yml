@@ -466,6 +466,9 @@ prop:
   er_checks: Conditions (CHECK), one per line
   er_indexes: Indexes, one per line
   er_indexes_placeholder: "UNIQUE ix_name (column_a, column_b)"
+  er_check_placeholder: price >= 0
+  er_checks_placeholder: end > start
+  er_values_placeholder: red, green, blue
   er_values: Values (enumeration), comma-separated
   er_foreign_key: Foreign key of
   er_unnamed: (unnamed relationship)
@@ -522,7 +525,9 @@ status:
   exporting: Exporting to .asta …
   importing: Importing source code …
   importing_astah: Importing the .asta project …
+  importing_sql: Laying out the tables of the SQL dump …
   opening: Opening the project …
+  busy: Wait until the running file operation has finished.
   no_diagram_font: Neither Arial nor Liberation Sans is installed, so diagram texts use another font and may not fit their boxes.
   cancel: Cancel
   imported: "Imported %{files} files: %{created} new types, %{updated} updated, %{associations} associations."
@@ -558,6 +563,8 @@ dialog:
   import_source_none: No source files found.
   import_source_discarded: The source import was discarded.
   import_source_discarded_detail: Another project was opened while importing. Please repeat the import in this project.
+  import_sql_discarded: The SQL import was discarded.
+  import_sql_discarded_detail: Another project was opened while the dump was read. Please repeat the import in this project.
   import_source_none_detail: "The selection contains no files ending in %{extensions}."
   import_source_partial: "%{count} files could not be imported; the others were."
   import_source_skipped: "Left out on purpose: %{items}"
@@ -620,6 +627,8 @@ export_dropped:
   erSubtyping: Subtypes that could not be exported
   erCardinality: Cardinalities Astah does not take
   erForeignKeyName: Names of foreign key columns (Astah's own names are kept)
+  erForeignKey: Foreign keys whose relationship could not be exported (exported as plain columns)
+  partialDiagram: Diagrams exported only in part
   erEntity: ER entities
   erAttribute: ER attributes
   port: Ports
@@ -658,6 +667,15 @@ export_dropped:
   constraintPosition: Places of constraint labels on lines (Astah takes one offset for all constraints of an association)
   instanceNameVisibility: Hidden names of instances
   instanceTypeVisibility: Hidden classifiers of instances
+  associationClassDetails: Names, stereotypes, tagged values and documentation of the associations of association classes (the class's are kept)
+  associationClassOwner: Owners of association classes (Astah places them next to their first end)
+  componentAttribute: Attributes of components whose type is not a class
+  connectorEndMultiplicity: Multiplicities of connector ends
+  diagramFrame: Frames of composite structure diagrams
+  sharedGeneralization: Shared style of generalizations (exported as separate lines)
+  socket: Sockets of interfaces (Astah draws them only at ports)
+  portOutsideHost: Ports not on the border of a class or part
+  partOutsideClass: Parts not drawn inside their class
 settings:
   title: Settings
   language: Language
@@ -734,6 +752,8 @@ skipped:
   deleted_function: deleted functions (= delete)
   friend: friend declarations
   statement: statements that declare nothing
+  conditional_branch: "branches of #if left out (#elif, #else, #if 0)"
+  deep_method: methods nested too deeply for a structogram
 new_name:
   systemBoundary: System
 kind:
@@ -742,6 +762,9 @@ kind:
   package: Package
   subsystem: Subsystem
   class: Class
+  boundary: Boundary
+  control: Control
+  entity: Entity
   interface: Interface
   enumeration: Enumeration
   dataType: Data type
@@ -922,6 +945,7 @@ error:
   image_too_large: The image is too large.
   too_new: "The file was saved by a newer UmlCraft (format version %{found}; this version reads up to %{supported})."
   migration: "The file could not be upgraded from format version %{from}: %{reason}"
+  not_saved_unreadable: "The project was not saved, because the file would not open again: %{reason}"
 nsd:
   untitled_stem: Untitled
   save_failed: The structogram could not be exported.
@@ -993,6 +1017,8 @@ nsd:
   note_loop_else: the else of the loop follows it; it also runs there after a break
   note_try_else: the else of try ends the try block
   note_nested_function: a function defined in the function is left out
+  note_conditional_branch: "#if: only one branch is read (the first, or the one after #if 0), the others are left out"
+  note_case_break: "break leaves the switch here; kept as a jump, which in a structogram leaves a loop"
 sql:
   title: Import SQL dump
   found: "%{file}: %{count} tables found."
@@ -1031,3 +1057,4 @@ sql:
   export_check: "%{table}: CHECK (%{check}) cannot be written in this dialect"
   export_generated: "%{table}.%{column}: generated in the other dialect, a plain column here"
   export_auto_increment: "%{table}.%{column}: MySQL only counts a column that leads the key or is unique, so no AUTO_INCREMENT"
+  export_default: "%{table}.%{column}: %{default} has no counterpart in this dialect and is left out"

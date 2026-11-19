@@ -36,19 +36,56 @@ pub(super) fn is_er_model(tags: &[(String, String)]) -> bool {
     tags.iter().any(|(k, _)| k == "jude.er.model")
 }
 
+/// What a constraint of Astah's ER model says: keys, NOT NULL, UNIQUE, defaults and checks are
+/// constraints with these bodies there (`docs/asta-format.md`, "Attribute"), in any case
+/// (`Not Null` on domains).
+#[derive(Debug, PartialEq)]
+enum ErConstraint<'a> {
+    PrimaryKey,
+    ForeignKey,
+    NotNull,
+    Unique,
+    Default(&'a str),
+    Check(&'a str),
+}
+
+fn er_constraint(body: &str) -> Option<ErConstraint<'_>> {
+    let keyword = body.trim();
+    let after = |prefix: &str| {
+        keyword
+            .get(..prefix.len())
+            .filter(|p| p.eq_ignore_ascii_case(prefix))
+            .map(|_| &keyword[prefix.len()..])
+    };
+    Some(match keyword.to_ascii_uppercase().as_str() {
+        "PRIMARY KEY" => ErConstraint::PrimaryKey,
+        "FOREIGN KEY" => ErConstraint::ForeignKey,
+        "NOT NULL" => ErConstraint::NotNull,
+        "UNIQUE" => ErConstraint::Unique,
+        _ => {
+            if let Some(value) = after("DEFAULT:") {
+                ErConstraint::Default(value)
+            } else {
+                ErConstraint::Check(after("CHECK:")?)
+            }
+        }
+    })
+}
+
 impl Importer<'_> {
-    /// Name, documentation and the tagged values other than Astah's ER ones; the constraints
-    /// Astah keeps keys, NOT NULL, UNIQUE and defaults in become properties.
+    /// Name, documentation and the tagged values other than Astah's ER ones. The constraints
+    /// Astah keeps keys, NOT NULL, UNIQUE, defaults and checks in are left out: the callers
+    /// read them into properties (a foreign key follows from its relationship).
     fn er_data(&self, object: ObjId, kind: ElementKind) -> ElementData {
         let mut data = self.data(object, kind, &[]);
         data.tagged_values.retain(|t| !ER_TAGS.contains(&t.key.as_str()));
-        data.constraints.retain(|c| {
-            !matches!(
-                c.to_ascii_uppercase().as_str(),
-                "PRIMARY KEY" | "NOT NULL" | "UNIQUE" | "FOREIGN KEY"
-            ) && !c.starts_with("DEFAULT:")
-        });
+        data.constraints.retain(|c| er_constraint(c).is_none());
         data
+    }
+
+    /// The constraints of `object` as `er_data` sees them, for the callers to read.
+    fn er_constraints(&self, object: ObjId) -> Vec<String> {
+        self.constraints(object)
     }
 
     /// Creates the schemas, packages, entities and diagrams the ER model `object` owns, as
@@ -90,8 +127,16 @@ impl Importer<'_> {
     }
 
     fn er_entity(&mut self, owner: Id, object: ObjId) {
-        let props =
-            ErEntityProps { physical_name: self.tag(object, "alias3"), ..Default::default() };
+        let checks = self.er_constraints(object);
+        let checks = checks.iter().filter_map(|c| match er_constraint(c) {
+            Some(ErConstraint::Check(check)) => Some(check.to_owned()),
+            _ => None,
+        });
+        let props = ErEntityProps {
+            physical_name: self.tag(object, "alias3"),
+            checks: checks.collect(),
+            ..Default::default()
+        };
         let data = self.er_data(object, ElementKind::ErEntity(props));
         let Some(entity) = self.create(owner, data, Some(object)) else { return };
         for attribute in self.r.list(object, "structuralFeature") {
@@ -121,18 +166,22 @@ impl Importer<'_> {
             self.skip(object);
             return;
         }
-        let not_null = self
-            .r
-            .list(object, "constraint")
-            .into_iter()
-            .any(|c| self.r.text(c, "body").eq_ignore_ascii_case("not null"));
-        let props = ErDomainProps {
+        let mut props = ErDomainProps {
             datatype: self.tag(object, "jude.domain.datatype"),
             length_precision: self.tag(object, "jude.domain.modifier"),
-            not_null,
             default_value: self.tag(object, "jude.domain.default"),
             ..Default::default()
         };
+        for body in self.er_constraints(object) {
+            match er_constraint(&body) {
+                Some(ErConstraint::NotNull) => props.not_null = true,
+                Some(ErConstraint::Check(check)) => props.check = check.to_owned(),
+                Some(ErConstraint::Default(value)) if props.default_value.is_empty() => {
+                    props.default_value = value.to_owned();
+                }
+                _ => {}
+            }
+        }
         let mut data = self.er_data(object, ElementKind::ErDomain(props));
         data.name = self.er_sql_name(object);
         data.tagged_values.retain(|t| !t.key.starts_with("jude."));
@@ -157,8 +206,8 @@ impl Importer<'_> {
             .collect()
     }
 
-    /// An attribute with what its entity's constraints say about it: `PRIMARY KEY`,
-    /// `NOT NULL`, `UNIQUE`, `DEFAULT:<value>`, `FOREIGN KEY`.
+    /// An attribute with what its constraints say about it: `PRIMARY KEY`, `NOT NULL`,
+    /// `UNIQUE`, `DEFAULT:<value>`, `CHECK:<condition>`, `FOREIGN KEY`.
     fn er_attribute(&mut self, entity: Id, object: ObjId) {
         let r = self.r;
         let mut props = ErAttributeProps {
@@ -177,17 +226,15 @@ impl Importer<'_> {
                 props.datatype = r.name(ty);
             }
         }
-        for constraint in r.list(object, "constraint") {
-            let body = r.text(constraint, "body");
-            match body.as_str() {
-                "PRIMARY KEY" => props.key = Some(ErKey::Primary),
-                "NOT NULL" => props.not_null = true,
-                "UNIQUE" => props.unique = true,
-                _ => {
-                    if let Some(value) = body.strip_prefix("DEFAULT:") {
-                        props.default_value = value.to_owned();
-                    }
-                }
+        for body in self.er_constraints(object) {
+            match er_constraint(&body) {
+                Some(ErConstraint::PrimaryKey) => props.key = Some(ErKey::Primary),
+                Some(ErConstraint::NotNull) => props.not_null = true,
+                Some(ErConstraint::Unique) => props.unique = true,
+                Some(ErConstraint::Default(value)) => props.default_value = value.to_owned(),
+                Some(ErConstraint::Check(check)) => props.check = check.to_owned(),
+                // The relationship that made the column says it.
+                Some(ErConstraint::ForeignKey) | None => {}
             }
         }
         let by = r.obj(object, "relationship");

@@ -131,16 +131,25 @@ pub fn counting(
 
 /// Whether an expression holds a number with a fraction (`2.5`, `1e3`, `0.5f`).
 fn fraction(expr: Node, src: &str) -> bool {
-    let literal = match expr.kind() {
-        "decimal_floating_point_literal" | "hex_floating_point_literal" | "real_literal" => true,
-        "number_literal" => {
-            let text = node_text(expr, src);
-            !text.starts_with("0x") && !text.starts_with("0X") && text.contains(['.', 'e', 'E'])
+    let mut open = vec![expr];
+    while let Some(node) = open.pop() {
+        let literal = match node.kind() {
+            "decimal_floating_point_literal" | "hex_floating_point_literal" | "real_literal" => {
+                true
+            }
+            "number_literal" => {
+                let text = node_text(node, src);
+                !text.starts_with("0x") && !text.starts_with("0X") && text.contains(['.', 'e', 'E'])
+            }
+            _ => false,
+        };
+        if literal {
+            return true;
         }
-        _ => false,
-    };
-    let mut cursor = expr.walk();
-    literal || expr.named_children(&mut cursor).any(|c| fraction(c, src))
+        let mut cursor = node.walk();
+        open.extend(node.named_children(&mut cursor));
+    }
+    false
 }
 
 /// `foreach v in values` (`für jedes v in values`) for `for (T v : values)`.
@@ -191,10 +200,11 @@ fn increment(expr: Node, src: &str) -> Option<i64> {
     }
 }
 
-/// `bound + by` on one line: a number is computed, an expression gets `- 1` or `+ 1`.
+/// `bound + by` on one line: a number is computed (where it fits), an expression gets `- 1`
+/// or `+ 1`.
 pub fn offset(bound: Node, src: &str, by: i64) -> String {
-    if let Ok(n) = node_text(bound, src).parse::<i64>() {
-        return (n + by).to_string();
+    if let Some(n) = node_text(bound, src).parse::<i64>().ok().and_then(|n| n.checked_add(by)) {
+        return n.to_string();
     }
     // As the left operand of `-`/`+`, a sum needs no parentheses.
     let text = operand(bound, src, 0, precedence("+") - 1).join(" ");

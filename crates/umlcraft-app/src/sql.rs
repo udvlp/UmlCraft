@@ -1,7 +1,7 @@
 //! "Import SQL dump as ER diagram …": a file, a small dialog (dialect, notation, attributes,
 //! schemas),
 //! and the import into the project: a package named after the database with an ER diagram,
-//! which opens. What was found goes to the status bar; hints and problems to a message.
+//! which opens. What was found goes to a toast; hints and problems to a message.
 //!
 //! "ER diagram as SQL …": the dialect, then the file the `CREATE TABLE` statements go to.
 
@@ -233,6 +233,8 @@ fn run(
 ) {
     let (path, bytes, schema) = (job.0.clone(), job.1.clone(), job.2.clone());
     let handle = window.window_handle();
+    // The project the import is meant for; another may open while the dump is read again.
+    let Some(generation) = view.upgrade().map(|v| v.read(cx).generation()) else { return };
     cx.spawn(async move |cx| {
         let read = cx
             .background_executor()
@@ -256,7 +258,7 @@ fn run(
                 Ok((schema, options)) => {
                     let file = file_name(&path);
                     view.update(cx, |view, cx| {
-                        view.import_sql(&schema, &options, &file, window, cx)
+                        view.import_sql(schema, options, file, generation, window, cx)
                     })
                     .ok();
                 }
@@ -348,10 +350,31 @@ pub fn export_text(ddl: &Ddl, file: &str) -> (String, Vec<String>) {
             LeftOut::AutoIncrement { table, column } => {
                 t!("sql.export_auto_increment", table = table, column = column)
             }
+            LeftOut::Default { table, column, default } => {
+                t!("sql.export_default", table = table, column = column, default = default)
+            }
         })
         .map(|text| text.to_string())
         .collect();
     (summary, lines)
+}
+
+/// Imports `schema` into a copy of the project as `Workspace::import_sql` does, sizing boxes
+/// with `measure`, and returns what it made with the operations that make the same change to
+/// the project. Runs in the background: mapping and laying out hundreds of tables take
+/// seconds.
+pub fn plan_import(
+    model: umlcraft_model::Model,
+    schema: &Schema,
+    options: &Options,
+    measure: &dyn umlcraft_notation::scene::TextMeasure,
+) -> Result<(umlcraft_erm_sql::Import, Vec<umlcraft_model::Op>), umlcraft_model::ModelError> {
+    let mut copy = umlcraft_model::Document::new(model);
+    let root = copy.model().root();
+    let import = umlcraft_notation::edit::apply(&mut copy, "import", measure, |tx| {
+        umlcraft_erm_sql::import(tx, root, schema, options, measure)
+    })?;
+    Ok((import, copy.take_last_step().unwrap_or_default()))
 }
 
 /// Whether the schemas chosen have tables.

@@ -249,7 +249,7 @@ impl Parser {
         if (close + 1..s.toks.len()).any(|k| s.is(k, "WHERE")) {
             return false;
         }
-        let Some(columns) = s.ident_list(i) else { return false };
+        let Some(columns) = s.ident_list(i, true) else { return false };
         let Some(found) = self.schema.find(&key).cloned() else { return false };
         if let Some(t) = self.schema.tables.get_mut(&found) {
             if unique {
@@ -342,6 +342,10 @@ impl Parser {
             (parts, None)
         };
         let Some(key) = s.key_of(table_parts) else { return false };
+        // pg_dump writes `COMMENT ON COLUMN` for the columns of views as well.
+        if self.views.contains(&key) {
+            return false;
+        }
         let Some(found) = self.schema.find(&key).cloned() else {
             self.problem(line, ProblemKind::UnknownTable, s.text(0, s.toks.len()));
             return true;
@@ -386,6 +390,8 @@ fn column(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
     }
     let mut k = tail;
     let mut depth = 0usize;
+    // After `REFERENCES`, `ON UPDATE` is the reference's action.
+    let mut referenced = false;
     while k < b {
         if s.punct(k, b'(') {
             depth += 1;
@@ -403,11 +409,21 @@ fn column(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
             table.primary_key = vec![col.name.clone()];
         } else if s.is(k, "UNIQUE") {
             table.uniques.push(vec![col.name.clone()]);
+        } else if s.is(k, "ON") && s.is(k + 1, "UPDATE") && !referenced {
+            // MySQL: `ON UPDATE CURRENT_TIMESTAMP`.
+            let end = (k + 2..b).find(|&j| j > k + 2 && s.depth0_keyword(j, k + 2)).unwrap_or(b);
+            col.on_update = Some(s.text(k + 2, end)).filter(|t| !t.is_empty());
+            k = end;
+            continue;
         } else if s.is(k, "REFERENCES") {
+            referenced = true;
             let mut j = k + 1;
             if let Some(target) = s.table_name(&mut j) {
-                let target_columns =
-                    if s.punct(j, b'(') { s.ident_list(j).unwrap_or_default() } else { vec![] };
+                let target_columns = if s.punct(j, b'(') {
+                    s.ident_list(j, false).unwrap_or_default()
+                } else {
+                    vec![]
+                };
                 let (on_delete, on_update) = actions(s, j, b);
                 table.foreign_keys.push(ForeignKey {
                     columns: vec![col.name.clone()],
@@ -452,7 +468,7 @@ fn column(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
 }
 
 /// A default that takes the next value of a sequence (`nextval('kunde_id_seq'::regclass)`).
-fn is_sequence(default: &str) -> bool {
+pub(crate) fn is_sequence(default: &str) -> bool {
     default.trim_start().to_ascii_lowercase().starts_with("nextval(")
 }
 
@@ -487,7 +503,7 @@ fn constraint(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
     }
     let first_paren = |from: usize| (from..b).find(|&k| s.punct(k, b'('));
     if s.is(i, "PRIMARY") && s.is(i + 1, "KEY") {
-        let Some(cols) = first_paren(i + 2).and_then(|p| s.ident_list(p)) else {
+        let Some(cols) = first_paren(i + 2).and_then(|p| s.ident_list(p, false)) else {
             return false;
         };
         // Key columns are NOT NULL without saying so.
@@ -500,7 +516,7 @@ fn constraint(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
         return true;
     }
     if s.is(i, "UNIQUE") {
-        let Some(cols) = first_paren(i + 1).and_then(|p| s.ident_list(p)) else {
+        let Some(cols) = first_paren(i + 1).and_then(|p| s.ident_list(p, true)) else {
             return false;
         };
         table.uniques.push(cols);
@@ -508,7 +524,7 @@ fn constraint(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
     }
     if s.is(i, "FOREIGN") && s.is(i + 1, "KEY") {
         let Some(open) = first_paren(i + 2) else { return false };
-        let Some(columns) = s.ident_list(open) else { return false };
+        let Some(columns) = s.ident_list(open, false) else { return false };
         let mut j = s.close(open) + 1;
         if !s.is(j, "REFERENCES") {
             return false;
@@ -516,7 +532,7 @@ fn constraint(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
         j += 1;
         let Some(target) = s.table_name(&mut j) else { return false };
         let target_columns =
-            if s.punct(j, b'(') { s.ident_list(j).unwrap_or_default() } else { vec![] };
+            if s.punct(j, b'(') { s.ident_list(j, false).unwrap_or_default() } else { vec![] };
         let (on_delete, on_update) = actions(s, j, b);
         table.foreign_keys.push(ForeignKey {
             columns,
@@ -536,7 +552,7 @@ fn constraint(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
         // MySQL: `KEY name (columns)`; one on an expression is not read.
         let Some(open) = first_paren(i + 1) else { return false };
         let name = (i + 1..open).find_map(|k| s.ident(k)).unwrap_or_default();
-        if let Some(columns) = s.ident_list(open) {
+        if let Some(columns) = s.ident_list(open, true) {
             table.indexes.push(Index { name, columns });
         }
         return true;
@@ -921,26 +937,29 @@ impl<'a> Stmt<'a> {
             || (self.is(k, "AS") && self.punct(k + 1, b'('))
     }
 
-    /// The names in the parentheses at `open`; `None` if one is an expression. Prefix
-    /// lengths (`email(10)`), sort orders and operator classes are left out.
-    fn ident_list(&self, open: usize) -> Option<Vec<String>> {
+    /// The names in the parentheses at `open`; `None` if one is an expression. Sort orders
+    /// and operator classes are left out, and so are prefix lengths (`email(10)`) unless
+    /// `prefixes` keeps them (as `email(10)`, for indexes and unique keys).
+    fn ident_list(&self, open: usize, prefixes: bool) -> Option<Vec<String>> {
         let close = self.close(open);
         let mut out = Vec::new();
         for (a, b) in self.commas(open + 1, close) {
             if a == b {
                 continue;
             }
-            let name = self.ident(a)?;
+            let mut name = self.ident(a)?;
             let rest_ok = (a + 1..b).all(|k| {
                 self.punct(k, b'(')
                     || self.punct(k, b')')
                     || matches!(self.toks[k].tok, Tok::Number | Tok::Word)
             });
-            if !rest_ok
-                || self.punct(a + 1, b'(')
-                    && !self.toks.get(a + 2).is_some_and(|t| t.tok == Tok::Number)
-            {
+            let prefix = self.punct(a + 1, b'(');
+            if !rest_ok || prefix && !self.toks.get(a + 2).is_some_and(|t| t.tok == Tok::Number) {
                 return None;
+            }
+            if prefix && prefixes {
+                let length = &self.toks[a + 2];
+                name = format!("{name}({})", &self.src[length.start..length.end]);
             }
             out.push(name);
         }
@@ -957,8 +976,10 @@ impl<'a> Stmt<'a> {
         raw.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// A default: a string's value (also with an introducer such as `_utf8mb4` or a cast
-    /// after it), `None` for `NULL`, else the expression as written.
+    /// A default: a string as an SQL string in single quotes, doubled quotes and no
+    /// backslash escapes (`'it''s'`, also from one with an introducer such as `_utf8mb4` or
+    /// `E`, or with a cast after it), `None` for `NULL`, else the expression as written
+    /// (MySQL's bit and hex literals `b'0'` and `x'ff'` too).
     fn value(&self, from: usize, to: usize) -> Option<String> {
         if from >= to {
             return None;
@@ -966,7 +987,9 @@ impl<'a> Stmt<'a> {
         if self.is(from, "NULL") && to == from + 1 {
             return None;
         }
-        let at = if self.word(from).is_some() && self.string(from + 1).is_some() {
+        let bits = ["b", "x"].iter().any(|w| self.is(from, w))
+            && self.toks.get(from + 1).is_some_and(|t| t.start == self.toks[from].end);
+        let at = if self.word(from).is_some() && self.string(from + 1).is_some() && !bits {
             from + 1
         } else {
             from
@@ -974,7 +997,7 @@ impl<'a> Stmt<'a> {
         if let Some(s) = self.string(at) {
             let cast = self.punct(at + 1, b':') && self.punct(at + 2, b':');
             if at + 1 == to || cast {
-                return Some(s.to_owned());
+                return Some(format!("'{}'", s.replace('\'', "''")));
             }
         }
         Some(self.text(from, to))
@@ -1005,14 +1028,14 @@ mod tests {
         let t = table(&s, "", "gate");
         let cols: Vec<_> = t.columns.iter().map(|c| c.datatype.as_str()).collect();
         assert_eq!(cols, ["int", "varchar(8)", "geometry", "enum('a,b','c')", "int"]);
-        assert_eq!(t.columns[1].default.as_deref(), Some("A1"));
+        assert_eq!(t.columns[1].default.as_deref(), Some("'A1'"));
         assert_eq!(t.columns[1].comment.as_deref(), Some("Gate, z. B. 'B12'"));
         assert!(t.columns[1].not_null && !t.columns[2].not_null);
         assert_eq!(t.columns[3].default, None);
         assert!(t.columns[4].generated && !t.columns[0].generated);
         assert!(t.columns[4].virtual_column);
         assert_eq!(t.primary_key, ["flughafen_id", "nummer"]);
-        assert_eq!(t.uniques, [vec!["nummer".to_owned()]]);
+        assert_eq!(t.uniques, [vec!["nummer(4)".to_owned()]]);
         assert_eq!(
             t.foreign_keys,
             [ForeignKey {
@@ -1046,7 +1069,7 @@ mod tests {
         let f = table(&s, "public", "flug");
         assert_eq!(f.columns[1].datatype, "numeric(8,2)");
         assert_eq!(f.columns[1].default.as_deref(), Some("0.00"));
-        assert_eq!(f.columns[2].default.as_deref(), Some("reserviert"));
+        assert_eq!(f.columns[2].default.as_deref(), Some("'reserviert'"));
         assert!(f.columns[2].not_null);
         assert_eq!(f.columns[3].datatype, "timestamp without time zone");
         assert!(f.columns[4].generated && !f.columns[5].generated);
@@ -1218,5 +1241,68 @@ CREATE INDEX ix_lower ON public.flugzeug (lower(sitze));
         let s = parse(sql, Dialect::MySql);
         assert_eq!(table(&s, "", "Straße").columns[0].name, "größe");
         assert_eq!(s.recoded, [1]);
+    }
+
+    #[test]
+    fn defaults_keep_their_quotes_and_on_update() {
+        let sql = "CREATE TABLE t (a varchar(9) DEFAULT '(none)', b varchar(9) DEFAULT 'it''s', \
+                   c varchar(9) DEFAULT (_utf8mb4'x'), d bit(1) DEFAULT b'0', e timestamp NOT NULL \
+                   DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, f datetime(3) NULL \
+                   ON UPDATE CURRENT_TIMESTAMP(3) COMMENT 'x', g int REFERENCES u (id) ON UPDATE \
+                   CASCADE, h varchar(9) DEFAULT _utf8mb4'y');";
+        let s = parse(sql.as_bytes(), Dialect::MySql);
+        assert_eq!(s.problems, []);
+        let t = table(&s, "", "t");
+        let defaults: Vec<_> = t.columns.iter().map(|c| c.default.as_deref()).collect();
+        assert_eq!(
+            defaults,
+            [
+                Some("'(none)'"),
+                Some("'it''s'"),
+                Some("(_utf8mb4'x')"),
+                Some("b'0'"),
+                Some("CURRENT_TIMESTAMP"),
+                None,
+                None,
+                Some("'y'")
+            ]
+        );
+        let on_update: Vec<_> = t.columns.iter().map(|c| c.on_update.as_deref()).collect();
+        let now = Some("CURRENT_TIMESTAMP");
+        assert_eq!(
+            on_update,
+            [None, None, None, None, now, Some("CURRENT_TIMESTAMP(3)"), None, None]
+        );
+        assert_eq!(t.columns[5].comment.as_deref(), Some("x"));
+        assert_eq!(t.foreign_keys[0].on_update, Some(ErAction::Cascade));
+        let sql = "CREATE TABLE public.t (a text DEFAULT 'infinity'::text, b text[] DEFAULT \
+                   ARRAY[]::text[], c text DEFAULT E'a\\'b');";
+        let s = parse(sql.as_bytes(), Dialect::Postgres);
+        let defaults: Vec<_> =
+            table(&s, "public", "t").columns.iter().map(|c| c.default.clone()).collect();
+        let expected = ["'infinity'", "ARRAY[]::text[]", "'a''b'"].map(|d| Some(d.to_owned()));
+        assert_eq!(defaults, expected);
+    }
+
+    #[test]
+    fn prefix_lengths_stay_with_indexes_and_unique_keys() {
+        let sql = "CREATE TABLE t (id int, body text, PRIMARY KEY (id), UNIQUE KEY u (body(50)), \
+                   KEY ix (body(100), id));\nCREATE INDEX ix2 ON t (body(20));";
+        let s = parse(sql.as_bytes(), Dialect::MySql);
+        let t = table(&s, "", "t");
+        assert_eq!(t.uniques, [vec!["body(50)".to_owned()]]);
+        let indexes: Vec<_> = t.indexes.iter().map(|i| i.columns.join(",")).collect();
+        assert_eq!(indexes, ["body(100),id", "body(20)"]);
+    }
+
+    #[test]
+    fn comments_on_the_columns_of_views_are_skipped() {
+        let sql = "CREATE TABLE public.a (id integer);\nCREATE VIEW public.v AS SELECT id FROM \
+                   public.a;\nCOMMENT ON COLUMN public.v.id IS 'x';\nCOMMENT ON COLUMN public.a.id \
+                   IS 'y';";
+        let s = parse(sql.as_bytes(), Dialect::Postgres);
+        assert_eq!(s.problems, []);
+        assert_eq!(s.skipped.get("COMMENT ON"), Some(&1));
+        assert_eq!(table(&s, "public", "a").columns[0].comment.as_deref(), Some("y"));
     }
 }

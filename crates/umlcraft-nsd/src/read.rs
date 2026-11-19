@@ -53,8 +53,6 @@ struct Parser<'a> {
     reader: Reader<&'a [u8]>,
     /// Where the last event started.
     at: usize,
-    /// How many elements are open around the one being read.
-    depth: usize,
 }
 
 /// What the next event means for the structure.
@@ -67,7 +65,7 @@ enum Next<'a> {
 
 impl<'a> Parser<'a> {
     fn new(xml: &'a str) -> Self {
-        Parser { xml, reader: Reader::from_str(xml), at: 0, depth: 0 }
+        Parser { xml, reader: Reader::from_str(xml), at: 0 }
     }
 
     fn position(&self, at: usize) -> (usize, usize) {
@@ -155,79 +153,92 @@ impl<'a> Parser<'a> {
         Ok(Diagram { attrs, children: children.unwrap_or_default() })
     }
 
-    /// The elements up to the end tag of `start`.
+    /// The elements up to the end tag of `start`, with everything nested in them. Read with a
+    /// stack of open elements and branches instead of recursion, so that the depth of a file
+    /// costs heap rather than the caller's stack.
     fn sequence(
         &mut self,
         start: &BytesStart,
         empty: bool,
         tag: &str,
     ) -> Result<Sequence, ReadError> {
-        let attrs = self.attrs(start)?;
-        let mut elements = Vec::new();
-        if !empty {
-            loop {
-                match self.next(tag)? {
-                    Next::Open(e, empty) => {
-                        let name = e.name();
-                        let kind = ElementKind::from_tag(name.as_ref())
-                            .ok_or_else(|| self.unexpected(name.as_ref(), tag))?;
-                        elements.push(self.element(kind, &e, empty)?);
-                    }
-                    Next::Close => break,
-                    Next::End => return Err(ReadError::Truncated(tag.into())),
-                }
-            }
-        }
-        Ok(Sequence { attrs, elements })
-    }
-
-    fn element(
-        &mut self,
-        kind: ElementKind,
-        start: &BytesStart,
-        empty: bool,
-    ) -> Result<Element, ReadError> {
-        let started = self.at;
-        if self.depth >= MAX_DEPTH {
-            let (line, column) = self.position(started);
-            return Err(ReadError::TooDeep { line, column, max: MAX_DEPTH });
-        }
-        self.depth += 1;
-        let element = self.element_inside(kind, start, empty, started);
-        self.depth -= 1;
-        element
-    }
-
-    fn element_inside(
-        &mut self,
-        kind: ElementKind,
-        start: &BytesStart,
-        empty: bool,
-        started: usize,
-    ) -> Result<Element, ReadError> {
-        let attrs = self.attrs(start)?;
-        let mut branches = Vec::new();
-        let mut tags = Vec::new();
-        if !empty {
-            loop {
-                match self.next(kind.tag())? {
-                    Next::Open(e, empty) => {
-                        let tag = e.name().as_ref().to_owned();
-                        let known = match kind.branches() {
-                            Branches::Fixed(fixed) => fixed.contains(&tag.as_str()),
-                            Branches::Repeated(t) => t == tag,
-                        };
-                        if !known {
-                            return Err(self.unexpected(&tag, kind.tag()));
+        let first = OpenSequence::new(tag.to_owned(), self.attrs(start)?, empty);
+        let mut open = vec![Open::Sequence(first)];
+        loop {
+            match open.last_mut().expect("the outer sequence is open until it is returned") {
+                Open::Sequence(s) => {
+                    let next = if s.empty { Next::Close } else { self.next(&s.tag)? };
+                    match next {
+                        Next::Open(e, empty) => {
+                            let name = e.name();
+                            let kind = ElementKind::from_tag(name.as_ref())
+                                .ok_or_else(|| self.unexpected(name.as_ref(), &s.tag))?;
+                            // Sequence, element, sequence, …: one element per two entries.
+                            if open.len() / 2 >= MAX_DEPTH {
+                                let (line, column) = self.position(self.at);
+                                return Err(ReadError::TooDeep { line, column, max: MAX_DEPTH });
+                            }
+                            let element = OpenElement {
+                                kind,
+                                attrs: self.attrs(&e)?,
+                                branches: Vec::new(),
+                                tags: Vec::new(),
+                                started: self.at,
+                                empty,
+                            };
+                            open.push(Open::Element(element));
                         }
-                        branches.push(self.sequence(&e, empty, &tag)?);
-                        tags.push(tag);
+                        Next::Close => {
+                            let Some(Open::Sequence(s)) = open.pop() else { unreachable!() };
+                            let sequence = Sequence { attrs: s.attrs, elements: s.elements };
+                            match open.last_mut() {
+                                None => return Ok(sequence),
+                                Some(Open::Element(e)) => {
+                                    e.branches.push(sequence);
+                                    e.tags.push(s.tag);
+                                }
+                                Some(Open::Sequence(_)) => unreachable!("sequences hold elements"),
+                            }
+                        }
+                        Next::End => return Err(ReadError::Truncated(s.tag.clone())),
                     }
-                    Next::Close => break,
-                    Next::End => return Err(ReadError::Truncated(kind.tag().into())),
+                }
+                Open::Element(e) => {
+                    let kind = e.kind;
+                    let next = if e.empty { Next::Close } else { self.next(kind.tag())? };
+                    match next {
+                        Next::Open(b, empty) => {
+                            let name = b.name();
+                            let tag: &str = name.as_ref();
+                            let tag = tag.to_owned();
+                            let known = match kind.branches() {
+                                Branches::Fixed(fixed) => fixed.contains(&tag.as_str()),
+                                Branches::Repeated(t) => t == tag,
+                            };
+                            if !known {
+                                return Err(self.unexpected(&tag, kind.tag()));
+                            }
+                            let branch = OpenSequence::new(tag, self.attrs(&b)?, empty);
+                            open.push(Open::Sequence(branch));
+                        }
+                        Next::Close => {
+                            let Some(Open::Element(e)) = open.pop() else { unreachable!() };
+                            let element = self.finish(e)?;
+                            let Some(Open::Sequence(parent)) = open.last_mut() else {
+                                unreachable!("elements are read inside sequences")
+                            };
+                            parent.elements.push(element);
+                        }
+                        Next::End => return Err(ReadError::Truncated(kind.tag().into())),
+                    }
                 }
             }
         }
+    }
+
+    /// The element whose end tag was read, if it has the branches its kind takes.
+    fn finish(&self, e: OpenElement) -> Result<Element, ReadError> {
+        let OpenElement { kind, attrs, branches, tags, started, .. } = e;
         let (fits, expected) = match kind.branches() {
             Branches::Fixed(fixed) => (tags == fixed, format!("{fixed:?}")),
             Branches::Repeated(t) => (!tags.is_empty(), format!("one or more {t}")),
@@ -244,6 +255,38 @@ impl<'a> Parser<'a> {
         }
         Ok(Element { kind, attrs, branches })
     }
+}
+
+/// What [`Parser::sequence`] has open: branches (or the root's children) and elements in turn.
+enum Open {
+    Sequence(OpenSequence),
+    Element(OpenElement),
+}
+
+/// A sequence whose end tag is still to come, with the elements read so far.
+struct OpenSequence {
+    tag: String,
+    attrs: Attrs,
+    elements: Vec<Element>,
+    /// Written as an empty tag (`<qTrue/>`): it ends where it starts.
+    empty: bool,
+}
+
+impl OpenSequence {
+    fn new(tag: String, attrs: Attrs, empty: bool) -> Self {
+        OpenSequence { tag, attrs, elements: Vec::new(), empty }
+    }
+}
+
+/// An element whose end tag is still to come, with the branches read so far.
+struct OpenElement {
+    kind: ElementKind,
+    attrs: Attrs,
+    branches: Vec<Sequence>,
+    tags: Vec<String>,
+    /// Where its start tag begins.
+    started: usize,
+    empty: bool,
 }
 
 #[cfg(test)]

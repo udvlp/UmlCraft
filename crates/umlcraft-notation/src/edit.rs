@@ -59,10 +59,16 @@ fn constraint_texts(model: &Model) -> HashMap<(Id, Id), String> {
 /// keep their size, even if Astah stored one that does not fit. State invariants take the
 /// height of their text; a sequence diagram where one did, or where a duration or time
 /// constraint was renamed, is tidied again, so that lifelines and frame hold them and their
-/// labels. Classes grow around their parts,
-/// and ports follow the border of the class or part they sit on ([`composite::follow`]). Then lines that the router
+/// labels. A state grown for its text grows the states it lies in, so that they still hold
+/// it. Classes grow around their parts, and ports, pins and entry and exit points follow
+/// the border of the node they sit on ([`composite::follow`]). Then lines that the router
 /// keeps are routed again where their nodes moved or something moved into their way, and found
 /// and lost messages keep their length to lifelines that moved.
+///
+/// The order of these passes matters: lifelines first, as everything on a sequence diagram
+/// hangs on them; boxes take their size before the nodes on their borders follow, since a state
+/// is both sized to its text and the host of entry and exit points; the router last, once every
+/// node is where it ends up.
 pub fn apply<R>(
     doc: &mut Document,
     label: impl Into<String>,
@@ -84,11 +90,11 @@ pub fn apply<R>(
     let result = doc.edit(label, |tx| {
         let result = f(tx)?;
         sequence_edit::follow_lifelines(tx, &lifelines)?;
-        composite::follow(tx, &ports)?;
         let close = |a: Size, b: Size| {
             (a.width - b.width).abs() < 0.01 && (a.height - b.height).abs() < 0.01
         };
         let mut sequences = Vec::new();
+        let mut states: Vec<(Id, Vec<Id>)> = Vec::new();
         for b in fitted_boxes(tx.model(), measure) {
             let unchanged = before.get(&b.presentation) == Some(&b.content);
             if !unchanged && !close(b.bounds.size(), b.size) {
@@ -106,8 +112,19 @@ pub fn apply<R>(
                 if kind == Some(DiagramKind::Sequence) && !sequences.contains(&b.diagram) {
                     sequences.push(b.diagram);
                 }
+                if kind == Some(DiagramKind::StateMachine) {
+                    match states.iter_mut().find(|(d, _)| *d == b.diagram) {
+                        Some((_, grown)) => grown.push(b.presentation),
+                        None => states.push((b.diagram, vec![b.presentation])),
+                    }
+                }
             }
         }
+        // A state grown for its text: the states it lies in hold it still.
+        for (diagram, grown) in states {
+            state_edit::grow_owners(tx, diagram, &grown)?;
+        }
+        composite::follow(tx, &ports)?;
         // A constraint renamed: the frame holds its label.
         for ((diagram, p), text) in constraint_texts(tx.model()) {
             if constraints.get(&(diagram, p)) != Some(&text) && !sequences.contains(&diagram) {

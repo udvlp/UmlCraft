@@ -20,6 +20,7 @@
 //! what contradicts itself is refused: an attribute with two owners, a second weak entity at an
 //! identifying relationship, a second supertype.
 
+use umlcraft_model::Refusal;
 use umlcraft_model::{
     Cardinality, CardinalityMax, DiagramKind, ElementData, ElementKind, ErAttributeProps,
     ErEntityProps, ErIsAProps, ErKey, ErNotation, ErParticipationProps, ErRelationshipProps,
@@ -27,13 +28,6 @@ use umlcraft_model::{
 };
 
 use crate::palette::{EdgeTool, NodeTool};
-
-/// Why a line was refused, as [`ModelError::Invalid`] says it; the app words these in the
-/// language of its user.
-pub const NOT_JOINED: &str = "these two cannot be joined";
-pub const ATTRIBUTE_OWNED: &str = "the attribute already belongs to something";
-pub const SECOND_WEAK: &str = "an identifying relationship has one weak entity";
-pub const ASSOCIATIVE_IN_USE: &str = "entities take part in the associative entity";
 
 /// Whether `diagram` is an ER diagram.
 pub fn is_er(model: &Model, diagram: Id) -> bool {
@@ -99,7 +93,7 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<I
     let (s, t) = (element_of(source)?, element_of(target)?);
     let (sk, tk) = (model.element(s)?.kind(), model.element(t)?.kind());
     let Some((join, swap)) = joins(sk, tk).filter(|_| s != t) else {
-        return Err(ModelError::Invalid(NOT_JOINED.into()));
+        return Err(ModelError::Refused(Refusal::ErNotJoined));
     };
     // The attribute, relationship or IS-A first.
     let ((first, first_node), (second, second_node)) =
@@ -108,7 +102,7 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<I
         Join::Attribute => {
             let owner = model.element(first)?.owner();
             if owner.is_some_and(|o| model.get(o).is_some_and(|o| is_er_kind(o.kind()))) {
-                return Err(ModelError::Invalid(ATTRIBUTE_OWNED.into()));
+                return Err(ModelError::Refused(Refusal::ErAttributeOwned));
             }
             // A cycle of composite attributes is an ownership cycle: the model refuses it.
             let index = model.children(second).len();
@@ -118,7 +112,7 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<I
         }
         Join::Participation => {
             if second_weak(model, first, second) {
-                return Err(ModelError::Invalid(SECOND_WEAK.into()));
+                return Err(ModelError::Refused(Refusal::ErSecondWeak));
             }
             let kind = ElementKind::ErParticipation(ErParticipationProps::new(first, second));
             let line = tx.create(first, ElementData::new("", kind))?;
@@ -215,7 +209,7 @@ pub fn relate(tx: &mut Tx<'_>, diagram: Id, line: IeLine, parent: Id, child: Id)
         .all(|&e| matches!(model.get(e).map(|e| e.kind()), Some(ElementKind::ErEntity(_))));
     let looped = p == c;
     if !entities || (looped && matches!(line, IeLine::Identifying | IeLine::Subtype)) {
-        return Err(ModelError::Invalid(NOT_JOINED.into()));
+        return Err(ModelError::Refused(Refusal::ErNotJoined));
     }
     let owner = model.element(p)?.owner().ok_or(ModelError::NotFound(p))?;
     if line == IeLine::Subtype {
@@ -242,6 +236,9 @@ pub fn relate(tx: &mut Tx<'_>, diagram: Id, line: IeLine, parent: Id, child: Id)
     }
     tx.add_edge(diagram, Some(relationship), parent, child, Vec::new())
 }
+
+/// How far right of its entity the rhombus of a relationship of the entity with itself goes.
+const LOOP_GAP: f32 = 60.0;
 
 /// How far below its supertype a new IS-A goes.
 const SUBTYPE_DROP: f32 = 30.0;
@@ -289,7 +286,7 @@ fn subtype(
         }
     };
     if subtypings(tx.model(), is_a).any(|s| s.entity == sub) {
-        return Err(ModelError::Invalid(NOT_JOINED.into()));
+        return Err(ModelError::Refused(Refusal::ErNotJoined));
     }
     let kind = ElementKind::ErSubtyping(ErSubtypingProps { is_a, entity: sub, supertype: false });
     let line = tx.create(is_a, ElementData::new("", kind))?;
@@ -350,8 +347,25 @@ pub fn attributes(model: &Model, owner: Id) -> impl Iterator<Item = &umlcraft_mo
         .filter(|c| matches!(c.kind(), ElementKind::ErAttribute(_)))
 }
 
+/// Whether `entity` has foreign key columns of an identifying relationship other than `except`:
+/// another parent still identifies it.
+fn identified_by_other(model: &Model, entity: Id, except: Id) -> bool {
+    attributes(model, entity).any(|a| match a.kind() {
+        ElementKind::ErAttribute(p) => p.foreign_key.is_some_and(|r| {
+            r != except
+                && matches!(
+                    model.get(r).map(|r| r.kind()),
+                    Some(ElementKind::ErRelationship(q)) if q.identifying
+                )
+        }),
+        _ => false,
+    })
+}
+
 /// Makes `relationship` identifying or not: its foreign key columns move into the child's key
-/// or out of it, and the child becomes weak or no longer is.
+/// or out of it, and the child becomes weak, or no longer is unless another identifying
+/// relationship still keys it (`OrderLine` keyed by both `Order` and `Product`). Deleting a
+/// relationship leaves `weak` as it is: in Chen notation it is the user's to set.
 pub fn set_identifying(tx: &mut Tx<'_>, relationship: Id, identifying: bool) -> Result<()> {
     tx.update(relationship, |data| {
         if let ElementKind::ErRelationship(p) = &mut data.kind {
@@ -374,17 +388,18 @@ pub fn set_identifying(tx: &mut Tx<'_>, relationship: Id, identifying: bool) -> 
     let mut children: Vec<Id> = columns.iter().filter_map(|c| c.1).collect();
     children.dedup();
     for child in children {
-        set_weak(tx, child, identifying)?;
+        let weak = identifying || identified_by_other(tx.model(), child, relationship);
+        set_weak(tx, child, weak)?;
     }
     Ok(())
 }
 
 /// Makes `entity` associative or a plain entity. A plain entity cannot be a relationship, so
 /// an associative entity that entities take part in stays one, refused with
-/// [`ASSOCIATIVE_IN_USE`] until its participations are gone.
+/// [`Refusal::ErAssociativeInUse`] until its participations are gone.
 pub fn set_associative(tx: &mut Tx<'_>, entity: Id, associative: bool) -> Result<()> {
     if !associative && participations(tx.model(), entity).next().is_some() {
-        return Err(ModelError::Invalid(ASSOCIATIVE_IN_USE.into()));
+        return Err(ModelError::Refused(Refusal::ErAssociativeInUse));
     }
     tx.update(entity, |data| {
         if let ElementKind::ErEntity(p) = &mut data.kind {
@@ -461,28 +476,80 @@ pub fn set_notation(
         return Ok(());
     }
     if notation.lists_attributes() {
-        to_listing(tx, diagram)
+        to_listing(tx, diagram, None).map(drop)
     } else {
         to_chen(tx, diagram, measure)
     }
 }
 
-fn to_listing(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+/// Draws what was just pasted onto the ER diagram `diagram` (the presentations `created`), copied
+/// from a diagram in notation `from`, in the diagram's notation, as [`set_notation`] would: in
+/// IE and IDEF1X attribute nodes go and relationships drawn as lines lose their node for one
+/// line; in Chen relationship lines become a node with its participation lines, and pasted
+/// entities and relationships get nodes for their attributes, in a row above them. Returns
+/// `created` without what went and with what was added.
+pub fn fit_pasted(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    created: Vec<Id>,
+    from: Option<ErNotation>,
+) -> Result<Vec<Id>> {
+    let to = notation(tx.model(), diagram);
+    if from.is_some_and(|from| from.lists_attributes() == to.lists_attributes()) {
+        return Ok(created);
+    }
+    let scope: std::collections::HashSet<Id> = created.iter().copied().collect();
+    let added = if to.lists_attributes() {
+        to_listing(tx, diagram, Some(&scope))?
+    } else {
+        let mut added = lines_to_nodes(tx, diagram, Some(&scope))?;
+        let model = tx.model();
+        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let owners: Vec<(Id, Id)> = created
+            .iter()
+            .chain(&added)
+            .filter_map(|&p| view.get(p))
+            .filter(|p| p.bounds().is_some())
+            .filter_map(|p| Some((p.element?, p.id)))
+            .filter(|&(e, _)| {
+                matches!(
+                    model.get(e).map(|e| e.kind()),
+                    Some(ElementKind::ErEntity(_) | ElementKind::ErRelationship(_))
+                )
+            })
+            .collect();
+        added.extend(attribute_nodes(tx, diagram, owners, true)?);
+        added
+    };
+    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let kept: Vec<Id> = created.into_iter().filter(|&p| view.get(p).is_some()).collect();
+    Ok(kept.into_iter().chain(added).collect())
+}
+
+/// IE and IDEF1X: removes the attribute nodes of `diagram` and turns relationship nodes that are
+/// lines ([`is_line`]) into one line, of those in `scope` or of all. Returns the new lines.
+fn to_listing(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    scope: Option<&std::collections::HashSet<Id>>,
+) -> Result<Vec<Id>> {
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     let kind_of =
         |p: &umlcraft_model::Presentation| p.element.and_then(|e| model.get(e)).map(|e| e.kind());
+    let within = |p: &umlcraft_model::Presentation| scope.is_none_or(|s| s.contains(&p.id));
     let attributes: indexmap::IndexSet<Id> = view
         .presentations()
         .iter()
         .filter(|p| p.bounds().is_some() && matches!(kind_of(p), Some(ElementKind::ErAttribute(_))))
+        .filter(|p| within(p))
         .map(|p| p.id)
         .collect();
     // Relationship nodes that become lines: (node, relationship, parent node, child node).
     let node_of =
         |entity: Id| view.presentations_of(entity).find(|p| p.bounds().is_some()).map(|p| p.id);
     let mut lines = Vec::new();
-    for p in view.presentations().iter().filter(|p| p.bounds().is_some()) {
+    for p in view.presentations().iter().filter(|p| p.bounds().is_some() && within(p)) {
         let Some(relationship) = p.element.filter(|&e| is_line(model, e)) else { continue };
         let Some([parent, child]) = parent_and_child(model, relationship) else { continue };
         if let (Some(a), Some(b)) = (node_of(parent.entity), node_of(child.entity)) {
@@ -494,19 +561,44 @@ fn to_listing(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     if !removed.is_empty() {
         tx.remove_presentations(diagram, removed)?;
     }
+    let mut added = Vec::new();
     for (_, relationship, parent, child) in lines {
-        tx.add_edge(diagram, Some(relationship), parent, child, Vec::new())?;
+        added.push(tx.add_edge(diagram, Some(relationship), parent, child, Vec::new())?);
     }
-    Ok(())
+    Ok(added)
 }
 
 fn to_chen(tx: &mut Tx<'_>, diagram: Id, measure: &dyn crate::scene::TextMeasure) -> Result<()> {
+    lines_to_nodes(tx, diagram, None)?;
+    // Attribute nodes around what shows them.
+    let model = tx.model();
+    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let mut owners: Vec<(Id, Id)> = Vec::new();
+    for p in view.presentations().iter().filter(|p| p.bounds().is_some()) {
+        let Some(e) = p.element.and_then(|e| model.get(e)) else { continue };
+        if matches!(e.kind(), ElementKind::ErEntity(_) | ElementKind::ErRelationship(_)) {
+            owners.push((e.id(), p.id));
+        }
+    }
+    attribute_nodes(tx, diagram, owners, false)?;
+    crate::er_layout::arrange_attributes(tx, diagram, measure)
+}
+
+/// Chen: turns the relationship lines of `diagram` (those in `scope`, or all) into a node
+/// between the two entities, or beside the entity for a relationship of an entity with itself,
+/// with a line for each participation. Returns the new nodes and lines.
+fn lines_to_nodes(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    scope: Option<&std::collections::HashSet<Id>>,
+) -> Result<Vec<Id>> {
     let model = tx.model();
     let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
     // Relationship lines: (edge, relationship, parent node, child node).
     let lines: Vec<(Id, Id, Id, Id)> = view
         .presentations()
         .iter()
+        .filter(|p| scope.is_none_or(|s| s.contains(&p.id)))
         .filter_map(|p| {
             let (s, t) = p.endpoints()?;
             let e = p.element?;
@@ -514,14 +606,22 @@ fn to_chen(tx: &mut Tx<'_>, diagram: Id, measure: &dyn crate::scene::TextMeasure
                 .then_some((p.id, e, s, t))
         })
         .collect();
+    let mut added = Vec::new();
+    let mut spread = Vec::new();
     for &(edge, relationship, s, t) in &lines {
         let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
         let (a, b) = (view.get(s).and_then(|p| p.bounds()), view.get(t).and_then(|p| p.bounds()));
         let (Some(a), Some(b)) = (a, b) else { continue };
         tx.remove_presentation(diagram, edge)?;
         let size = crate::palette::default_size_for(tx.model().element(relationship)?.kind());
+        // Between the two entities; a relationship of an entity with itself beside it.
+        let looped = s == t;
         let (ca, cb) = (a.center(), b.center());
-        let at = Point::new((ca.x + cb.x - size.width) / 2.0, (ca.y + cb.y - size.height) / 2.0);
+        let at = if looped {
+            Point::new(a.right() + LOOP_GAP, ca.y - size.height / 2.0)
+        } else {
+            Point::new((ca.x + cb.x - size.width) / 2.0, (ca.y + cb.y - size.height) / 2.0)
+        };
         let node = tx.add_node(
             diagram,
             Some(relationship),
@@ -537,28 +637,41 @@ fn to_chen(tx: &mut Tx<'_>, diagram: Id, measure: &dyn crate::scene::TextMeasure
             })
             .collect();
         let mut used = Vec::new();
+        let mut drawn = Vec::new();
         for (part, entity) in parts {
+            // Both ends of a loop are the same node.
             let end = [s, t].into_iter().find(|&n| {
-                !used.contains(&n)
+                (looped || !used.contains(&n))
                     && tx.model().view(diagram).and_then(|v| v.get(n)).and_then(|p| p.element)
                         == Some(entity)
             });
             if let Some(end) = end {
                 used.push(end);
-                tx.add_edge(diagram, Some(part), node, end, Vec::new())?;
+                drawn.push(tx.add_edge(diagram, Some(part), node, end, Vec::new())?);
             }
         }
-    }
-    // Attribute nodes around what shows them.
-    let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
-    let mut owners: Vec<(Id, Id)> = Vec::new();
-    for p in view.presentations().iter().filter(|p| p.bounds().is_some()) {
-        let Some(e) = p.element.and_then(|e| model.get(e)) else { continue };
-        if matches!(e.kind(), ElementKind::ErEntity(_) | ElementKind::ErRelationship(_)) {
-            owners.push((e.id(), p.id));
+        added.push(node);
+        added.extend(&drawn);
+        if looped {
+            spread.extend(drawn);
         }
     }
+    // The two lines of a loop lie apart.
+    crate::er_layout::spread_new_lines(tx, diagram, &spread)?;
+    Ok(added)
+}
+
+/// Chen: gives the attributes of the `owners` (element, node) of `diagram` that it does not show
+/// yet (but foreign key columns) a node and a line, and so on for composite attributes. The
+/// nodes go on their owner, or with `row` in a row above it as [`add_attribute`] puts them.
+/// Returns the new nodes and lines.
+fn attribute_nodes(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    owners: Vec<(Id, Id)>,
+    row: bool,
+) -> Result<Vec<Id>> {
+    let mut added = Vec::new();
     let mut stack = owners;
     while let Some((owner, owner_node)) = stack.pop() {
         let columns: Vec<Id> = attributes(tx.model(), owner)
@@ -567,19 +680,27 @@ fn to_chen(tx: &mut Tx<'_>, diagram: Id, measure: &dyn crate::scene::TextMeasure
             .collect();
         let at = tx.model().view(diagram).and_then(|v| v.get(owner_node)).and_then(|p| p.bounds());
         let Some(at) = at else { continue };
+        let mut placed = 0;
         for column in columns {
             if tx.model().view(diagram).is_some_and(|v| v.presentations_of(column).next().is_some())
             {
                 continue;
             }
             let size = crate::palette::default_size_for(tx.model().element(column)?.kind());
-            let node =
-                tx.add_node(diagram, Some(column), Rect::new(at.x, at.y, size.width, size.height))?;
-            tx.add_edge(diagram, Some(column), owner_node, node, Vec::new())?;
+            let origin = if row {
+                Point::new(at.x + placed as f32 * ATTRIBUTE_STEP, at.y - ATTRIBUTE_RISE)
+            } else {
+                at.origin()
+            };
+            placed += 1;
+            let bounds = Rect::from_origin_size(origin, size);
+            let node = tx.add_node(diagram, Some(column), bounds)?;
+            let line = tx.add_edge(diagram, Some(column), owner_node, node, Vec::new())?;
+            added.extend([node, line]);
             stack.push((column, node));
         }
     }
-    crate::er_layout::arrange_attributes(tx, diagram, measure)
+    Ok(added)
 }
 
 /// The participations of a relationship (or associative entity).
@@ -777,7 +898,7 @@ mod tests {
         set(&mut d, student, false).unwrap();
         d.connect(enrolment_node, student_node).unwrap();
         let err = set(&mut d, enrolment, false).unwrap_err();
-        assert_eq!(err, ModelError::Invalid(ASSOCIATIVE_IN_USE.into()));
+        assert_eq!(err, ModelError::Refused(Refusal::ErAssociativeInUse));
         let model = d.doc.model();
         assert!(matches!(
             model.element(enrolment).unwrap().kind(),
@@ -828,7 +949,7 @@ mod tests {
         assert_eq!(presentation.element, Some(name));
         assert_eq!(presentation.endpoints(), Some((customer_node, name_node)), "from the owner");
         let err = d.connect(name_node, other_node).unwrap_err();
-        assert_eq!(err, ModelError::Invalid(ATTRIBUTE_OWNED.into()));
+        assert_eq!(err, ModelError::Refused(Refusal::ErAttributeOwned));
         assert_eq!(d.doc.model().get(name).unwrap().owner(), Some(customer));
         // Deleting the entity takes its attributes.
         d.doc.edit("delete", |tx| tx.delete(customer)).unwrap();
@@ -874,7 +995,7 @@ mod tests {
         d.connect(owner_node, rel_node).unwrap();
         d.connect(rel_node, weak_node).unwrap();
         let err = d.connect(weak2_node, rel_node).unwrap_err();
-        assert_eq!(err, ModelError::Invalid(SECOND_WEAK.into()));
+        assert_eq!(err, ModelError::Refused(Refusal::ErSecondWeak));
         let model = d.doc.model();
         let parts: Vec<_> = participations(model, rel).collect();
         assert_eq!(parts.len(), 2);
@@ -1153,8 +1274,75 @@ mod tests {
         // Refused: a subtype of itself, lines to what is not an entity.
         assert_eq!(
             d.relate(IeLine::Identifying, person_node, person_node),
-            Err(ModelError::Invalid(NOT_JOINED.into()))
+            Err(ModelError::Refused(Refusal::ErNotJoined))
         );
+    }
+
+    /// `OrderLine` keyed by `Order` and by `Product` stays weak while either identifies it.
+    #[test]
+    fn a_child_with_two_identifying_parents_stays_weak_while_one_is_left() {
+        let mut d = diagram();
+        d.set_notation(ErNotation::Ie);
+        let (order, order_node) = d.add(entity(false));
+        let (product, product_node) = d.add(entity(false));
+        let (line, line_node) = d.add(entity(false));
+        d.key(order, "order no");
+        d.key(product, "product no");
+        let diagram = d.diagram;
+        let relationship = |d: &Diagram, edge: Id| {
+            d.doc.model().view(diagram).unwrap().get(edge).unwrap().element.unwrap()
+        };
+        let by_order = d.relate(IeLine::Identifying, order_node, line_node).unwrap();
+        let by_product = d.relate(IeLine::Identifying, product_node, line_node).unwrap();
+        let (by_order, by_product) = (relationship(&d, by_order), relationship(&d, by_product));
+        assert!(is_weak(d.doc.model(), line));
+        d.doc.edit("plain", |tx| set_identifying(tx, by_product, false)).unwrap();
+        assert!(is_weak(d.doc.model(), line), "the order still identifies it");
+        d.doc.edit("plain", |tx| set_identifying(tx, by_order, false)).unwrap();
+        assert!(!is_weak(d.doc.model(), line));
+        d.doc.edit("again", |tx| set_identifying(tx, by_product, true)).unwrap();
+        assert!(is_weak(d.doc.model(), line));
+    }
+
+    /// A relationship of an entity with itself becomes a rhombus beside the entity in Chen,
+    /// with both its lines, and a loop again in IE.
+    #[test]
+    fn recursive_relationships_survive_switching_notation() {
+        let mut d = diagram();
+        d.set_notation(ErNotation::Ie);
+        let (employee, employee_node) = d.add(entity(false));
+        d.key(employee, "id");
+        let diagram = d.diagram;
+        d.doc
+            .edit("place", |tx| {
+                tx.set_bounds(diagram, employee_node, Rect::new(100.0, 100.0, 120.0, 60.0))
+            })
+            .unwrap();
+        let edge = d.relate(IeLine::NonIdentifying, employee_node, employee_node).unwrap();
+        let manages = d.doc.model().view(diagram).unwrap().get(edge).unwrap().element.unwrap();
+        d.set_notation(ErNotation::Chen);
+        let model = d.doc.model();
+        let view = model.view(diagram).unwrap();
+        let rhombus: Vec<_> =
+            view.presentations_of(manages).filter(|p| p.bounds().is_some()).collect();
+        assert_eq!(rhombus.len(), 1);
+        let r = rhombus[0].bounds().unwrap();
+        let e = view.get(employee_node).unwrap().bounds().unwrap();
+        assert!(!r.intersects(&e), "beside the entity: {r:?} {e:?}");
+        let lines: Vec<_> = view
+            .edges_attached_to(rhombus[0].id)
+            .filter(|l| {
+                l.endpoints().is_some_and(|(s, t)| s == employee_node || t == employee_node)
+            })
+            .collect();
+        assert_eq!(lines.len(), 2, "both participations drawn");
+        assert!(crate::invariants::check(model, &crate::scene::ApproxMeasure).is_empty());
+        d.set_notation(ErNotation::Ie);
+        let view = d.doc.model().view(diagram).unwrap();
+        let line: Vec<_> = view.presentations_of(manages).collect();
+        assert_eq!(line.len(), 1);
+        assert_eq!(line[0].endpoints(), Some((employee_node, employee_node)));
+        let _ = employee;
     }
 
     #[test]
@@ -1244,7 +1432,7 @@ mod tests {
         assert_eq!(subtypings(model, is_a).count(), 2);
         assert_eq!(
             d.connect(person_node, person_node),
-            Err(ModelError::Invalid(NOT_JOINED.into()))
+            Err(ModelError::Refused(Refusal::ErNotJoined))
         );
     }
 }

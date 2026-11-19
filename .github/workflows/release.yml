@@ -398,6 +398,8 @@ jobs:
     if: github.ref_type == 'tag'
     needs: [version, checks, build, build-linux, linux-packages, flatpak, snap]
     runs-on: ubuntu-latest
+    # Holds UPDATE_SIGNING_KEY; required reviewers on it keep the key to approved releases.
+    environment: release
     permissions:
       contents: write
     env:
@@ -411,10 +413,13 @@ jobs:
           merge-multiple: true
           path: dist
       - name: Create the draft release
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           sed "s/@VERSION@/$VERSION/g" packaging/release-notes.md > release-notes.md
           cd dist
           sha256sum * > SHA256SUMS.txt
+          sh ../packaging/sign-checksums.sh SHA256SUMS.txt "$VERSION"
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
             --title "UmlCraft $VERSION" \
             --notes-file ../release-notes.md --generate-notes \

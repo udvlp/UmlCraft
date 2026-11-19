@@ -180,6 +180,24 @@ impl Scene {
         self.edges.iter().find(|e| e.id == id)
     }
 
+    /// The nodes by id, to look up many: where an id repeats, the first, as [`Scene::node`].
+    pub fn nodes_by_id(&self) -> HashMap<Id, &NodeShape> {
+        let mut map = HashMap::with_capacity(self.nodes.len());
+        for n in &self.nodes {
+            map.entry(n.id).or_insert(n);
+        }
+        map
+    }
+
+    /// The edges by id, to look up many: where an id repeats, the first, as [`Scene::edge`].
+    pub fn edges_by_id(&self) -> HashMap<Id, &EdgeShape> {
+        let mut map = HashMap::with_capacity(self.edges.len());
+        for e in &self.edges {
+            map.entry(e.id).or_insert(e);
+        }
+        map
+    }
+
     /// Bounding box of all nodes and lines as drawn, so that a diagram of free lines or a loop
     /// to self fits too.
     pub fn bounds(&self) -> Option<Rect> {
@@ -1408,6 +1426,23 @@ impl Line {
 
 /// Builds the scene of `diagram`, with `preview` applied.
 pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMeasure) -> Scene {
+    build_with(model, diagram, preview, measure, true)
+}
+
+/// [`build`] with the labels of lines where Astah puts them, not moved off what they cover
+/// ([`labels::place`]): for layout and routing, which need where nodes and lines are and what
+/// the labels say, but not where they end up.
+pub fn build_geometry(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> Scene {
+    build_with(model, diagram, &Preview::default(), measure, false)
+}
+
+fn build_with(
+    model: &Model,
+    diagram: Id,
+    preview: &Preview,
+    measure: &dyn TextMeasure,
+    place_labels: bool,
+) -> Scene {
     let Some(view) = model.view(diagram) else { return Scene::empty() };
     let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
     let listing = model.get(diagram).and_then(|d| ErListing::of(d.kind()));
@@ -1665,7 +1700,9 @@ pub fn build(model: &Model, diagram: Id, preview: &Preview, measure: &dyn TextMe
     for label in edges.iter_mut().flat_map(|e| &mut e.labels) {
         label.text = single_line(&label.text);
     }
-    labels::place(&nodes, &mut edges, measure);
+    if place_labels {
+        labels::place(&nodes, &mut edges, measure);
+    }
     Scene { nodes, edges, sequence }
 }
 
@@ -1686,9 +1723,8 @@ fn association_class_anchors(
         else {
             continue;
         };
-        let (Some(class), Some(edge)) = (a.class, edges.iter().find(|e| e.id == p.id)) else {
-            continue;
-        };
+        let Some(class) = a.class else { continue };
+        let Some(edge) = edges.iter().find(|e| e.id == p.id) else { continue };
         let (a, b) = route::middle_segment(&edge.points, edge.shape.is_curve());
         let at = middle(a, b);
         for node in nodes.iter().filter(|n| n.element == Some(class)) {
@@ -1766,11 +1802,12 @@ fn keywords_away_from_notes(
     edges: &mut [EdgeShape],
     measure: &dyn TextMeasure,
 ) {
-    let placed = |id: Id| {
-        candidates.iter().any(|p| {
-            p.id == id && matches!(&p.shape, Shape::Edge { labels, .. } if labels.keyword.is_some())
-        })
-    };
+    let keywords_placed: HashSet<Id> = candidates
+        .iter()
+        .filter(|p| matches!(&p.shape, Shape::Edge { labels, .. } if labels.keyword.is_some()))
+        .map(|p| p.id)
+        .collect();
+    let placed = |id: Id| keywords_placed.contains(&id);
     let index: HashMap<Id, usize> = edges.iter().enumerate().map(|(i, e)| (e.id, i)).collect();
     // Each anchored line with the point the note's line comes from.
     let notes: Vec<(Id, Point)> = candidates
@@ -3339,15 +3376,24 @@ fn layout_er_table(
         _ => None,
     };
     let foreign = |a: &Element| props(a).is_some_and(|p| p.foreign_key.is_some());
-    let kind_text =
-        |a: &Element| props(a).map(|p| er_type(&er_resolved(model, a, p))).unwrap_or_default();
+    // Only IDEF1X shows the types; each is resolved through its domain once.
     let all = compartments.iter().flat_map(|(_, rows)| rows.iter());
+    let kinds: HashMap<Id, String> = if listing.idef1x {
+        all.clone()
+            .map(|(a, _)| {
+                (a.id(), props(a).map(|p| er_type(&er_resolved(model, a, p))).unwrap_or_default())
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    let kind_text = |a: &Element| kinds.get(&a.id()).map_or("", String::as_str);
     let name_w = all
         .clone()
         .map(|(a, indent)| indent + measure.width(er_name(a, listing.physical), size, false))
         .fold(0.0, f32::max);
     let type_w = if listing.idef1x {
-        all.clone().map(|(a, _)| measure.width(&kind_text(a), size, false)).fold(0.0, f32::max)
+        all.clone().map(|(a, _)| measure.width(kind_text(a), size, false)).fold(0.0, f32::max)
     } else {
         0.0
     };
@@ -3401,7 +3447,7 @@ fn layout_er_table(
             rows.push(row);
             let kind = kind_text(a);
             if listing.idef1x && !kind.is_empty() {
-                rows.push(cell(&kind, type_x, RowRole::Stereotype));
+                rows.push(cell(kind, type_x, RowRole::Stereotype));
             }
             if foreign(a) {
                 rows.push(cell(ER_FOREIGN_KEY, fk_x, RowRole::Stereotype));

@@ -35,13 +35,6 @@ pub fn methods(root: Node, src: &str) -> Vec<MethodRef> {
     members(root, src).into_iter().map(|m| m.reference).collect()
 }
 
-/// The member `method` names.
-pub fn find<'t>(root: Node<'t>, src: &str, method: &MethodRef) -> Option<Member<'t>> {
-    members(root, src)
-        .into_iter()
-        .find(|m| m.reference.start == method.start && m.reference.name == method.name)
-}
-
 /// The names of every function the file defines (methods included).
 pub fn function_names(root: Node, src: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
@@ -58,7 +51,8 @@ pub fn function_names(root: Node, src: &str) -> BTreeSet<String> {
     names
 }
 
-fn members<'t>(root: Node<'t>, src: &str) -> Vec<Member<'t>> {
+/// The functions and the code of the module, in file order.
+pub fn members<'t>(root: Node<'t>, src: &str) -> Vec<Member<'t>> {
     let mut out = Vec::new();
     definitions(root, src, &mut Vec::new(), &mut out);
     module_code(root, src, &mut out);
@@ -130,6 +124,7 @@ fn function<'t>(
             line: node.start_position().row + 1,
             start: node.start_byte(),
             end: node.end_byte(),
+            module_code: false,
         },
         title: format!("{name}({})", names.join(", ")),
         doc,
@@ -159,6 +154,7 @@ fn module_code<'t>(root: Node<'t>, src: &str, out: &mut Vec<Member<'t>>) {
             line: kept[0].start_position().row + 1,
             start: kept[0].start_byte(),
             end: kept[kept.len() - 1].end_byte(),
+            module_code: true,
         },
         title: "__main__".to_owned(),
         doc: None,

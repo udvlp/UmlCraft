@@ -7,6 +7,7 @@
 //! Stub states go inside a submachine state, which holds nothing else.
 
 use std::collections::{HashMap, HashSet};
+use umlcraft_model::Refusal;
 
 use umlcraft_model::{
     ElementData, ElementKind, Id, InternalTransitionProps, Model, ModelError, Point,
@@ -16,10 +17,6 @@ use umlcraft_model::{
 use crate::composite::{border_distance, snap};
 use crate::palette::{NodeTool, owner_for, unique_name};
 use crate::scene::{self, MIN_REGION};
-
-/// Why a stub state could not be placed, as [`ModelError::Invalid`] says it; the app words it
-/// in the language of its user.
-pub const STUB_OUTSIDE: &str = "a stub state goes into a submachine state";
 
 /// How close to a state's border a new entry or exit point must be dropped to go on it, when
 /// not dropped inside the state.
@@ -60,10 +57,10 @@ fn is_stub(kind: &ElementKind) -> bool {
 }
 
 /// The state whose border an entry or exit point dropped with its center at `at` goes on: the
-/// innermost one drawn around the point whose border is within reach, else the one whose
-/// border is nearest, within reach.
+/// one whose border is nearest, within reach (of two as near, the smaller one); else the
+/// innermost state drawn around the point.
 fn border_state_at(model: &Model, diagram: Id, at: Point) -> Option<(Id, Id, Rect)> {
-    model
+    let states: Vec<(Id, Id, Rect)> = model
         .view(diagram)?
         .presentations()
         .iter()
@@ -71,20 +68,29 @@ fn border_state_at(model: &Model, diagram: Id, at: Point) -> Option<(Id, Id, Rec
         .filter(|(_, e, _)| {
             model.get(*e).is_some_and(|e| matches!(e.kind(), ElementKind::State(_)))
         })
-        .map(|(p, e, r)| (p, e, r, border_distance(r, at)))
+        .collect();
+    let area = |r: &Rect| r.width * r.height;
+    states
+        .iter()
+        .map(|&(p, e, r)| (p, e, r, border_distance(r, at)))
         .filter(|(.., d)| *d <= NEAR_STATE)
-        // Nearest border first; of two as near, the smaller state.
-        .min_by(|a, b| {
-            a.3.total_cmp(&b.3).then((a.2.width * a.2.height).total_cmp(&(b.2.width * b.2.height)))
-        })
+        .min_by(|a, b| a.3.total_cmp(&b.3).then(area(&a.2).total_cmp(&area(&b.2))))
         .map(|(p, e, r, _)| (p, e, r))
+        .or_else(|| {
+            states
+                .iter()
+                .filter(|(.., r)| r.contains(at))
+                .min_by(|a, b| area(&a.2).total_cmp(&area(&b.2)))
+                .copied()
+        })
 }
 
 /// Creates an entry point, an exit point or a stub state with `tool` at `origin` on the state
 /// machine diagram `diagram`. A point goes on the border of the state nearest to where it is
-/// dropped and belongs to it; dropped away from every state, it belongs to the state machine
+/// dropped (within 20), else of the innermost state it is dropped in, and belongs to it;
+/// dropped away from every state, it belongs to the state machine
 /// and goes on the frame, which is added when the diagram has none. A stub state goes into the
-/// submachine state it is dropped on (refused elsewhere, [`STUB_OUTSIDE`]). Returns (element,
+/// submachine state it is dropped on (refused elsewhere, [`Refusal::StubOutside`]). Returns (element,
 /// presentation).
 pub fn create_node(
     tx: &mut Tx<'_>,
@@ -100,7 +106,7 @@ pub fn create_node(
     let owner = if is_stub(&kind) {
         let state = vertex_owner_at(model, diagram, at, &|s| !is_submachine(model, s))
             .filter(|&s| is_submachine(model, s))
-            .ok_or_else(|| ModelError::Invalid(STUB_OUTSIDE.into()))?;
+            .ok_or(ModelError::Refused(Refusal::StubOutside))?;
         // Within the state, below its texts.
         let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
         if let Some(r) = view.presentations_of(state).next().and_then(|p| p.bounds()) {
@@ -944,6 +950,80 @@ mod tests {
         doc.model().check().unwrap();
     }
 
+    /// A state widened for a longer name takes its exit point along on its right border.
+    #[test]
+    fn points_follow_a_state_that_grows_for_its_text() {
+        let (mut doc, _) = order_system();
+        let shipped = named(doc.model(), "Shipped");
+        let (diagram, state_node) = node_of(doc.model(), shipped);
+        let s = bounds(&doc, diagram, state_node);
+        let (_, exit_node) = create(
+            &mut doc,
+            diagram,
+            NodeTool::ExitPoint,
+            Point::new(s.right() - 10.0, s.y + 10.0),
+        )
+        .unwrap();
+        let level = bounds(&doc, diagram, exit_node).center().y;
+        assert_eq!(bounds(&doc, diagram, exit_node).center().x, s.right());
+        crate::edit::apply(&mut doc, "rename", &crate::scene::ApproxMeasure, |tx| {
+            tx.rename(shipped, "Shipped to the customer and confirmed by the carrier")
+        })
+        .unwrap();
+        let grown = bounds(&doc, diagram, state_node);
+        assert!(grown.width > s.width, "the state grew: {grown:?}");
+        let at = bounds(&doc, diagram, exit_node).center();
+        assert_eq!((at.x, at.y), (grown.right(), level), "still on the right border");
+    }
+
+    /// A substate widened for a longer name stays inside its state, which grows around it.
+    #[test]
+    fn a_state_grows_around_a_substate_renamed_longer() {
+        let (mut doc, _) = order_system();
+        let (shipped, open) = (named(doc.model(), "Shipped"), named(doc.model(), "Open"));
+        let (diagram, node) = node_of(doc.model(), shipped);
+        let (_, open_node) = node_of(doc.model(), open);
+        let o = bounds(&doc, diagram, open_node);
+        crate::edit::apply(&mut doc, "in", &crate::scene::ApproxMeasure, |tx| {
+            tx.set_bounds(
+                diagram,
+                node,
+                Rect::new(o.right() - 130.0, o.bottom() - 60.0, 100.0, 40.0),
+            )?;
+            after_move(tx, diagram, &[node])
+        })
+        .unwrap();
+        assert_eq!(owner_name(doc.model(), shipped), "Open");
+        crate::edit::apply(&mut doc, "rename", &crate::scene::ApproxMeasure, |tx| {
+            tx.rename(shipped, "Shipped to the customer and confirmed by the carrier")
+        })
+        .unwrap();
+        let (s, o) = (bounds(&doc, diagram, node), bounds(&doc, diagram, open_node));
+        assert!(s.width > 100.0, "{s:?}");
+        assert!(o.contains_rect(&s), "{o:?} holds {s:?}");
+    }
+
+    /// A point dropped deep inside a large state goes onto that state's border, not the frame.
+    #[test]
+    fn points_dropped_inside_a_state_go_on_its_border() {
+        let (mut doc, _) = order_system();
+        let shipped = named(doc.model(), "Shipped");
+        let (diagram, state_node) = node_of(doc.model(), shipped);
+        let s = bounds(&doc, diagram, state_node);
+        let large = Rect::new(s.x, s.y, 400.0, 200.0);
+        crate::edit::apply(&mut doc, "grow", &crate::scene::ApproxMeasure, |tx| {
+            tx.set_bounds(diagram, state_node, large)
+        })
+        .unwrap();
+        let large = bounds(&doc, diagram, state_node);
+        let size = NodeTool::EntryPoint.default_size();
+        let middle =
+            Point::new(large.center().x - size.width / 2.0, large.center().y - size.height / 2.0);
+        let (point, node) = create(&mut doc, diagram, NodeTool::EntryPoint, middle).unwrap();
+        assert_eq!(doc.model().element(point).unwrap().owner(), Some(shipped));
+        assert!(border_distance(large, bounds(&doc, diagram, node).center()) < 0.5);
+    }
+
     #[test]
     fn points_away_from_states_go_on_the_frame() {
         let (mut doc, _) = order_system();
@@ -969,7 +1049,7 @@ mod tests {
         assert!(create(&mut doc, diagram, NodeTool::StubState, Point::new(1500.0, 900.0)).is_err());
         let s = bounds(&doc, diagram, node_of(doc.model(), shipped).1);
         let refused = create(&mut doc, diagram, NodeTool::StubState, s.center());
-        assert!(matches!(refused, Err(ModelError::Invalid(m)) if m == STUB_OUTSIDE));
+        assert_eq!(refused.err(), Some(ModelError::Refused(Refusal::StubOutside)));
         // The sample has one state machine, so the submachine state brings a new one along.
         let machines = |doc: &umlcraft_model::Document| {
             doc.model().elements().filter(|e| matches!(e.kind(), ElementKind::StateMachine)).count()

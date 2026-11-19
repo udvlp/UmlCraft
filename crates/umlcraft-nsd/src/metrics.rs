@@ -41,6 +41,11 @@ struct Face {
 impl Face {
     fn advance(&self, c: char) -> f64 {
         let code = c as u32;
+        // A tab (kept as read, see `read`) is a space to Structorizer, whose XML parser
+        // normalizes it in attribute values; XML allows no other control characters.
+        if code < 0x20 {
+            return self.latin[0];
+        }
         if (0x20..=0xff).contains(&code) {
             return self.latin[(code - 0x20) as usize];
         }
@@ -77,7 +82,8 @@ impl Metrics {
         })
     }
 
-    /// The width Structorizer gives `text` (one line); tabs and control characters count 0.
+    /// The width Structorizer gives `text` (one line); tabs and other control characters
+    /// count as spaces.
     pub fn width(&self, text: &str, bold: bool) -> i32 {
         let face = if bold { &self.bold } else { &self.plain };
         let sum: f64 = text.chars().map(|c| face.advance(c)).sum();
@@ -227,5 +233,13 @@ mod tests {
         assert_eq!(m.line(), 13);
         assert_eq!(m.title_line(), 17);
         assert_eq!(m.width("∅", false), 10);
+    }
+
+    #[test]
+    fn tabs_are_as_wide_as_spaces() {
+        for m in [Metrics::linux(), Metrics::windows()] {
+            assert_eq!(m.width("a\tb", false), m.width("a b", false));
+            assert_eq!(m.title_width(&["a\tb".into()]), m.title_width(&["a b".into()]));
+        }
     }
 }

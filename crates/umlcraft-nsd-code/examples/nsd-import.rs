@@ -44,7 +44,7 @@ fn main() {
         for m in source.methods() {
             let label = format!("{}:{} {}", file.display(), m.line, m.name);
             let result = std::panic::catch_unwind(|| {
-                let (d, report) = source.diagram(&m, &made).expect("method found again");
+                let (d, report) = source.diagram(&m, &made).map_err(|e| format!("{e:?}"))?;
                 let layout = Layout::of(&d, Metrics::linux());
                 let _ = umlcraft_nsd::svg::render(&d, Metrics::linux());
                 let written = write(&d);

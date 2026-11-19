@@ -89,6 +89,10 @@ fn parse(args: &[&str], setup: bool) -> Result<Options, String> {
             _ => return Err(format!("unknown option `{arg}`\n\n{USAGE}")),
         }
     }
+    // `--in` starts headless; `--connect` never does.
+    if options.port.is_some() && (options.headless || options.input.is_some()) {
+        return Err(format!("--connect goes with neither --headless nor --in\n\n{USAGE}"));
+    }
     Ok(options)
 }
 
@@ -221,8 +225,16 @@ fn claude_desktop_config() -> Option<PathBuf> {
 }
 
 /// Sets `path` in the JSON file `file` to `entry`, keeping everything else. A file that cannot
-/// be read or is not a JSON object is left as it is.
+/// be read or is not a JSON object is left as it is. A symbolic link is followed, so that the
+/// file it points to changes and the link stays.
 fn add_to_json(file: &Path, path: &[&str], entry: Value, dry_run: bool) -> Result<bool, String> {
+    let is_link = std::fs::symlink_metadata(file).is_ok_and(|m| m.file_type().is_symlink());
+    let target = if is_link {
+        std::fs::canonicalize(file).map_err(|e| format!("{}: {e}", file.display()))?
+    } else {
+        file.to_owned()
+    };
+    let file = target.as_path();
     let text = merged_json(file, path, entry)?;
     if dry_run {
         println!("{}:\n{text}", file.display());
@@ -246,7 +258,8 @@ fn add_to_json(file: &Path, path: &[&str], entry: Value, dry_run: bool) -> Resul
 }
 
 /// The text of the JSON file `file` with `path` set to `entry`; a missing or empty file counts
-/// as `{}`.
+/// as `{}`, a missing key on the way as `{}` too. Anything else on the way that is not an
+/// object is not understood, and the file is left as it is.
 fn merged_json(file: &Path, path: &[&str], entry: Value) -> Result<String, String> {
     let keep = |e: String| format!("{}: {e}; left as it is", file.display());
     let mut root: Value = match std::fs::read(file) {
@@ -261,10 +274,7 @@ fn merged_json(file: &Path, path: &[&str], entry: Value) -> Result<String, Strin
     let mut slot = root.as_object_mut().ok_or_else(|| keep("not a JSON object".into()))?;
     for key in parents {
         let child = slot.entry(*key).or_insert_with(|| json!({}));
-        if !child.is_object() {
-            *child = json!({});
-        }
-        slot = child.as_object_mut().expect("made an object above");
+        slot = child.as_object_mut().ok_or_else(|| keep(format!("`{key}` is not an object")))?;
     }
     slot.insert((*last).to_owned(), entry);
     Ok(serde_json::to_string_pretty(&root).map_err(|e| e.to_string())? + "\n")
@@ -317,6 +327,37 @@ mod tests {
         // A folder in place of the file cannot be read: no fresh `{}` overwrites it.
         assert!(merged_json(&dir, &["mcpServers", "umlcraft"], json!({})).is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "[1, 2]");
+        // Nor is a file whose servers are not an object.
+        for servers in ["null", "\"x\"", "[]"] {
+            std::fs::write(&file, format!(r#"{{"mcpServers": {servers}}}"#)).unwrap();
+            assert!(merged_json(&file, &["mcpServers", "umlcraft"], json!({})).is_err());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn conflicting_options_are_refused() {
+        for args in
+            [&["--headless", "--connect", "4000"][..], &["--connect", "4000", "--in", "x.ucraft"]]
+        {
+            assert!(parse(args, false).is_err(), "{args:?}");
+        }
+        assert!(parse(&["--headless", "--in", "x.ucraft"], false).is_ok());
+        assert!(parse(&["--connect", "127.0.0.1:4000"], false).is_ok_and(|o| o.port == Some(4000)));
+    }
+
+    /// A configuration kept elsewhere and linked into place stays linked.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_configuration_stays_a_link() {
+        let dir = scratch("link");
+        let real = dir.join("real.json");
+        std::fs::write(&real, "{}").unwrap();
+        let link = dir.join("config.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        add_to_json(&link, &["mcpServers", "umlcraft"], json!({"command": "u"}), false).unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(&real).unwrap().contains("umlcraft"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

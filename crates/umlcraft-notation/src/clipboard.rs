@@ -3,12 +3,20 @@
 //! A [`Clip`] is a self-contained snapshot: the copied elements with everything they own, the
 //! relationships among them, and their presentations. Pasting either duplicates the elements
 //! (new ids, free names) or shows the original elements again ("paste as reference").
+//!
+//! What a copied element owns comes along in the model, and so do the nodes the diagram shows of
+//! it (substates, pins, parts and ports, the attribute ellipses of a Chen entity), selected or
+//! not, so that nothing is pasted undrawn. Lines between copied nodes come along: relationships
+//! whose ends are copied, note anchors, and on ER diagrams the lines of attributes and the lines
+//! of IE and IDEF1X relationships, whose relationship is copied with its participations and keeps
+//! the foreign key columns of its copied child. On an ER diagram in the other notation, what is
+//! pasted is drawn in that one ([`crate::er::fit_pasted`]).
 
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    DiagramKind, EdgeLabels, ElementData, ElementKind, Id, Model, ModelError, Op, Point,
-    Presentation, Rect, Result, Shape, Tx,
+    DiagramKind, EdgeLabels, ElementData, ElementKind, ErNotation, Id, Model, ModelError, Op,
+    Point, Presentation, Rect, Regions, Result, Shape, Tx,
 };
 
 use crate::palette::{can_show, owner_for};
@@ -25,6 +33,8 @@ pub struct ClipNode {
     pub presentation: Id,
     pub element: Id,
     pub bounds: Rect,
+    /// How an orthogonal state's regions are laid out.
+    pub regions: Option<Regions>,
     pub style: umlcraft_model::Style,
 }
 
@@ -49,6 +59,8 @@ pub struct Clip {
     pub edges: Vec<ClipEdge>,
     /// Free texts and lines, which show no element and are copied as they are.
     pub free: Vec<Presentation>,
+    /// The notation of the ER diagram copied from.
+    pub notation: Option<ErNotation>,
 }
 
 impl Clip {
@@ -97,19 +109,21 @@ fn collect_ids(element: &ClipElement, into: &mut Vec<Id>) {
 /// automatically when both their ends are copied). Returns `None` if nothing can be copied.
 pub fn copy(model: &Model, diagram: Id, selection: &[Id]) -> Option<Clip> {
     let view = model.view(diagram)?;
-    let nodes: Vec<ClipNode> = selection
+    let clip_node = |p: &Presentation| {
+        Some(ClipNode {
+            presentation: p.id,
+            element: p.element?,
+            bounds: p.bounds()?,
+            regions: p.regions().cloned(),
+            style: p.style.clone(),
+        })
+    };
+    let mut nodes: Vec<ClipNode> = selection
         .iter()
         .filter_map(|&p| view.get(p))
         // The frame of a sequence or activity diagram stands for the diagram itself.
         .filter(|p| p.element != Some(diagram))
-        .filter_map(|p| {
-            Some(ClipNode {
-                presentation: p.id,
-                element: p.element?,
-                bounds: p.bounds()?,
-                style: p.style.clone(),
-            })
-        })
+        .filter_map(clip_node)
         .collect();
     let free: Vec<Presentation> = selection
         .iter()
@@ -134,8 +148,20 @@ pub fn copy(model: &Model, diagram: Id, selection: &[Id]) -> Option<Clip> {
     roots.iter().for_each(|r| collect_ids(r, &mut copied));
     let copied: HashSet<Id> = copied.into_iter().collect();
 
-    let node_ids: HashSet<Id> = nodes.iter().map(|n| n.presentation).collect();
+    // What the copied elements own and the diagram shows comes along drawn, as the copy has it.
+    let mut node_ids: HashSet<Id> = nodes.iter().map(|n| n.presentation).collect();
+    let owned: Vec<ClipNode> = view
+        .presentations()
+        .iter()
+        .filter(|p| !node_ids.contains(&p.id) && p.element.is_some_and(|e| copied.contains(&e)))
+        .filter(|p| matches!(p.shape, Shape::Node { .. }))
+        .filter_map(clip_node)
+        .collect();
+    node_ids.extend(owned.iter().map(|n| n.presentation));
+    nodes.extend(owned);
+
     let mut relationships = Vec::new();
+    let mut taken = HashSet::new();
     let mut edges = Vec::new();
     for p in view.presentations() {
         let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, labels } =
@@ -148,18 +174,27 @@ pub fn copy(model: &Model, diagram: Id, selection: &[Id]) -> Option<Clip> {
         }
         if let Some(element) = p.element {
             let Some(e) = model.get(element) else { continue };
-            let ends_copied = e
-                .kind()
-                .references()
-                .iter()
-                .filter(|(_, role)| role.is_strong())
-                .all(|(id, _)| copied.contains(id));
-            if !ends_copied || !e.kind().is_relationship() {
+            let comes_along = match e.kind() {
+                // An attribute's line in Chen shows the attribute, copied with its owner.
+                ElementKind::ErAttribute(_) => copied.contains(&element),
+                // A relationship drawn as one line in IE and IDEF1X, between copied entities.
+                ElementKind::ErRelationship(_) => {
+                    let mut ends = crate::er::participations(model, element).peekable();
+                    ends.peek().is_some() && ends.all(|p| copied.contains(&p.entity))
+                }
+                kind => {
+                    kind.is_relationship()
+                        && kind
+                            .references()
+                            .iter()
+                            .filter(|(_, role)| role.is_strong())
+                            .all(|(id, _)| copied.contains(id))
+                }
+            };
+            if !comes_along {
                 continue;
             }
-            if !copied.contains(&element)
-                && !relationships.iter().any(|r: &ClipElement| r.id == element)
-            {
+            if !copied.contains(&element) && taken.insert(element) {
                 relationships.extend(snapshot(model, element));
             }
         }
@@ -172,7 +207,8 @@ pub fn copy(model: &Model, diagram: Id, selection: &[Id]) -> Option<Clip> {
             labels: *labels,
         });
     }
-    Some(Clip { roots, relationships, nodes, edges, free })
+    let notation = crate::er::is_er(model, diagram).then(|| crate::er::notation(model, diagram));
+    Some(Clip { roots, relationships, nodes, edges, free, notation })
 }
 
 /// `name` if no sibling under `owner` has it, else `name2`, `name3`, …; empty names stay empty.
@@ -200,6 +236,19 @@ struct Pending<'c> {
     postponed: Vec<(&'c ClipElement, Id, usize, bool)>,
 }
 
+/// The ids of the copies by the id of what they copy, and the set of them.
+struct Copies {
+    map: HashMap<Id, Id>,
+    new: HashSet<Id>,
+}
+
+impl Copies {
+    fn new(map: HashMap<Id, Id>) -> Self {
+        let new = map.values().copied().collect();
+        Self { map, new }
+    }
+}
+
 /// Inserts `element` and what it owns under `owner`, at `index` or at the end, or postpones
 /// it (see [`Pending`]).
 fn insert_tree<'c>(
@@ -207,17 +256,18 @@ fn insert_tree<'c>(
     element: &'c ClipElement,
     owner: Id,
     index: Option<usize>,
-    map: &HashMap<Id, Id>,
+    copies: &Copies,
     rename: bool,
     pending: &mut Pending<'c>,
 ) -> Result<()> {
+    let map = &copies.map;
     let mut data = element.data.clone();
     data.kind.remap(map);
     let index = match index {
         Some(index) => index,
         None => tx.model().element(owner)?.children().len(),
     };
-    let is_copy = |id: &Id| map.values().any(|v| v == id);
+    let is_copy = |id: &Id| copies.new.contains(id);
     // A foreign key column copied without its relationship is a plain column of the copy.
     if let ElementKind::ErAttribute(p) = &mut data.kind
         && p.foreign_key.is_some_and(|r| !is_copy(&r))
@@ -253,18 +303,14 @@ fn insert_tree<'c>(
     }
     tx.apply(Op::InsertElement { id, owner, index, data })?;
     for child in &element.children {
-        insert_tree(tx, child, id, None, map, false, pending)?;
+        insert_tree(tx, child, id, None, copies, false, pending)?;
     }
     Ok(())
 }
 
 /// Inserts the postponed elements once what they refer to is in place. Later ones go first,
 /// so that each index still counts only the siblings inserted before it.
-fn insert_postponed<'c>(
-    tx: &mut Tx<'_>,
-    map: &HashMap<Id, Id>,
-    pending: &mut Pending<'c>,
-) -> Result<()> {
+fn insert_postponed<'c>(tx: &mut Tx<'_>, map: &Copies, pending: &mut Pending<'c>) -> Result<()> {
     loop {
         let postponed = std::mem::take(&mut pending.postponed);
         let count = postponed.len();
@@ -320,53 +366,67 @@ pub fn paste(
         let roots: Vec<&ClipElement> = clip.roots.iter().filter(|r| shows(&r.data.kind)).collect();
         let mut ids = Vec::new();
         roots.iter().copied().chain(&clip.relationships).for_each(|r| collect_ids(r, &mut ids));
-        element_map = ids.into_iter().map(|old| (old, Id::generate())).collect();
+        let mut copies = Copies::new(ids.into_iter().map(|old| (old, Id::generate())).collect());
         let mut pending = Pending::default();
         for root in roots {
             let owner = owner_for(tx.model(), diagram_owner, &root.data.kind).ok_or_else(|| {
                 let kind = root.data.kind.type_name();
                 ModelError::Refused(umlcraft_model::Refusal::CannotPaste(kind))
             })?;
-            insert_tree(tx, root, owner, None, &element_map, true, &mut pending)?;
+            insert_tree(tx, root, owner, None, &copies, true, &mut pending)?;
         }
-        insert_postponed(tx, &element_map, &mut pending)?;
+        insert_postponed(tx, &copies, &mut pending)?;
         for relationship in &clip.relationships {
-            let mut kind = relationship.data.kind.clone();
-            kind.remap(&element_map);
-            let ends_exist = kind
-                .references()
-                .iter()
-                .filter(|(_, r)| r.is_strong())
-                .all(|(id, _)| tx.model().contains(*id));
-            if !ends_exist {
-                element_map.remove(&relationship.id);
+            let ends = relationship_ends(relationship, &copies.map);
+            if ends.is_empty() || !ends.iter().all(|&id| tx.model().contains(id)) {
+                copies.map.remove(&relationship.id);
                 continue;
             }
-            let source = kind.references()[0].0;
-            let start = tx.model().element(source)?.owner().unwrap_or(diagram_owner);
+            let mut kind = relationship.data.kind.clone();
+            kind.remap(&copies.map);
+            let start = tx.model().element(ends[0])?.owner().unwrap_or(diagram_owner);
             let owner = owner_for(tx.model(), start, &kind)
                 .ok_or_else(|| ModelError::Invalid("no owner for a relationship".into()))?;
-            insert_tree(tx, relationship, owner, None, &element_map, false, &mut pending)?;
+            insert_tree(tx, relationship, owner, None, &copies, false, &mut pending)?;
         }
-        insert_postponed(tx, &element_map, &mut pending)?;
-        for (id, kind) in pending.deferred {
+        insert_postponed(tx, &copies, &mut pending)?;
+        for (id, mut kind) in pending.deferred {
+            // What was to come but did not (a relationship whose ends were not pasted) is not
+            // referred to.
+            let gone: Vec<Id> = kind
+                .references()
+                .into_iter()
+                .filter(|(id, role)| !role.is_strong() && !tx.model().contains(*id))
+                .map(|(id, _)| id)
+                .collect();
+            for target in gone {
+                kind.unlink(target, "");
+            }
             tx.update(id, |data| data.kind = kind)?;
         }
+        element_map = copies.map;
     }
 
     let mut presentation_map: HashMap<Id, Id> = HashMap::new();
     let mut created = Vec::new();
+    let mut shown: HashSet<Id> = match tx.model().view(diagram) {
+        Some(view) if as_reference => {
+            view.presentations().iter().filter_map(|p| p.element).collect()
+        }
+        _ => HashSet::new(),
+    };
     for node in &clip.nodes {
         let Some(&element) = element_map.get(&node.element) else { continue };
-        let already_shown =
-            tx.model().view(diagram).is_some_and(|v| v.presentations_of(element).next().is_some());
-        if !tx.model().contains(element) || (as_reference && already_shown) {
+        if !tx.model().contains(element) || (as_reference && !shown.insert(element)) {
             continue;
         }
         let mut presentation = umlcraft_model::Presentation::node(
             Some(element),
             node.bounds.translate(offset.x, offset.y),
         );
+        if let Shape::Node { regions, .. } = &mut presentation.shape {
+            regions.clone_from(&node.regions);
+        }
         presentation.style = node.style.clone();
         let id = tx.add_presentation(diagram, presentation)?;
         presentation_map.insert(node.presentation, id);
@@ -399,7 +459,36 @@ pub fn paste(
         presentation.id = Id::generate();
         created.push(tx.add_presentation(diagram, presentation)?);
     }
+    if diagram_kind == DiagramKind::EntityRelationship {
+        created = crate::er::fit_pasted(tx, diagram, created, clip.notation)?;
+    }
     Ok(created)
+}
+
+/// What the copy of `relationship` connects, as copied: the ends its strong references name, or
+/// for a relationship that names none itself (an ER relationship), the entities its
+/// participations name.
+fn relationship_ends(relationship: &ClipElement, map: &HashMap<Id, Id>) -> Vec<Id> {
+    let strong = |kind: &ElementKind| -> Vec<Id> {
+        let mut kind = kind.clone();
+        kind.remap(map);
+        kind.references()
+            .into_iter()
+            .filter(|(_, role)| role.is_strong())
+            .map(|(id, _)| id)
+            .collect()
+    };
+    let own = strong(&relationship.data.kind);
+    if !own.is_empty() {
+        return own;
+    }
+    let itself = map.get(&relationship.id).copied();
+    relationship
+        .children
+        .iter()
+        .flat_map(|c| strong(&c.data.kind))
+        .filter(|&id| Some(id) != itself)
+        .collect()
 }
 
 #[cfg(test)]
@@ -606,6 +695,206 @@ mod tests {
             panic!("a line")
         };
         assert_eq!((from, dashed), (Point::new(5.0, 105.0), true));
+    }
+
+    fn named(model: &Model, name: &str) -> Vec<Id> {
+        model.elements().filter(|e| e.name() == name).map(|e| e.id()).collect()
+    }
+
+    /// An orthogonal state copied alone comes back with its regions side by side as they were
+    /// and its substates drawn in them.
+    #[test]
+    fn orthogonal_states_keep_their_regions_and_substates() {
+        let (mut doc, _) = order_system();
+        let open = named(doc.model(), "Open")[0];
+        let (d, node) = doc.model().shown_on(open)[0];
+        doc.edit("divide", |tx| crate::state_edit::add_region(tx, open, true, None)).unwrap();
+        doc.edit("line", |tx| crate::state_edit::move_region_line(tx, d, node, 0, 250.0)).unwrap();
+        let regions = doc.model().view(d).unwrap().get(node).unwrap().regions().cloned();
+        assert!(regions.as_ref().is_some_and(|r| r.vertical));
+        let clip = copy(doc.model(), d, &[node]).unwrap();
+        let before = crate::invariants::check(doc.model(), &crate::scene::ApproxMeasure);
+        let created =
+            doc.edit("paste", |tx| paste(tx, d, &clip, Point::new(0.0, 400.0), false)).unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        let view = model.view(d).unwrap();
+        let state = view.get(created[0]).unwrap();
+        assert_eq!(state.regions().cloned(), regions);
+        // "Empty", "Filled" and the rest come along drawn, inside the copy of "Open".
+        let inside = |state: Id| {
+            view.presentations()
+                .iter()
+                .filter(|p| p.bounds().is_some())
+                .filter(|p| p.element.is_some_and(|e| model.is_ancestor(state, e)))
+                .count()
+        };
+        let copy_of_open = state.element.unwrap();
+        assert!(inside(open) >= 2);
+        assert_eq!(inside(copy_of_open), inside(open), "every substate drawn");
+        let after = crate::invariants::check(model, &crate::scene::ApproxMeasure);
+        assert_eq!(crate::invariants::new_violations(&before, &after), Vec::<String>::new());
+    }
+
+    /// An ER diagram with `Order` and `OrderLine` (keyed by the order) in `notation`, the
+    /// second one keyed by an identifying relationship in IE. Returns the document, the
+    /// diagram and the entities' nodes.
+    fn er(notation: umlcraft_model::ErNotation) -> (umlcraft_model::Document, Id, Id, Id) {
+        use crate::palette::{NodeTool, create_node};
+        let mut doc = umlcraft_model::Document::new(Model::new("m"));
+        let root = doc.model().root();
+        let measure = crate::scene::ApproxMeasure;
+        let (d, order, line) = doc
+            .edit("setup", |tx| {
+                let p = tx.create(root, ElementData::new("p", ElementKind::Package))?;
+                let kind = ElementKind::diagram(DiagramKind::EntityRelationship);
+                let d = tx.create(p, ElementData::new("d", kind))?;
+                crate::er::set_notation(tx, d, notation, &measure)?;
+                let (o, order) =
+                    create_node(tx, d, NodeTool::ErEntity, Point::new(0.0, 100.0), "Order")?;
+                let (_, line) =
+                    create_node(tx, d, NodeTool::ErEntity, Point::new(300.0, 100.0), "Line")?;
+                crate::er::add_column(tx, o, "order no", true)?;
+                Ok((d, order, line))
+            })
+            .unwrap();
+        (doc, d, order, line)
+    }
+
+    fn other_er_diagram(doc: &mut umlcraft_model::Document, d: Id, notation: ErNotation) -> Id {
+        let owner = doc.model().get(d).unwrap().owner().unwrap();
+        doc.edit("other", |tx| {
+            let kind = ElementKind::diagram(DiagramKind::EntityRelationship);
+            let other = tx.create(owner, ElementData::new("other", kind))?;
+            crate::er::set_notation(tx, other, notation, &crate::scene::ApproxMeasure)?;
+            Ok(other)
+        })
+        .unwrap()
+    }
+
+    fn foreign_keys(model: &Model, entity: Id) -> Vec<Option<Id>> {
+        crate::er::attributes(model, entity)
+            .filter_map(|a| match a.kind() {
+                ElementKind::ErAttribute(p) => Some(p.foreign_key),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Two tables joined by an IE line: the relationship comes along, and the copied child keeps
+    /// its foreign key, to the copied relationship. Pasted onto a Chen diagram, the line becomes
+    /// a rhombus with its participation lines, and the attributes get their ellipses.
+    #[test]
+    fn ie_lines_and_foreign_keys_are_copied() {
+        let (mut doc, d, order, line) = er(ErNotation::Ie);
+        let edge = doc
+            .edit("relate", |tx| {
+                crate::er::relate(tx, d, crate::er::IeLine::Identifying, order, line)
+            })
+            .unwrap();
+        let relationship = doc.model().view(d).unwrap().get(edge).unwrap().element.unwrap();
+        let clip = copy(doc.model(), d, &[order, line]).unwrap();
+        assert_eq!(clip.relationships.len(), 1);
+        assert_eq!(clip.edges.len(), 1);
+        let created =
+            doc.edit("paste", |tx| paste(tx, d, &clip, Point::new(0.0, 300.0), false)).unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        assert_eq!(created.len(), 3, "two tables and their line");
+        let view = model.view(d).unwrap();
+        let copy = view.get(created[2]).unwrap().element.unwrap();
+        assert_ne!(copy, relationship);
+        let line_copy = view.get(created[1]).unwrap().element.unwrap();
+        assert_eq!(foreign_keys(model, line_copy), [Some(copy)], "(FK) to the copied line");
+        let ends: Vec<Id> = crate::er::participations(model, copy).map(|p| p.entity).collect();
+        let order_copy = view.get(created[0]).unwrap().element.unwrap();
+        assert_eq!(ends, [order_copy, line_copy]);
+        assert!(crate::invariants::check(model, &crate::scene::ApproxMeasure).is_empty());
+
+        // Onto a Chen diagram: a rhombus, two participation lines and the key's ellipse.
+        let chen = other_er_diagram(&mut doc, d, ErNotation::Chen);
+        let created =
+            doc.edit("paste", |tx| paste(tx, chen, &clip, Point::default(), false)).unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        let view = model.view(chen).unwrap();
+        let kinds: Vec<&str> = created
+            .iter()
+            .filter_map(|&p| view.get(p))
+            .filter_map(|p| Some(model.get(p.element?)?.kind().type_name()))
+            .collect();
+        let count = |name: &str| kinds.iter().filter(|&&k| k == name).count();
+        assert_eq!(count("erEntity"), 2, "{kinds:?}");
+        assert_eq!(count("erRelationship"), 1, "a rhombus: {kinds:?}");
+        assert_eq!(count("erParticipation"), 2, "{kinds:?}");
+        // The order's key gets an ellipse and its line; the foreign key column does not.
+        assert_eq!(count("erAttribute"), 2, "{kinds:?}");
+        assert!(created.iter().all(|&p| view.get(p).is_some()));
+    }
+
+    /// A Chen entity copied alone takes its attribute ellipses and their lines along; pasted
+    /// onto an IE diagram, it lists them instead.
+    #[test]
+    fn chen_attributes_come_along_with_their_lines() {
+        let (mut doc, d, order, _) = er(ErNotation::Chen);
+        doc.edit("attribute", |tx| crate::er::add_attribute(tx, d, order, "date")).unwrap();
+        let clip = copy(doc.model(), d, &[order]).unwrap();
+        assert_eq!(clip.nodes.len(), 2, "the entity and its ellipse");
+        assert_eq!(clip.edges.len(), 1, "the attribute's line");
+        let created =
+            doc.edit("paste", |tx| paste(tx, d, &clip, Point::new(0.0, 300.0), false)).unwrap();
+        let model = doc.model();
+        model.check().unwrap();
+        assert_eq!(created.len(), 3);
+        let view = model.view(d).unwrap();
+        let line = view.get(created[2]).unwrap();
+        assert_eq!(line.endpoints(), Some((created[0], created[1])), "from the owner");
+        let attribute = view.get(created[1]).unwrap().element.unwrap();
+        assert_eq!(line.element, Some(attribute));
+        assert_eq!(model.get(attribute).unwrap().owner(), view.get(created[0]).unwrap().element);
+
+        let ie = other_er_diagram(&mut doc, d, ErNotation::Ie);
+        let created = doc.edit("paste", |tx| paste(tx, ie, &clip, Point::default(), true)).unwrap();
+        let model = doc.model();
+        let view = model.view(ie).unwrap();
+        assert_eq!(created.len(), 1, "the table alone");
+        let entity = model.view(d).unwrap().get(order).unwrap().element;
+        assert_eq!(view.get(created[0]).unwrap().element, entity);
+        assert_eq!(view.presentations().len(), 1);
+    }
+
+    /// On IE, an attribute is not shown, a relationship is shown as its line, and an entity
+    /// shown comes with the lines to the tables already there.
+    #[test]
+    fn showing_on_ie_draws_lines() {
+        let (mut doc, d, order, line) = er(ErNotation::Ie);
+        let edge = doc
+            .edit("relate", |tx| {
+                crate::er::relate(tx, d, crate::er::IeLine::Identifying, order, line)
+            })
+            .unwrap();
+        let view = doc.model().view(d).unwrap();
+        let relationship = view.get(edge).unwrap().element.unwrap();
+        let (order_entity, line_entity) =
+            (view.get(order).unwrap().element.unwrap(), view.get(line).unwrap().element.unwrap());
+        let column = crate::er::attributes(doc.model(), order_entity).next().unwrap().id();
+        let show = |doc: &mut umlcraft_model::Document, e: Id| {
+            doc.edit("show", |tx| crate::palette::show_element(tx, d, e, Point::new(0.0, 400.0)))
+        };
+        assert!(show(&mut doc, column).is_err(), "IE lists attributes");
+        doc.edit("remove", |tx| tx.remove_presentation(d, edge)).unwrap();
+        let shown = show(&mut doc, relationship).unwrap();
+        let model = doc.model();
+        assert_eq!(model.view(d).unwrap().get(shown).unwrap().endpoints(), Some((order, line)));
+        // The child table shown again brings its line along, and no rhombus.
+        doc.edit("remove", |tx| tx.remove_presentation(d, line)).unwrap();
+        let node = show(&mut doc, line_entity).unwrap();
+        let model = doc.model();
+        let view = model.view(d).unwrap();
+        let lines: Vec<_> = view.presentations_of(relationship).collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].endpoints(), Some((order, node)));
+        assert_eq!(view.presentations().len(), 3);
     }
 
     #[test]

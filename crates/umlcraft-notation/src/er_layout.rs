@@ -20,7 +20,7 @@
 //!    entities, relationships and IS-As with their middles); the whole starts at (20, 20).
 //!    Notes and free texts stay where they are.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
     CardinalityMax, DiagramKind, ElementKind, Id, Model, ModelError, Point, Rect, Result, Shape,
@@ -144,7 +144,7 @@ pub fn arrange(
     direction: Direction,
     measure: &dyn TextMeasure,
 ) -> Result<Vec<Id>> {
-    let scene = scene::build(tx.model(), diagram, &Preview::default(), measure);
+    let scene = scene::build_geometry(tx.model(), diagram, measure);
     let Some(mut g) = Graph::of(tx.model(), diagram, &scene)? else { return Ok(Vec::new()) };
     let before: Vec<Rect> = g.nodes.iter().map(|n| n.bounds).collect();
     let first = place(&g, &vec![[false; 4]; g.core.len()], direction);
@@ -370,6 +370,7 @@ impl Graph {
         let mut node_of: HashMap<Id, usize> = HashMap::new();
         // The node that shows an element, for its attributes.
         let mut shown: HashMap<Id, usize> = HashMap::new();
+        let drawn_nodes = scene.nodes_by_id();
         for p in view.presentations() {
             let Shape::Node { bounds, .. } = p.shape else { continue };
             let Some(element) = p.element.and_then(|e| model.get(e)) else { continue };
@@ -377,7 +378,7 @@ impl Graph {
                 continue;
             }
             // As large as it is drawn: a long name makes the box grow.
-            let drawn = scene.node(p.id).map_or(bounds, |n| n.rect);
+            let drawn = drawn_nodes.get(&p.id).map_or(bounds, |n| n.rect);
             let bounds = Rect::new(bounds.x, bounds.y, drawn.width, drawn.height);
             let (attribute, key) = match element.kind() {
                 ElementKind::ErAttribute(a) => (true, a.key.is_some()),
@@ -419,9 +420,11 @@ impl Graph {
             let (keys, rest): (Vec<usize>, Vec<usize>) = list.iter().partition(|&&i| nodes[i].key);
             *list = keys.into_iter().chain(rest).collect();
         }
-        // Parents first: a part whose parent is a part waits for it.
+        // Parents first: a part whose parent is a part waits for it. Attributes without a
+        // shown owner are laid out with the core, and their parts go around them.
         let mut ordered: Vec<(usize, usize)> = Vec::new();
-        let mut placed: Vec<usize> = roots.iter().map(|r| r.0).collect();
+        let mut placed: HashSet<usize> = roots.iter().map(|r| r.0).collect();
+        placed.extend(core.iter().copied().filter(|&i| nodes[i].attribute));
         let mut rest = parts;
         while !rest.is_empty() {
             let (ready, wait): (Vec<_>, Vec<_>) =
@@ -951,53 +954,103 @@ fn slots(w: f32, h: f32, attrs: &[(f32, f32)], used: Used) -> Vec<Slot> {
 }
 
 /// What attributes keep clear of: nodes, lines and labels.
+#[derive(Default)]
 struct Obstacles {
     /// Boxes, with the core node whose attribute they are (`None`: nodes, labels).
     rects: Vec<(Rect, Option<usize>)>,
     /// Line segments, with the core node whose attributes may touch them (their own lines).
     segments: Vec<(Point, Point, Option<usize>)>,
+    /// Where the boxes and the segments lie, so that a test looks only at those nearby: a
+    /// schema of hundreds of tables has thousands of them.
+    rect_cells: Cells,
+    segment_cells: Cells,
 }
 
 impl Obstacles {
+    fn add_rect(&mut self, r: Rect, of: Option<usize>) {
+        self.rect_cells.insert(&r, self.rects.len());
+        self.rects.push((r, of));
+    }
+
+    fn add_segment(&mut self, a: Point, b: Point, of: Option<usize>) {
+        self.segment_cells.insert(&Rect::from_corners(a, b), self.segments.len());
+        self.segments.push((a, b, of));
+    }
+
     /// Whether `r` is free for an attribute of `owner`. `strict` also keeps it off the lines
     /// of its siblings and its own line off them; without, only foreign things count.
     fn free(&self, r: &Rect, owner: Option<usize>, owner_box: &Rect, strict: bool) -> bool {
         let foreign = |of: &Option<usize>| strict || of.is_none() || *of != owner;
+        // Each test below implies that the bounds of the two touch, so only the boxes and
+        // segments in the cells of the tested area can fail it.
+        let rects = |area: &Rect| self.rect_cells.near(area).map(move |i| &self.rects[i]);
+        let segments = |area: &Rect| self.segment_cells.near(area).map(move |i| &self.segments[i]);
         let wide = inflate(r, CLEARANCE);
-        if self.rects.iter().any(|(o, _)| overlap(&wide, o)) {
+        if rects(&wide).any(|(o, _)| overlap(&wide, o)) {
             return false;
         }
         let near = inflate(r, CLEARANCE / 2.0);
-        if self.segments.iter().any(|(a, b, o)| foreign(o) && segment_hits(*a, *b, &near)) {
+        if segments(&near).any(|(a, b, o)| foreign(o) && segment_hits(*a, *b, &near)) {
             return false;
         }
         // Its own line must not run through another node, nor cross another line.
         let (from, to) = (r.center(), owner_box.center());
-        let through = self.rects.iter().any(|(o, of)| {
+        let line = Rect::from_corners(from, to);
+        let through = rects(&line).any(|(o, of)| {
             o != owner_box && foreign(of) && segment_hits(from, to, &inflate(o, -1.0))
         });
-        !through && !self.segments.iter().any(|(a, b, o)| foreign(o) && crosses(from, to, *a, *b))
+        !through && !segments(&line).any(|(a, b, o)| foreign(o) && crosses(from, to, *a, *b))
+    }
+}
+
+/// The side of a cell of [`Cells`].
+const CELL: f32 = 128.0;
+
+/// Indices of boxes, listed in each cell of a grid they reach into, edges included.
+#[derive(Default)]
+struct Cells(HashMap<(i32, i32), Vec<u32>>);
+
+impl Cells {
+    fn of(r: &Rect) -> impl Iterator<Item = (i32, i32)> + use<> {
+        let span = |a: f32, b: f32| (a / CELL).floor() as i32..=(b / CELL).floor() as i32;
+        let rows = span(r.y, r.y + r.height);
+        span(r.x, r.x + r.width).flat_map(move |x| rows.clone().map(move |y| (x, y)))
+    }
+
+    fn insert(&mut self, r: &Rect, index: usize) {
+        for cell in Self::of(r) {
+            self.0.entry(cell).or_default().push(index as u32);
+        }
+    }
+
+    /// The boxes that may reach into `area`, some more than once.
+    fn near<'a>(&'a self, area: &Rect) -> impl Iterator<Item = usize> + use<'a> {
+        Self::of(area).filter_map(|cell| self.0.get(&cell)).flatten().map(|&i| i as usize)
     }
 }
 
 /// Where the labels of the lines between core nodes are drawn.
 fn label_rects(g: &Graph, scene: &Scene, measure: &dyn TextMeasure) -> Vec<Rect> {
-    let edges = g.lines.iter().filter(|l| l.core).filter_map(|l| scene.edge(l.id));
+    let drawn = scene.edges_by_id();
+    let edges = g.lines.iter().filter(|l| l.core).filter_map(|l| drawn.get(&l.id));
     edges.flat_map(|e| &e.labels).map(|l| crate::labels::label_rect(l, measure)).collect()
 }
 
 /// Places the attributes around their owners, clear of the core nodes, the lines between
 /// them (as `scene` draws them) and `labels`.
 fn place_attributes(g: &mut Graph, scene: &Scene, labels: &[Rect]) {
-    let mut obstacles = Obstacles { rects: Vec::new(), segments: Vec::new() };
+    let mut obstacles = Obstacles::default();
     for &i in &g.core {
-        obstacles.rects.push((g.nodes[i].bounds, None));
+        obstacles.add_rect(g.nodes[i].bounds, None);
     }
-    obstacles.rects.extend(labels.iter().map(|&r| (r, None)));
+    for &r in labels {
+        obstacles.add_rect(r, None);
+    }
+    let drawn = scene.edges_by_id();
     for l in g.lines.iter().filter(|l| l.core) {
-        let Some(edge) = scene.edge(l.id) else { continue };
+        let Some(edge) = drawn.get(&l.id) else { continue };
         for w in edge.points.windows(2) {
-            obstacles.segments.push((w[0], w[1], None));
+            obstacles.add_segment(w[0], w[1], None);
         }
     }
     let used = used_sides(g);
@@ -1011,8 +1064,8 @@ fn place_attributes(g: &mut Graph, scene: &Scene, labels: &[Rect]) {
             let outward = slots[k].side.outward();
             let r = find_place(&obstacles, Some(c), &owner, wanted, outward, attrs[k]);
             g.nodes[g.attributes[c][k]].bounds = r;
-            obstacles.rects.push((r, Some(c)));
-            obstacles.segments.push((r.center(), owner.center(), Some(c)));
+            obstacles.add_rect(r, Some(c));
+            obstacles.add_segment(r.center(), owner.center(), Some(c));
         }
     }
     for k in 0..g.parts.len() {
@@ -1027,8 +1080,8 @@ fn place_attributes(g: &mut Graph, scene: &Scene, labels: &[Rect]) {
         let wanted = Point::new(p.center().x + dir.0 * reach, p.center().y + dir.1 * reach);
         let at = find_place(&obstacles, None, &p, wanted, dir, (aw, ah));
         g.nodes[part].bounds = at;
-        obstacles.rects.push((at, None));
-        obstacles.segments.push((at.center(), p.center(), None));
+        obstacles.add_rect(at, None);
+        obstacles.add_segment(at.center(), p.center(), None);
     }
 }
 
@@ -1522,6 +1575,20 @@ mod tests {
         d.arrange();
         let y = |n: Id| d.bounds(n).y;
         assert!(y(sup) < y(is_a) && y(is_a) < y(sub));
+    }
+
+    #[test]
+    fn parts_go_around_a_composite_attribute_whose_owner_is_not_shown() {
+        let mut d = Diagram::new();
+        let (_, e) = d.entity("Kunde");
+        let address = d.attribute(e, "adresse", false);
+        let parts = [d.attribute(address, "strasse", false), d.attribute(address, "ort", false)];
+        d.edit(|tx, _, diagram| tx.remove_presentation(diagram, e));
+        d.arrange();
+        let a = d.bounds(address);
+        let (p, q) = (d.bounds(parts[0]), d.bounds(parts[1]));
+        assert!(!p.intersects(&q) && !p.intersects(&a) && !q.intersects(&a), "{a:?} {p:?} {q:?}");
+        assert_eq!(d.overlaps(), []);
     }
 
     #[test]

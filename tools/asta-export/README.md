@@ -25,7 +25,9 @@ bounds. `report.txt` gets one line per finding, tab-separated:
   `templateParameterBounds` (Astah keeps one bound per template parameter),
   `variadicTemplateParameter`, or `templateParameter` for those of operations; for ER
   diagrams `erChenNotation` (a Chen diagram written in IE), `erRelationship`, `erUnique`,
-  `erDisjoint`, `erCardinality` and the like;
+  `erDisjoint`, `erCardinality`, `erForeignKey` (a foreign key column whose relationship was
+  not made, written as a plain column) and the like; `partialDiagram` for a diagram that failed
+  after it was created and is in the file as far as it got;
 - `problem <text>`: a single element that failed;
 - `error <text>`: the export failed as a whole.
 
@@ -39,7 +41,14 @@ cargo run -p umlcraft-asta-export --example asta-export -- project.ucraft out.as
 
 - Only the public API (`com.change_vision.jude.api.inf.*`) is used; no Astah code or files go
   into this repository.
-- The tool runs everything in one transaction and saves only if it completes. Single elements
-  that fail are dropped and reported, so one odd element does not stop the export.
+- The tool builds the project in one transaction (a second one only puts the substates of
+  orthogonal states back) and saves only if it completes. Single elements and details that
+  fail are dropped and reported, so one odd element does not stop the export.
 - Astah hides exceptions that escape `main`, so the tool catches everything and writes the
   report itself.
+- CI compiles the tool against `stubs/`: hand-written declarations of exactly the API classes
+  and methods it calls, without Astah's jars (`.github/workflows/ci.yml`, job "Astah export
+  tool"). A call to an API method the stubs lack fails that job; add the method to the stub
+  as the API declares it (Astah's API reference), and check the tool against the real
+  `astah-api.jar` with the round-trip tests (`cargo test -p umlcraft-asta-export` with
+  `UMLCRAFT_REQUIRE_ASTAH=1` on a machine with Astah).

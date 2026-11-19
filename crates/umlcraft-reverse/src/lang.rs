@@ -94,7 +94,8 @@ pub enum Skip {
     Event,
     /// Explicit values of enum members (`A = 1`).
     EnumValue,
-    /// `#elif` and `#else` branches; only the first branch of a conditional is read.
+    /// Branches of conditionals: `#elif` and `#else` after the branch read, and branches under
+    /// a constant false condition (`#if 0`).
     PreprocessorBranch,
     /// Aliases of constructed types (`using Ids = List<int>;`).
     GenericAlias,
@@ -110,6 +111,9 @@ pub enum Skip {
     Friend,
     /// Python statements that declare nothing (`if __name__ == "__main__":`).
     Statement,
+    /// Methods whose statements nest too deeply for a structogram
+    /// (`umlcraft_nsd::read::MAX_DEPTH`): chosen for a structogram, but none is made.
+    DeepMethod,
 }
 
 impl Skip {
@@ -126,7 +130,7 @@ impl Skip {
             Skip::Delegate => "delegate",
             Skip::Event => "event",
             Skip::EnumValue => "enum_value",
-            Skip::PreprocessorBranch => "preprocessor_branch",
+            Skip::PreprocessorBranch => "conditional_branch",
             Skip::GenericAlias => "generic_alias",
             Skip::UnknownOwner => "unknown_owner",
             Skip::Macro => "macro",
@@ -134,6 +138,7 @@ impl Skip {
             Skip::DeletedFunction => "deleted_function",
             Skip::Friend => "friend",
             Skip::Statement => "statement",
+            Skip::DeepMethod => "deep_method",
         }
     }
 }

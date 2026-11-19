@@ -1,0 +1,19 @@
+// Compile stub for CI: only the part of Astah's API that AstaExport.java uses, declared
+// as the API declares it (see tools/asta-export/README.md).
+package com.change_vision.jude.api.inf.editor;
+
+public interface StateMachineDiagramEditor extends com.change_vision.jude.api.inf.editor.BasicDiagramEditor {
+    public abstract com.change_vision.jude.api.inf.model.IStateMachineDiagram createStatemachineDiagram(com.change_vision.jude.api.inf.model.INamedElement p0, java.lang.String p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createState(java.lang.String p0, com.change_vision.jude.api.inf.presentation.INodePresentation p1, java.awt.geom.Point2D p2) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract void addRegion(com.change_vision.jude.api.inf.presentation.INodePresentation p0, boolean p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createInitialPseudostate(com.change_vision.jude.api.inf.presentation.INodePresentation p0, java.awt.geom.Point2D p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createFinalState(com.change_vision.jude.api.inf.presentation.INodePresentation p0, java.awt.geom.Point2D p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createChoicePseudostate(com.change_vision.jude.api.inf.presentation.INodePresentation p0, java.awt.geom.Point2D p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createJunctionPseudostate(com.change_vision.jude.api.inf.presentation.INodePresentation p0, java.awt.geom.Point2D p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createForkPseudostate(com.change_vision.jude.api.inf.presentation.INodePresentation p0, java.awt.geom.Point2D p1, double p2, double p3) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createJoinPseudostate(com.change_vision.jude.api.inf.presentation.INodePresentation p0, java.awt.geom.Point2D p1, double p2, double p3) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createShallowHistoryPseudostate(com.change_vision.jude.api.inf.presentation.INodePresentation p0, java.awt.geom.Point2D p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createDeepHistoryPseudostate(com.change_vision.jude.api.inf.presentation.INodePresentation p0, java.awt.geom.Point2D p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.INodePresentation createSubmachineState(com.change_vision.jude.api.inf.presentation.INodePresentation p0, com.change_vision.jude.api.inf.model.IStateMachineDiagram p1, java.awt.geom.Point2D p2) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+    public abstract com.change_vision.jude.api.inf.presentation.ILinkPresentation createTransition(com.change_vision.jude.api.inf.presentation.INodePresentation p0, com.change_vision.jude.api.inf.presentation.INodePresentation p1) throws com.change_vision.jude.api.inf.exception.InvalidEditingException;
+}

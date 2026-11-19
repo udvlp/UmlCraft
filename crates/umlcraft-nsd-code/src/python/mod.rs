@@ -10,7 +10,7 @@ use umlcraft_nsd::Element;
 use crate::core::{Builder, Grammar};
 
 pub use build::diagram;
-pub use methods::{find, methods};
+pub use methods::{function_names, members, methods};
 
 pub struct Python;
 
