@@ -1525,6 +1525,11 @@ impl PropertiesPanel {
         // pending, the others take the new values. After Enter nothing is pending, so the field
         // shows the text as written back.
         let same = self.shown_id() == Some(id);
+        // A cardinality typed in one reading is dropped once the diagram reads them another
+        // way: the field shows the cardinality in the new reading instead.
+        if same && self.shown.as_ref().is_some_and(|(_, _, _, r, _)| *r != reading) {
+            self.editing.remove(&Field::Cardinality);
+        }
         let typing = same && !self.editing.is_empty();
         self.shown = Some(key);
         if !same {

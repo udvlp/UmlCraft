@@ -476,6 +476,9 @@ struct InlineEdit {
     /// An association end of `element`, by index, whose role (or, if true, multiplicity) is
     /// edited.
     end: Option<(usize, bool)>,
+    /// How the active diagram wrote ER cardinalities when the editor opened: a cardinality
+    /// typed in one reading is not written once the diagram reads them another way.
+    reading: er::CardinalityReading,
     editor: Editor,
     _subscription: Subscription,
 }
@@ -2348,6 +2351,7 @@ impl DiagramCanvas {
             original,
             new_member: None,
             end: None,
+            reading: self.workspace.read(cx).cardinality_reading(),
             editor: editor.0,
             _subscription: editor.1,
         });
@@ -2433,7 +2437,8 @@ impl DiagramCanvas {
             Editor::Area(s) => s.read(cx).value().to_string(),
         };
         if let Some((end, multiplicity)) = edit.end {
-            if text != edit.original {
+            let reading = self.workspace.read(cx).cardinality_reading();
+            if text != edit.original && !(multiplicity && edit.reading != reading) {
                 self.update_workspace(cx, |ws| {
                     ws.set_end_text(edit.element, end, multiplicity, &text)
                 });
