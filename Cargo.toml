@@ -46,7 +46,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Structograms in the app hand rasterized images to GPUI as image frames.
 image = { version = "0.25", default-features = false }
 # PNG export rasterizes the SVG export; diagrams contain no raster images.
-resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+resvg = { version = "0.50", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 # The app's own icons (assets/icons), embedded in umlcraft.exe.
 rust-embed = { version = "8", features = ["interpolate-folder-path", "include-exclude"] }
 # The app icon in umlcraft.exe.
@@ -76,7 +76,7 @@ ttf-parser = "0.25"
 # Source import parses declarations with tree-sitter grammars (built from C by `cc`).
 tree-sitter = "0.27"
 tree-sitter-java = "0.23"
-tree-sitter-c-sharp = "0.23"
+tree-sitter-c-sharp = "0.24"
 tree-sitter-cpp = "0.23"
 tree-sitter-python = "0.25"
 # Source files in legacy encodings (Windows-1252, UTF-16).
