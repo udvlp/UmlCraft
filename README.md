@@ -355,7 +355,7 @@ one.
 | `crates/umlcraft-mcp` | MCP server: tools on a project, the protocol, the bridge to the running app |
 | `crates/umlcraft-cli` | `umlcraft-cli`: the MCP server for AI clients and its setup, image export |
 | `crates/umlcraft-screenshot` | The app window as an image, for the MCP server's `screenshot` (Windows) |
-| `crates/umlcraft-app` | GPUI application (`gpui-kit` 0.8) |
+| `crates/umlcraft-app` | GPUI application (`gpui-kit` 0.10) |
 
 Details: [docs/architecture.md](docs/architecture.md). Commands and project rules for
 contributors: [CONTRIBUTING.md](CONTRIBUTING.md).

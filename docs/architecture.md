@@ -129,7 +129,7 @@ migrations. Writing serializes from the model's own data without copying it.
 
 ## User interface
 
-`umlcraft-app` uses `gpui-kit` 0.8, which brings the matching GPUI release (`gpui-pre` 0.3.10) and
+`umlcraft-app` uses `gpui-kit` 0.10, which brings the matching GPUI release (`gpui-pre` 0.3.12) and
 `gpui-component`:
 
 - `Workspace` (a GPUI entity) holds the document, file path, open diagrams (tabs), selection and
