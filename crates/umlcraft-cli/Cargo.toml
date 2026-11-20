@@ -1,6 +1,6 @@
 [package]
 name = "umlcraft-cli"
-description = "UmlCraft on the command line: the MCP server for AI clients"
+description = "UmlCraft on the command line: the MCP server for AI clients, image export"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
