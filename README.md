@@ -217,6 +217,18 @@ path, which the properties panel then edits), and opens the sample project, so
 that screenshots need no one at the screen. The app accepts connections from this computer only, with a token only the user
 can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
 
+`umlcraft-cli export` writes diagrams as images without an AI client, e.g. in a build script,
+the same files the MCP server exports:
+
+```bash
+umlcraft-cli export project.ucraft --diagram "Class diagram" --out class.svg
+umlcraft-cli export project.ucraft --all --out-dir images --format png
+```
+
+`--diagram` takes a diagram's name or id (a structogram's title too, which may also go to
+`.nsd`); `--all` writes one file per diagram and structogram, named after it. Diagrams are
+drawn with the app's settings (column, guillemets, …), as by the MCP server.
+
 ## Not yet supported
 
 - Composite structure diagrams in the `.asta` export: Astah places port names itself; the
@@ -341,7 +353,7 @@ one.
 | `tools/nsd-metrics` | The Java tool that writes the text metrics `umlcraft-nsd` lays structograms out with |
 | `crates/umlcraft-erm-sql` | ER diagrams from SQL dumps of MySQL, MariaDB and PostgreSQL, and SQL from them |
 | `crates/umlcraft-mcp` | MCP server: tools on a project, the protocol, the bridge to the running app |
-| `crates/umlcraft-cli` | `umlcraft-cli`: the MCP server for AI clients and its setup |
+| `crates/umlcraft-cli` | `umlcraft-cli`: the MCP server for AI clients and its setup, image export |
 | `crates/umlcraft-screenshot` | The app window as an image, for the MCP server's `screenshot` (Windows) |
 | `crates/umlcraft-app` | GPUI application (`gpui-kit` 0.8) |
 

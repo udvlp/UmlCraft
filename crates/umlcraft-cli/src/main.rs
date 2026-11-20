@@ -1,5 +1,8 @@
 //! `umlcraft-cli`: UmlCraft on the command line. `umlcraft-cli mcp` is the MCP server that AI
-//! clients start (on stdin and stdout); `umlcraft-cli mcp setup` registers it with them.
+//! clients start (on stdin and stdout); `umlcraft-cli mcp setup` registers it with them;
+//! `umlcraft-cli export` writes a project's diagrams as images.
+
+mod export;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -23,6 +26,12 @@ usage:
                          [--allow-path DIR]... [--allow-any-path]
       Adds an `umlcraft` server with this program to each installed AI client. Without
       --allow-path the server may use the Documents folder.
+  umlcraft-cli export PROJECT.ucraft --diagram NAME|ID --out FILE
+  umlcraft-cli export PROJECT.ucraft --all --out-dir DIR [--format svg|png]
+      Writes a diagram or structogram as an image, as the MCP tool `export_image` does: the
+      format by the extension of FILE (.svg, .png, .nsd for a structogram), or each one to a
+      file in DIR named after it (default svg). Existing files are replaced, missing folders
+      made.
   umlcraft-cli --version";
 
 fn main() -> ExitCode {
@@ -34,6 +43,7 @@ fn main() -> ExitCode {
         }
         ["mcp", "setup" | "install", rest @ ..] => setup(rest),
         ["mcp", rest @ ..] => serve(rest),
+        ["export", rest @ ..] => export::run(rest, USAGE),
         [] | ["--help" | "-h" | "help"] => {
             println!("{USAGE}");
             Ok(())
