@@ -318,6 +318,10 @@ On Debian/Ubuntu, GPUI needs some system libraries first:
 `bash packaging/linux/install-build-deps.sh`. On NixOS, `nix develop` opens a shell with Rust
 and those libraries.
 
+UmlCraft builds with the latest stable Rust, which `rust-version` in `Cargo.toml` names; the
+`msrv` job on CI checks it, and the flake takes that version from rust-overlay, so it does not
+wait for nixpkgs.
+
 ## Releasing
 
 1. Set the version in `Cargo.toml` (`workspace.package.version`), add the release to
