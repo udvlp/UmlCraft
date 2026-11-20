@@ -204,9 +204,10 @@ pub struct PropertiesPanel {
     association_ids: Vec<Option<Id>>,
     /// Classifier boxes: which parameter directions the operations show.
     directions: Entity<Choice>,
-    /// The name's color of the selected node or line, and the line's color.
+    /// The name's color of the selected node or line, the line's color and a node's fill.
     font_color: Entity<ColorPickerState>,
     line_color: Entity<ColorPickerState>,
+    fill_color: Entity<ColorPickerState>,
     /// Undo depth before a color was picked and after its last change: while the picker stays
     /// open, its further changes (dragging a slider) join that one undo step.
     color_step: Option<(usize, usize)>,
@@ -546,6 +547,7 @@ impl PropertiesPanel {
         let directions = cx.new(|cx| SelectState::new(direction_items(), None, window, cx));
         let font_color = cx.new(|cx| ColorPickerState::new(window, cx));
         let line_color = cx.new(|cx| ColorPickerState::new(window, cx));
+        let fill_color = cx.new(|cx| ColorPickerState::new(window, cx));
 
         let structogram = cx.new(|cx| NsdProperties::new(workspace.clone(), window, cx));
         let mut subscriptions =
@@ -858,12 +860,17 @@ impl PropertiesPanel {
                 this.update_style(cx, move |s| s.parameter_directions = d);
             },
         ));
-        for (state, line) in [(&font_color, false), (&line_color, true)] {
+        let pickers = [
+            (&font_color, ColorOf::Font),
+            (&line_color, ColorOf::Line),
+            (&fill_color, ColorOf::Fill),
+        ];
+        for (state, of) in pickers {
             subscriptions.push(cx.subscribe_in(
                 state,
                 window,
                 move |this, _, ColorPickerEvent::Change(color), _, cx| {
-                    this.set_color(line, color.map(model_color), cx);
+                    this.set_color(of, color.map(model_color), cx);
                 },
             ));
             // Closing the picker ends its undo step.
@@ -962,6 +969,7 @@ impl PropertiesPanel {
             directions,
             font_color,
             line_color,
+            fill_color,
             color_step: None,
             shown: None,
             editing: HashMap::new(),
@@ -1035,9 +1043,9 @@ impl PropertiesPanel {
         });
     }
 
-    /// Sets the name's color (or with `line` the line's) of the selected node or line; `None`
-    /// goes back to the theme's. What one opened picker changes is one undo step.
-    fn set_color(&mut self, line: bool, color: Option<Color>, cx: &mut Context<Self>) {
+    /// Sets the color `of` the selected node or line; `None` goes back to the theme's. What one
+    /// opened picker changes is one undo step.
+    fn set_color(&mut self, of: ColorOf, color: Option<Color>, cx: &mut Context<Self>) {
         let step = self.color_step;
         self.color_step = self.workspace.update(cx, |ws, cx| {
             let p = selected_presentation(ws)?.id;
@@ -1046,7 +1054,13 @@ impl PropertiesPanel {
                 Some((start, end)) if end == depth => start,
                 _ => depth,
             };
-            ws.update_style(p, |s| *if line { &mut s.stroke } else { &mut s.font_color } = color);
+            ws.update_style(p, |s| {
+                *match of {
+                    ColorOf::Font => &mut s.font_color,
+                    ColorOf::Line => &mut s.stroke,
+                    ColorOf::Fill => &mut s.fill,
+                } = color;
+            });
             ws.doc.squash_since(start, t!("edit.properties"));
             cx.notify();
             Some((start, ws.doc.undo_depth()))
@@ -1584,9 +1598,12 @@ impl PropertiesPanel {
         let d = DIRECTIONS.iter().position(|&d| d == style.parameter_directions);
         choose(&self.directions, d, locale_changed.then(direction_items), window, cx);
         // Only a color that differs: writing back the one just picked would fight a slider drag.
-        for (state, color) in
-            [(&self.font_color, style.font_color), (&self.line_color, style.stroke)]
-        {
+        let colors = [
+            (&self.font_color, style.font_color),
+            (&self.line_color, style.stroke),
+            (&self.fill_color, style.fill),
+        ];
+        for (state, color) in colors {
             state.update(cx, |s, cx| {
                 if s.value().map(model_color) != color {
                     match color {
@@ -2107,11 +2124,21 @@ impl Render for PropertiesPanel {
                 .child(heading(t!("prop.display").to_string()))
                 .child(field(
                     t!("prop.font_color").into(),
-                    self.color_select(&self.font_color, p.style.font_color.is_some(), false, cx),
+                    self.color_select(
+                        &self.font_color,
+                        p.style.font_color.is_some(),
+                        ColorOf::Font,
+                        cx,
+                    ),
                 ))
                 .child(field(
                     t!("prop.line_color").into(),
-                    self.color_select(&self.line_color, p.style.stroke.is_some(), true, cx),
+                    self.color_select(
+                        &self.line_color,
+                        p.style.stroke.is_some(),
+                        ColorOf::Line,
+                        cx,
+                    ),
                 ));
         }
         if let Some(p) = presentation.filter(|p| !p.is_edge()) {
@@ -2119,6 +2146,17 @@ impl Render for PropertiesPanel {
         }
         body
     }
+}
+
+/// Which color of the selected node or line a picker sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColorOf {
+    /// The text's.
+    Font,
+    /// A line's.
+    Line,
+    /// A node's inside.
+    Fill,
 }
 
 // The render function is split up: built in one piece, its frame in a debug build outgrew the
@@ -3091,10 +3129,20 @@ impl PropertiesPanel {
         let shown = p.element.and_then(|e| model.get(e)).map(|e| e.kind().clone());
         body = body.child(heading(t!("prop.display").to_string()));
         if matches!(p.shape, Shape::Node { .. }) {
-            body = body.child(field(
-                t!("prop.font_color").into(),
-                self.color_select(&self.font_color, p.style.font_color.is_some(), false, cx),
-            ));
+            body = body
+                .child(field(
+                    t!("prop.font_color").into(),
+                    self.color_select(
+                        &self.font_color,
+                        p.style.font_color.is_some(),
+                        ColorOf::Font,
+                        cx,
+                    ),
+                ))
+                .child(field(
+                    t!("prop.fill_color").into(),
+                    self.color_select(&self.fill_color, p.style.fill.is_some(), ColorOf::Fill, cx),
+                ));
         }
         let boxed = matches!(
             shown,
@@ -3389,7 +3437,7 @@ impl PropertiesPanel {
         &self,
         state: &Entity<ColorPickerState>,
         set: bool,
-        line: bool,
+        of: ColorOf,
         cx: &Context<Self>,
     ) -> AnyElement {
         let panel = cx.entity();
@@ -3405,12 +3453,12 @@ impl PropertiesPanel {
             )
             .when(set, |row| {
                 row.child(
-                    Button::new(("reset-color", usize::from(line)))
+                    Button::new(("reset-color", of as usize))
                         .ghost()
                         .small()
                         .label(t!("prop.reset_color"))
                         .on_click(move |_, _, cx| {
-                            panel.update(cx, |this, cx| this.set_color(line, None, cx));
+                            panel.update(cx, |this, cx| this.set_color(of, None, cx));
                         }),
                 )
             })

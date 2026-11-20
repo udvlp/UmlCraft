@@ -382,6 +382,7 @@ prop:
   shown_operations: Show operations
   font_color: Font color
   line_color: Line color
+  fill_color: Fill color
   default_color: Default
   reset_color: Reset
   hide_instance_name: Hide name
