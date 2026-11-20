@@ -18,6 +18,9 @@ ignore = [
     # ttf-parser is unmaintained; umlcraft-asta reads font metrics with it, and fontdb in GPUI's
     # tree pulls it anyway. Moving umlcraft-asta to skrifa would leave only the latter.
     { id = "RUSTSEC-2026-0192", reason = "no replacement in GPUI's tree yet" },
+    # chrono is unmaintained; umlcraft-app takes today's local date from it for structogram
+    # exports, and gpui-base and gpui-component in GPUI's tree pull it anyway.
+    { id = "RUSTSEC-2026-0543", reason = "GPUI's tree depends on it; no vulnerability" },
 ]
 
 [licenses]
