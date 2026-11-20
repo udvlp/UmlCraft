@@ -1237,6 +1237,7 @@ pub fn is_container(kind: &ElementKind) -> bool {
             | ElementKind::Partition
             | ElementKind::State(_)
             | ElementKind::Component(_)
+            | ElementKind::Artifact(_)
             | ElementKind::Node(_)
     ) || matches!(kind, ElementKind::Instance(p) if p.instance == InstanceKind::Node)
 }

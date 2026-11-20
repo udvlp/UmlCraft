@@ -1,4 +1,4 @@
-//! Class, object and use case diagrams, and how their labels and lines are drawn.
+//! Class, object, use case and deployment diagrams, and how their labels and lines are drawn.
 
 use super::*;
 
@@ -1491,4 +1491,38 @@ fn a_members_text_stays_when_documentation_comes_with_it() {
     assert_eq!(data.documentation, "How many.");
     assert_eq!(data.constraints, ["count >= 0"]);
     model.check().unwrap();
+}
+
+/// An artifact drawn inside another belongs to it, as a node inside a node does: it moves with
+/// it, and arranging lays it out inside.
+#[test]
+fn artifacts_hold_the_artifacts_drawn_inside_them() {
+    let mut host = Headless::new();
+    let d = run(&mut host, "create_diagram", json!({ "kind": "deployment", "name": "D" }));
+    let d = id(&d["diagram"]);
+    let node = |host: &mut Headless, tool: &str, name: &str, bounds: [f32; 4]| {
+        let [x, y, width, height] = bounds;
+        let made = run(
+            host,
+            "create_element",
+            json!({ "diagram": d, "tool": tool, "name": name, "x": x, "y": y }),
+        );
+        let size = json!({ "diagram": d, "node": made["presentation"], "x": x, "y": y,
+                           "width": width, "height": height });
+        run(host, "move_node", size);
+        made
+    };
+    let server = node(&mut host, "node", "Server", [40.0, 40.0, 400.0, 300.0]);
+    let war = node(&mut host, "artifact", "app.war", [60.0, 90.0, 300.0, 180.0]);
+    let jar = node(&mut host, "artifact", "lib.jar", [80.0, 150.0, 120.0, 60.0]);
+    let made = [server, war, jar];
+
+    let moved = json!({ "diagram": d, "node": made[1]["presentation"], "x": 60, "y": 120 });
+    run(&mut host, "move_node", moved);
+    assert_eq!(drawn_rects(&mut host, &d, &made)[2].y, 180.0);
+
+    run(&mut host, "arrange_diagram", json!({ "diagram": d }));
+    let [server, war, jar] = drawn_rects(&mut host, &d, &made)[..] else { unreachable!() };
+    assert!(war.contains_rect(&jar), "{jar:?} not in {war:?}");
+    assert!(server.contains_rect(&war), "{war:?} not in {server:?}");
 }

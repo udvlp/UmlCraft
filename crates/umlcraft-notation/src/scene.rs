@@ -3678,6 +3678,7 @@ pub fn with_contents(model: &Model, scene: &Scene, ids: &[Id]) -> Vec<Id> {
                     | Figure::State { .. }
                     | Figure::Cube { .. }
                     | Figure::Component { .. }
+                    | Figure::Artifact { .. }
                     | Figure::Structured { .. }
                     | Figure::Part
             )

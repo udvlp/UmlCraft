@@ -236,7 +236,8 @@ migrations. Writing serializes from the model's own data without copying it.
   the same layout. Nodes grow with their content; text width is measured by a `TextMeasure` (the
   real font in the app, an estimate in tests). `scene` also places edge labels and provides
   resize handles, edge handles (waypoints), rubber-band selection and alignment. Containers (system
-  boundaries, packages, partitions, states, nodes, components, structured classes and parts)
+  boundaries, packages, partitions, states, nodes, components, artifacts, structured classes
+  and parts)
   graphically contain whatever lies fully inside them (`with_contents`); a state also holds its
   substates where they reach out of it. System boundaries are "hollow" and clickable only on
   their border and title. Layout and routing, which need where things are but not where free
