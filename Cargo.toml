@@ -7,7 +7,9 @@ version = "0.22.0"
 edition = "2024"
 # Named in the About dialog; the copyright holders behind "The UmlCraft authors" in LICENSE-MIT.
 authors = ["Ulf Haueisen", "Steven Gast"]
-rust-version = "1.100"
+# GPUI (gpui-kit 0.10) needs 1.95 (`std::hint::cold_path`); the `msrv` job on CI checks it.
+# Nixpkgs builds the flake with the Rust it ships, so keep this at or below that.
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 publish = false
 
