@@ -66,7 +66,7 @@ pub(super) fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let routed = match &route {
         None => None,
         Some(_) => {
-            let wanted = opt_id(args, "diagram")?;
+            let wanted = opt_diagram(model, args, "diagram", false)?;
             let lines: Vec<(Id, Id)> = shown
                 .iter()
                 .copied()

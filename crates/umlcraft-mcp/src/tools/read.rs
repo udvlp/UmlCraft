@@ -321,7 +321,8 @@ pub(super) fn display_json(display: Display) -> Value {
 
 pub(super) fn render_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let scale = opt_num(args, "scale").unwrap_or(1.0).clamp(0.5, 2.0);
-    let shown = opt_id(args, "diagram")?.or(host.active_diagram());
+    let shown =
+        opt_diagram(host.document().model(), args, "diagram", true)?.or(host.active_diagram());
     let model = host.document().model();
     if let Some(p) = shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram()) {
         let svg = structogram_svg(&p.structogram);

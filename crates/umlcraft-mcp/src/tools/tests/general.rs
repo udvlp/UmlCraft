@@ -496,3 +496,64 @@ fn a_panicking_tool_answers_with_an_error_and_changes_nothing() {
     let Content::Text(why) = &made.content[0] else { panic!() };
     assert!(made.is_error && why.contains("at most 99"), "{why}");
 }
+
+/// The text of the error `name` answers `args` with.
+fn refusal(host: &mut Headless, name: &str, args: Value) -> String {
+    let reply = call(host, &Access::default(), name, &args);
+    assert!(reply.is_error, "{name} {args}");
+    match &reply.content[0] {
+        Content::Text(text) => text.clone(),
+        Content::Image(_) => unreachable!(),
+    }
+}
+
+/// Where a tool takes a `diagram`, its name works as well as its id, a structogram's title
+/// too; a name that several have is refused with their ids.
+#[test]
+fn diagrams_are_found_by_name() {
+    let mut host = Headless::new();
+    let document = run(&mut host, "get_document", json!({}));
+    let first = document["diagrams"][0]["id"].clone();
+    let name = document["diagrams"][0]["name"].as_str().unwrap().to_owned();
+    let shown = run(&mut host, "get_diagram", json!({ "diagram": format!(" {name} ") }));
+    assert_eq!(shown["id"], first);
+
+    let shop = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "Shop" }));
+    let order = json!({ "diagram": "Shop", "tool": "class", "name": "Order" });
+    let order = run(&mut host, "create_element", order);
+    let shown = run(&mut host, "get_diagram", json!({ "diagram": shop["diagram"] }));
+    assert_eq!(shown["nodes"][0]["element"], order["element"]);
+    run(&mut host, "open_diagram", json!({ "diagram": name }));
+    assert_eq!(json!(host.active_diagram()), first);
+
+    let tree =
+        json!({ "title": "total(n)", "body": [{ "kind": "instruction", "text": "s := 0" }] });
+    let structogram = run(&mut host, "create_structogram", json!({ "structogram": tree }));
+    run(&mut host, "render_diagram", json!({ "diagram": "total(n)" }));
+    let opened = run(&mut host, "open_diagram", json!({ "diagram": "total(n)" }));
+    assert_eq!(opened["shown_diagram"], structogram["id"]);
+
+    assert!(
+        refusal(&mut host, "get_diagram", json!({ "diagram": "Nowhere" })).contains("`Nowhere`")
+    );
+    let twin = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "Shop" }));
+    let why = refusal(&mut host, "get_diagram", json!({ "diagram": "Shop" }));
+    for d in [&shop["diagram"], &twin["diagram"]] {
+        assert!(why.contains(d.as_str().unwrap()), "{why}");
+    }
+    // An id still goes first, also for a diagram named like another's id.
+    let renamed = json!({ "id": twin["diagram"], "name": first });
+    run(&mut host, "update_element", renamed);
+    let shown = run(&mut host, "get_diagram", json!({ "diagram": first }));
+    assert_eq!(shown["id"], first);
+
+    // Where only diagrams go, a structogram of the same name does not count; an empty text
+    // names none, rather than one without a name.
+    let same = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "total(n)" }));
+    let shown = run(&mut host, "get_diagram", json!({ "diagram": "total(n)" }));
+    assert_eq!(shown["id"], same["diagram"]);
+    let why = refusal(&mut host, "render_diagram", json!({ "diagram": "total(n)" }));
+    assert!(why.contains(structogram["id"].as_str().unwrap()), "{why}");
+    run(&mut host, "create_diagram", json!({ "kind": "class", "name": "" }));
+    refusal(&mut host, "render_diagram", json!({ "diagram": " " }));
+}

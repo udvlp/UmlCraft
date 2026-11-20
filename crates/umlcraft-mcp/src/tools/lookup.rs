@@ -59,13 +59,55 @@ pub(super) fn diagram_of(model: &Model, id: Id) -> Result<DiagramKind, String> {
         .ok_or_else(|| format!("{id} is not a diagram"))
 }
 
+/// The diagram `text` names, or with `structograms` also the structogram: its id, else its
+/// name (a structogram's title, as `get_document` gives it), which only one of them may have.
+pub(super) fn diagram_ref(model: &Model, text: &str, structograms: bool) -> Result<Id, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("an empty text names no diagram; give its id or name".into());
+    }
+    if let Ok(id) = Id::from_str(text) {
+        return Ok(id);
+    }
+    let named: Vec<Id> = model
+        .elements()
+        .filter(|e| match e.kind().as_structogram() {
+            Some(p) => structograms && p.structogram.text().join(" ").trim() == text,
+            None => e.kind().as_diagram().is_some() && e.name().trim() == text,
+        })
+        .map(|e| e.id())
+        .collect();
+    let what = if structograms { "diagram or structogram" } else { "diagram" };
+    match named[..] {
+        [id] => Ok(id),
+        [] => Err(format!(
+            "`{text}` is neither an id nor the name of a {what}; `get_document` lists them"
+        )),
+        _ => {
+            let ids: Vec<String> = named.iter().map(Id::to_string).collect();
+            Err(format!("more than one {what} is named `{text}`; give one of {}", ids.join(", ")))
+        }
+    }
+}
+
+/// The diagram (with `structograms` also the structogram) given as `key`, by id or name
+/// ([`diagram_ref`]).
+pub(super) fn opt_diagram(
+    model: &Model,
+    args: &Value,
+    key: &str,
+    structograms: bool,
+) -> Result<Option<Id>, String> {
+    opt_str(args, key).map(|text| diagram_ref(model, text, structograms)).transpose()
+}
+
 /// The diagram given as `key`, else the one shown.
 pub(super) fn diagram_arg(
     host: &dyn Host,
     args: &Value,
     key: &str,
 ) -> Result<(Id, DiagramKind), String> {
-    let diagram = match opt_id(args, key)? {
+    let diagram = match opt_diagram(host.document().model(), args, key, false)? {
         Some(diagram) => diagram,
         None => host.active_diagram().ok_or("no diagram is shown; give `diagram`")?,
     };
