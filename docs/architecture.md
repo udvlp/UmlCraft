@@ -1502,4 +1502,8 @@ unless told otherwise; `--dry-run` shows what it would do.
 
 `umlcraft-cli` ships in the Windows zip and installer, the Linux tarball, `.deb` and `.rpm`
 and inside the macOS app (`UmlCraft.app/Contents/MacOS/umlcraft-cli`). Flatpak, Snap and
-AppImage carry none: a client outside their sandbox could not start it.
+AppImage carry none: a client outside their sandbox could not start it. A server from another
+package reaches the Flatpak app: the Flatpak shares the network (the port of 127.0.0.1) and
+`xdg-run/umlcraft` (the control folder) with the host. `get_document` adds a `hint` when it
+finds the announcement of a Flatpak that lacks those, in the sandbox's private
+`$XDG_RUNTIME_DIR/.flatpak/com.umlcraft.app/xdg-run`, and is not live.

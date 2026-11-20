@@ -29,7 +29,7 @@ pub(super) fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
         stack.extend(model.children(id).iter().rev());
     }
     let root = model.root();
-    Ok(Reply::json(json!({
+    let mut reply = json!({
         "project": model.get(root).map_or("", |e| e.name()),
         "root": root,
         "file": host.path(),
@@ -43,7 +43,17 @@ pub(super) fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
         "selection": host.selection(),
         "allowed_folders": if access.any { json!("any") } else { json!(access.folders) },
         "display": display,
-    })))
+    });
+    // The user may be looking at an app this server cannot reach: say so rather than work on
+    // a project of its own unnoticed.
+    if !host.live() && crate::live::sandboxed_app_announced() {
+        reply["hint"] = json!(
+            "A UmlCraft Flatpak is running, but this server cannot reach it: that Flatpak \
+             lacks the permissions the current one has (network and xdg-run/umlcraft); update \
+             it. Until then changes go to a project of the server's own."
+        );
+    }
+    Ok(Reply::json(reply))
 }
 
 pub(super) fn list_elements(host: &mut dyn Host, args: &Value) -> Outcome {

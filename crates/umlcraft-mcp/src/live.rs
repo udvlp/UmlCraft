@@ -43,6 +43,26 @@ pub fn control_dir() -> Option<PathBuf> {
     Some(dir.join("control"))
 }
 
+/// Whether a UmlCraft Flatpak announced itself where only its sandbox sees it: a Flatpak
+/// without access to `xdg-run/umlcraft` writes its control folder into its private part of
+/// `$XDG_RUNTIME_DIR`, and without network its port is not this computer's either.
+pub fn sandboxed_app_announced() -> bool {
+    if cfg!(windows) || cfg!(target_os = "macos") {
+        return false;
+    }
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|v| !v.is_empty())
+        .is_some_and(|runtime| announced_in_sandbox(std::path::Path::new(&runtime)))
+}
+
+/// [`sandboxed_app_announced`] for the runtime folder `runtime`.
+fn announced_in_sandbox(runtime: &std::path::Path) -> bool {
+    let private = runtime.join(".flatpak/com.umlcraft.app/xdg-run/umlcraft/control");
+    std::fs::read_dir(private).is_ok_and(|entries| {
+        entries.flatten().any(|e| e.file_name().to_string_lossy().starts_with("live-"))
+    })
+}
+
 /// Where a request is: waiting for the app, taken up by it, or given up by the CLI.
 const WAITING: u8 = 0;
 const TAKEN: u8 = 1;
@@ -576,5 +596,19 @@ mod tests {
         assert_eq!(read_line(&mut reader, 8).as_deref(), Some("exactly8"));
         assert_eq!(read_line(&mut reader, 8).as_deref(), Some("last"));
         assert_eq!(read_line(&mut reader, 8), None);
+    }
+
+    /// A Flatpak without its permissions announces itself in its private runtime folder.
+    #[test]
+    fn a_sandboxed_announcement_is_found() {
+        let runtime = std::env::temp_dir().join(format!("umlcraft-xdg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&runtime);
+        assert!(!announced_in_sandbox(&runtime));
+        let control = runtime.join(".flatpak/com.umlcraft.app/xdg-run/umlcraft/control");
+        std::fs::create_dir_all(&control).unwrap();
+        assert!(!announced_in_sandbox(&runtime));
+        std::fs::write(control.join("live-7.json"), "{}").unwrap();
+        assert!(announced_in_sandbox(&runtime));
+        std::fs::remove_dir_all(&runtime).unwrap();
     }
 }

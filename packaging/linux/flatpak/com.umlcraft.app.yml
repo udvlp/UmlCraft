@@ -14,6 +14,11 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --share=ipc
+  # An MCP server outside the sandbox (`umlcraft-cli mcp` from another package) finds the app
+  # by the file it leaves in $XDG_RUNTIME_DIR/umlcraft/control and talks to it on a port of
+  # 127.0.0.1: both have to be the host's. The opt-in update check needs the network too.
+  - --share=network
+  - --filesystem=xdg-run/umlcraft:create
   - --device=dri
   - --filesystem=home
 modules:

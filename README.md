@@ -215,7 +215,9 @@ minimized; it sizes the window and can move it beyond the screens, where it keep
 nobody sees it, sets theme, language, zoom and selection (in a structogram an element by its
 path, which the properties panel then edits), and opens the sample project, so
 that screenshots need no one at the screen. The app accepts connections from this computer only, with a token only the user
-can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`.
+can read. The Flatpak, Snap and AppImage packages contain no `umlcraft-cli`; a server from the
+Linux tarball, `.deb` or `.rpm` reaches the Flatpak app (it shares the network and
+`$XDG_RUNTIME_DIR/umlcraft` for that).
 
 `umlcraft-cli export` writes diagrams as images without an AI client, e.g. in a build script,
 the same files the MCP server exports:
