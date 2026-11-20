@@ -146,6 +146,24 @@ fn files_only_in_allowed_folders() {
     assert!(!host.document().is_dirty());
     let outside = std::env::temp_dir().join("elsewhere.ucraft");
     assert!(call(&mut host, &access, "save_file", &json!({ "path": outside })).is_error);
+    // Missing folders are made, as for images, but only in an allowed folder.
+    let nested = dir.join("new").join("sub").join("p.ucraft");
+    let saved = call(&mut host, &access, "save_file", &json!({ "path": nested }));
+    assert!(!saved.is_error, "{saved:?}");
+    assert!(nested.exists());
+    let elsewhere = std::env::temp_dir().join("umlcraft-mcp-not-allowed");
+    let _ = std::fs::remove_dir_all(&elsewhere);
+    let outside = elsewhere.join("p.ucraft");
+    assert!(call(&mut host, &access, "save_file", &json!({ "path": outside })).is_error);
+    assert!(!elsewhere.exists());
+    // A folder is no file.
+    let folder = format!("{}{}", dir.join("folder").display(), std::path::MAIN_SEPARATOR);
+    assert!(call(&mut host, &access, "save_file", &json!({ "path": folder })).is_error);
+    assert!(!dir.join("folder").exists());
+    // The project's own file may lie outside, but its folder is not made again there.
+    let mut own = Headless::with(new_document("Own"), Some(outside.clone()));
+    assert!(call(&mut own, &access, "save_file", &json!({})).is_error);
+    assert!(!elsewhere.exists());
     let d = host.active_diagram().unwrap().to_string();
     let png = call(
         &mut host,
