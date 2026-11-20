@@ -474,8 +474,9 @@ struct InlineEdit {
     /// A member not made yet: the text becomes one on committing.
     new_member: Option<NewMember>,
     /// An association end of `element`, by index, whose role (or, if true, multiplicity) is
-    /// edited.
-    end: Option<(usize, bool)>,
+    /// edited, with how the diagram wrote ER cardinalities when the editing began: the text
+    /// is read that way even if the diagram's reading changes before it is written back.
+    end: Option<(usize, bool, er::CardinalityReading)>,
     editor: Editor,
     _subscription: Subscription,
 }
@@ -2358,6 +2359,7 @@ impl DiagramCanvas {
     fn open_end_editor(&mut self, hit: EndLabelHit, window: &mut Window, cx: &mut Context<Self>) {
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
+        let reading = ws.cardinality_reading();
         let Some(view) = ws.active_diagram.and_then(|d| model.view(d)) else { return };
         let Some(mut association) = view.get(hit.edge).and_then(|p| p.element) else { return };
         let mut end = hit.end;
@@ -2379,7 +2381,7 @@ impl DiagramCanvas {
             }
             Some(ElementKind::ErParticipation(_)) if hit.multiplicity => {
                 let shown = ws.shown_cardinality(association);
-                shown.map(|c| ws.cardinality_reading().text(c)).unwrap_or_default()
+                shown.map(|c| reading.text(c)).unwrap_or_default()
             }
             Some(ElementKind::ErParticipation(p)) => p.role.clone(),
             _ => return,
@@ -2392,7 +2394,7 @@ impl DiagramCanvas {
         let rect = Rect::new(hit.rect.x, hit.rect.y, hit.rect.width.max(80.0), hit.rect.height);
         self.open_editor(association, None, false, rect, text, false, window, cx);
         if let Some(edit) = &mut self.editing {
-            edit.end = Some((end, hit.multiplicity));
+            edit.end = Some((end, hit.multiplicity, reading));
         }
     }
 
@@ -2432,10 +2434,10 @@ impl DiagramCanvas {
             Editor::Line(s) => s.read(cx).value().to_string(),
             Editor::Area(s) => s.read(cx).value().to_string(),
         };
-        if let Some((end, multiplicity)) = edit.end {
+        if let Some((end, multiplicity, reading)) = edit.end {
             if text != edit.original {
                 self.update_workspace(cx, |ws| {
-                    ws.set_end_text(edit.element, end, multiplicity, &text)
+                    ws.set_end_text_read(edit.element, end, multiplicity, &text, reading)
                 });
             }
             cx.notify();

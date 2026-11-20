@@ -778,15 +778,7 @@ impl Workspace {
                 Some(ElementKind::ErParticipation(_))
             )
         {
-            let reading = self.cardinality_reading();
-            if self.shown_cardinality(association) == c {
-                return;
-            }
-            let label = t!("edit.properties").to_string();
-            let result = self.edit(label, |tx| {
-                umlcraft_notation::er::set_shown_cardinality(tx, association, c, reading)
-            });
-            self.report(result);
+            self.set_cardinality(association, c, self.cardinality_reading());
             return;
         }
         self.update_element(association, |data| match &mut data.kind {
@@ -822,17 +814,37 @@ impl Workspace {
         umlcraft_notation::er::shown_cardinality(self.doc.model(), participation, reading)
     }
 
-    /// Reads `text` typed for what ER participation `participation` shows, as the active
-    /// diagram writes it; an error says what it takes.
+    /// Sets the cardinality ER participation `participation` shows when read as `reading`: the
+    /// reading the value was typed in, which may no longer be the active diagram's by the time
+    /// it is written back (read at the entity, it is the other participation's).
+    pub fn set_cardinality(
+        &mut self,
+        participation: Id,
+        c: Option<Cardinality>,
+        reading: CardinalityReading,
+    ) {
+        let model = self.doc.model();
+        if umlcraft_notation::er::shown_cardinality(model, participation, reading) == c {
+            return;
+        }
+        let label = t!("edit.properties").to_string();
+        let result = self.edit(label, |tx| {
+            umlcraft_notation::er::set_shown_cardinality(tx, participation, c, reading)
+        });
+        self.report(result);
+    }
+
+    /// Reads `text` typed for what ER participation `participation` shows when read as
+    /// `reading`; an error says what it takes.
     pub fn read_cardinality(
         &self,
         participation: Id,
         text: &str,
+        reading: CardinalityReading,
     ) -> Result<Option<Cardinality>, String> {
-        let reading = self.cardinality_reading();
-        reading
-            .parse(text, self.shown_cardinality(participation))
-            .map_err(|err| crate::errors::cardinality_error(&err, reading))
+        let shown =
+            umlcraft_notation::er::shown_cardinality(self.doc.model(), participation, reading);
+        reading.parse(text, shown).map_err(|err| crate::errors::cardinality_error(&err, reading))
     }
 
     /// Lets a lifeline of the active diagram end at `bottom`.
@@ -866,8 +878,24 @@ impl Workspace {
         }
     }
 
-    /// Sets the role name or the multiplicity of an association end from text typed in place.
+    /// [`Self::set_end_text_read`] with ER cardinalities read as the active diagram reads them.
+    #[cfg(test)]
     pub fn set_end_text(&mut self, association: Id, end: usize, multiplicity: bool, text: &str) {
+        let reading = self.cardinality_reading();
+        self.set_end_text_read(association, end, multiplicity, text, reading);
+    }
+
+    /// Sets the role name or the multiplicity of an association end from text typed in place;
+    /// an ER cardinality read as `reading`, the way the diagram wrote it when the editing
+    /// began.
+    pub fn set_end_text_read(
+        &mut self,
+        association: Id,
+        end: usize,
+        multiplicity: bool,
+        text: &str,
+        reading: CardinalityReading,
+    ) {
         let text = text.trim();
         // An ER participation has one end with labels: its cardinality and its role.
         let participation = self
@@ -877,13 +905,11 @@ impl Workspace {
             .is_some_and(|e| matches!(e.kind(), ElementKind::ErParticipation(_)));
         if participation {
             let parsed = match multiplicity {
-                true => self.read_cardinality(association, text),
+                true => self.read_cardinality(association, text, reading),
                 false => Ok(None),
             };
             match parsed {
-                Ok(c) if multiplicity => {
-                    self.set_association_end(association, end, EndChange::Cardinality(c));
-                }
+                Ok(c) if multiplicity => self.set_cardinality(association, c, reading),
                 Ok(_) => self.update_element(association, |data| {
                     if let ElementKind::ErParticipation(p) = &mut data.kind {
                         p.role = text.to_owned();
@@ -1969,6 +1995,50 @@ mod tests {
         assert_eq!(shown(&ws), Some("[1,n]".into()));
         ws.set_end_text(part, 0, true, "");
         assert_eq!(shown(&ws), None);
+    }
+
+    #[test]
+    fn a_cardinality_typed_goes_where_it_was_read_even_if_the_reading_changed() {
+        let (doc, ids) = order_system();
+        let mut ws = Workspace::new(doc, None);
+        let chen = ElementKind::diagram(DiagramKind::EntityRelationship);
+        let (diagram, parts) = ws
+            .doc
+            .edit("er", |tx| {
+                let d = tx.create(ids.domain, ElementData::new("ER", chen))?;
+                let node = |tx: &mut Tx<'_>, kind| {
+                    let e = tx.create(ids.domain, ElementData::new("x", kind))?;
+                    tx.add_node(d, Some(e), Rect::new(0.0, 0.0, 80.0, 40.0))
+                };
+                let a = node(tx, ElementKind::ErEntity(Default::default()))?;
+                let b = node(tx, ElementKind::ErEntity(Default::default()))?;
+                let relationship = node(tx, ElementKind::ErRelationship(Default::default()))?;
+                let mut parts = Vec::new();
+                for entity in [a, b] {
+                    let edge = umlcraft_notation::er::connect(tx, d, entity, relationship)?;
+                    parts.push(tx.model().view(d).and_then(|v| v.get(edge)?.element).unwrap());
+                }
+                Ok((d, parts))
+            })
+            .unwrap();
+        ws.open_diagram(diagram);
+        let stored = |ws: &Workspace, part: Id| match ws.doc.model().get(part).map(|e| e.kind()) {
+            Some(ElementKind::ErParticipation(p)) => p.cardinality.map(|c| c.to_string()),
+            _ => None,
+        };
+        ws.set_end_text(parts[0], 0, true, "[0,n]");
+        ws.set_end_text(parts[1], 0, true, "[0,m]");
+        // `1` typed while the diagram showed ratios; before Enter it turned to reading at the
+        // entity, where the first participation shows the second's cardinality.
+        ws.update_element(diagram, |data| {
+            if let ElementKind::Diagram(p) = &mut data.kind {
+                p.look_here = true;
+            }
+        });
+        let ratios = CardinalityReading::Ratios;
+        ws.set_end_text_read(parts[0], 0, true, "1", ratios);
+        assert_eq!(stored(&ws, parts[0]), Some("[0,1]".into()));
+        assert_eq!(stored(&ws, parts[1]), Some("[0,m]".into()));
     }
 
     #[test]

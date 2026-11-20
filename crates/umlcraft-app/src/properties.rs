@@ -217,6 +217,9 @@ pub struct PropertiesPanel {
     /// An edit always goes back to that element, even if the selection has changed by the time
     /// the field loses focus; fields nobody typed into are never written back.
     editing: HashMap<Field, Id>,
+    /// How the cardinality being typed was written when the typing began: the text is read
+    /// that way, even if the diagram's reading changed before it is written back.
+    typed_reading: Option<CardinalityReading>,
     /// The structogram's fields, shown instead while something of the structogram shown is
     /// selected.
     structogram: Entity<NsdProperties>,
@@ -962,6 +965,7 @@ impl PropertiesPanel {
             color_step: None,
             shown: None,
             editing: HashMap::new(),
+            typed_reading: None,
             structogram,
             _subscriptions: subscriptions,
         };
@@ -1054,6 +1058,9 @@ impl PropertiesPanel {
         match ev {
             InputEvent::Change => {
                 if let Some(id) = self.shown_id() {
+                    if field == Field::Cardinality && !self.editing.contains_key(&field) {
+                        self.typed_reading = self.shown.as_ref().map(|shown| shown.3);
+                    }
                     self.editing.entry(field).or_insert(id);
                 }
             }
@@ -1275,9 +1282,11 @@ impl PropertiesPanel {
             }
             Field::Cardinality => {
                 let text = Self::value(&self.cardinality, cx);
+                let typed = self.typed_reading.take();
                 self.workspace.update(cx, |ws, cx| {
-                    match ws.read_cardinality(id, &text) {
-                        Ok(c) => ws.set_association_end(id, 0, crate::EndChange::Cardinality(c)),
+                    let reading = typed.unwrap_or_else(|| ws.cardinality_reading());
+                    match ws.read_cardinality(id, &text, reading) {
+                        Ok(c) => ws.set_cardinality(id, c, reading),
                         Err(message) => ws.complain(message),
                     }
                     cx.notify();
@@ -1530,6 +1539,7 @@ impl PropertiesPanel {
         if !same {
             // The fields are overwritten below, so nothing typed into them is pending any more.
             self.editing.clear();
+            self.typed_reading = None;
         }
 
         let set = |state: &Entity<InputState>,
