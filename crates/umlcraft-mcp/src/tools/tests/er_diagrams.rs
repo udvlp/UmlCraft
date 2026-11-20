@@ -492,6 +492,57 @@ fn a_cardinality_on_a_short_line_stays_beside_it() {
 }
 
 #[test]
+fn a_cardinality_on_a_very_short_line_stays_on_its_side_of_the_rhombus() {
+    // The rhombus close to the entity, or touching it: the `[0,n]` of the short line stays
+    // beside it rather than go past the rhombus, onto the side of the other line (#97).
+    for gap in [12.0, 10.0, 5.0, 2.0, 0.0] {
+        let mut host = Headless::new();
+        let r = build(
+            &mut host,
+            json!([
+                { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+                  "name": "er" } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erEntity", "name": "A", "x": 40, "y": 40 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erRelationship", "name": "r", "x": 140.0 + gap, "y": 35 } },
+                { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                  "tool": "erEntity", "name": "B", "x": 350, "y": 40 } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$2.element", "target": "$1.element" } },
+                { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+                  "source": "$2.element", "target": "$3.element" } },
+                { "tool": "update_element", "arguments": { "id": "$4.element",
+                  "cardinality": "[0,n]" } },
+                { "tool": "update_element", "arguments": { "id": "$5.element",
+                  "cardinality": "[1,1]" } },
+            ]),
+        );
+        let scene = drawn(&mut host, &r[0]["diagram"]);
+        let (_, measure) = host.parts();
+        let rhombus = scene.node(id(&r[2]["presentation"]).parse().unwrap()).unwrap().rect;
+        let edge = |k: usize| scene.edge(id(&r[k]["presentation"]).parse().unwrap()).unwrap();
+        let (own, other) = (edge(4), edge(5));
+        let distance = |p: Point, points: &[Point]| {
+            points
+                .windows(2)
+                .map(|w| scene::distance_to_segment(p, w[0], w[1]))
+                .fold(f32::INFINITY, f32::min)
+        };
+        let label = own.labels.iter().find(|l| l.text == "[0,n]").unwrap();
+        let drawn = labels::label_rect(label, measure);
+        let c = drawn.center();
+        assert!(
+            distance(c, &own.points) < distance(c, &other.points),
+            "gap {gap}: {drawn:?} nearer {:?} than {:?}",
+            other.points,
+            own.points
+        );
+        assert!(c.x < rhombus.center().x, "gap {gap}: {drawn:?} past the middle of {rhombus:?}");
+    }
+}
+
+#[test]
 fn the_labels_of_a_loop_into_the_top_of_an_entity_stay_at_the_entity() {
     let mut host = Headless::new();
     let r = build(

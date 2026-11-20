@@ -410,12 +410,12 @@ impl Block {
 }
 
 /// Spots for a role (`role`) or multiplicity at the source or target end of `points`, on the
-/// side Astah puts it first, then on the other: as far along the line as Astah or further, and
-/// as far across as Astah or far enough not to cross the line. Past the end segment the spots
-/// follow the line around its bend, beside the segment they reach, and also lie on the end
-/// segment's extension, which is clear where the line turns back (a loop). With `inside`, the
-/// side of the end segment facing that point comes first: the inside of a loop, where a short
-/// text reads as its own.
+/// side Astah puts it first, then on the other: as far along the line as Astah or further, but
+/// not past its other end, and as far across as Astah or far enough not to cross the line. Past
+/// the end segment the spots follow the line around its bend, beside the segment they reach,
+/// and also lie on the end segment's extension, which is clear where the line turns back (a
+/// loop). With `inside`, the side of the end segment facing that point comes first: the inside
+/// of a loop, where a short text reads as its own.
 fn end_spots(
     points: &[Point],
     source: bool,
@@ -454,11 +454,16 @@ fn end_spots(
     // the bend.
     let short = n > 2 && base + half_along + 2.0 * GAP > len;
     let nearer = short.then_some(clear + GAP - base);
+    // A label further along than the line is long stands beside the node at its other end or
+    // beyond it, where it reads as another line's: some of it stays beside the line. Spots
+    // further on stop there rather than drop out, so the others keep their rank.
+    let total: f32 = path.windows(2).map(|w| w[0].distance(w[1])).sum();
+    let reach = (total + half_along).max(base.max(clear));
     let mut spots = Vec::new();
     for wider in WIDER {
         for side in [first_side, -first_side] {
             for extra in nearer.into_iter().chain(FURTHER) {
-                let along = (base + extra).max(clear);
+                let along = (base + extra).max(clear).min(reach);
                 let (p, d, first) = along_from_end(&path, along);
                 let extended = Point::new(tip.x + u.0 * along, tip.y + u.1 * along);
                 let beyond = (!first).then_some((extended, u, true));
