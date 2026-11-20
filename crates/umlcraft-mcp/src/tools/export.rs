@@ -4,7 +4,8 @@ use super::*;
 
 pub(super) fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
     let path = access.check(Path::new(str_arg(args, "path")?), None)?;
-    let shown = opt_id(args, "diagram")?.or(host.active_diagram());
+    let shown =
+        opt_diagram(host.document().model(), args, "diagram", true)?.or(host.active_diagram());
     let model = host.document().model();
     let structogram = shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram());
     let bytes = match (structogram, extension(&path).as_str()) {

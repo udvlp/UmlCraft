@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) fn open_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
-    let diagram = id_arg(args, "diagram")?;
+    let diagram = diagram_ref(host.document().model(), str_arg(args, "diagram")?, true)?;
     let model = host.document().model();
     let structogram = model.get(diagram).is_some_and(|e| e.kind().as_structogram().is_some());
     if !structogram {
@@ -14,7 +14,7 @@ pub(super) fn open_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
 }
 
 pub(super) fn select(host: &mut dyn Host, args: &Value) -> Outcome {
-    let target = match opt_id(args, "diagram")? {
+    let target = match opt_diagram(host.document().model(), args, "diagram", true)? {
         Some(id) => Some(id),
         None => host.active_diagram(),
     };

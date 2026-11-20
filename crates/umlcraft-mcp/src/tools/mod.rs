@@ -133,7 +133,7 @@ unless `y` says where, `wrap_in_fragment` puts messages into an `alt`, `loop`, â
 case. Structograms (Nassi-Shneiderman diagrams) are JSON trees: `create_structogram`, \
 `get_structogram`, `update_structogram`. `batch` runs several calls as one undo step; a string `$0.id` in a later call's \
 arguments takes the `id` from the first call's reply. Ids are UUID strings returned by the \
-tools.";
+tools; a `diagram` may also be given by its name (a structogram by its title).";
 
 type Outcome = Result<Reply, String>;
 
