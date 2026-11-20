@@ -1187,7 +1187,7 @@ mod tests {
         let model = d.doc.model();
         assert_eq!(
             shown_cardinality(model, ticket_part, LookAcross),
-            Some(Cardinality::new(0, CardinalityMax::ManyM))
+            Some(Cardinality::new(0, CardinalityMax::M))
         );
         assert_eq!(shown_cardinality(model, customer_part, LookAcross), Some(Cardinality::ONE_ONE));
         // Three entities: each shows its own maximum (1 : m : 3).
@@ -1555,6 +1555,12 @@ mod tests {
         assert_eq!(er_end(true, c("[0,1]"), c("[1,1]"), false), (M::ErDot, Some("Z".into())));
         assert_eq!(er_end(true, c("[3,3]"), c("[1,1]"), false), (M::ErDot, Some("3".into())));
         assert_eq!(er_end(true, c("[0,n]"), c("[0,n]"), true), (M::ErDot, None), "many-to-many");
+        // Any letter is many, as `n` is.
+        assert_eq!(er_end(false, c("[1,q]"), c("[1,1]"), false), (M::ErOneMany, None));
+        assert_eq!(er_end(false, c("[0,p]"), c("[1,1]"), false), (M::ErZeroMany, None));
+        assert_eq!(er_end(true, c("[1,q]"), c("[1,1]"), false), (M::ErDot, Some("P".into())));
+        assert_eq!(er_end(true, c("[0,p]"), c("[0,q]"), true), (M::ErDot, None), "many-to-many");
+        assert_eq!(er_end(true, c("[1,1]"), c("[0,q]"), true), (M::None, None));
     }
 
     #[test]

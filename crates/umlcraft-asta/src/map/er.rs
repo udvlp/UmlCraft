@@ -295,7 +295,7 @@ impl Importer<'_> {
         for (end, entity) in [(parent, parent_entity), (child, child_entity)] {
             let cardinality = r.multiplicity(end).map(|m| {
                 let max = match m.upper {
-                    None => CardinalityMax::Many,
+                    None => CardinalityMax::N,
                     Some(n) => CardinalityMax::Count(n),
                 };
                 Cardinality::new(m.lower, max)

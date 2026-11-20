@@ -255,17 +255,47 @@ pub enum CardinalityMin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CardinalityMax {
     Count(u32),
-    /// Any number (`n`).
-    Many,
-    /// Any number, named `m`: the second "many" side of a relationship (`[0,n]` to `[0,m]`).
-    ManyM,
+    /// Any number, named by a lowercase ASCII letter: `n` ([`N`](Self::N)), `m`
+    /// ([`M`](Self::M)) for the second "many" side of a relationship (`[0,n]` to `[0,m]`), and
+    /// any other letter where more of them are told apart (`n`, `m` and `p` in a ternary
+    /// relationship, `[0,p]` and `[1,q]`). [`many`](Self::many) makes one from a letter in
+    /// either case.
+    Many(char),
+}
+
+impl CardinalityMax {
+    /// Many, `n` (also read from `N` and `*`).
+    pub const N: Self = Self::Many('n');
+    /// The second many, `m`.
+    pub const M: Self = Self::Many('m');
+
+    /// A "many" maximum named `letter`, an ASCII letter. It is kept in lowercase, as `N` has
+    /// always read as `n`: `P` and `p` are the same maximum.
+    pub fn many(letter: char) -> Option<Self> {
+        letter.is_ascii_alphabetic().then(|| Self::Many(letter.to_ascii_lowercase()))
+    }
+
+    /// Any number, whatever its letter: what crow's feet and SQL make of it.
+    pub fn is_many(self) -> bool {
+        matches!(self, Self::Many(_))
+    }
+}
+
+/// The number or the letter: `1`, `3`, `n`, `q`.
+impl fmt::Display for CardinalityMax {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Count(n) => write!(f, "{n}"),
+            Self::Many(letter) => write!(f, "{letter}"),
+        }
+    }
 }
 
 impl Cardinality {
     pub const ZERO_ONE: Self = Self::new(0, CardinalityMax::Count(1));
     pub const ONE_ONE: Self = Self::new(1, CardinalityMax::Count(1));
-    pub const ZERO_MANY: Self = Self::new(0, CardinalityMax::Many);
-    pub const ONE_MANY: Self = Self::new(1, CardinalityMax::Many);
+    pub const ZERO_MANY: Self = Self::new(0, CardinalityMax::N);
+    pub const ONE_MANY: Self = Self::new(1, CardinalityMax::N);
 
     /// `[min,max]` with a number as the minimum.
     pub const fn new(min: u32, max: CardinalityMax) -> Self {
@@ -279,13 +309,9 @@ impl Cardinality {
     }
 
     /// The maximum alone, as Chen's ratios write it: `1` for `[1,1]`, `n` for `[0,n]`, `m` for
-    /// `[0,m]`, `3` for `[0,3]`.
+    /// `[0,m]`, `q` for `[1,q]`, `3` for `[0,3]`.
     pub fn ratio(&self) -> String {
-        match self.max {
-            CardinalityMax::Count(n) => n.to_string(),
-            CardinalityMax::Many => "n".into(),
-            CardinalityMax::ManyM => "m".into(),
-        }
+        self.max.to_string()
     }
 
     /// `current` with the maximum `max`, as setting a ratio changes it: the minimum stays,
@@ -302,9 +328,9 @@ impl Cardinality {
         Self { min, max }
     }
 
-    /// Reads a ratio (`1`, `n` or `N`, `m` or `M`, a number) as the new maximum of `current`,
-    /// as [`with_ratio`](Self::with_ratio) sets it, and a whole cardinality (`[1,n]`, `0..1`)
-    /// as it is.
+    /// Reads a ratio (a number or a letter: `1`, `n` or `N`, `m`, `q`) as the new maximum of
+    /// `current`, as [`with_ratio`](Self::with_ratio) sets it, and a whole cardinality
+    /// (`[1,n]`, `0..1`) as it is.
     pub fn from_ratio(text: &str, current: Option<Self>) -> Result<Self, ParseCardinalityError> {
         let ratio = text.trim();
         if ratio.contains([',', '[', '(']) || ratio.contains("..") {
@@ -317,12 +343,15 @@ impl Cardinality {
     }
 }
 
-/// A maximum: `n`, `N` or `*` for many, `m` or `M` for the second many, or a number.
+/// A maximum: a number, `*` for many (`n`), or one ASCII letter in either case for a named
+/// many (`n`, `m`, `q`).
 fn parse_max(text: &str) -> Option<CardinalityMax> {
-    match text.trim() {
-        "n" | "N" | "*" => Some(CardinalityMax::Many),
-        "m" | "M" => Some(CardinalityMax::ManyM),
-        n => n.parse().ok().map(CardinalityMax::Count),
+    let text = text.trim();
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some('*'), None) => Some(CardinalityMax::N),
+        (Some(letter), None) if letter.is_ascii_alphabetic() => CardinalityMax::many(letter),
+        _ => text.parse().ok().map(CardinalityMax::Count),
     }
 }
 
@@ -333,11 +362,7 @@ impl fmt::Display for Cardinality {
             CardinalityMin::Count(n) => write!(f, "{n}")?,
             CardinalityMin::Any => f.write_str("*")?,
         }
-        match self.max {
-            CardinalityMax::Count(n) => write!(f, ",{n}]"),
-            CardinalityMax::Many => f.write_str(",n]"),
-            CardinalityMax::ManyM => f.write_str(",m]"),
-        }
+        write!(f, ",{}]", self.max)
     }
 }
 
@@ -348,9 +373,9 @@ pub struct ParseCardinalityError(pub String);
 impl FromStr for Cardinality {
     type Err = ParseCardinalityError;
 
-    /// Reads `[0,n]` (brackets optional, or parentheses; `*` as the minimum for any; `n`, `N` or
-    /// `*` as the maximum for many, `m` or `M` for the second many) and UML's `1..*`, `0..1`,
-    /// `1` and `*`.
+    /// Reads `[0,n]` (brackets optional, or parentheses; `*` as the minimum for any; `*` or one
+    /// ASCII letter in either case as the maximum for many: `n`, `m` for the second many, `p`,
+    /// `q`, …, kept in lowercase) and UML's `1..*`, `0..1`, `1` and `*`.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let err = || ParseCardinalityError(s.to_owned());
         let text = s.trim();
@@ -444,7 +469,7 @@ pub struct ErSubtypingProps {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cardinality, ErAction};
+    use super::{Cardinality, CardinalityMax, ErAction};
 
     #[test]
     fn actions_read_their_sql_words() {
@@ -479,12 +504,37 @@ mod tests {
     }
 
     #[test]
+    fn any_letter_is_a_maximum_of_many() {
+        let read = |s: &str| s.parse::<Cardinality>().unwrap();
+        assert_eq!(read("[1,q]").to_string(), "[1,q]");
+        assert_eq!(read("[0,p]").max, CardinalityMax::Many('p'));
+        assert!(read("[1,q]").max.is_many());
+        // Kept in lowercase, as `N` reads as `n`.
+        assert_eq!(read("[0,P]").to_string(), "[0,p]");
+        assert_eq!(read("(1, Q)").to_string(), "[1,q]");
+        assert_eq!(read("1..k").to_string(), "[1,k]");
+        assert_eq!(read("[0,N]").max, CardinalityMax::N);
+        assert_eq!(read("[0,*]").max, CardinalityMax::N);
+        assert_eq!(read("[0,m]").max, CardinalityMax::M);
+        assert_ne!(read("[0,p]"), read("[0,q]"));
+        // One ASCII letter, nothing else.
+        for bad in ["[0,nn]", "[0,pq]", "[0,ä]", "[0,1n]", "[0,_]", "[0,#]", "[p,1]", "[0,]"] {
+            assert!(bad.parse::<Cardinality>().is_err(), "{bad}");
+        }
+        assert_eq!(CardinalityMax::many('Q'), Some(CardinalityMax::Many('q')));
+        assert_eq!(CardinalityMax::many('7'), None);
+        assert_eq!(CardinalityMax::Count(3).to_string(), "3");
+    }
+
+    #[test]
     fn ratios_are_the_maximum() {
         let ratio = |s: &str| s.parse::<Cardinality>().unwrap().ratio();
         assert_eq!(ratio("[1,1]"), "1");
         assert_eq!(ratio("[0,n]"), "n");
         assert_eq!(ratio("[1,m]"), "m");
         assert_eq!(ratio("[0,3]"), "3");
+        assert_eq!(ratio("[1,q]"), "q");
+        assert_eq!(ratio("[0,P]"), "p");
         // Setting one keeps the minimum, lowered to the new maximum if it is above.
         let set = |s: &str, current: &str| {
             Cardinality::from_ratio(s, current.parse().ok()).unwrap().to_string()
@@ -495,10 +545,13 @@ mod tests {
         assert_eq!(set("1", "[2,5]"), "[1,1]");
         assert_eq!(set(" 3 ", "[*,n]"), "[*,3]");
         assert_eq!(set("N", ""), "[0,n]");
+        assert_eq!(set("q", "[1,n]"), "[1,q]");
+        assert_eq!(set("P", "[2,5]"), "[2,p]");
         // A whole cardinality is taken as it is.
         assert_eq!(set("[1,n]", "[0,1]"), "[1,n]");
         assert_eq!(set("0..1", "[1,n]"), "[0,1]");
-        for bad in ["", "0", "x", "[2,1]", "-1"] {
+        assert_eq!(set("[1,q]", "[0,1]"), "[1,q]");
+        for bad in ["", "0", "nn", "ä", "[2,1]", "-1"] {
             assert!(Cardinality::from_ratio(bad, None).is_err(), "{bad}");
         }
     }

@@ -1989,10 +1989,13 @@ mod tests {
         ws.set_end_text(part, 0, true, "[1,1]");
         ws.set_end_text(part, 0, true, "n");
         assert_eq!(shown(&ws), Some("[1,n]".into()));
+        // Any letter is a ratio of many.
+        ws.set_end_text(part, 0, true, "Q");
+        assert_eq!(shown(&ws), Some("[1,q]".into()));
         // Text that is no ratio is refused with a message.
-        ws.set_end_text(part, 0, true, "x");
+        ws.set_end_text(part, 0, true, "xy");
         assert!(ws.message.is_some());
-        assert_eq!(shown(&ws), Some("[1,n]".into()));
+        assert_eq!(shown(&ws), Some("[1,q]".into()));
         ws.set_end_text(part, 0, true, "");
         assert_eq!(shown(&ws), None);
     }

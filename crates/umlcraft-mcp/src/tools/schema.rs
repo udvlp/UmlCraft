@@ -174,8 +174,11 @@ pub fn list() -> Vec<Value> {
         "disjoint": { "type": "string", "enum": ["", "disjoint", "overlapping"],
                       "description": "IS-A: whether the subtypes exclude each other (d, o)." },
         "cardinality": text("ER participations: how often the entity takes part, read \
-                             look-across, e.g. [0,1], [1,n], [0,m]; \"\" for none. Chen \
-                             diagrams with `ratios` show its maximum alone (1, n, m)."),
+                             look-across, e.g. [0,1], [1,n], [0,m]; \"\" for none. The \
+                             maximum is a number or one letter for many: n (also * or N), m \
+                             for the second many, any other to tell more apart ([0,p], \
+                             [1,q]), kept in lowercase. Chen diagrams with `ratios` show its \
+                             maximum alone (1, n, m, q)."),
         "cardinality_here": text("ER participations of relationships of one or of three and \
                                   more entities: how often each instance of the entity takes \
                                   part, read at the entity, e.g. (1,n), as Chen diagrams with \
@@ -235,7 +238,7 @@ pub fn list() -> Vec<Value> {
                            look-across. Turns `ratios` off."),
         "ratios": flag("ER diagrams in Chen: show cardinalities as Chen's ratios (1:1, 1:n, \
                         n:m), the maximum of each participation's `cardinality` alone \
-                        ([1,1] as 1, [0,n] as n, [0,m] as m), instead of [min,max]. Turns \
+                        ([1,1] as 1, [0,n] as n, [1,q] as q), instead of [min,max]. Turns \
                         `look_here` off."),
     });
     let structogram_schema = json!({

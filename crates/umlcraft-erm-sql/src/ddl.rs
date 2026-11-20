@@ -1600,6 +1600,38 @@ mod tests {
     }
 
     #[test]
+    fn a_letter_as_the_maximum_is_many_like_n() {
+        let (doc, diagram) = shop();
+        let with_n = ddl(doc.model(), diagram, Dialect::Postgres).unwrap().sql;
+        let (mut doc, diagram) = shop();
+        let parts: Vec<Id> = doc
+            .model()
+            .elements()
+            .filter(|e| matches!(e.kind(), ElementKind::ErParticipation(_)))
+            .map(|e| e.id())
+            .collect();
+        let mut renamed = 0;
+        doc.edit("letters", |tx| {
+            for (i, part) in parts.into_iter().enumerate() {
+                tx.update(part, |data| {
+                    if let ElementKind::ErParticipation(p) = &mut data.kind
+                        && let Some(c) = &mut p.cardinality
+                        && c.max == CardinalityMax::N
+                    {
+                        c.max = CardinalityMax::Many(if i % 2 == 0 { 'p' } else { 'q' });
+                        renamed += 1;
+                    }
+                })?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert!(renamed >= 6, "{renamed}");
+        // `[0,p]` and `[1,q]` make the same tables and foreign keys as `[0,n]`.
+        assert_eq!(ddl(doc.model(), diagram, Dialect::Postgres).unwrap().sql, with_n);
+    }
+
+    #[test]
     fn mysql_quotes_with_backticks_and_comments_inline() {
         let (mut doc, diagram) = shop();
         let model = doc.model();

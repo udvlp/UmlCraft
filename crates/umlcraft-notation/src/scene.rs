@@ -815,10 +815,8 @@ pub fn er_end(
             return (if zero { EndMarker::ErOptional } else { EndMarker::None }, None);
         }
         let text = match (c.min, c.max) {
-            (CardinalityMin::Count(0), CardinalityMax::Many | CardinalityMax::ManyM) => None,
-            (CardinalityMin::Count(1), CardinalityMax::Many | CardinalityMax::ManyM) => {
-                Some("P".to_owned())
-            }
+            (CardinalityMin::Count(0), CardinalityMax::Many(_)) => None,
+            (CardinalityMin::Count(1), CardinalityMax::Many(_)) => Some("P".to_owned()),
             (CardinalityMin::Count(0), CardinalityMax::Count(1)) => Some("Z".to_owned()),
             (CardinalityMin::Count(a), CardinalityMax::Count(b)) if a == b => Some(a.to_string()),
             _ => Some(c.to_string()),
@@ -832,7 +830,7 @@ pub fn er_end(
         (true, false) => EndMarker::ErZeroMany,
     };
     let plain = matches!(c.min, CardinalityMin::Count(0 | 1))
-        && matches!(c.max, CardinalityMax::Count(1) | CardinalityMax::Many | CardinalityMax::ManyM);
+        && matches!(c.max, CardinalityMax::Count(1) | CardinalityMax::Many(_));
     (marker, (!plain).then(|| c.to_string()))
 }
 

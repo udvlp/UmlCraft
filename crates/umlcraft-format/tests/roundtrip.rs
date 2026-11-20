@@ -94,13 +94,10 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
             ..Default::default()
         };
         tx.create(ticket, ElementData::new("customer", ElementKind::ErAttribute(column)))?;
-        tx.create(
-            books,
-            ElementData::new(
-                "",
-                ElementKind::ErParticipation(ErParticipationProps::new(books, ticket)),
-            ),
-        )?;
+        // Any letter is a maximum of many, kept as written.
+        let mut at_ticket = ErParticipationProps::new(books, ticket);
+        at_ticket.cardinality = Some(Cardinality::new(1, CardinalityMax::Many('q')));
+        tx.create(books, ElementData::new("", ElementKind::ErParticipation(at_ticket)))?;
         let is_a = tx.create(
             package,
             ElementData::new(
@@ -148,6 +145,7 @@ fn er_diagrams_survive_and_deleting_an_entity_takes_its_lines() {
         "\"notNull\": true",
         "\"identifying\": true",
         "\"cardinality\": \"[1,1]\"",
+        "\"cardinality\": \"[1,q]\"",
         "\"type\": \"erIsA\"",
         "\"supertype\": true",
         "\"diagram\": \"entityRelationship\"",

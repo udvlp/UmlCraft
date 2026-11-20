@@ -188,16 +188,20 @@ fn multiplicity_choices(end: &AssociationEnd) -> Vec<(String, bool, EndChange)> 
 }
 
 /// The cardinalities the context menu offers for an ER participation that shows `shown`,
-/// written as `reading` writes them: as ratios the maximum alone (`1`, `n`, `m`), which keeps
-/// the minimum.
+/// written as `reading` writes them: as ratios the maximum alone (`1`, `n`, `m`, and the shown
+/// one's letter if it is another, such as `q`), which keeps the minimum.
 fn cardinality_choices(
     shown: Option<Cardinality>,
     reading: er::CardinalityReading,
 ) -> Vec<(String, bool, Option<Cardinality>)> {
     let offered: Vec<_> = match reading {
         er::CardinalityReading::Ratios => {
-            [CardinalityMax::Count(1), CardinalityMax::Many, CardinalityMax::ManyM]
+            let other_letter = shown.map(|s| s.max).filter(|max| {
+                max.is_many() && ![CardinalityMax::N, CardinalityMax::M].contains(max)
+            });
+            [CardinalityMax::Count(1), CardinalityMax::N, CardinalityMax::M]
                 .into_iter()
+                .chain(other_letter)
                 .map(|max| {
                     let c = Cardinality::with_ratio(shown, max);
                     (c.ratio(), shown.is_some_and(|s| s.max == max), Some(c))
@@ -3539,8 +3543,28 @@ mod tests {
     use umlcraft_model::sample::order_system;
     use umlcraft_notation::scene::{self, ApproxMeasure, Preview};
 
-    use super::{lane_order, lane_room, lanes_of};
+    use super::{cardinality_choices, lane_order, lane_room, lanes_of};
     use crate::workspace::Workspace;
+
+    #[test]
+    fn ratios_offer_the_shown_letter_besides_1_n_and_m() {
+        use umlcraft_notation::er::CardinalityReading;
+        let offered = |shown: &str| -> Vec<(String, bool)> {
+            cardinality_choices(shown.parse().ok(), CardinalityReading::Ratios)
+                .into_iter()
+                .skip(1)
+                .map(|(text, checked, _)| (text, checked))
+                .collect()
+        };
+        let plain = |checked: usize| -> Vec<(String, bool)> {
+            ["1", "n", "m"].iter().enumerate().map(|(i, t)| (t.to_string(), i == checked)).collect()
+        };
+        assert_eq!(offered("[0,n]"), plain(1));
+        assert_eq!(offered("[0,m]"), plain(2));
+        let mut with_q = plain(usize::MAX);
+        with_q.push(("q".into(), true));
+        assert_eq!(offered("[1,q]"), with_q);
+    }
 
     #[test]
     fn a_swimlane_dropped_past_its_neighbour_swaps_places_with_it() {

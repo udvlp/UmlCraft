@@ -233,7 +233,7 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
                     .then(|| relationship_name(&fk.columns, ""));
                 let target = m.target(&fk.target)?;
                 // `[0,n]` to `[0,m]`; a third and further ends are `n` again.
-                let max = if k == 1 { CardinalityMax::ManyM } else { CardinalityMax::Many };
+                let max = if k == 1 { CardinalityMax::M } else { CardinalityMax::N };
                 m.join(r, target, Cardinality::new(0, max), role, false)?;
             }
             m.attributes(r, t, &own, &[], &[])?;
@@ -269,7 +269,7 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
             let near_source = if unique(t, fk) {
                 Cardinality::new(0, CardinalityMax::Count(1))
             } else {
-                Cardinality::new(0, CardinalityMax::Many)
+                Cardinality::new(0, CardinalityMax::N)
             };
             if fk.target == t.key {
                 // S8: the line of the referenced side carries the role.

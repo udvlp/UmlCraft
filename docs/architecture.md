@@ -1046,7 +1046,8 @@ one is the other's cardinality, so the diagram only swaps the ends (`er::shown_c
 cardinalities and is kept on its own (`ErParticipationProps::look_here`). With
 `DiagramProps::ratios` a Chen diagram shows Chen's ratios instead, the maximum of each
 participation's look-across cardinality alone (`1` at `Kunde`, `n` at `Ticket`: 1:n; `[0,m]`
-gives `m`, `[0,3]` gives `3`), ignoring `look_here`; typing `1`, `n`, `m` or a number sets the
+gives `m`, `[1,q]` gives `q`, `[0,3]` gives `3`), ignoring `look_here`; typing a number or a
+letter (`1`, `n`, `m`, `q`) sets the
 maximum and keeps the minimum, lowered to the maximum if it is above
 (`Cardinality::from_ratio`). `er::CardinalityReading` says which of the three a diagram
 shows. The shapes are Chen's as draw.io draws them; the text and lines follow UmlCraft's
@@ -1070,8 +1071,14 @@ canvas. `umlcraft-erm-sql` makes such diagrams from SQL dumps and writes them ba
   associative entity) and refers to it and the entity (`cardinality`, `role`, `total` for the
   double line); a subtyping is owned by its IS-A and refers to it and the entity, the first
   one is the `supertype`. Both ends are strong references: deleting either deletes the line.
-  `Cardinality` has a minimum (a number or `*`) and a maximum (a number, `n`, or `m` for the
-  second "many" side of a relationship), written `[0,n]` and read also as `0..*`, `1`, `*`.
+  `Cardinality` has a minimum (a number or `*`) and a maximum: a number or "many" named by a
+  letter (`CardinalityMax::Many(char)`): `n`, `m` for the second "many" side of a
+  relationship, any other ASCII letter where more are told apart (`n`, `m` and `p` in a
+  ternary relationship, `[0,p]` and `[1,q]`). It is written `[0,n]` and read also as `0..*`,
+  `1`, `*` (`*` as the maximum is `n`); a letter is read in either case and kept in
+  lowercase, as `N` has always been `n`. The file stores the text, so a new letter needs no
+  change of the format. Wherever only "many" counts (crow's feet, IDEF1X's `P`, SQL), every
+  letter is `n`; the `.asta` export writes it as `*`, so the letter does not survive Astah.
   The file format went to version 5 for these kinds and to 6 for the IE and IDEF1X
   properties (no migration needed; older versions refuse the newer files).
 - **Connecting** (`notation/src/er.rs`). The palette has one line tool, `erLine`; what it makes
@@ -1126,7 +1133,8 @@ canvas. `umlcraft-erm-sql` makes such diagrams from SQL dumps and writes them ba
   cardinalities: `[min,max]`, `(min,max)` at the entity or `1 : n`), the key, the database
   properties, and for a participation its cardinality, role and total participation; the
   canvas's context menu sets a participation's cardinality (`[0,1]`, `[1,1]`, `[0,n]`,
-  `[1,n]`; with ratios `1`, `n`, `m`) and total participation and adds an attribute to an
+  `[1,n]`; with ratios `1`, `n`, `m` and the shown letter if it is another) and total
+  participation and adds an attribute to an
   entity, relationship or attribute; a double click on a cardinality or role edits it in
   place. The sample project has a "Database"
   diagram. File › "Import SQL dump as ER diagram …" (`sql.rs`) reads the dump in the

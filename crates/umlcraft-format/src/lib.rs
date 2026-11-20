@@ -54,7 +54,8 @@ type Migration = fn(&mut Value) -> Result<(), FormatError>;
 /// the IE and IDEF1X notations and foreign key columns; older ER diagrams are Chen's. Version
 /// 7 adds `{xor}` constraints between associations (`constraint` elements), domains, keys,
 /// indexes, checks and column details of ER diagrams, the diagrams' `simpleStates` and
-/// `lookHere` and the styles' `sharedChosen`; older files have none of them. Each addition
+/// `lookHere`, the styles' `sharedChosen` and letters besides `n` and `m` as the maximum of a
+/// cardinality (`"[1,q]"`); older files have none of them. Each addition
 /// gets a new version even when older files need no change: an older UmlCraft ignores fields it
 /// does not know, and would drop them on saving instead of refusing the newer file.
 const MIGRATIONS: &[Migration] =

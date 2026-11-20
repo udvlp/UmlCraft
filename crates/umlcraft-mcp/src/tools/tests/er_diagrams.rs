@@ -760,3 +760,60 @@ fn chen_ratios_show_the_maximum_of_each_cardinality() {
     let args = json!({ "id": class["diagram"], "ratios": true });
     assert!(call(&mut host, &Access::default(), "update_element", &args).is_error);
 }
+
+#[test]
+fn any_letter_is_a_maximum_of_many() {
+    let mut host = Headless::new();
+    let r = build(
+        &mut host,
+        json!([
+            { "tool": "create_diagram", "arguments": { "kind": "entity_relationship",
+              "name": "er" } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+              "tool": "erEntity", "name": "Kurs" } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+              "tool": "erEntity", "name": "Raum" } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+              "tool": "erRelationship", "name": "belegt" } },
+            { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+              "source": "$3.element", "target": "$1.element" } },
+            { "tool": "update_element", "arguments": { "id": "$4.element",
+              "cardinality": "[1,q]" } },
+            { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "erLine",
+              "source": "$3.element", "target": "$2.element" } },
+            { "tool": "update_element", "arguments": { "id": "$6.element",
+              "cardinality": "[0,P]" } },
+        ]),
+    );
+    // Kept as written, a capital in lowercase as `N` is `n`.
+    let got = run(&mut host, "get_element", json!({ "id": r[4]["element"] }));
+    assert!(got.to_string().contains("[1,q]"), "{got}");
+    let got = run(&mut host, "get_element", json!({ "id": r[6]["element"] }));
+    assert!(got.to_string().contains("[0,p]"), "{got}");
+    let texts = |host: &mut Headless| -> Vec<Vec<String>> {
+        let scene = drawn(host, &r[0]["diagram"]);
+        [&r[4], &r[6]]
+            .iter()
+            .map(|edge| {
+                let edge = scene.edge(id(&edge["presentation"]).parse().unwrap()).unwrap();
+                edge.labels.iter().map(|l| l.text.clone()).collect()
+            })
+            .collect()
+    };
+    assert_eq!(texts(&mut host), [["[1,q]"], ["[0,p]"]]);
+    // As ratios the letter alone, q : p.
+    run(&mut host, "update_element", json!({ "id": r[0]["diagram"], "ratios": true }));
+    assert_eq!(texts(&mut host), [["q"], ["p"]]);
+    let image = call(
+        &mut host,
+        &Access::default(),
+        "render_diagram",
+        &json!({ "diagram": r[0]["diagram"] }),
+    );
+    assert!(matches!(image.content[0], Content::Image(_)), "{image:?}");
+    // One letter only.
+    for bad in ["[0,nn]", "[1,ä]", "[1,#]"] {
+        let args = json!({ "id": r[4]["element"], "cardinality": bad });
+        assert!(call(&mut host, &Access::default(), "update_element", &args).is_error, "{bad}");
+    }
+}

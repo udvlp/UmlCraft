@@ -155,7 +155,11 @@ pub(super) fn set_er(kind: &mut ElementKind, args: &Value) -> Result<(), String>
                     None
                 } else {
                     Some(text.parse().map_err(|e: umlcraft_model::ParseCardinalityError| {
-                        format!("`{}` is no cardinality, e.g. [0,1], [1,n], 0..*", e.0)
+                        format!(
+                            "`{}` is no cardinality, e.g. [0,1], [1,n], [1,q], 0..* (the \
+                             maximum a number or one letter)",
+                            e.0
+                        )
                     })?)
                 };
                 if key == "cardinality" {
