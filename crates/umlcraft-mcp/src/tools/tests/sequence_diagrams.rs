@@ -1150,3 +1150,34 @@ fn an_update_tidies_only_the_sequence_diagrams_it_touches() {
     run(&mut host, "update_element", json!({ "id": messages[0]["element"], "name": "b()" }));
     assert_ne!(bars_of(&host, &d, 1), untidy);
 }
+
+/// `x` alone places a lifeline (and any node) there, with the top of a free spot; `y` alone
+/// likewise (issue #93).
+#[test]
+fn x_alone_places_a_lifeline() {
+    let mut host = Headless::new();
+    let d = run(&mut host, "create_diagram", json!({ "kind": "sequence", "name": "S" }));
+    let d = d["diagram"].clone();
+    let a = json!({ "diagram": d, "tool": "lifeline", "name": "a" });
+    let a = run(&mut host, "create_element", a);
+    let b = json!({ "diagram": d, "tool": "lifeline", "name": "b", "x": 280 });
+    let b = run(&mut host, "create_element", b);
+    let shown = run(&mut host, "get_diagram", json!({ "diagram": d }));
+    let bounds = |id: &Value| {
+        let nodes = shown["nodes"].as_array().unwrap();
+        nodes.iter().find(|n| n["presentation"] == *id).unwrap()["bounds"].clone()
+    };
+    let a_top = bounds(&a["presentation"])["y"].clone();
+    assert_eq!(
+        (bounds(&b["presentation"])["x"].as_f64(), bounds(&b["presentation"])["y"].clone()),
+        (Some(280.0), a_top)
+    );
+
+    let c = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "C" }));
+    let c = c["diagram"].clone();
+    let k = run(&mut host, "create_element", json!({ "diagram": c, "tool": "class", "y": 300 }));
+    let shown = run(&mut host, "get_diagram", json!({ "diagram": c }));
+    let node =
+        shown["nodes"].as_array().unwrap().iter().find(|n| n["presentation"] == k["presentation"]);
+    assert_eq!(node.unwrap()["bounds"]["y"].as_f64(), Some(300.0));
+}

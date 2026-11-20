@@ -77,7 +77,11 @@ pub(super) fn create_element(host: &mut dyn Host, args: &Value) -> Outcome {
             let on = on_diagram(model, diagram, on)?;
             composite::free_spot(model, diagram, on, tool).ok_or("`on` is not a node")?
         }
-        _ => free_origin(model, diagram),
+        // One of the two given (a lifeline's `x`): the other as on a free spot.
+        (x, y, None) => {
+            let free = free_origin(model, diagram);
+            Point::new(x.unwrap_or(free.x), y.unwrap_or(free.y))
+        }
     };
     let name = opt_str(args, "name").map(str::to_owned);
     let base = name.clone().unwrap_or_else(|| default_base(tool));

@@ -435,8 +435,9 @@ pub fn list() -> Vec<Value> {
                     "tool": text("The diagram tool."),
                     "name": text("Its name; a free default name if omitted. A `comment` \
                                   (note) shows it as its text, lines joined with \\n."),
-                    "x": number("Left edge."),
-                    "y": number("Top edge."),
+                    "x": number("Left edge; without `y`, the top is that of a free spot (a \
+                                 lifeline's `x` alone places it)."),
+                    "y": number("Top edge; without `x`, the left edge is that of a free spot."),
                     "on": id("Composite structure diagrams: the class (or part) a part goes into or \
                               a port goes on; activity diagrams: the action a pin goes on; state \
                               machine diagrams: the state an entry or exit point goes on, the \
