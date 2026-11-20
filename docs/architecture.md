@@ -1492,7 +1492,9 @@ travels with each live call, so the app keeps to the folders of the server that 
 Paths are canonicalized before the check; saving to the open project's own path is always
 allowed. `save_file` always writes `.ucraft` and `export_sql` `.sql` (added to a path without
 it), and the exports replace an existing file only with `"overwrite": true`, so a call cannot
-write over a document in an allowed folder. `umlcraft-cli mcp setup` registers the server with each client it finds (Claude
+write over a document in an allowed folder. `save_file` and the exports make the folders on the way that are
+missing, but only in an allowed folder (not again the folder of the project's own file when it
+is gone). `umlcraft-cli mcp setup` registers the server with each client it finds (Claude
 Code through `claude mcp add --scope user`, Claude Desktop's `claude_desktop_config.json`,
 Cursor's `~/.cursor/mcp.json`, merged into what is there) and allows the Documents folder
 unless told otherwise; `--dry-run` shows what it would do.

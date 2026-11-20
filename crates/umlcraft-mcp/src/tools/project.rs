@@ -90,8 +90,12 @@ pub(super) fn open_file(host: &mut dyn Host, access: &Access, args: &Value) -> O
 pub(super) fn save_file(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
     let own = host.path().map(Path::to_path_buf);
     let path: PathBuf = match (opt_str(args, "path"), &own) {
-        (Some(path), _) => {
-            let mut path = PathBuf::from(path);
+        (Some(text), _) => {
+            // Else `folder/` would become the file `folder/.ucraft`.
+            if text.ends_with(std::path::is_separator) {
+                return Err(format!("`{text}` is a folder; give the file's name too"));
+            }
+            let mut path = PathBuf::from(text);
             if extension(&path) != "ucraft" {
                 path.as_mut_os_string().push(".ucraft");
             }
@@ -100,6 +104,13 @@ pub(super) fn save_file(host: &mut dyn Host, access: &Access, args: &Value) -> O
         (None, Some(own)) => own.clone(),
         (None, None) => return Err("the project has no file yet; give `path`".into()),
     };
+    // Missing folders are made, as for exports, but only in an allowed folder: the project's
+    // own file may lie elsewhere, and a folder of it that is gone is not made again.
+    let absolute = crate::host::absolute;
+    let own_file = own.as_deref().is_some_and(|own| absolute(own) == absolute(&path));
+    if !own_file && let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    }
     umlcraft_format::save(host.document().model(), &path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let (doc, _) = host.parts();

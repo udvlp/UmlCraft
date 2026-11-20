@@ -819,7 +819,8 @@ pub fn list() -> Vec<Value> {
         ),
         tool(
             "save_file",
-            "Saves the project as .ucraft: to `path` in an allowed folder, or to its own file.",
+            "Saves the project as .ucraft: to `path` in an allowed folder (making the folders \
+             on the way that are missing), or to its own file.",
             json!({ "path": text("Where to save; the project's file if omitted.") }),
             &[],
         ),
