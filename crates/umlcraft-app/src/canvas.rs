@@ -2205,7 +2205,9 @@ impl DiagramCanvas {
     fn start_edit_at(&mut self, p: MPoint, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let row = scene::row_at(&self.scene, p);
         let mut slot_of = None;
-        let (presentation, element, role, rect) = match row {
+        // The rectangle of the row, and that of all rows of its text, for a text on several
+        // lines.
+        let (presentation, element, role, rect, whole) = match row {
             Some((node, _)) if matches!(node.figure, Figure::Text) => {
                 let text = self.free_text(node.id, cx).unwrap_or_default();
                 let rect = node.rect;
@@ -2226,7 +2228,13 @@ impl DiagramCanvas {
                 if row.role == RowRole::Slot {
                     slot_of = node.element;
                 }
-                (node.id, element, row.role, rect)
+                let whole = node
+                    .rows
+                    .iter()
+                    .filter(|r| r.element == row.element && r.role == row.role)
+                    .map(|r| r.rect)
+                    .fold(rect, |a, b| a.union(&b));
+                (node.id, element, row.role, rect, whole)
             }
             // A message of a sequence diagram: edit its label.
             None => {
@@ -2237,7 +2245,8 @@ impl DiagramCanvas {
                 let Some(element) = self.reorderable(id, cx) else { return false };
                 let (a, b) = (edge.points[0], edge.points[1]);
                 let x = if edge.points.len() > 2 { a.x } else { (a.x + b.x) / 2.0 - 70.0 };
-                (id, element, RowRole::Name, Rect::new(x, a.y - 20.0, 140.0, 16.0))
+                let rect = Rect::new(x, a.y - 20.0, 140.0, 16.0);
+                (id, element, RowRole::Name, rect, rect)
             }
         };
         let model = self.workspace.read(cx).doc.model();
@@ -2271,6 +2280,15 @@ impl DiagramCanvas {
                 (format!("{} = {value}", e.name()), false)
             }
             _ => (e.name().to_owned(), false),
+        };
+        // A text with a line break opens the editor for several lines, which keeps the break,
+        // over all its lines.
+        let multi_line = multi_line || text.contains('\n');
+        let rect = if multi_line && !matches!(e.kind(), ElementKind::Comment(_)) {
+            let lines = text.split('\n').count() as f32;
+            Rect::new(whole.x, whole.y, whole.width, whole.height.max(lines * scene::LABEL_HEIGHT))
+        } else {
+            rect
         };
         let node_id = presentation;
         self.workspace.update(cx, |ws, cx| {

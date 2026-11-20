@@ -234,14 +234,23 @@ migrations. Writing serializes from the model's own data without copying it.
 - `scene` turns a view into shapes in logical coordinates. Each node carries its text rows (`Row`)
   with position, font and the element the row edits. Painting, hit testing and inline editing share
   the same layout. Nodes grow with their content; text width is measured by a `TextMeasure` (the
-  real font in the app, an estimate in tests). `scene` also places edge labels and provides
-  resize handles, edge handles (waypoints), rubber-band selection and alignment. Containers (system
-  boundaries, packages, partitions, states, nodes, components, artifacts, structured classes
-  and parts)
-  graphically contain whatever lies fully inside them (`with_contents`); a state also holds its
-  substates where they reach out of it. System boundaries are "hollow" and clickable only on
-  their border and title. Layout and routing, which need where things are but not where free
-  labels end up, build the scene without placing them (`build_geometry`).
+  real font in the app, an estimate in tests). Every row and label is one line of text: texts
+  that may hold line breaks (notes, free texts, the names of nodes, lifelines and lines, a
+  state's entry, do and exit activities, internal transitions) are split at them
+  (`text_lines`), one row per line, centered or aligned as the single line is, and the box grows
+  in height for the further lines and in width for the longest; a line's name on several lines
+  is several labels, the first where Astah puts a name and the others below it, left-aligned
+  with it (as a transition's guard goes below its trigger), moving together; a message's keeps
+  its last line where the single line would be and the others above it. Other line breaks and
+  control characters become spaces (`single_line`). The in-place editor opens with several
+  lines for a text that has a break, so the break survives. Astah's API refuses line breaks in
+  names, so the export to `.asta` writes them as spaces. `scene` also places edge labels and
+  provides resize handles, edge handles (waypoints), rubber-band selection and alignment.
+  Containers (system boundaries, packages, partitions, states, nodes, components, artifacts,
+  structured classes and parts) graphically contain whatever lies fully inside them (`with_contents`); a
+  state also holds its substates where they reach out of it. System boundaries are "hollow" and
+  clickable only on their border and title. Layout and routing, which need where things are but
+  not where free labels end up, build the scene without placing them (`build_geometry`).
 - `labels` places the edge labels that were not placed by hand (`EdgeShape::free_labels`). Each
   starts where Astah's rule puts it; if that covers a node, a line or another label, it moves to
   the spot nearby that covers least: the other side of its line, further along it (a role or

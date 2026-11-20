@@ -469,6 +469,8 @@ mod tests {
         assert_eq!(escape("tab\there"), "tab\there");
     }
 
+    /// Each text is one line: tabs become spaces, other control characters go, and a name
+    /// written on several lines is drawn on as many.
     #[test]
     fn rows_and_labels_are_single_lines() {
         let (mut doc, ids) = order_system();
@@ -480,7 +482,42 @@ mod tests {
         let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
         let svg = render(&scene, &ApproxMeasure);
         assert!(svg.contains(">Cus tomer</text>"), "{svg}");
-        assert!(svg.contains(">places orders</text>"), "{svg}");
+        assert!(svg.contains(">places</text>") && svg.contains(">orders</text>"), "{svg}");
+        assert!(!svg.contains("places orders"), "{svg}");
+    }
+
+    /// The baseline of each `<text>` holding exactly `text`.
+    fn baselines(svg: &str, text: &str) -> Vec<f32> {
+        svg.lines()
+            .filter(|l| l.ends_with(&format!(">{text}</text>")))
+            .map(|l| l.split(" y=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap())
+            .collect()
+    }
+
+    /// GitHub issue #99: a deployment node named on two lines shows two texts, one below the
+    /// other, both inside the node.
+    #[test]
+    fn a_name_with_a_line_break_is_two_texts() {
+        let (mut doc, ids) = order_system();
+        let d = ids.class_diagram;
+        doc.edit("node", |tx| {
+            let owner = tx.model().get(d).unwrap().owner().unwrap();
+            let node = tx.create(
+                owner,
+                umlcraft_model::ElementData::new(
+                    "Web server\n(Linux VM)",
+                    umlcraft_model::ElementKind::Node(Default::default()),
+                ),
+            )?;
+            tx.add_node(d, Some(node), umlcraft_model::Rect::new(600.0, 40.0, 80.0, 40.0))
+        })
+        .unwrap();
+        let scene = build(doc.model(), d, &Preview::default(), &ApproxMeasure);
+        let svg = render(&scene, &ApproxMeasure);
+        let (first, second) = (baselines(&svg, "Web server"), baselines(&svg, "(Linux VM)"));
+        assert_eq!((first.len(), second.len()), (1, 1), "{svg}");
+        assert!((second[0] - first[0] - crate::scene::line_height(12.0)).abs() < 0.02, "{svg}");
+        assert!(!svg.contains("Web server (Linux VM)"), "{svg}");
     }
 
     #[test]

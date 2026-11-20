@@ -575,3 +575,58 @@ fn diagrams_are_found_by_name() {
     run(&mut host, "create_diagram", json!({ "kind": "class", "name": "" }));
     refusal(&mut host, "render_diagram", json!({ "diagram": " " }));
 }
+
+/// GitHub issue #99: names, a state's entry activity and a transition's label written with
+/// line breaks come out of the SVG export on their lines, one `<text>` each.
+#[test]
+fn line_breaks_in_names_reach_the_svg() {
+    let dir = std::env::temp_dir().join(format!("umlcraft-mcp-breaks-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::host::absolute(&dir);
+    let access = Access { folders: vec![dir.clone()], any: false };
+    let mut host = Headless::new();
+    let export = |host: &mut Headless, d: &str, file: &str| {
+        let path = dir.join(file);
+        let written = call(host, &access, "export_image", &json!({ "diagram": d, "path": path }));
+        assert!(!written.is_error, "{written:?}");
+        std::fs::read_to_string(path).unwrap()
+    };
+    let texts = |svg: &str| -> Vec<String> {
+        svg.lines()
+            .filter_map(|l| l.strip_suffix("</text>")?.rsplit_once('>').map(|(_, t)| t.into()))
+            .collect()
+    };
+
+    let d = run(&mut host, "create_diagram", json!({ "kind": "deployment", "name": "D" }));
+    let d = id(&d["diagram"]);
+    let node = json!({ "diagram": d, "tool": "node", "name": "Web server\n(Linux VM)" });
+    let node = run(&mut host, "create_element", node);
+    let element = id(&node["element"]).parse().unwrap();
+    let name = host.document().model().get(element).unwrap().name().to_owned();
+    assert_eq!(name, "Web server\n(Linux VM)", "kept in the model");
+    let svg = export(&mut host, &d, "node.svg");
+    let shown = texts(&svg);
+    let at = shown.iter().position(|t| t == "Web server").expect(&svg);
+    assert_eq!(shown[at + 1], "(Linux VM)", "{svg}");
+    assert!(!svg.contains("Web server (Linux VM)"), "{svg}");
+
+    let s = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "S" }));
+    let s = id(&s["diagram"]);
+    let state = |host: &mut Headless, name: &str, x: f32| {
+        let args = json!({ "diagram": s, "tool": "state", "name": name, "x": x, "y": 100 });
+        run(host, "create_element", args)
+    };
+    let (a, b) = (state(&mut host, "Idle", 100.0), state(&mut host, "Busy", 400.0));
+    run(&mut host, "add_member", json!({ "owner": a["element"], "text": "entry / a;\nb;\nc" }));
+    let args = json!({ "diagram": s, "tool": "transition", "source": a["element"],
+                       "target": b["element"], "name": "go [ready] / start;\nlog" });
+    run(&mut host, "connect", args);
+    let svg = export(&mut host, &s, "states.svg");
+    let shown = texts(&svg);
+    for lines in [&["entry / a;", "b;", "c"][..], &["go", "[ready] / start;", "log"]] {
+        let at = shown.iter().position(|t| t == lines[0]).expect(&svg);
+        assert_eq!(&shown[at..at + lines.len()], lines, "{svg}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}

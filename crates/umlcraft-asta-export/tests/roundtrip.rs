@@ -2179,3 +2179,55 @@ fn sample_er_model_through_astah() {
     // The ER model comes back as the one it was, not next to an empty UML package of its name.
     assert_eq!(packages(&original), packages(&back));
 }
+
+/// GitHub issue #99: a state's entry activity and a transition's effect written on several
+/// lines keep their line breaks through Astah. Astah's API refuses line breaks in names (when
+/// creating and when renaming): such elements come back with spaces instead, counted as
+/// renamed, rather than being left out with everything attached to them.
+#[test]
+fn line_breaks_through_astah() {
+    let (mut doc, ids) = order_system();
+    let find = |doc: &Document, name: &str| {
+        doc.model().elements().find(|e| e.name() == name).unwrap().id()
+    };
+    let (server, submitted) = (find(&doc, "AppServer"), find(&doc, "Submitted"));
+    let shipping = doc
+        .model()
+        .elements()
+        .find(|e| matches!(e.kind(), ElementKind::Transition(p) if p.guard == "in stock"))
+        .unwrap()
+        .id();
+    doc.edit("breaks", |tx| {
+        tx.rename(ids.customer, "Web\nCustomer")?;
+        tx.rename(server, "Web server\n(Linux VM)")?;
+        tx.update(submitted, |d| {
+            if let ElementKind::State(p) = &mut d.kind {
+                p.entry = "a;\nb;\nc".into();
+            }
+        })?;
+        tx.update(shipping, |d| {
+            if let ElementKind::Transition(p) = &mut d.kind {
+                p.effect = "ship;\nnotify".into();
+            }
+        })
+    })
+    .unwrap();
+    let Some((back, report)) = through_astah_reporting(doc.model(), "breaks") else { return };
+    let names: BTreeSet<&str> = back.elements().map(|e| e.name()).collect();
+    assert!(names.contains("Web Customer"), "{names:?}");
+    assert!(names.contains("Web server (Linux VM)"), "{names:?}");
+    assert_eq!(report.dropped.get("renamed"), Some(&2), "{:?}", report.dropped);
+    // The class keeps its associations and generalization.
+    let original = order_system().0;
+    assert_eq!(relationships(&back).len(), relationships(original.model()).len());
+    let entry = back.elements().find_map(|e| match e.kind() {
+        ElementKind::State(p) if e.name() == "Submitted" => Some(p.entry.clone()),
+        _ => None,
+    });
+    assert_eq!(entry.as_deref(), Some("a;\nb;\nc"));
+    let effect = back.elements().find_map(|e| match e.kind() {
+        ElementKind::Transition(p) if p.guard == "in stock" => Some(p.effect.clone()),
+        _ => None,
+    });
+    assert_eq!(effect.as_deref(), Some("ship;\nnotify"));
+}

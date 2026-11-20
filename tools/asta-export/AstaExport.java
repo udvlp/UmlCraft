@@ -2276,7 +2276,7 @@ public final class AstaExport {
             default -> throw new IllegalStateException(text(e, "node"));
         };
         if (!name(e).isEmpty() && !name(e).equals(((INamedElement) node.getModel()).getName())) {
-            ((INamedElement) node.getModel()).setName(name(e));
+            ((INamedElement) node.getModel()).setName(lineName(e));
         }
         created.put(id, node.getModel());
         common(id, (IElement) node.getModel(), Set.of());
@@ -2452,7 +2452,7 @@ public final class AstaExport {
         };
         INamedElement model = (INamedElement) node.getModel();
         if (!name(e).isEmpty() && !name(e).equals(model.getName())) {
-            model.setName(name(e));
+            model.setName(lineName(e));
         }
         if (model instanceof IState state && "state".equals(type(e))) {
             state.setEntry(text(e, "entry"));
@@ -2492,7 +2492,7 @@ public final class AstaExport {
         List<IState> made = ((IState) node.getModel()).getStateRegions();
         for (int i = 0; i < regions.size() && i < made.size(); i++) {
             created.put(regions.get(i), made.get(i));
-            String name = name(elements.get(regions.get(i)));
+            String name = lineName(elements.get(regions.get(i)));
             if (!name.isEmpty()) {
                 made.get(i).setName(name);
             }
@@ -2556,7 +2556,7 @@ public final class AstaExport {
             transition.setAction(text(e, "effect"));
         }
         if (!name(e).isEmpty()) {
-            transition.setName(name(e));
+            transition.setName(lineName(e));
         }
         common(id, transition, Set.of());
         created.put(id, transition);
@@ -2591,7 +2591,7 @@ public final class AstaExport {
         ILinkPresentation link = editor.createFlow(source, target);
         IFlow flow = (IFlow) link.getModel();
         if (!name(e).isEmpty()) {
-            flow.setName(name(e));
+            flow.setName(lineName(e));
         }
         if (!text(e, "guard").isEmpty()) {
             flow.setGuard(text(e, "guard"));
@@ -2660,7 +2660,7 @@ public final class AstaExport {
         ILinkPresentation presentation = editor.createInstanceSpecificationLink(source, target);
         ILink link = (ILink) presentation.getModel();
         if (!name(e).isEmpty()) {
-            link.setName(name(e));
+            link.setName(lineName(e));
         }
         for (Object o : list(e.get("ends"))) {
             Map<String, Object> end = (Map<String, Object>) o;
@@ -3632,7 +3632,7 @@ public final class AstaExport {
             }
             ICombinedFragment model = (ICombinedFragment) node.getModel();
             if (!name(e).isEmpty()) {
-                model.setName(name(e));
+                model.setName(lineName(e));
             }
             IInteractionOperand[] operands = model.getInteractionOperands();
             for (int i = 0; i < operands.length && i < made.size(); i++) {
@@ -3724,14 +3724,17 @@ public final class AstaExport {
     }
 
     /// Creates an element under its UmlCraft name. Astah rejects empty names and duplicates
-    /// among siblings, so those get a numbered name instead.
+    /// among siblings, so those get a numbered name instead. The API also refuses line breaks
+    /// in names (when creating and when renaming, as `\n` or `\r\n`), so they become spaces and
+    /// the name counts as renamed, rather than the element being dropped.
     private Object named(String id, Creator creator) throws Exception {
-        String base = name(elements.get(id));
+        String written = name(elements.get(id));
+        String base = written.replaceAll("\r?\n", " ");
         String name = base;
         for (int attempt = 2; ; attempt++) {
             try {
                 Object made = creator.create(name);
-                if (!name.equals(base)) {
+                if (!name.equals(written)) {
                     drop("renamed");
                 }
                 return made;
@@ -3881,6 +3884,11 @@ public final class AstaExport {
 
     private static String name(Map<String, Object> element) {
         return element == null ? "" : text(element, "name");
+    }
+
+    /// The name as the API takes it: line breaks, which it refuses, as spaces (see `named`).
+    private static String lineName(Map<String, Object> element) {
+        return name(element).replaceAll("\r?\n", " ");
     }
 
     private static String text(Map<String, Object> map, String key) {

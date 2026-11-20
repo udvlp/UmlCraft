@@ -1181,3 +1181,42 @@ fn x_alone_places_a_lifeline() {
         shown["nodes"].as_array().unwrap().iter().find(|n| n["presentation"] == k["presentation"]);
     assert_eq!(node.unwrap()["bounds"]["y"].as_f64(), Some(300.0));
 }
+
+/// GitHub issue #99: a lifeline's name on two lines makes its head higher; a message's name on
+/// two lines keeps its last line where a single line would be, the first above it.
+#[test]
+fn lifeline_and_message_names_keep_their_line_breaks() {
+    let mut host = Headless::new();
+    let mut calls = lifelines(&["a:A", "web\n(Linux VM)", "c:C"]);
+    calls.push(message("message", 1, 2, "fetch()", Some(100.0)));
+    calls.push(message("message", 1, 3, "check\nstock()", Some(130.0)));
+    let r = build(&mut host, json!(calls));
+    let scene = drawn(&mut host, &r[0]["diagram"]);
+    let h = scene::line_height(12.0);
+    let head = |k: usize| {
+        let node = scene.node(id(&r[k]["presentation"]).parse().unwrap()).unwrap();
+        let Figure::Lifeline { head, line, .. } = node.figure else { panic!("a lifeline") };
+        let names: Vec<(&str, Rect)> =
+            node.rows.iter().map(|row| (row.text.as_str(), row.rect)).collect();
+        (head, line.0, names)
+    };
+    let (plain, plain_line, plain_names) = head(1);
+    let (two, two_line, two_names) = head(2);
+    assert_eq!(plain_names.len(), 1);
+    assert_eq!(two_names.iter().map(|(t, _)| *t).collect::<Vec<_>>(), ["web", "(Linux VM)"]);
+    assert!((two_names[1].1.y - two_names[0].1.y - h).abs() < 0.01);
+    assert!((two.height - plain.height - h).abs() < 0.01, "{two:?} {plain:?}");
+    assert!((two_line - two.bottom()).abs() < 0.01 && (plain_line - plain.bottom()).abs() < 0.01);
+    assert!(two_names[1].1.bottom() <= two.bottom());
+
+    let label = |k: usize| {
+        let edge = scene.edge(id(&r[k]["presentation"]).parse().unwrap()).unwrap();
+        edge.labels.iter().map(|l| (l.text.clone(), l.anchor.y)).collect::<Vec<_>>()
+    };
+    let (one, two) = (label(4), label(5));
+    let texts: Vec<&str> = two.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(texts, ["check", "stock()"]);
+    // The last line as far above its arrow as the single line above its own.
+    assert!(((two[1].1 - 130.0) - (one[0].1 - 100.0)).abs() < 0.01, "{one:?} {two:?}");
+    assert!((two[1].1 - two[0].1 - h).abs() < 0.01);
+}

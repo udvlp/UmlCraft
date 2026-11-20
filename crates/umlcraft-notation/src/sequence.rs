@@ -372,6 +372,12 @@ pub(crate) fn arrange(
                 let head = node.rect;
                 let (line_top, rows) =
                     lifeline_rows(model, lifeline, &p.style, head, icon, measure);
+                // A box head reaches down to where the line starts, below a name on several
+                // lines.
+                let head = match icon {
+                    HeadIcon::Box => Rect::new(head.x, head.y, head.width, line_top - head.y),
+                    _ => head,
+                };
                 let bottom = line_top + length;
                 node.rect = Rect::new(head.x, head.y, head.width, bottom - head.y);
                 node.figure = Figure::Lifeline { head, icon, line: (line_top, bottom) };
@@ -926,19 +932,29 @@ fn lifeline_rows(
         Some(t) => format!("{name} : {}", crate::member::display_name(model, t)),
         None => name.to_owned(),
     };
-    let w = measure.rounded_width(&text, 12.0, false);
+    // On the lines it is written on, each centered; a box head grows for the lines after the
+    // first, and the dashed line starts below them.
+    let lines = crate::scene::text_lines(&text);
     let h = line_height(12.0);
-    let left = head.center().x - w / 2.0;
+    let more = h * (lines.len() - 1) as f32;
     let (line_top, row_top) = match icon {
-        HeadIcon::Box => (head.bottom(), head.y + ROW_17),
-        _ => (head.bottom() + h, head.bottom() + LABEL_TO_ROW),
+        HeadIcon::Box => (head.bottom() + more, head.y + ROW_17),
+        _ => (head.bottom() + h + more, head.bottom() + LABEL_TO_ROW),
     };
-    let row = Row {
-        rect: Rect::new(left, row_top, w, h),
-        role: RowRole::Name,
-        ..plain_row(text, lifeline)
-    };
-    (line_top, vec![row])
+    let rows = lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let w = measure.rounded_width(&text, 12.0, false);
+            let left = head.center().x - w / 2.0;
+            Row {
+                rect: Rect::new(left, row_top + h * i as f32, w, h),
+                role: RowRole::Name,
+                ..plain_row(text, lifeline)
+            }
+        })
+        .collect();
+    (line_top, rows)
 }
 
 /// Room a lifeline's head keeps on either side of its name.
@@ -957,8 +973,9 @@ pub(crate) fn fitted_head(
         return None;
     }
     let (_, rows) = lifeline_rows(model, lifeline, style, head, HeadIcon::Box, measure);
-    let row = rows.into_iter().next()?;
-    Some(((row.rect.width + 2.0 * HEAD_PADDING).max(HEAD_WIDTH), row.text))
+    let widest = rows.iter().map(|r| r.rect.width).reduce(f32::max)?;
+    let text = rows.into_iter().map(|r| r.text).collect::<Vec<_>>().join("\n");
+    Some(((widest + 2.0 * HEAD_PADDING).max(HEAD_WIDTH), text))
 }
 
 fn plain_row(text: String, element: Id) -> Row {
@@ -1280,9 +1297,13 @@ fn message_edge(
     };
     let mut labels = Vec::new();
     let n = points.len();
-    let width = [Some(&text), stereotype.as_ref()]
-        .into_iter()
-        .flatten()
+    // A text written on several lines keeps its last line where a single line would be, the
+    // others above it.
+    let lines = crate::scene::text_lines(&text);
+    let raised = line_height(FONT_SIZE) * (lines.len() - 1) as f32;
+    let width = lines
+        .iter()
+        .chain(stereotype.as_ref())
         .map(|t| measure.width(t, FONT_SIZE, false))
         .fold(0.0, f32::max);
     let (label_top, center) = match m.label {
@@ -1296,7 +1317,7 @@ fn message_edge(
         None => {
             let (a, b) = (points[n - 2], points[n - 1]);
             let top = b.y - LABEL_ABOVE;
-            let above = if stereotype.is_some() { STEREOTYPE_ABOVE } else { 0.0 };
+            let above = (if stereotype.is_some() { STEREOTYPE_ABOVE } else { 0.0 }) + raised;
             let span = (a.x.min(b.x), a.x.max(b.x));
             let bars: Vec<(f32, f32)> = lanes
                 .iter()
@@ -1352,13 +1373,16 @@ fn message_edge(
             (None, None) => unreachable!("one of them is set"),
         });
     }
-    // Astah breaks the label of a found message at spaces where it would run past the lifeline
-    // it calls; the last line stays where the whole label would be.
-    if m.gate == MessageGate::Found
-        && let Some(first) = labels.first().filter(|l| l.align == LabelAlign::Left).cloned()
-    {
+    // A text on several lines, and the label of a found message, which Astah breaks at spaces
+    // where it would run past the lifeline it calls: the last line stays where the whole label
+    // would be.
+    if let Some(first) = labels.first().cloned() {
+        let found = m.gate == MessageGate::Found && first.align == LabelAlign::Left;
         let room = to.center() - first.anchor.x;
-        let lines = break_lines(&first.text, room, measure);
+        let lines: Vec<String> = crate::scene::text_lines(&first.text)
+            .into_iter()
+            .flat_map(|line| if found { break_lines(&line, room, measure) } else { vec![line] })
+            .collect();
         if lines.len() > 1 {
             let count = lines.len();
             labels.splice(
@@ -1386,7 +1410,7 @@ fn message_edge(
         };
         labels.push(EdgeLabel {
             text: stereotype,
-            anchor: Point::new(x, label_top - above),
+            anchor: Point::new(x, label_top - above - raised),
             align: LabelAlign::Center,
             underline: false,
             keyword: false,
