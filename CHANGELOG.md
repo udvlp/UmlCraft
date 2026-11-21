@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.23.1 – 2026-11-21
 
 - **Line handle in ER diagrams**: entities, relationships, attributes and IS-A triangles show
   the handle for drawing a line when the mouse is over them, as classes do.
