@@ -3,6 +3,18 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Folders to read and folders to write for AI assistants**: `umlcraft-cli mcp` takes
+  `--automation-read-root` (folders it may only read) and `--automation-write-root` (folders
+  it may read and write), as the storytold Craft apps do. `mcp setup` writes them;
+  `--allow-path` still works as a folder to read and write. A relative path is taken from the
+  first write folder, in the app as on the command line. A project opened from a folder that
+  may only be read is not saved back there, exports no longer write through a hard link to a
+  file elsewhere, and on Windows device names such as `NUL` are refused.
+- **Layer check**: `cargo xtask layers` checks that the crates depend only downwards and that
+  only the app knows the user interface; the tests run it too.
+
 ## 0.23.0 – 2026-11-21
 
 - **Fill colors**: the properties panel sets a box's fill color, next to the colors of its name

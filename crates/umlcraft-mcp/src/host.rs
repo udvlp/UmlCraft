@@ -80,51 +80,183 @@ pub fn app_display() -> Display {
     }
 }
 
-/// Folders in which tools may open, save and export files.
+/// Folders in which tools may open, save and export files: the read and write roots of the
+/// Craft apps' RFC-0015. A write folder may be read too; a read folder that is not also a write
+/// folder may only be read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Access {
-    pub folders: Vec<PathBuf>,
+    /// Folders whose files may only be read (`--automation-read-root`).
+    pub read: Vec<PathBuf>,
+    /// Folders whose files may be read and written (`--automation-write-root`,
+    /// `--allow-path`).
+    pub write: Vec<PathBuf>,
     /// Any folder (`--allow-any-path`).
     pub any: bool,
 }
 
 impl Access {
-    /// `path` made absolute, if it lies in an allowed folder or is `own` (the project's file).
-    pub fn check(&self, path: &Path, own: Option<&Path>) -> Result<PathBuf, String> {
-        let absolute = absolute(path);
-        if self.any || own.is_some_and(|own| absolute == self::absolute(own)) {
+    /// `folders` to read and write in.
+    pub fn folders(folders: Vec<PathBuf>) -> Self {
+        Self { write: folders, ..Self::default() }
+    }
+
+    /// Any folder.
+    pub fn any() -> Self {
+        Self { any: true, ..Self::default() }
+    }
+
+    /// `path` made absolute, if it may be read: it lies in a read or write folder. A relative
+    /// path is taken from the first write folder (else the first read folder).
+    pub fn check_read(&self, path: &Path) -> Result<PathBuf, String> {
+        let absolute = self.place(path)?;
+        if self.any {
             return Ok(absolute);
         }
-        if self.folders.iter().any(|folder| absolute.starts_with(self::absolute(folder))) {
+        if !self.write.iter().chain(&self.read).any(|folder| inside(&absolute, folder)) {
+            return Err(self.refusal(&absolute, "read"));
+        }
+        refuse_hard_link(&absolute)?;
+        Ok(absolute)
+    }
+
+    /// `path` made absolute, if it may be written: it lies in a write folder, or it is `own`
+    /// (the project's file, saved again as Ctrl+S does) and not in a folder that may only be
+    /// read.
+    pub fn check_write(&self, path: &Path, own: Option<&Path>) -> Result<PathBuf, String> {
+        let absolute = self.place(path)?;
+        if self.any || self.write.iter().any(|folder| inside(&absolute, folder)) {
             return Ok(absolute);
         }
-        let folders: Vec<String> = self.folders.iter().map(|f| f.display().to_string()).collect();
-        Err(if folders.is_empty() {
-            format!(
-                "{} is not in a folder UmlCraft may use. No folder is allowed; the user can \
-                 add one with `--allow-path` in the MCP server's command (`umlcraft-cli mcp \
-                 setup --allow-path <folder>`).",
-                absolute.display()
-            )
-        } else {
-            format!(
-                "{} is not in a folder UmlCraft may use: {}.",
-                absolute.display(),
-                folders.join(", ")
-            )
+        let read_only = self.read.iter().find(|folder| inside(&absolute, folder));
+        if read_only.is_none() && own.is_some_and(|own| absolute == self::absolute(own)) {
+            return Ok(absolute);
+        }
+        let mut refusal = self.refusal(&absolute, "written");
+        if let Some(folder) = read_only {
+            refusal.push_str(&format!(" {} may only be read.", folder.display()));
+        }
+        Err(refusal)
+    }
+
+    /// `path` absolute: a relative one taken from the first write (else read) folder, so that
+    /// the app and the CLI read it alike. Device names are refused on Windows.
+    fn place(&self, path: &Path) -> Result<PathBuf, String> {
+        if let Some(device) = device_name(path) {
+            return Err(format!("{} names the device {device}, not a file", path.display()));
+        }
+        let base = self.write.first().or(self.read.first());
+        Ok(match base {
+            Some(base) if path.is_relative() => absolute(&base.join(path)),
+            _ => absolute(path),
         })
     }
 
-    pub fn to_json(&self) -> Value {
-        json!({ "folders": self.folders, "any": self.any })
+    fn refusal(&self, path: &Path, access: &str) -> String {
+        let list = |folders: &[PathBuf]| {
+            folders.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", ")
+        };
+        if self.read.is_empty() && self.write.is_empty() {
+            return format!(
+                "{} cannot be {access}: UmlCraft may use no folder. The user names folders in \
+                 the MCP server's command: `--automation-write-root <folder>` to read and write \
+                 there, `--automation-read-root <folder>` to read only (`umlcraft-cli mcp setup \
+                 --allow-path <folder>` registers the server with a folder to read and write).",
+                path.display()
+            );
+        }
+        let mut text = format!("{} cannot be {access}: it lies outside ", path.display());
+        if access == "read" {
+            text.push_str(&format!(
+                "the folders UmlCraft may read: {}.",
+                list(&[self.write.as_slice(), self.read.as_slice()].concat())
+            ));
+        } else if self.write.is_empty() {
+            text.push_str("the folders UmlCraft may write: none.");
+        } else {
+            text.push_str(&format!("the folders UmlCraft may write: {}.", list(&self.write)));
+        }
+        text
     }
 
-    pub fn from_json(value: &Value) -> Self {
-        let folders = value["folders"].as_array().map_or_else(Vec::new, |folders| {
-            folders.iter().filter_map(Value::as_str).map(PathBuf::from).collect()
-        });
-        Self { folders, any: value["any"].as_bool().unwrap_or(false) }
+    /// For the live bridge. `folders`, the write folders, is what UmlCraft 0.23 and earlier
+    /// read; they would read and write there and never in a read folder they do not know of.
+    pub fn to_json(&self) -> Value {
+        json!({ "read": self.read, "write": self.write, "any": self.any, "folders": self.write })
     }
+
+    /// From the live bridge; `folders` alone, from a CLI of UmlCraft 0.23 or earlier, are
+    /// folders to read and write.
+    pub fn from_json(value: &Value) -> Self {
+        let paths = |key: &str| {
+            value[key].as_array().map_or_else(Vec::new, |folders| {
+                folders.iter().filter_map(Value::as_str).map(PathBuf::from).collect()
+            })
+        };
+        let any = value["any"].as_bool().unwrap_or(false);
+        if value.get("read").is_some() || value.get("write").is_some() {
+            Self { read: paths("read"), write: paths("write"), any }
+        } else {
+            Self { read: Vec::new(), write: paths("folders"), any }
+        }
+    }
+}
+
+/// Whether the absolute `path` lies in `folder`, compared by whole components (`/work2` is not
+/// in `/work`), on Windows regardless of case.
+fn inside(path: &Path, folder: &Path) -> bool {
+    let folder = absolute(folder);
+    let mut components = path.components();
+    folder.components().all(|f| {
+        components.next().is_some_and(|c| {
+            let (c, f) = (c.as_os_str(), f.as_os_str());
+            if cfg!(windows) {
+                c.to_string_lossy().to_lowercase() == f.to_string_lossy().to_lowercase()
+            } else {
+                c == f
+            }
+        })
+    })
+}
+
+/// A file with another name besides this one may lie outside the folders while this name lies
+/// inside, and nothing tells where the other is: refused. Windows tells the count only through
+/// a call that needs `unsafe` code, which this crate does not have, so there it is not checked.
+fn refuse_hard_link(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.nlink() > 1) {
+            return Err(format!(
+                "{} cannot be read: it has more than one name (a hard link), and another may \
+                 lie outside the folders UmlCraft may use.",
+                path.display()
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+/// The Windows device `path` names (`NUL`, `com1.txt`), whatever its folder: Windows opens the
+/// device, not a file. Elsewhere these are plain names.
+fn device_name(path: &Path) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    path.components().find_map(|c| {
+        let std::path::Component::Normal(name) = c else { return None };
+        let name = name.to_string_lossy();
+        let stem = name.split('.').next().unwrap_or("").trim_end().to_uppercase();
+        let numbered = |prefix: &str| {
+            stem.strip_prefix(prefix)
+                .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
+        };
+        (matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+            || numbered("COM")
+            || numbered("LPT"))
+        .then(|| name.into_owned())
+    })
 }
 
 /// `path` absolute and without `.` and `..`, also for files that do not exist yet: the
@@ -322,18 +454,63 @@ mod tests {
     fn access_allows_files_in_its_folders_and_the_projects_own() {
         let dir = std::env::temp_dir().join("umlcraft-mcp-access");
         std::fs::create_dir_all(&dir).unwrap();
-        let access = Access { folders: vec![dir.clone()], any: false };
-        assert!(access.check(&dir.join("new").join("a.ucraft"), None).is_ok());
+        let access = Access::folders(vec![dir.clone()]);
+        assert!(access.check_write(&dir.join("new").join("a.ucraft"), None).is_ok());
         // Leaving the folder with `..` does not count as inside it, also after a folder that
         // does not exist yet; going back into it does.
-        assert!(access.check(&dir.join("..").join("b.ucraft"), None).is_err());
+        assert!(access.check_write(&dir.join("..").join("b.ucraft"), None).is_err());
         let up = dir.join("missing").join("..").join("..").join("b.ucraft");
-        assert!(access.check(&up, None).is_err(), "{:?}", access.check(&up, None));
+        assert!(access.check_write(&up, None).is_err(), "{:?}", access.check_write(&up, None));
         let back = dir.join("missing").join("..").join("c.ucraft");
-        assert_eq!(access.check(&back, None), Ok(absolute(&dir).join("c.ucraft")));
+        assert_eq!(access.check_write(&back, None), Ok(absolute(&dir).join("c.ucraft")));
         let own = std::env::temp_dir().join("own.ucraft");
-        assert!(access.check(&own, Some(&own)).is_ok());
-        assert!(Access::default().check(&own, None).is_err());
-        assert!(Access { folders: Vec::new(), any: true }.check(&own, None).is_ok());
+        assert!(access.check_write(&own, Some(&own)).is_ok());
+        assert!(access.check_read(&own).is_err(), "only saving the own file is allowed");
+        assert!(Access::default().check_write(&own, None).is_err());
+        assert!(Access::any().check_write(&own, None).is_ok());
+    }
+
+    #[test]
+    fn the_live_bridge_carries_both_lists_and_reads_older_clis() {
+        let access = Access {
+            read: vec![PathBuf::from("/in")],
+            write: vec![PathBuf::from("/out")],
+            any: false,
+        };
+        assert_eq!(Access::from_json(&access.to_json()), access);
+        // UmlCraft 0.23 sent its folders to read and write as `folders`.
+        let old = json!({ "folders": ["/both"], "any": false });
+        assert_eq!(Access::from_json(&old), Access::folders(vec![PathBuf::from("/both")]));
+        // And reads the write folders from there.
+        assert_eq!(access.to_json()["folders"], json!(["/out"]));
+    }
+
+    #[test]
+    fn folders_compare_whole_names() {
+        let base = std::env::temp_dir().join(format!("umlcraft-mcp-names-{}", std::process::id()));
+        let root = base.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let access = Access::folders(vec![root.clone()]);
+        assert!(access.check_write(&base.join("root-other").join("x.ucraft"), None).is_err());
+        assert!(access.check_write(&base.join("rootx.ucraft"), None).is_err());
+        assert!(access.check_write(&root.join("x.ucraft"), None).is_ok());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_ignores_case_and_refuses_devices() {
+        let root = std::env::temp_dir().join(format!("umlcraft-mcp-case-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let access = Access::folders(vec![root.clone()]);
+        let upper = PathBuf::from(root.to_string_lossy().to_uppercase()).join("a.ucraft");
+        assert!(access.check_write(&upper, None).is_ok(), "{:?}", access.check_write(&upper, None));
+        for device in ["NUL", "nul.ucraft", "COM1.svg", "con", "LPT9.png"] {
+            assert!(access.check_write(&root.join(device), None).is_err(), "{device}");
+            assert!(Access::any().check_read(Path::new(device)).is_err(), "{device}");
+        }
+        assert!(access.check_write(&root.join("console.ucraft"), None).is_ok());
+        assert!(access.check_write(&root.join("COM10.svg"), None).is_ok());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

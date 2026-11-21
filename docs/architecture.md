@@ -1,5 +1,26 @@
 # Architecture
 
+## Crates and layers
+
+The crates depend on one another only downwards, through these layers:
+
+| Layer | Crates | What they hold |
+|---|---|---|
+| 0 | `umlcraft-nsd`, `umlcraft-screenshot` | The structogram model, which knows nothing of UML; the window capture |
+| 1 | `umlcraft-model` | Elements, presentations, operations and undo |
+| 2 | `umlcraft-notation`, `umlcraft-format` | Drawing and editing the way the app does; the file format |
+| 3 | `umlcraft-asta`, `umlcraft-erm-sql` | Reading Astah's files; SQL in and out |
+| 4 | `umlcraft-reverse`, `umlcraft-asta-export`, `umlcraft-mcp` | Source import, export through Astah, the MCP tools |
+| 5 | `umlcraft-nsd-code`, `umlcraft-cli` | Structograms from and to code; the command line |
+| 6 | `umlcraft-app` | The app |
+
+Only `umlcraft-app` depends on GPUI (`gpui-kit`, also not as a test dependency), so
+everything below it runs without a window, and only `umlcraft-screenshot` on the Windows API.
+`cargo xtask layers` (`crates/xtask`, from `cargo metadata`) checks that, and its test does
+so in every `cargo test --workspace`; tests may depend upwards. A new crate has to go into
+the table in `crates/xtask/src/main.rs`, or the check fails. The idea comes from WordCraft,
+whose `cargo xtask layers` keeps its UI toolkit to the top layer.
+
 ## Model and view
 
 Like UML, `umlcraft-model` separates **elements** from **presentations**:
@@ -1507,18 +1528,45 @@ the computer can read.
 
 ### Files
 
-The server opens and saves projects and writes images only in the folders it was allowed:
-`--allow-path DIR` (several times), `--allow-any-path`, and the folder of `--in`. `Access`
-travels with each live call, so the app keeps to the folders of the server that asked.
-Paths are canonicalized before the check; saving to the open project's own path is always
-allowed. `save_file` always writes `.ucraft` and `export_sql` `.sql` (added to a path without
-it), and the exports replace an existing file only with `"overwrite": true`, so a call cannot
-write over a document in an allowed folder. `save_file` and the exports make the folders on the way that are
-missing, but only in an allowed folder (not again the folder of the project's own file when it
-is gone). `umlcraft-cli mcp setup` registers the server with each client it finds (Claude
-Code through `claude mcp add --scope user`, Claude Desktop's `claude_desktop_config.json`,
-Cursor's `~/.cursor/mcp.json`, merged into what is there) and allows the Documents folder
-unless told otherwise; `--dry-run` shows what it would do.
+The server reads and writes files only in the folders it was given, as the Craft apps'
+RFC-0015 (storytold/craft-contrib) describes them: `--automation-read-root DIR` (read only)
+and `--automation-write-root DIR` (read and write), each as often as needed and also as
+`--flag=DIR`; both must be existing folders when the server starts. `--allow-path DIR` (a
+write folder that need not exist yet, for the clients set up before), `--allow-any-path` and
+the folder of `--in` stay. Unlike RFC-0015, a server without folders starts and opens, saves
+and exports no file, so that the Craft apps' gateway, which starts every app as plain
+`<app>-cli mcp`, can still drive UmlCraft. `Access` (`read`, `write`, `any`) travels with each
+live call, so the app keeps to the folders of the server that asked; it also carries
+`folders`, the write folders, for an app of 0.23 or earlier, and reads `folders` alone from
+an older CLI as folders to read and write.
+
+`Access::check_read` (`open_file`) and `check_write` (`save_file`, the exports) resolve the
+path first: a relative one from the first write folder (else read folder), so that the app
+and the CLI read it alike; `..` and links resolved, also for the part that does not exist yet
+(`host::absolute`). Then they compare whole components with the resolved folders, so
+`/work2` is not in `/work`; on Windows regardless of case, and device names (`NUL`,
+`com1.txt`) are refused. Saving the open project to its own file is allowed outside the
+folders, as Ctrl+S, but not in a folder that may only be read. On Unix a file to read with
+another name (a hard link) is refused, since that name may lie outside; Windows tells the
+count only through a call that needs `unsafe` code, so there it is not checked. Exports write
+a file beside the target and rename it over it, so a hard link to a file elsewhere is
+replaced rather than written through. `tools/tests/general.rs` runs RFC-0015's escape cases
+that need no such code: outside, `..`, a sibling with the same beginning, links to a file and
+a folder outside, a hard link, read and write apart, and the same through `batch`.
+
+`save_file` always writes `.ucraft` and `export_sql` `.sql` (added to a path without it), and
+the exports replace an existing file only with `"overwrite": true`, so a call cannot write
+over a document in a write folder. `save_file` and the exports make the folders on the way
+that are missing, but only in a write folder (not again the folder of the project's own file
+when it is gone).
+
+`umlcraft-cli mcp setup` registers the server with each client it finds (Claude Code through
+`claude mcp add --scope user`, Claude Desktop's `claude_desktop_config.json`, Cursor's
+`~/.cursor/mcp.json`, merged into what is there) with the folders as `--automation-read-root`
+and `--automation-write-root` (`--allow-path` as a write folder), the Documents folder to read
+and write unless told otherwise; `--dry-run` shows what it would do. It leaves the Craft
+apps' `ArtCraft/mcp/apps.json` alone: the ArtCraft Launcher writes that file as the person's
+consent, and nothing else is to change it.
 
 `umlcraft-cli` ships in the Windows zip and installer, the Linux tarball, `.deb` and `.rpm`
 and inside the macOS app (`UmlCraft.app/Contents/MacOS/umlcraft-cli`). Flatpak, Snap and

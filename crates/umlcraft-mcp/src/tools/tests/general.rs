@@ -137,7 +137,7 @@ fn files_only_in_allowed_folders() {
     // The server keeps canonical paths: on CI runners the temporary folder is a short
     // name (Windows) or a symbolic link (macOS).
     let dir = crate::host::absolute(&dir);
-    let access = Access { folders: vec![dir.clone()], any: false };
+    let access = Access::folders(vec![dir.clone()]);
     let mut host = Headless::new();
     let file = dir.join("shop");
     let saved = call(&mut host, &access, "save_file", &json!({ "path": file }));
@@ -175,6 +175,126 @@ fn files_only_in_allowed_folders() {
     let opened = call(&mut host, &access, "open_file", &json!({ "path": dir.join("shop.ucraft") }));
     assert!(!opened.is_error, "{opened:?}");
     assert_eq!(host.path(), Some(dir.join("shop.ucraft").as_path()));
+}
+
+/// The escape cases of the Craft apps' RFC-0015 that need no `unsafe` code: a read root, a
+/// write root and a folder outside both with a marker file that must stay unread and unchanged.
+#[test]
+fn read_and_write_roots_keep_files_in() {
+    let base = std::env::temp_dir().join(format!("umlcraft-mcp-roots-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    for folder in ["in", "out", "outside"] {
+        std::fs::create_dir_all(base.join(folder)).unwrap();
+    }
+    let base = crate::host::absolute(&base);
+    let (input, output, outside) = (base.join("in"), base.join("out"), base.join("outside"));
+    let access = Access { read: vec![input.clone()], write: vec![output.clone()], any: false };
+    let mut host = Headless::new();
+    // A project to read in the read root, a marker outside.
+    let saved = call(&mut host, &Access::any(), "save_file", &json!({ "path": input.join("p") }));
+    assert!(!saved.is_error, "{saved:?}");
+    let marker = outside.join("secret.ucraft");
+    std::fs::copy(input.join("p.ucraft"), &marker).unwrap();
+    let marker_bytes = std::fs::read(&marker).unwrap();
+    let input_before = std::fs::read_dir(&input).unwrap().count();
+    let d = host.active_diagram().unwrap().to_string();
+    let refused = |host: &mut Headless, tool: &str, args: Value| {
+        let reply = call(host, &access, tool, &args);
+        assert!(reply.is_error, "{tool} {args}: {reply:?}");
+        reply
+    };
+
+    // Read and write apart: the read root may be read, not written.
+    let opened = call(&mut host, &access, "open_file", &json!({ "path": input.join("p.ucraft") }));
+    assert!(!opened.is_error, "{opened:?}");
+    let reply = refused(&mut host, "save_file", json!({ "path": input.join("q") }));
+    assert!(format!("{reply:?}").contains("may write"), "{reply:?}");
+    // Nor saved again to its own file there.
+    let reply = refused(&mut host, "save_file", json!({}));
+    assert!(format!("{reply:?}").contains("may only be read"), "{reply:?}");
+    refused(&mut host, "export_image", json!({ "diagram": d, "path": input.join("a.svg") }));
+    assert_eq!(std::fs::read_dir(&input).unwrap().count(), input_before);
+    // The write root may be both.
+    let saved = call(&mut host, &access, "save_file", &json!({ "path": output.join("p") }));
+    assert!(!saved.is_error, "{saved:?}");
+    let opened = call(&mut host, &access, "open_file", &json!({ "path": output.join("p.ucraft") }));
+    assert!(!opened.is_error, "{opened:?}");
+    // A relative path lands in the write root.
+    let saved = call(&mut host, &access, "save_file", &json!({ "path": "rel" }));
+    assert!(!saved.is_error, "{saved:?}");
+    assert!(output.join("rel.ucraft").exists());
+
+    // Outside: absolute, through `..`, beside a root with the same beginning, and through a
+    // batch.
+    let sibling = base.join("out-other");
+    let escapes = [
+        marker.clone(),
+        output.join("..").join("outside").join("secret.ucraft"),
+        PathBuf::from("../outside/secret.ucraft"),
+        sibling.join("x.ucraft"),
+    ];
+    for path in &escapes {
+        refused(&mut host, "open_file", json!({ "path": path }));
+        refused(&mut host, "save_file", json!({ "path": path }));
+        let args = json!({ "diagram": d, "path": path, "overwrite": true });
+        refused(&mut host, "export_image", args);
+        let batch = json!([{ "tool": "save_file", "arguments": { "path": path } }]);
+        refused(&mut host, "batch", json!({ "calls": batch }));
+    }
+    assert!(!sibling.exists());
+
+    // Links out of the roots: a file and a folder (where the system lets us make them).
+    if link(&marker, &output.join("link.ucraft"), false) {
+        refused(&mut host, "open_file", json!({ "path": output.join("link.ucraft") }));
+        refused(&mut host, "save_file", json!({ "path": output.join("link.ucraft") }));
+    }
+    if link(&outside, &output.join("dir"), true) {
+        refused(
+            &mut host,
+            "open_file",
+            json!({ "path": output.join("dir").join("secret.ucraft") }),
+        );
+        let args = json!({ "diagram": d, "path": output.join("dir").join("a.svg") });
+        refused(&mut host, "export_image", args);
+    }
+
+    // A hard link to the marker: replaced, not written through, by an export that may
+    // overwrite; on Unix not read either.
+    let hard = output.join("hard.svg");
+    if std::fs::hard_link(&marker, &hard).is_ok() {
+        #[cfg(unix)]
+        {
+            let hard_project = output.join("hard.ucraft");
+            std::fs::hard_link(&marker, &hard_project).unwrap();
+            refused(&mut host, "open_file", json!({ "path": hard_project }));
+        }
+        let args = json!({ "diagram": d, "path": hard, "overwrite": true });
+        let written = call(&mut host, &access, "export_image", &args);
+        assert!(!written.is_error, "{written:?}");
+    }
+
+    // Nothing reached the marker, and no reply showed it.
+    assert_eq!(std::fs::read(&marker).unwrap(), marker_bytes);
+    assert!(!outside.join("a.svg").exists());
+    std::fs::remove_dir_all(&base).unwrap();
+}
+
+/// Makes `link` point to `target`; false where the system does not let this user (Windows
+/// without developer mode).
+fn link(target: &Path, link: &Path, folder: bool) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = folder;
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        if folder {
+            std::os::windows::fs::symlink_dir(target, link).is_ok()
+        } else {
+            std::os::windows::fs::symlink_file(target, link).is_ok()
+        }
+    }
 }
 
 #[test]
@@ -306,7 +426,7 @@ fn a_far_flung_node_does_not_make_a_huge_image() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dir = crate::host::absolute(&dir);
-    let access = Access { folders: vec![dir.clone()], any: false };
+    let access = Access::folders(vec![dir.clone()]);
     let export = json!({ "diagram": d, "path": dir.join("far.png") });
     let written = call(&mut host, &access, "export_image", &export);
     assert!(!written.is_error, "{written:?}");
@@ -333,7 +453,7 @@ fn exports_replace_files_only_when_asked() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dir = crate::host::absolute(&dir);
-    let access = Access { folders: vec![dir.clone()], any: false };
+    let access = Access::folders(vec![dir.clone()]);
     let mut host = Headless::new();
     let d = host.active_diagram().unwrap().to_string();
     let svg = dir.join("a.svg");
@@ -372,7 +492,7 @@ fn a_batch_keeps_to_what_a_rollback_takes_back() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dir = crate::host::absolute(&dir);
-    let access = Access { folders: vec![dir.clone()], any: false };
+    let access = Access::folders(vec![dir.clone()]);
     let mut host = Headless::new();
     let d = host.active_diagram().unwrap().to_string();
     for (tool, arguments) in [
@@ -584,7 +704,7 @@ fn line_breaks_in_names_reach_the_svg() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dir = crate::host::absolute(&dir);
-    let access = Access { folders: vec![dir.clone()], any: false };
+    let access = Access::folders(vec![dir.clone()]);
     let mut host = Headless::new();
     let export = |host: &mut Headless, d: &str, file: &str| {
         let path = dir.join(file);

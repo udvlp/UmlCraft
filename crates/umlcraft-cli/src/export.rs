@@ -80,7 +80,7 @@ pub fn run(args: &[&str], usage: &str) -> Result<(), String> {
     let display = umlcraft_mcp::host::app_display();
     let mut host = Headless::with(doc, Some(project)).drawn_as(display);
     // The user names the files on the command line.
-    let access = Access { folders: Vec::new(), any: true };
+    let access = Access::any();
     match wanted {
         Wanted::One { diagram, out } => {
             let written = export(&mut host, &access, &diagram, &out)?;
@@ -205,13 +205,7 @@ mod tests {
     }
 
     fn call(host: &mut Headless, name: &str, args: Value) -> Value {
-        reply(umlcraft_mcp::tools::call(
-            host,
-            &Access { folders: Vec::new(), any: true },
-            name,
-            &args,
-        ))
-        .unwrap()
+        reply(umlcraft_mcp::tools::call(host, &Access::any(), name, &args)).unwrap()
     }
 
     #[test]

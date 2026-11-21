@@ -41,7 +41,11 @@ pub(super) fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
         "structograms": structograms,
         "shown_diagram": host.active_diagram(),
         "selection": host.selection(),
-        "allowed_folders": if access.any { json!("any") } else { json!(access.folders) },
+        "allowed_folders": if access.any {
+            json!("any")
+        } else {
+            json!({ "read": access.read, "write": access.write })
+        },
         "display": display,
     });
     // The user may be looking at an app this server cannot reach: say so rather than work on

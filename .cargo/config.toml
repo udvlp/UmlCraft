@@ -1,0 +1,3 @@
+[alias]
+# Checks of the workspace itself (crates/xtask): `cargo xtask layers`.
+xtask = "run --quiet -p xtask --"

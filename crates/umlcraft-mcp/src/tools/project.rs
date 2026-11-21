@@ -77,7 +77,7 @@ pub(super) fn extension(path: &Path) -> String {
 }
 
 pub(super) fn open_file(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
-    let path = access.check(Path::new(str_arg(args, "path")?), None)?;
+    let path = access.check_read(Path::new(str_arg(args, "path")?))?;
     if extension(&path) != "ucraft" {
         return Err("only UmlCraft projects (.ucraft) can be opened".into());
     }
@@ -99,9 +99,10 @@ pub(super) fn save_file(host: &mut dyn Host, access: &Access, args: &Value) -> O
             if extension(&path) != "ucraft" {
                 path.as_mut_os_string().push(".ucraft");
             }
-            access.check(&path, own.as_deref())?
+            access.check_write(&path, own.as_deref())?
         }
-        (None, Some(own)) => own.clone(),
+        // Checked too: a project opened from a folder that may only be read stays there.
+        (None, Some(own)) => access.check_write(own, Some(own))?,
         (None, None) => return Err("the project has no file yet; give `path`".into()),
     };
     // Missing folders are made, as for exports, but only in an allowed folder: the project's

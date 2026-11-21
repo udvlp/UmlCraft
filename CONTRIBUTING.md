@@ -8,6 +8,9 @@ How it is built: [`docs/architecture.md`](docs/architecture.md).
 - Build and start: `cargo run -p umlcraft-app`
 - Tests: `cargo test --workspace`
 - Lints: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check`
+- Layers: `cargo xtask layers` checks that crates depend only downwards and that only the app
+  knows GPUI (also part of the tests); a new crate goes into its table, see
+  [Crates and layers](docs/architecture.md#crates-and-layers)
 
 CI runs all three on Windows, Ubuntu 22.04 and macOS, plus `cargo deny check` (advisories,
 licenses and sources, `deny.toml`). On Debian and Ubuntu,

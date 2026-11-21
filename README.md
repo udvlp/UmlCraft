@@ -198,8 +198,12 @@ installed:
 umlcraft-cli mcp setup
 ```
 
-It may open and save projects and images in the Documents folder; `--allow-path DIR` (more
-than once) names other folders instead, `--dry-run` shows the changes first. On macOS the
+It may open and save projects and images in the Documents folder;
+`--automation-write-root DIR` names other folders to read and write instead,
+`--automation-read-root DIR` folders it may only read (each more than once, as in the
+storytold Craft apps), `--dry-run` shows the changes first. A relative path is taken from
+the first write folder. Without any folder the server still edits the open project but
+opens, saves and exports no file. On macOS the
 program is `/Applications/UmlCraft.app/Contents/MacOS/umlcraft-cli`.
 
 While UmlCraft runs, the assistant works in the open project: every change shows up at once,

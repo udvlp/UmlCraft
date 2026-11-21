@@ -14,18 +14,26 @@ use umlcraft_mcp::{Access, Headless};
 const USAGE: &str = "\
 usage:
   umlcraft-cli mcp [--headless] [--in project.ucraft] [--connect PORT]
+                   [--automation-read-root DIR]... [--automation-write-root DIR]...
                    [--allow-path DIR]... [--allow-any-path]
       The MCP server, on stdin and stdout. Calls go to the UmlCraft app when it runs (the
       user sees every change and can undo it), else to a project of the server's own.
-      --headless        never the app
-      --in FILE         start headless with this project
-      --connect PORT    the app at this port of 127.0.0.1, never headless
-      --allow-path DIR  a folder in which projects and images may be opened and saved
-      --allow-any-path  any folder
+      Without a folder it opens, saves and exports no file.
+      --headless                    never the app
+      --in FILE                     start headless with this project; its folder may be
+                                    read and written
+      --connect PORT                the app at this port of 127.0.0.1, never headless
+      --automation-read-root DIR    an existing folder whose files may be read, not written
+      --automation-write-root DIR   an existing folder whose files may be read and written
+      --allow-path DIR              a folder to read and write, which need not exist yet
+      --allow-any-path              any folder
+      A relative path in a call is taken from the first write folder (else read folder).
+      DIR may also follow as --flag=DIR, which a folder starting with - needs.
   umlcraft-cli mcp setup [--dry-run] [--client claude-code|claude-desktop|cursor]
+                         [--automation-read-root DIR]... [--automation-write-root DIR]...
                          [--allow-path DIR]... [--allow-any-path]
-      Adds an `umlcraft` server with this program to each installed AI client. Without
-      --allow-path the server may use the Documents folder.
+      Adds an `umlcraft` server with this program to each installed AI client. Without a
+      folder the server may read and write in the Documents folder.
   umlcraft-cli export PROJECT.ucraft --diagram NAME|ID --out FILE
   umlcraft-cli export PROJECT.ucraft --all --out-dir DIR [--format svg|png]
       Writes a diagram or structogram as an image, as the MCP tool `export_image` does: the
@@ -77,6 +85,17 @@ fn parse(args: &[&str], setup: bool) -> Result<Options, String> {
         args.next().map(|v| v.to_string()).ok_or_else(|| format!("{flag} needs a value"))
     };
     while let Some(&arg) = args.next() {
+        // The roots of the Craft apps' RFC-0015, also as `--flag=DIR`.
+        let (flag, inline) = arg.split_once('=').map_or((arg, None), |(f, v)| (f, Some(v)));
+        if let "--automation-read-root" | "--automation-write-root" = flag {
+            let folder = root_value(flag, inline, &mut args)?;
+            let folder = existing_folder(flag, &folder, !setup)?;
+            match flag {
+                "--automation-read-root" => options.access.read.push(folder),
+                _ => options.access.write.push(folder),
+            }
+            continue;
+        }
         match arg {
             // Absolute, as the server may run in another folder (started by an AI client) and
             // the app checks paths in its own.
@@ -84,7 +103,7 @@ fn parse(args: &[&str], setup: bool) -> Result<Options, String> {
                 let folder = PathBuf::from(value(&mut args, arg)?);
                 let folder = std::path::absolute(&folder)
                     .map_err(|e| format!("--allow-path {}: {e}", folder.display()))?;
-                options.access.folders.push(folder);
+                options.access.write.push(folder);
             }
             "--allow-any-path" => options.access.any = true,
             "--headless" if !setup => options.headless = true,
@@ -106,6 +125,42 @@ fn parse(args: &[&str], setup: bool) -> Result<Options, String> {
     Ok(options)
 }
 
+/// The folder after a root flag: `inline` (`--flag=DIR`) or the next argument, which must not
+/// look like another flag, so that a forgotten folder does not swallow it.
+fn root_value(
+    flag: &str,
+    inline: Option<&str>,
+    args: &mut std::slice::Iter<&str>,
+) -> Result<String, String> {
+    let value = match inline {
+        Some(value) => value.to_owned(),
+        None => {
+            let value = args.next().ok_or_else(|| format!("{flag} needs a folder"))?;
+            if value.starts_with('-') {
+                return Err(format!(
+                    "{flag} needs a folder; write {flag}=<folder> for one starting with `-`"
+                ));
+            }
+            (*value).to_owned()
+        }
+    };
+    if value.is_empty() {
+        return Err(format!("{flag} needs a folder"));
+    }
+    Ok(value)
+}
+
+/// `folder` made absolute; when the server starts (`check`), it must be an existing folder, so
+/// that a mistyped root stops the server rather than leaving it without the folder.
+fn existing_folder(flag: &str, folder: &str, check: bool) -> Result<PathBuf, String> {
+    let absolute = std::path::absolute(folder).map_err(|e| format!("{flag} {folder}: {e}"))?;
+    if check && !absolute.is_dir() {
+        let why = if absolute.exists() { "is not a folder" } else { "does not exist" };
+        return Err(format!("{flag} {}: {why}", absolute.display()));
+    }
+    Ok(absolute)
+}
+
 fn serve(args: &[&str]) -> Result<(), String> {
     let mut options = parse(args, false)?;
     // Diagrams drawn as in the app, whose settings say how.
@@ -116,7 +171,7 @@ fn serve(args: &[&str]) -> Result<(), String> {
         if let Some(folder) =
             std::path::absolute(path).ok().and_then(|p| p.parent().map(Path::to_path_buf))
         {
-            options.access.folders.push(folder);
+            options.access.write.push(folder);
         }
         Auto::headless(options.access, Headless::with(doc, Some(path.clone())).drawn_as(display))
     } else if options.headless {
@@ -135,21 +190,16 @@ fn serve(args: &[&str]) -> Result<(), String> {
 
 fn setup(args: &[&str]) -> Result<(), String> {
     let mut options = parse(args, true)?;
-    if options.access.folders.is_empty()
-        && !options.access.any
+    let access = &mut options.access;
+    if access.read.is_empty()
+        && access.write.is_empty()
+        && !access.any
         && let Some(documents) = documents_dir()
     {
-        options.access.folders.push(documents);
+        access.write.push(documents);
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut server_args = vec!["mcp".to_owned()];
-    for folder in &options.access.folders {
-        server_args.push("--allow-path".into());
-        server_args.push(folder.display().to_string());
-    }
-    if options.access.any {
-        server_args.push("--allow-any-path".into());
-    }
+    let server_args = server_args(&options.access);
     let wanted = |client: &str| options.client.as_deref().is_none_or(|c| c == client);
     let mut done = 0;
     if wanted("claude-code") {
@@ -174,7 +224,7 @@ fn setup(args: &[&str]) -> Result<(), String> {
     if done == 0 {
         return Err(
             "found no AI client to set up (Claude Code, Claude Desktop, Cursor). Register it by \
-             hand: command `umlcraft-cli`, arguments `mcp --allow-path <folder>`."
+             hand: command `umlcraft-cli`, arguments `mcp --automation-write-root <folder>`."
                 .into(),
         );
     }
@@ -182,6 +232,24 @@ fn setup(args: &[&str]) -> Result<(), String> {
         println!("Restart the AI client to use UmlCraft.");
     }
     Ok(())
+}
+
+/// The server's arguments for an AI client's configuration: each folder as a root of the
+/// Craft apps' RFC-0015 (`--allow-path` folders as write roots).
+fn server_args(access: &Access) -> Vec<String> {
+    let mut args = vec!["mcp".to_owned()];
+    for (flag, folders) in
+        [("--automation-read-root", &access.read), ("--automation-write-root", &access.write)]
+    {
+        for folder in folders {
+            args.push(flag.into());
+            args.push(folder.display().to_string());
+        }
+    }
+    if access.any {
+        args.push("--allow-any-path".into());
+    }
+    args
 }
 
 /// Registers the server with Claude Code's `claude mcp add`, if `claude` is installed.
@@ -374,7 +442,59 @@ mod tests {
     #[test]
     fn allowed_folders_are_made_absolute() {
         let options = parse(&["--allow-path", "diagrams"], true).unwrap();
-        assert!(options.access.folders[0].is_absolute(), "{:?}", options.access.folders);
-        assert!(options.access.folders[0].ends_with("diagrams"));
+        assert!(options.access.write[0].is_absolute(), "{:?}", options.access.write);
+        assert!(options.access.write[0].ends_with("diagrams"));
+        assert!(options.access.read.is_empty());
+    }
+
+    #[test]
+    fn roots_read_and_write_apart() {
+        let dir = scratch("roots");
+        let (input, output) = (dir.join("in"), dir.join("-out"));
+        std::fs::create_dir_all(&input).unwrap();
+        std::fs::create_dir_all(&output).unwrap();
+        let (input_text, output_text) = (input.display().to_string(), output.display().to_string());
+        let write_flag = format!("--automation-write-root={output_text}");
+        let options =
+            parse(&["--automation-read-root", &input_text, &write_flag, "--headless"], false)
+                .unwrap();
+        assert_eq!(options.access.read, vec![input.clone()]);
+        assert_eq!(options.access.write, vec![output.clone()]);
+        // Several of each.
+        let twice = ["--automation-read-root", &input_text, "--automation-read-root", &input_text];
+        assert_eq!(parse(&twice, false).unwrap().access.read.len(), 2);
+        // The server's command for a client keeps them apart.
+        assert_eq!(
+            server_args(&options.access),
+            ["mcp", "--automation-read-root", &input_text, "--automation-write-root", &output_text]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_root_needs_an_existing_folder() {
+        let dir = scratch("missing-root");
+        let missing = dir.join("missing").display().to_string();
+        let file = dir.join("file.txt");
+        std::fs::write(&file, "x").unwrap();
+        let file = file.display().to_string();
+        for flag in ["--automation-read-root", "--automation-write-root"] {
+            for args in [
+                vec![flag],
+                vec![flag, ""],
+                vec![flag, "--headless"],
+                vec![flag, "-folder"],
+                vec![flag, &missing],
+                vec![flag, &file],
+            ] {
+                assert!(parse(&args, false).is_err(), "{args:?}");
+            }
+            assert!(parse(&[&format!("{flag}=")], false).is_err());
+            // `mcp setup` may name a folder made later; the server checks it when it starts.
+            assert!(parse(&[flag, &missing], true).is_ok());
+        }
+        // `--allow-path` stays as it was, for the clients set up with it.
+        assert!(parse(&["--allow-path", &missing], false).is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

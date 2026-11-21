@@ -79,7 +79,7 @@ fn structograms_are_made_read_and_changed() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dir = crate::host::absolute(&dir);
-    let access = Access { folders: vec![dir.clone()], any: false };
+    let access = Access::folders(vec![dir.clone()]);
     for name in ["total.png", "total.svg", "total.nsd"] {
         let export = json!({ "diagram": made["id"], "path": dir.join(name) });
         let written = call(&mut host, &access, "export_image", &export);

@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
-    let path = access.check(Path::new(str_arg(args, "path")?), None)?;
+    let path = access.check_write(Path::new(str_arg(args, "path")?), None)?;
     let shown =
         opt_diagram(host.document().model(), args, "diagram", true)?.or(host.active_diagram());
     let model = host.document().model();
@@ -38,7 +38,9 @@ pub(super) fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -
 }
 
 /// Writes an export to `path`, creating its folder; a file that is there already only with
-/// `overwrite`, so that a call cannot replace a document by mistake.
+/// `overwrite`, so that a call cannot replace a document by mistake. The bytes go to a file
+/// beside it that then takes its place, so that a hard link to a file elsewhere is replaced
+/// rather than written through.
 pub(super) fn write_export(path: &Path, bytes: &[u8], args: &Value) -> Result<(), String> {
     let overwrite = match args.get("overwrite") {
         None => false,
@@ -53,7 +55,15 @@ pub(super) fn write_export(path: &Path, bytes: &[u8], args: &Value) -> Result<()
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     }
-    std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".umlcraft-tmp");
+    let tmp = PathBuf::from(tmp);
+    let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{}: {e}", path.display()));
+    }
+    Ok(())
 }
 
 pub(super) const DIALECTS: [(&str, Dialect); 3] =
@@ -108,7 +118,7 @@ pub(super) fn export_sql(host: &mut dyn Host, access: &Access, args: &Value) -> 
             if extension(&path) != "sql" {
                 path.as_mut_os_string().push(".sql");
             }
-            let path = access.check(&path, None)?;
+            let path = access.check_write(&path, None)?;
             write_export(&path, out.sql.as_bytes(), args)?;
             reply["written"] = json!(path);
         }

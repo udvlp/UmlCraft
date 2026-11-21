@@ -254,7 +254,8 @@ pub fn list() -> Vec<Value> {
             "get_document",
             "The open project: its file, whether it has unsaved changes, whether it is the one \
              open in the UmlCraft app (live), its diagrams, the diagram shown and the selection, \
-             and the folders files may be opened from and saved to.",
+             and the folders files may be read from (`read`) and written to (`write`, also \
+             read). A relative path is taken from the first write folder.",
             json!({}),
             &[],
         )),
@@ -816,21 +817,22 @@ pub fn list() -> Vec<Value> {
         ),
         tool(
             "open_file",
-            "Opens a UmlCraft project (.ucraft) from an allowed folder. In the app only when \
+            "Opens a UmlCraft project (.ucraft) from a read or write folder. In the app only when \
              the open project has no unsaved changes.",
             json!({ "path": text("The file.") }),
             &["path"],
         ),
         tool(
             "save_file",
-            "Saves the project as .ucraft: to `path` in an allowed folder (making the folders \
-             on the way that are missing), or to its own file.",
+            "Saves the project as .ucraft: to `path` in a write folder (making the folders on \
+             the way that are missing), or to its own file unless that lies in a folder that \
+             may only be read.",
             json!({ "path": text("Where to save; the project's file if omitted.") }),
             &[],
         ),
         tool(
             "export_image",
-            "Writes a diagram or structogram as an SVG or PNG image to an allowed folder (by the \
+            "Writes a diagram or structogram as an SVG or PNG image to a write folder (by the \
              extension); a structogram also as a Structorizer file (.nsd). A very large \
              diagram comes out as a smaller PNG. An existing file is replaced only with \
              `overwrite`.",
@@ -845,8 +847,8 @@ pub fn list() -> Vec<Value> {
             "export_sql",
             "Writes the entities of an ER diagram as CREATE TABLE statements: relationships \
              become foreign keys, many-to-many relationships tables of their own, subtypes take \
-             their supertype's key. Returns the SQL, or writes it to `path` in an allowed \
-             folder (an existing file only with `overwrite`).",
+             their supertype's key. Returns the SQL, or writes it to `path` in a write folder \
+             (an existing file only with `overwrite`).",
             json!({
                 "diagram": id("The ER diagram; the one shown if omitted."),
                 "dialect": { "type": "string", "enum": ["mysql", "mariadb", "postgres"],
