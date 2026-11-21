@@ -29,6 +29,7 @@ use umlcraft_notation::scene::{
 };
 use umlcraft_notation::sequence::SequenceLayout;
 
+use crate::dark_colors;
 use crate::nsd::NsdView;
 use crate::workspace::{EndChange, NewItem, Workspace};
 use crate::{
@@ -2709,8 +2710,7 @@ struct Painter<'a> {
     font_family: SharedString,
     window: &'a mut Window,
     cx: &'a mut App,
-    /// The fill color chosen for the node being painted; only on a light background, where the
-    /// texts stay readable on it.
+    /// The fill color chosen for the node being painted, as drawn in this theme.
     node_fill: Option<Hsla>,
     /// The line color chosen for the edge being painted, likewise.
     edge_line: Option<Hsla>,
@@ -2865,9 +2865,40 @@ impl Painter<'_> {
         measured
     }
 
-    /// A text color of its own, only on a light background, where it stays readable.
+    /// Whether the canvas is light, where a diagram's own colors are drawn as they are stored.
+    /// The dark canvas draws their counterparts (see `dark_colors`).
+    fn light(&self) -> bool {
+        self.c.background.l > 0.5
+    }
+
+    /// A text color of its own, as drawn in this theme.
     fn ink(&self, color: Option<Color>) -> Hsla {
-        color.filter(|_| self.c.background.l > 0.5).map_or(self.c.text, hsla)
+        match color.map(hsla) {
+            None => self.c.text,
+            Some(c) if self.light() => c,
+            Some(c) => dark_colors::ink(
+                c,
+                self.c.text,
+                &[self.node_fill.unwrap_or(self.c.fill), self.c.background],
+                dark_colors::TEXT_CONTRAST,
+            ),
+        }
+    }
+
+    /// A node's fill color of its own, as drawn in this theme.
+    fn own_fill(&self, color: Option<Color>) -> Option<Hsla> {
+        let c = hsla(color?);
+        Some(if self.light() { c } else { dark_colors::fill(c, self.c.fill, self.c.text) })
+    }
+
+    /// An edge's line color of its own, as drawn in this theme.
+    fn own_line(&self, color: Option<Color>) -> Option<Hsla> {
+        let c = hsla(color?);
+        Some(if self.light() {
+            c
+        } else {
+            dark_colors::ink(c, self.c.line, &[self.c.background], dark_colors::LINE_CONTRAST)
+        })
     }
 
     fn row(&mut self, row: &Row) {
@@ -2941,21 +2972,20 @@ impl Painter<'_> {
 
     /// Paints a node's outline and its rows, except the row being edited in place.
     fn node(&mut self, node: &NodeShape, editing: Option<Id>) {
-        let light = self.c.background.l > 0.5;
-        self.node_fill = node.fill.filter(|_| light).map(hsla);
+        self.node_fill = self.own_fill(node.fill);
         for primitive in draw::figure(node) {
             self.primitive(&primitive);
         }
-        self.node_fill = None;
-        if draw::rows_on_backdrop(node) {
-            return;
-        }
-        for row in &node.rows {
-            if editing.is_some() && row.element == editing {
-                continue;
+        // The rows' own colors keep their contrast to the node's own fill.
+        if !draw::rows_on_backdrop(node) {
+            for row in &node.rows {
+                if editing.is_some() && row.element == editing {
+                    continue;
+                }
+                self.row(row);
             }
-            self.row(row);
         }
+        self.node_fill = None;
     }
 
     /// The rows of a node that stand on a backdrop, over the nodes drawn before: the labels of
@@ -2993,8 +3023,7 @@ impl Painter<'_> {
 
     /// Paints an edge with its labels.
     fn edge(&mut self, edge: &EdgeShape, selected: bool) {
-        let light = self.c.background.l > 0.5;
-        self.edge_line = edge.stroke.filter(|_| light).map(hsla);
+        self.edge_line = self.own_line(edge.stroke);
         let color = if selected { self.c.selection } else { self.paint(Paint::Line) };
         let width = if selected { 2.0 } else { 1.0 };
         if edge.double {

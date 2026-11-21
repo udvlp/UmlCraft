@@ -343,7 +343,10 @@ migrations. Writing serializes from the model's own data without copying it.
 - `sequence` draws sequence diagrams, `sequence_edit` edits them (see below).
 - `draw` turns a scene's figures and end markers into a few primitives (polyline, polygon,
   ellipse, frame, curve) with color roles (`Paint`) and says where text baselines go. The canvas paints
-  them with its theme colors (and a node's own fill color on a light background); `svg` writes
+  them with its theme colors and a presentation's own fill, font and line colors, which are
+  meant for a light background; the dark canvas draws a counterpart of each, worked out when
+  painting (`dark_colors` in the app: same hue, lightness mirrored, enough contrast), so the
+  model and the `.asta` export keep the colors as chosen. `svg` writes
   them as the canvas shows them in the light theme: black lines, white where a node has no color
   of its own, a margin of 10 and 4/3 pixels per unit. The app's image export writes coordinates
   and sizes ten times larger (`render_scaled`, same image size): Word's PDF export puts the

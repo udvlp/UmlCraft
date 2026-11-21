@@ -38,8 +38,9 @@ between releases is in the [changelog](CHANGELOG.md).
 Diagrams imported from `.asta` files keep their layout, sizes and colors. The properties panel
 sets per class box what it shows of its members (stereotypes, visibility, types, initial
 values, parameters and their directions, the members of chosen visibilities), per box or
-line the color of its name and of the line, and per box its fill (shown in the light theme and
-in exports), e.g. to set off what a diagram showed before from what is new.
+line the color of its name and of the line, and per box its fill, e.g. to set off what a
+diagram showed before from what is new. Files and exports keep the colors as chosen; the dark
+theme draws a dark counterpart of each, of the same hue and as far from the default.
 
 ## Files
 

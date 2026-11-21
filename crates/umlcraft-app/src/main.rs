@@ -2,6 +2,7 @@
 
 mod about_dialog;
 mod canvas;
+mod dark_colors;
 mod demo;
 mod errors;
 #[cfg(test)]
