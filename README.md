@@ -302,9 +302,11 @@ check for new versions.
 - **Why and on what basis:** to tell you about new versions, with your consent (Art. 6(1)(a)
   GDPR). You can withdraw it at any time in the settings. Requests made before stay lawful.
 - **Responsible:** Ulf Haueisen, c/o Heinrich-Kleyer-Schule, Kühhornshofweg 27, 60320 Frankfurt
-  am Main, Germany, <app@umlcraft.com>. You have the rights of the GDPR, among them access,
-  erasure and complaint to a supervisory authority. UmlCraft's side stores nothing about you
-  that could be accessed or erased; for what GitHub stores, ask GitHub.
+  am Main, Germany, <app@umlcraft.com>. This is where post about UmlCraft reaches me. The
+  Heinrich-Kleyer-Schule does not provide UmlCraft and is not responsible for it. You have the
+  rights of the GDPR, among them access, erasure and complaint to a supervisory authority.
+  UmlCraft itself stores nothing about you that could be accessed or erased. For what GitHub
+  stores, ask GitHub.
 
 ## Build and run
 
