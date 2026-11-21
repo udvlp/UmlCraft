@@ -32,6 +32,8 @@ pub struct Settings {
     /// Write stereotypes and keywords in guillemets, `«include»`, as UML does. Off by default:
     /// `<<include>>`, as in Astah.
     pub guillemets: bool,
+    /// Moved nodes line up with the others when they come close; `None` is on.
+    pub align_to_nodes: Option<bool>,
     /// The language of new structograms' keywords (`de`, `en`); `None` follows the user
     /// interface.
     pub structogram_keywords: Option<String>,
@@ -87,6 +89,7 @@ impl Settings {
             abstract_stereotype: field(&fields, "abstractStereotype"),
             read_only_constraint: field(&fields, "readOnlyConstraint"),
             guillemets: field(&fields, "guillemets"),
+            align_to_nodes: field(&fields, "alignToNodes"),
             structogram_keywords: field(&fields, "structogramKeywords"),
             ribbon_collapsed: field(&fields, "ribbonCollapsed"),
             update_check: field(&fields, "updateCheck"),
@@ -133,6 +136,11 @@ impl Settings {
             read_only_constraint: self.read_only_constraint,
             guillemets: self.guillemets,
         }
+    }
+
+    /// Whether moved nodes line up with the others; on unless switched off.
+    pub fn aligns_to_nodes(&self) -> bool {
+        self.align_to_nodes != Some(false)
     }
 
     /// The keywords new structograms are written with: German or English as chosen, else as

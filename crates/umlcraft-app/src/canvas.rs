@@ -29,6 +29,7 @@ use umlcraft_notation::scene::{
 };
 use umlcraft_notation::sequence::SequenceLayout;
 
+use crate::align;
 use crate::dark_colors;
 use crate::nsd::NsdView;
 use crate::workspace::{EndChange, NewItem, Workspace};
@@ -338,12 +339,16 @@ enum Drag {
     /// was already part of a multi-selection: a click without movement selects just it.
     /// `moved` is the selection with the contents of its containers, taken from the scene as it
     /// was before the drag, so nodes a container passes over are not picked up.
+    /// `align` is what the nodes may line up with (none when that is switched off), `guides`
+    /// the lines showing what they line up with now.
     Move {
         start: MPoint,
         dx: f32,
         dy: f32,
         reselect: Option<Id>,
         moved: Vec<Id>,
+        align: Option<align::Targets>,
+        guides: Vec<[MPoint; 2]>,
     },
     Resize {
         presentation: Id,
@@ -566,6 +571,8 @@ pub struct DiagramCanvas {
     new_member_when_drawn: Option<(Id, Compartment)>,
     /// How the diagram is drawn beyond what it stores (settings).
     pub display: Display,
+    /// Moved nodes line up with the others when they come close (settings).
+    pub align_to_nodes: bool,
     /// What the scene was built from: revision, diagram, display settings and locale. Without a
     /// drag the scene is only built again when one of them changes, not on every pan, zoom or
     /// caret blink.
@@ -735,6 +742,7 @@ impl DiagramCanvas {
             select_when_drawn: false,
             new_member_when_drawn: None,
             display: Display::default(),
+            align_to_nodes: true,
             scene_key: None,
             hover: None,
             offer: None,
@@ -893,6 +901,19 @@ impl DiagramCanvas {
             }
             _ => Preview::default(),
         }
+    }
+
+    /// What the nodes `moved` may line up with while dragged: the other nodes, without diagram
+    /// frames. None when lining up is switched off, and on sequence diagrams, which place
+    /// their parts themselves.
+    fn align_targets(&self, moved: &[Id]) -> Option<align::Targets> {
+        if !self.align_to_nodes || self.scene.sequence.is_some() {
+            return None;
+        }
+        let nodes =
+            || self.scene.nodes.iter().filter(|n| !matches!(n.figure, Figure::Frame { .. }));
+        let others = nodes().filter(|n| !moved.contains(&n.id)).map(|n| n.rect).collect();
+        align::Targets::new(nodes().filter(|n| moved.contains(&n.id)).map(|n| n.rect), others)
     }
 
     /// The node under `p` for connecting. Fragment frames and swimlanes only count at their
@@ -1268,8 +1289,16 @@ impl DiagramCanvas {
                             let ws = self.workspace.read(cx);
                             let moved =
                                 scene::with_contents(ws.doc.model(), &self.scene, &ws.selection);
-                            self.drag =
-                                Some(Drag::Move { start: p, dx: 0.0, dy: 0.0, reselect, moved });
+                            let align = self.align_targets(&moved);
+                            self.drag = Some(Drag::Move {
+                                start: p,
+                                dx: 0.0,
+                                dy: 0.0,
+                                reselect,
+                                moved,
+                                align,
+                                guides: Vec::new(),
+                            });
                         }
                     }
                     None => {
@@ -1375,7 +1404,8 @@ impl DiagramCanvas {
     }
 
     /// The node under `position` and its handles: a line handle on classes, interfaces,
-    /// enumerations, data types, actors, use cases and objects, one for each compartment that
+    /// enumerations, data types, actors, use cases, objects and the elements of ER diagrams
+    /// (entities, relationships, attributes, IS-A triangles), one for each compartment that
     /// takes members, and on a sequence diagram a message handle on activation bars and
     /// lifelines. Over the handles shown, they stay.
     fn hover_at(&self, position: Point<Pixels>, cx: &App) -> Option<Hover> {
@@ -1428,6 +1458,10 @@ impl DiagramCanvas {
                 | K::Actor(_)
                 | K::UseCase(_)
                 | K::Instance(_)
+                | K::ErEntity(_)
+                | K::ErRelationship(_)
+                | K::ErAttribute(_)
+                | K::ErIsA(_)
         );
         let mut handles = Vec::new();
         if connects {
@@ -1958,13 +1992,20 @@ impl DiagramCanvas {
         let lanes = self.lanes_at_start.get_or_insert_with(|| lanes_of(&self.scene));
         let Some(drag) = self.drag.as_mut() else { return };
         match drag {
-            Drag::Move { start, dx, dy, moved, .. } => {
+            Drag::Move { start, dx, dy, moved, align, guides, .. } => {
                 *dx = snap(p.x - start.x);
                 *dy = snap(p.y - start.y);
+                guides.clear();
                 // Swimlanes move sideways only, within their row.
                 if let Some((left, right)) = lane_room(lanes, moved) {
                     *dx = dx.clamp(left, right);
                     *dy = 0.0;
+                } else if let Some(targets) = align {
+                    // Lined up from where the mouse is, not from the grid, so that a center a
+                    // few pixels beside an edge can be reached; the grid where nothing lines up.
+                    let (raw_x, raw_y) = (p.x - start.x, p.y - start.y);
+                    let (sx, sy, lines) = targets.snap(raw_x, raw_y, align::REACH / self.zoom);
+                    (*dx, *dy, *guides) = (sx.unwrap_or(*dx), sy.unwrap_or(*dy), lines);
                 }
             }
             Drag::Resize { handle, original, start, rect, .. } => {
@@ -3437,6 +3478,12 @@ impl Render for DiagramCanvas {
                             match &drag {
                                 Some(Drag::RubberBand { start, current, .. }) => {
                                     p.rubber_band(Rect::from_corners(*start, *current));
+                                }
+                                Some(Drag::Move { guides, .. }) => {
+                                    let s = p.c.selection;
+                                    for guide in guides {
+                                        p.line(guide, 1.0, s, LineStyle::Dashed);
+                                    }
                                 }
                                 Some(Drag::Reorder { start, current, .. })
                                     if (current.y - start.y).abs() > 6.0 =>

@@ -5,6 +5,12 @@ today.
 
 ## Unreleased
 
+- **Line handle in ER diagrams**: entities, relationships, attributes and IS-A triangles show
+  the handle for drawing a line when the mouse is over them, as classes do.
+- **Lining up while moving**: a moved element snaps to other elements when it comes close,
+  center to center and edge to edge, and dashed guides show what it lines up with. An entity
+  and a relationship whose centers line up are joined by a straight line. Tools › Settings
+  switches it off.
 - **Folders to read and folders to write for AI assistants**: `umlcraft-cli mcp` takes
   `--automation-read-root` (folders it may only read) and `--automation-write-root` (folders
   it may read and write), as the storytold Craft apps do. `mcp setup` writes them;

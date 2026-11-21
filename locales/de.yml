@@ -690,6 +690,8 @@ settings:
   dark: Dunkel
   diagrams: Diagramme
   guillemets: "Stereotype in Guillemets: «include» statt <<include>>"
+  align_to_nodes: Beim Verschieben an anderen Elementen ausrichten
+  align_to_nodes_detail: Mitte rastet an Mitte, Kante an Kante ein, sobald sie nah genug kommen. Hilfslinien zeigen, woran.
   classes: Klassen
   visibility_column: Sichtbarkeit in eigener Spalte
   abstract: Abstrakte Klassen zusätzlich zur Kursivschrift kennzeichnen mit

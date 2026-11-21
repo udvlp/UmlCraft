@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod about_dialog;
+mod align;
 mod canvas;
 mod dark_colors;
 mod demo;

@@ -142,6 +142,7 @@ impl MainView {
         let canvas = cx.new(|cx| {
             let mut canvas = DiagramCanvas::new(workspace.clone(), cx);
             canvas.display = display;
+            canvas.align_to_nodes = settings.aligns_to_nodes();
             canvas.clear = clear.clone();
             canvas
         });
@@ -1891,6 +1892,14 @@ impl MainView {
     pub fn set_guillemets(&mut self, on: bool, cx: &mut Context<Self>) {
         self.settings.guillemets = on;
         self.apply_display(cx);
+    }
+
+    /// Moved nodes line up with the others when they come close, or not.
+    pub fn set_align_to_nodes(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.settings.align_to_nodes = Some(on);
+        self.settings.save();
+        self.canvas.update(cx, |canvas, _| canvas.align_to_nodes = on);
+        cx.notify();
     }
 
     /// Lets UmlCraft ask GitHub for new versions, or not; agreeing checks at once.

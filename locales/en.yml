@@ -690,6 +690,8 @@ settings:
   dark: Dark
   diagrams: Diagrams
   guillemets: "Stereotypes in guillemets: «include» instead of <<include>>"
+  align_to_nodes: Line up with other elements while moving
+  align_to_nodes_detail: Centers snap to centers and edges to edges when they come close. Guides show what lines up.
   classes: Classes
   visibility_column: Visibility in a column of its own
   abstract: Besides the italic name, abstract classes show

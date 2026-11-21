@@ -1,5 +1,6 @@
 //! The settings dialog (Tools › Settings …, Ctrl+,): language, theme, how classes show
-//! their members and that they are abstract, the keywords of new structograms, and whether to
+//! their members and that they are abstract, whether moved elements line up with others, the
+//! keywords of new structograms, and whether to
 //! look for new versions, in one place. Every change applies at once and is saved, so the dialog
 //! only has to be closed.
 
@@ -34,6 +35,7 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
         let stereotype = settings.abstract_stereotype;
         let read_only = settings.read_only_constraint;
         let guillemets = settings.guillemets;
+        let align = settings.aligns_to_nodes();
         // 0 follows the user interface, then those of `LANGUAGES`.
         let keywords = settings
             .structogram_keywords
@@ -121,13 +123,35 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             });
         let classes =
             v_flex().gap_3().child(visibility_column).child(abstract_mark).child(read_only_mark);
-        let v8 = view.clone();
-        let diagrams = Switch::new("settings-guillemets")
-            .checked(guillemets)
-            .label(t!("settings.guillemets").to_string())
-            .on_change(move |&on, _, cx| {
-                v8.update(cx, |this, cx| this.set_guillemets(on, cx)).ok();
-            });
+        let (v8, v9) = (view.clone(), view.clone());
+        let diagrams = v_flex()
+            .gap_3()
+            .child(
+                Switch::new("settings-guillemets")
+                    .checked(guillemets)
+                    .label(t!("settings.guillemets").to_string())
+                    .on_change(move |&on, _, cx| {
+                        v8.update(cx, |this, cx| this.set_guillemets(on, cx)).ok();
+                    }),
+            )
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        Switch::new("settings-align")
+                            .checked(align)
+                            .label(t!("settings.align_to_nodes").to_string())
+                            .on_change(move |&on, _, cx| {
+                                v9.update(cx, |this, cx| this.set_align_to_nodes(on, cx)).ok();
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(t!("settings.align_to_nodes_detail").to_string()),
+                    ),
+            );
         let structograms = v_flex()
             .gap_1()
             .child(div().text_sm().child(t!("settings.keywords").to_string()))
