@@ -3,6 +3,34 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## 0.23.0 – 2026-11-21
+
+- **Fill colors**: the properties panel sets a box's fill color, next to the colors of its name
+  and line, e.g. to set off in grey what a diagram showed before from what is new.
+- **Own colors in the dark theme**: fill, font and line colors now show in the dark theme as
+  well, as a dark counterpart of the same hue that keeps texts readable. Files and exports keep
+  the colors as chosen.
+- **Line breaks in names**: names of boxes, lifelines and lines, and a state's activities and
+  internal transitions, are drawn on as many lines as they have; boxes grow to hold them, and
+  the editor on the diagram opens with several lines. The `.asta` export writes the breaks as
+  spaces.
+- **Chen ratios in ER diagrams**: a Chen diagram can show each cardinality as Chen's ratio
+  (`1`, `n`, `m`, or a number) instead of `[min,max]`. Typing `1`, `n` or `m` sets the maximum,
+  and the context menu offers them. Any letter may be the maximum of a cardinality (`[0,p]`),
+  meaning many as `n` and `m` do.
+- **ER cardinalities on very short lines** stay beside their line instead of running past the
+  relationship.
+- **Artifacts inside artifacts**: an artifact drawn inside another belongs to it, moves with it,
+  and *Arrange* lays it out inside.
+- **Properties of the diagram**: with nothing selected, the properties panel shows the active
+  diagram's settings.
+- **Command line export**: `umlcraft-cli export project.ucraft --diagram NAME --out FILE` writes
+  a diagram or structogram as SVG, PNG or `.nsd`; `--all --out-dir DIR` writes each one.
+- **MCP**: tools take a diagram's name as well as its id; `create_element` keeps an `x` or `y`
+  given alone; `save_file` makes missing folders in an allowed folder. An MCP server outside the
+  Flatpak now reaches the Flatpak app.
+- UmlCraft builds with Rust 1.100 and the latest dependencies.
+
 ## 0.22.0 – 2026-11-16
 
 - **Actors in sequence diagrams**: a lifeline whose type is an actor is drawn as a stick figure
