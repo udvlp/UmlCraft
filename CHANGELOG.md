@@ -3,6 +3,33 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Diagram in a panel of its own**: the diagram no longer lies under the ribbon, model tree
+  and properties; it sits between tree and properties as a white panel with the grid. In the
+  light theme the window around the panels and the title bar are a light grey, the panels an
+  almost white grey with a thin line around them, without shadows.
+- **Tabs above the ribbon, File as a page**: the ribbon's tabs sit above it, the open one
+  underlined. File, the first tab, replaces the title bar's File menu and opens a page over
+  the window with the project's information, new, open with the recently used projects,
+  save, import and export; Back or Escape returns to the diagram. The ribbon's group captions
+  are smaller and open no menu any more.
+- **No Tools tab**: importing and exporting are only on the File page. The source import of
+  Java, C#, C++ and Python moved to File › Import, each language with an icon of its own and
+  the choice of files or a folder; Copy as image moved to Edit › Clipboard.
+- **New structogram only with the other diagrams**: File no longer offers it, since it adds to
+  the open project instead of starting a new one; Edit › New diagram › Structogram and the
+  model tree's menu do.
+- **Classes start folded in the model tree**: an element holding only its own parts (a class
+  with its attributes and operations, an entity with its attributes, an operation with its
+  parameters) is shown folded; one folded or unfolded by hand stays so.
+- **Edit instead of Home, View before the diagram**: the ribbon's first tab after File is
+  called Edit (Bearbeiten), View follows it, and the open diagram's tab comes last, so that
+  Edit and View keep their place when a diagram opens or closes.
+- **A short menu bar on macOS**: it keeps the app menu (About UmlCraft, Settings, Quit) and
+  Undo, Redo, Cut, Copy, Paste and Select All; everything else is in the ribbon and on the
+  File page, as on Windows and Linux.
+
 ## 0.23.1 – 2026-11-21
 
 - **Line handle in ER diagrams**: entities, relationships, attributes and IS-A triangles show

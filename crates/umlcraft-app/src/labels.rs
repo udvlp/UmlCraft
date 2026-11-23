@@ -46,6 +46,33 @@ pub fn tree_children(model: &Model, e: &Element) -> Vec<Id> {
     children
 }
 
+/// Whether the model tree shows `e` folded until it is unfolded by hand: an element holding
+/// only its own parts, such as a class with attributes and operations or an entity with its
+/// attributes. One holding anything else (a nested class, a structogram, a diagram) or nothing
+/// stays unfolded.
+pub fn tree_folded(model: &Model, e: &Element) -> bool {
+    !e.children().is_empty()
+        && e.children().iter().all(|&c| model.get(c).is_some_and(|c| is_part(c.kind())))
+}
+
+/// The parts an element lists below itself: features, literals, parameters and the like.
+fn is_part(kind: &ElementKind) -> bool {
+    use ElementKind as K;
+    matches!(
+        kind,
+        K::Attribute(_)
+            | K::Operation(_)
+            | K::Parameter(_)
+            | K::TemplateParameter(_)
+            | K::EnumerationLiteral
+            | K::Slot(_)
+            | K::Port(_)
+            | K::ExtensionPoint
+            | K::InternalTransition(_)
+            | K::ErAttribute(_)
+    )
+}
+
 /// Where an element of `kind` goes among its siblings in the model tree: its group, then its
 /// place in the group.
 fn tree_rank(kind: &ElementKind) -> (u8, u8) {
@@ -275,7 +302,7 @@ mod tests {
     use umlcraft_model::sample::order_system;
     use umlcraft_model::{DiagramKind, ElementData, ElementKind};
 
-    use super::{one_line, tree_children};
+    use super::{one_line, tree_children, tree_folded};
 
     #[test]
     fn packages_list_their_contents_in_order() {
@@ -313,6 +340,28 @@ mod tests {
         // A class keeps its members as they are.
         let customer = model.get(ids.customer).unwrap();
         assert_eq!(tree_children(model, customer), customer.children());
+    }
+
+    #[test]
+    fn only_elements_holding_their_parts_start_folded() {
+        let (mut doc, ids) = order_system();
+        let (empty, outer) = doc
+            .edit("more", |tx| {
+                let empty =
+                    tx.create(ids.domain, ElementData::new("Empty", ElementKind::class()))?;
+                let outer =
+                    tx.create(ids.domain, ElementData::new("Outer", ElementKind::class()))?;
+                tx.create(outer, ElementData::new("Inner", ElementKind::class()))?;
+                Ok((empty, outer))
+            })
+            .unwrap();
+        let model = doc.model();
+        let folded = |id| tree_folded(model, model.get(id).unwrap());
+        assert!(folded(ids.customer), "a class with its members");
+        assert!(!folded(ids.domain), "a package");
+        assert!(!folded(model.root()), "the project");
+        assert!(!folded(empty), "nothing to fold");
+        assert!(!folded(outer), "a nested class");
     }
 
     #[test]

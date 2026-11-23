@@ -48,10 +48,10 @@ drück Strg+Z und nimm stattdessen Strg+Entf. Jede Änderung lässt sich rückg�
 
 - **Titelleiste**, ganz oben: das Menü Datei, Speichern, Rückgängig, Wiederholen, rechts
   „Über UmlCraft“ und die Einstellungen (das Zahnrad).
-- **Menüband** darunter, mit Registerkarten: **Start** (Zwischenablage, Löschen, Ausrichten,
-  Linienstil, Layout, Neues Diagramm), eine Karte für die Art des offenen Diagramms mit
-  dessen Elementen und Beziehungen, **Ansicht** (Zoom, helles oder dunkles Design, Sprache)
-  und **Werkzeuge** (Quellcode importieren, Austausch mit anderen Dateien, Bilder).
+- **Menüband** darunter, mit Registerkarten: **Bearbeiten** (Zwischenablage, Löschen,
+  Ausrichten, Linienstil, Layout, Neues Diagramm), **Ansicht** (Zoom, helles oder dunkles
+  Design, Sprache) und, solange ein Diagramm offen ist, eine Karte für seine Art mit dessen
+  Elementen und Beziehungen.
 - **Modell**, die Leiste links: der Modellbaum. Ein Klick auf ein Diagramm öffnet es, ein
   Klick auf ein Element wählt es aus.
 - **Zeichenfläche** in der Mitte: das offene Diagramm.
@@ -84,7 +84,7 @@ Klick dich im Modellbaum durch die Diagramme. Dann probier den Gedanken von oben
 ## Dein erstes Diagramm
 
 1. **Datei › Neues Projekt** (Strg+N). Ein neues Projekt ist leer, ohne Diagramm.
-2. **Start › Neues Diagramm › Klassendiagramm**. Das Menüband hat jetzt eine Karte
+2. **Bearbeiten › Neues Diagramm › Klassendiagramm**. Das Menüband hat jetzt eine Karte
    *Klassendiagramm* mit ihren Werkzeugen, und der Modellbaum zeigt das neue Diagramm.
 3. Wähl im Menüband **Klasse** und klick in das Diagramm. Die neue Klasse öffnet ihren Namen
    zum Tippen: Schreib `Kunde` und drück Enter.
@@ -105,7 +105,7 @@ stehen alle dort, neben dem Diagramm.
 
 ## Dieselbe Klasse auf einem zweiten Diagramm
 
-1. Noch einmal **Start › Neues Diagramm › Klassendiagramm**.
+1. Noch einmal **Bearbeiten › Neues Diagramm › Klassendiagramm**.
 2. Zieh `Kunde` aus dem Modellbaum auf das neue Diagramm, dann `Bestellung`. Die Assoziation
    kommt von selbst mit, weil sie im Modell zwischen den beiden Klassen besteht.
 3. Benenne `Bestellung` auf diesem Diagramm in `Auftrag` um (Doppelklick auf den Namen) und
@@ -156,9 +156,9 @@ Auf dem Mac tritt Cmd an die Stelle von Strg.
 
 ## Wie es weitergeht
 
-- Die anderen Diagrammarten: **Start › Neues Diagramm** listet sie alle. Das Beispielprojekt
+- Die anderen Diagrammarten: **Bearbeiten › Neues Diagramm** listet sie alle. Das Beispielprojekt
   zeigt zu jeder ein Beispiel.
-- **Struktogramme** (Nassi-Shneiderman-Diagramme): **Datei › Neues Struktogramm**.
+- **Struktogramme** (Nassi-Shneiderman-Diagramme): **Bearbeiten › Neues Diagramm › Struktogramm**.
 - **Quellcode**: **Werkzeuge › Quellcode importieren** liest Java, C#, C++ oder Python ins
   Modell. Dann hast du Klassen im Modellbaum, aber noch kein Diagramm: Zieh sie auf eins.
 - Das [README](README.md) beschreibt alles, was UmlCraft kann (auf Englisch).

@@ -174,17 +174,22 @@ migrations. Writing serializes from the model's own data without copying it.
   fields that were typed into. Placeholders and choices come from the locales and are set again
   when the language changes.
 - `main_view.rs` lays out the window and holds the file operations: the title bar (gpui-component's
-  `TitleBar` with the File menu, save, undo and redo; the window draws its own title bar), the
-  ribbon, model tree and properties. The diagram view fills the window below the title bar and
-  the others float over it as cards; the empty middle between them is measured into a
-  `shell::ClearArea` that the diagram views use to zoom, center and paste. There is no status
+  `TitleBar` with save, undo and redo; the window draws its own title bar), the ribbon's tabs
+  on the backdrop and below them its card, model tree and properties. Below the ribbon, model
+  tree, diagram view and properties sit side by side as cards on the backdrop; the zoom and
+  running work float over the bottom of the diagram's card. The File tab (`OpenFilePage`)
+  shows `main_view/file_page.rs` over all of it but the title bar: pages on the left, commands
+  as cards on the right. The diagram views stay drawn below it, so its commands go to the view
+  shown as the ribbon's do, closing the page first; Escape closes it. There is no status
   line: `Workspace::message` (what went wrong in an edit) is taken by an observer and shown as
   a toast (`toast`, gpui-component's notifications), and running work as a card above the zoom
   (`busy_card`). One file job runs at a time; another one asked for meanwhile is refused with a
   toast. Opening and the Astah import read in the background while the open project stays
   editable; if it was edited meanwhile, the user is asked about unsaved changes again before
   it is replaced. Background imports remember `generation` and drop their result if another
-  project was opened meanwhile. The platform menu bar (`cx.set_menus`) stays for macOS.
+  project was opened meanwhile. The platform menu bar (`cx.set_menus`, shown on macOS) holds
+  only the app menu (About, Settings, Quit) and the standard edit commands, so that macOS
+  users work with the ribbon and the File page like everyone else.
 - The diagram views open their context menu themselves (`shell::MenuAt`) on releasing the
   right button without moving; held and moved, it pans. gpui-component's `context_menu`
   opens on the press and so cannot tell a click from a drag.
@@ -194,8 +199,8 @@ migrations. Writing serializes from the model's own data without copying it.
   elements and commands, and opens by itself when another diagram becomes active. Buttons send
   their action to the view shown (canvas or structogram), wherever the keyboard focus is. Where the estimated width does not fit, buttons drop their
   labels; a double click on a tab folds the ribbon (`ribbonCollapsed` in the settings).
-- `shell.rs` has the opaque backdrop the cards float on, the card styles (the floating one
-  over the diagram is light grey and catches the mouse with `occlude()`) and icon buttons
+- `shell.rs` has the opaque backdrop the cards sit on, the card styles (hairline border, no
+  shadow; `panel_card` catches the mouse with `occlude()`) and icon buttons
   (`in_title_bar` keeps a press on a title bar button from moving the window on Windows). A
   system backdrop (Mica, macOS blur) was tried and dropped: with a non-opaque window GPUI
   renders text without subpixel antialiasing, and on Windows its antialiased edges come out

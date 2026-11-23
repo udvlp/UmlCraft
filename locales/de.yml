@@ -50,9 +50,8 @@ toolbar:
   zoom_fit: Einpassen
 ribbon:
   tab:
-    home: Start
+    home: Bearbeiten
     view: Ansicht
-    tools: Werkzeuge
   group:
     new: Neu
     clipboard: Zwischenablage
@@ -65,9 +64,6 @@ ribbon:
     notes: Notizen
     zoom: Zoom
     appearance: Darstellung
-    source: Quellcode importieren
-    exchange: Austausch
-    image: Bild exportieren
     nsd_simple: Einfach
     nsd_branches: Verzweigungen
     nsd_loops: Schleifen
@@ -91,52 +87,25 @@ ribbon:
     idef1x: IDEF1X
   light: Hell
   dark: Dunkel
-  files: Dateien …
-  folder: Ordner …
-  import: Importieren
-  export: Exportieren
-  export_nsd: Für Structorizer speichern
-  export_nsd_tip: Speichert das Struktogramm als .nsd-Datei, die Structorizer öffnen und bearbeiten kann
-  export_sql: Als SQL
-  export_sql_tip: Schreibt die Entities des ER-Diagramms als CREATE TABLE-Anweisungen in eine .sql-Datei
-  copy_image: In Zwischenablage
+  copy_as_image: Als Bild kopieren
   new_diagram: Neues Diagramm
 menu:
   file: Datei
-  new: Neues Projekt
-  open: Öffnen …
-  new_structogram: Neues Struktogramm
-  import_astah: .asta-Projekt importieren …
-  import_structogram: Struktogramm (.nsd) importieren …
-  import_sql: SQL-Dump als ER-Diagramm importieren …
-  export: Exportieren
-  export_svg: Diagramm als SVG …
-  export_png: Diagramm als PNG …
-  export_astah: .asta-Projekt …
-  export_structogram: Struktogramm als .nsd …
-  export_sql: ER-Diagramm als SQL …
-  recent: Zuletzt geöffnet
-  no_recent: (keine)
-  save: Speichern
-  save_as: Speichern unter …
   quit: Beenden
   edit: Bearbeiten
   delete: Aus dem Modell löschen
   remove_from_diagram: Aus dem Diagramm entfernen
   select_all: Alles auswählen
   copy: Kopieren
-  copy_image: Diagramm als Bild kopieren
   cut: Ausschneiden
   paste: Einfügen (als Kopie)
   paste_reference: Einfügen (dieselben Elemente)
-  align: Ausrichten
   align_left: Links ausrichten
   align_center: Horizontal zentrieren
   align_right: Rechts ausrichten
   align_top: Oben ausrichten
   align_middle: Vertikal zentrieren
   align_bottom: Unten ausrichten
-  wrap_in_fragment: Mit Fragment umschließen
   line_style: Linienstil
   line_straight: Linie
   line_right_angle: Linie (rechtwinklig)
@@ -167,26 +136,14 @@ menu:
   total_participation: Totale Teilnahme (Doppellinie)
   clicked_end: "%{end} – angeklicktes Ende"
   unspecified: nicht festgelegt
-  view: Ansicht
   zoom_in: Vergrößern
   zoom_out: Verkleinern
   zoom_reset: Originalgröße
-  tools: Werkzeuge
   java: Java
-  import_java_files: Java-Dateien importieren …
-  import_java_folder: Java-Ordner importieren …
   csharp: C#
-  import_csharp_files: C#-Dateien importieren …
-  import_csharp_folder: C#-Ordner importieren …
   cpp: C++
-  import_cpp_files: C++-Dateien importieren …
-  import_cpp_folder: C++-Ordner importieren …
   python: Python
-  import_python_files: Python-Dateien importieren …
-  import_python_folder: Python-Ordner importieren …
   settings: Einstellungen …
-  help: Hilfe
-  open_sample: Beispielprojekt öffnen
   about: Über UmlCraft …
   open_diagram: Diagramm öffnen
   new_prefix: "Neu:"
@@ -1065,3 +1022,52 @@ sql:
   export_generated: "%{table}.%{column}: im anderen Dialekt berechnet, hier eine gewöhnliche Spalte"
   export_auto_increment: "%{table}.%{column}: MySQL zählt nur eine Spalte, die den Schlüssel anführt oder eindeutig ist, also kein AUTO_INCREMENT"
   export_default: "%{table}.%{column}: %{default} gibt es in diesem Dialekt nicht, es fehlt"
+file_page:
+  back: Zurück
+  info: Informationen
+  new: Neu
+  open: Öffnen
+  save: Speichern
+  save_as: Speichern unter
+  import: Importieren
+  export: Exportieren
+  settings: Einstellungen
+  about: Info
+  quit: Beenden
+  project: Projekt
+  file: Datei
+  not_saved_yet: Noch nicht gespeichert
+  saved: Alle Änderungen sind gespeichert.
+  unsaved: Es gibt ungespeicherte Änderungen.
+  contents: Inhalt
+  diagrams: Diagramme
+  structograms: Struktogramme
+  elements: Modellelemente
+  new_project: Leeres Projekt
+  new_project_note: Ein neues Projekt, noch ohne Diagramm
+  sample: Beispielprojekt
+  sample_note: Ein fertiges Projekt zum Ausprobieren
+  browse: Durchsuchen …
+  browse_note: Ein UmlCraft-Projekt (.ucraft) von diesem Computer öffnen
+  recent: Zuletzt verwendet
+  no_recent: Noch keine Projekte geöffnet.
+  import_astah: Astah-Projekt (.asta)
+  import_astah_note: Modell und Diagramme aus Astah übernehmen
+  import_structogram: Struktogramm (.nsd)
+  import_structogram_note: Ein Struktogramm aus einer .nsd-Datei
+  import_sql: SQL-Dump
+  import_sql_note: Die Tabellen eines Dumps als ER-Diagramm
+  export_svg: Diagramm als SVG
+  export_svg_note: Das angezeigte Diagramm als Vektorgrafik
+  export_png: Diagramm als PNG
+  export_png_note: Das angezeigte Diagramm als Bild
+  export_astah: Astah-Projekt (.asta)
+  export_astah_note: Das Projekt als Datei für Astah
+  export_sql: ER-Diagramm als SQL
+  export_sql_note: Die Entitäten des angezeigten ER-Diagramms als CREATE TABLE
+  export_structogram: Struktogramm (.nsd)
+  export_structogram_note: Das angezeigte Struktogramm als .nsd-Datei
+  source: Quellcode
+  source_note: Klassen aus Quelltext ins Modell übernehmen
+  files: Dateien …
+  folder: Ordner …

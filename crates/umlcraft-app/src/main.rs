@@ -100,6 +100,8 @@ actions!(
         AddLiteral,
         // Folds the ribbon to its tabs, or unfolds it.
         ToggleRibbon,
+        // Shows the file page (new, open, save, import, export) over the window.
+        OpenFilePage,
     ]
 );
 

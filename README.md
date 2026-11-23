@@ -52,10 +52,10 @@ theme draws a dark counterpart of each, of the same hue and as far from the defa
   the API cannot express is reported. See
   [docs/architecture.md](docs/architecture.md#asta-export).
 - **Images** (File › Export › Diagram as SVG … / Diagram as PNG …): the open diagram. SVG keeps
-  real text; PNG is rasterized at twice the canvas size. Edit › Copy diagram as image
+  real text; PNG is rasterized at twice the canvas size. Edit › Clipboard › Copy as image
   (Ctrl+Shift+C) puts both on the clipboard: Word and PowerPoint paste the SVG as a vector
   image, other programs the PNG.
-- **Structograms** (File › New structogram, Import › Structogram (.nsd) …, Export ›
+- **Structograms** (Edit › New diagram › Structogram, Import › Structogram (.nsd) …, Export ›
   Structogram as .nsd …, and the source import): Nassi-Shneiderman diagrams as
   [Structorizer](https://structorizer.fisch.lu) draws them are part of the project and saved in
   the `.ucraft` file with the UML diagrams. They open in the main window like a diagram, drawn
@@ -89,8 +89,8 @@ theme draws a dark counterpart of each, of the same hue and as far from the defa
 
 ## Importing source code
 
-The ribbon's Tools tab imports source code (Import source code › Java, C#, C++ or Python, then
-Files … or Folder …). After reading the files it lists their methods: those ticked get a
+File › Import imports source code (Source code › Java, C#, C++ or Python, each with Files …
+or Folder …). After reading the files it lists their methods: those ticked get a
 structogram under their class, linked to the operation (none are ticked at first; with none,
 only the classes are imported). Importing again renews the structograms it made, deletes those
 no longer ticked or whose method is gone, and keeps those edited by hand.
@@ -137,12 +137,15 @@ whole CPython standard library imports in one go.
 
 ## Editing
 
-The window has its own title bar (File menu, Save, Undo, Redo, About, Settings) and a ribbon
-with the tabs Home (clipboard, delete, align, line style, layout), the open diagram's kind (its tools; for a
-structogram its elements and the `.nsd` export), View
-(zoom, theme, language) and Tools (source import, exchange with `.asta` files, images). The
-diagram fills the window; ribbon, model tree and properties float over it as cards whose
-inner edge can be dragged to resize them. A double click on a ribbon tab folds
+The window has its own title bar (Save, Undo, Redo, About, Settings) and a ribbon whose tabs
+sit above it. File, the first tab, opens a page of its own over the window: project
+information, new, open (with the recently used projects), save, save as, import, export,
+settings, about and exit; Back or Escape closes it. All importing and exporting is there,
+the source import too. The other tabs are Edit (clipboard with copy as image, delete, align,
+line style, layout), View (zoom, theme, language) and, last, the open diagram's kind (its
+tools; for a structogram its elements and the `.nsd` export). Below
+the ribbon, model tree, diagram and properties sit side by side as panels of their own; the
+inner edges of tree and properties can be dragged to resize them. A double click on a ribbon tab folds
 the ribbon to its tabs; in a narrow window its buttons show icons only. Errors and notices
 show as toasts at the bottom right. A new project starts empty, without a diagram.
 

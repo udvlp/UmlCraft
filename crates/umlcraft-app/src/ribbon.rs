@@ -1,5 +1,5 @@
-//! The ribbon: tabs with labelled groups of large and small buttons, floating above the
-//! panels. Tabs, groups and buttons are data (`tabs`, `groups`), built on every render from a
+//! The ribbon: tabs with labelled groups of large and small buttons, a panel above
+//! the others. Tabs, groups and buttons are data (`tabs`, `groups`), built on every render from a
 //! [`State`]; [`render`] draws them. Every button dispatches an action, so the ribbon holds no
 //! state of its own besides the open tab, which the main view keeps.
 
@@ -16,7 +16,6 @@ use rust_i18n::t;
 use umlcraft_model::{DiagramKind, ErNotation};
 use umlcraft_notation::layout::{self, Direction};
 use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
-use umlcraft_reverse::SourceLanguage;
 
 use crate::icons::{self, fluent};
 use crate::shell;
@@ -30,7 +29,6 @@ pub enum RibbonTab {
     /// there only while one is open.
     Diagram,
     View,
-    Tools,
 }
 
 /// What the buttons show, read once per render from the workspace.
@@ -194,9 +192,13 @@ fn group(id: &'static str, items: Vec<Item>) -> Group {
     Group { id, caption: t!(format!("ribbon.group.{id}")).to_string(), items }
 }
 
-/// The tabs in order, with their labels; the diagram tab is named after the diagram's kind.
+/// The tabs in order, with their labels: Edit, View, then the diagram tab, named after the
+/// diagram's kind.
 pub fn tabs(state: &State) -> Vec<(RibbonTab, String)> {
-    let mut tabs = vec![(RibbonTab::Home, t!("ribbon.tab.home").to_string())];
+    let mut tabs = vec![
+        (RibbonTab::Home, t!("ribbon.tab.home").to_string()),
+        (RibbonTab::View, t!("ribbon.tab.view").to_string()),
+    ];
     if let Some(kind) = state.diagram {
         let key = match state.objects {
             true => crate::workspace::NewItem::ObjectDiagram.key(),
@@ -206,8 +208,6 @@ pub fn tabs(state: &State) -> Vec<(RibbonTab, String)> {
     } else if state.structogram.is_some() {
         tabs.push((RibbonTab::Diagram, t!("kind.structogram").to_string()));
     }
-    tabs.push((RibbonTab::View, t!("ribbon.tab.view").to_string()));
-    tabs.push((RibbonTab::Tools, t!("ribbon.tab.tools").to_string()));
     tabs
 }
 
@@ -236,7 +236,6 @@ pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
             (None, None) => Vec::new(),
         },
         RibbonTab::View => view(state),
-        RibbonTab::Tools => tools(state),
     }
 }
 
@@ -277,6 +276,11 @@ fn home(state: &State) -> Vec<Group> {
                     .action(Copy)
                     .size(Size::Small)
                     .enabled(selected),
+                // The diagram shown as SVG and PNG.
+                Item::new("copy-image", fluent("image_copy"), t!("ribbon.copy_as_image"))
+                    .action(CopyImage)
+                    .size(Size::Small)
+                    .enabled(state.diagram.is_some() || state.structogram.is_some()),
             ],
         ),
         group(
@@ -623,56 +627,6 @@ fn view(state: &State) -> Vec<Group> {
     ]
 }
 
-fn tools(state: &State) -> Vec<Group> {
-    let languages = [
-        (SourceLanguage::Java, "java", "menu.java"),
-        (SourceLanguage::CSharp, "csharp", "menu.csharp"),
-        (SourceLanguage::Cpp, "cpp", "menu.cpp"),
-        (SourceLanguage::Python, "python", "menu.python"),
-    ];
-    vec![
-        group(
-            "source",
-            languages
-                .map(|(language, id, label)| {
-                    Item::new(format!("import-{id}"), fluent("code"), t!(label))
-                        .action(ImportSource { language, folder: false })
-                        .menu_entry(t!("ribbon.files"), ImportSource { language, folder: false })
-                        .menu_entry(t!("ribbon.folder"), ImportSource { language, folder: true })
-                })
-                .into(),
-        ),
-        group(
-            "exchange",
-            vec![
-                Item::new("astah-import", fluent("arrow_import"), t!("ribbon.import"))
-                    .action(ImportAstah),
-                Item::new("astah-export", fluent("arrow_export_ltr"), t!("ribbon.export"))
-                    .action(ExportAstah),
-                // Goes to the structogram shown, so only with one.
-                Item::new("nsd-export", fluent("arrow_export_ltr"), t!("ribbon.export_nsd"))
-                    .tooltip(t!("ribbon.export_nsd_tip"))
-                    .action(crate::nsd::ExportStructogram)
-                    .enabled(state.structogram.is_some()),
-                // The ER diagram shown as tables.
-                Item::new("sql-export", fluent("arrow_export_ltr"), t!("ribbon.export_sql"))
-                    .tooltip(t!("ribbon.export_sql_tip"))
-                    .action(ExportSql)
-                    .enabled(state.notation.is_some()),
-            ],
-        ),
-        group(
-            "image",
-            vec![
-                Item::new("export-svg", fluent("image_arrow_forward"), "SVG").action(ExportSvg),
-                Item::new("export-png", fluent("image_arrow_forward"), "PNG").action(ExportPng),
-                Item::new("copy-image", fluent("image_copy"), t!("ribbon.copy_image"))
-                    .action(CopyImage),
-            ],
-        ),
-    ]
-}
-
 // ----- Width --------------------------------------------------------------------------------
 
 /// About the mean width of a character of a button's label ([`LABEL`]).
@@ -741,10 +695,12 @@ pub fn width(groups: &[Group]) -> f32 {
 
 /// Room for a large button: its icon and two lines of label.
 const HEIGHT: Pixels = px(84.0);
-/// The tab strip.
-const STRIP: Pixels = px(40.0);
+/// The tab strip above the ribbon card.
+const STRIP: Pixels = px(28.0);
 /// The size of the buttons' labels, between the tabs' and the captions'.
 const LABEL: Pixels = px(13.0);
+/// The size of the groups' captions below their buttons.
+const CAPTION: Pixels = px(11.0);
 /// A line of a large button's label.
 const LABEL_LINE: Pixels = px(16.0);
 /// The lower part of a split button, with the label.
@@ -757,7 +713,7 @@ pub const SMALL_ICON_SIZE: Pixels = px(20.0);
 
 /// Background and text of the open tab and of a selected button: navy on a pale blue in the
 /// light theme, pale blue on a dark blue in the dark one (the theme's own blue is too loud).
-fn selected_colors(cx: &App) -> (Hsla, Hsla) {
+pub(crate) fn selected_colors(cx: &App) -> (Hsla, Hsla) {
     let hue = 213.0 / 360.0;
     if cx.theme().is_dark() {
         (hsla(hue, 0.45, 0.27, 1.0), hsla(hue, 0.85, 0.86, 1.0))
@@ -798,29 +754,6 @@ fn entries_menu(
                     menu.menu_with_check(label.clone(), *checked, action.boxed_clone())
                 }
                 MenuEntry::Separator => menu.separator(),
-            };
-        }
-        menu.action_context(focus.clone())
-    }
-}
-
-/// The menu of a group caption: per button its command, or a submenu with the button's menu.
-fn group_menu(
-    entries: Rc<Vec<(String, Entries)>>,
-    focus: FocusHandle,
-) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static {
-    move |mut menu, window, cx| {
-        for (label, commands) in entries.iter() {
-            menu = match commands.as_slice() {
-                [MenuEntry::Command { action, .. }] => {
-                    menu.menu(label.clone(), action.boxed_clone())
-                }
-                _ => menu.submenu(
-                    label.clone(),
-                    window,
-                    cx,
-                    entries_menu(commands.clone(), focus.clone()),
-                ),
             };
         }
         menu.action_context(focus.clone())
@@ -953,83 +886,78 @@ fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> im
     }
     row = flush(row, &mut column);
 
-    // The caption lists the group's commands, so that each stays reachable when the ribbon is
-    // cut off at the right. A button with a menu of its own is a submenu there.
-    let entries: Vec<(String, Entries)> = group
-        .items
-        .iter()
-        .filter(|i| i.enabled)
-        .filter_map(|item| {
-            let commands: Vec<_> = if item.menu.is_empty() {
-                item.action
-                    .iter()
-                    .map(|a| MenuEntry::Command {
-                        label: item.label.clone(),
-                        icon: None,
-                        action: a.boxed_clone(),
-                    })
-                    .collect()
-            } else {
-                item.menu.clone()
-            };
-            (!commands.is_empty()).then(|| (item.label.clone(), Rc::new(commands)))
-        })
-        .collect();
-    let caption = Button::new(SharedString::from(format!("group-{}", group.id)))
-        .ghost()
-        .xsmall()
-        .label(group.caption.clone())
+    let caption = div()
+        .h(px(18.0))
+        .flex()
+        .items_center()
+        .text_size(CAPTION)
         .text_color(cx.theme().muted_foreground)
-        .dropdown_caret(true)
-        .dropdown_menu(group_menu(Rc::new(entries), focus.clone()));
-    v_flex().flex_shrink_0().items_center().px_3().child(row).child(caption)
+        .child(group.caption.clone());
+    v_flex()
+        .id(SharedString::from(format!("group-{}", group.id)))
+        .flex_shrink_0()
+        .items_center()
+        .px_3()
+        .child(row)
+        .child(caption)
 }
 
-/// The ribbon card: the tab strip and, unless collapsed, the open tab's groups.
-pub fn render(
+/// A tab of the strip: its label and below it a short bar, blue under the open tab and grey
+/// under the one the mouse is over.
+fn tab_view(id: SharedString, label: &str, selected: bool, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
+    let (_, accent) = selected_colors(cx);
+    v_flex()
+        .id(id)
+        .group("ribbon-tab")
+        .px_2()
+        .pt_1()
+        .text_sm()
+        .cursor_pointer()
+        .when(selected, |this| this.text_color(accent))
+        // Every tab is as wide as its label in bold, an invisible copy holding the place, so
+        // that selecting one does not shift the others.
+        .child(
+            div()
+                .relative()
+                .child(
+                    div().font_semibold().text_color(transparent_black()).child(label.to_owned()),
+                )
+                .child(
+                    h_flex()
+                        .absolute()
+                        .inset_0()
+                        .justify_center()
+                        .when(selected, |this| this.font_semibold())
+                        .child(label.to_owned()),
+                ),
+        )
+        .child(
+            div()
+                .mt(px(1.0))
+                .h(px(2.0))
+                .rounded_full()
+                .when(selected, |this| this.bg(accent))
+                .when(!selected, |this| this.group_hover("ribbon-tab", |s| s.bg(theme.border))),
+        )
+}
+
+/// The tabs above the ribbon card, on the window's backdrop: File, which opens the file page,
+/// then the ribbon's own tabs.
+pub fn tab_strip(
+    file_label: &str,
     tabs: &[(RibbonTab, String)],
     active: RibbonTab,
-    groups: &[Group],
-    compact: bool,
     collapsed: bool,
-    focus: &FocusHandle,
     cx: &App,
-) -> Stateful<Div> {
-    let theme = cx.theme();
-    let (tab_bg, tab_text) = selected_colors(cx);
-    let strip =
-        h_flex().h(STRIP).gap_1().px_2().pt_1().children(tabs.iter().map(|(tab, label)| {
+) -> Div {
+    let file = tab_view("ribbon-tab-file".into(), file_label, false, cx)
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenFilePage), cx));
+    h_flex().h(STRIP).items_end().gap_2().px_1().child(file).children(tabs.iter().map(
+        |(tab, label)| {
             let tab = *tab;
-            let selected = tab == active && !collapsed;
-            div()
-                .id(SharedString::from(format!("ribbon-tab-{tab:?}")))
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .text_sm()
-                .cursor_pointer()
-                .when(selected, |this| this.bg(tab_bg).text_color(tab_text))
-                .when(!selected, |this| this.hover(|s| s.bg(theme.secondary_hover)))
-                // Every tab is as wide as its label in bold, an invisible copy holding the
-                // place, so that selecting one does not shift the others.
-                .child(
-                    div()
-                        .relative()
-                        .child(
-                            div()
-                                .font_semibold()
-                                .text_color(transparent_black())
-                                .child(label.clone()),
-                        )
-                        .child(
-                            h_flex()
-                                .absolute()
-                                .inset_0()
-                                .justify_center()
-                                .when(selected, |this| this.font_semibold())
-                                .child(label.clone()),
-                        ),
-                )
+            let id = SharedString::from(format!("ribbon-tab-{tab:?}"));
+            tab_view(id, label, tab == active && !collapsed, cx)
                 // A double click folds the ribbon to its tabs, or unfolds it.
                 .on_click(move |event, window, cx| {
                     if event.click_count() >= 2 {
@@ -1038,7 +966,13 @@ pub fn render(
                         window.dispatch_action(Box::new(SelectRibbonTab { tab }), cx);
                     }
                 })
-        }));
+        },
+    ))
+}
+
+/// The ribbon card: the open tab's groups.
+pub fn render(groups: &[Group], compact: bool, focus: &FocusHandle, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
     // A short line between groups, from the buttons' top to the captions' bottom.
     let line = || div().flex_none().w(px(1.0)).my_1().bg(theme.border);
     let mut row = h_flex().px_1().pt_1().pb_0p5().items_stretch();
@@ -1048,15 +982,7 @@ pub fn render(
         }
         row = row.child(group_view(group, compact, focus, cx));
     }
-    // The card keeps the mouse from the diagram below, and with it from the elements around
-    // it: whoever handles the wheel over the ribbon attaches it to this card.
-    shell::floating_card(cx)
-        .id("ribbon")
-        .flex_1()
-        .min_w_0()
-        .overflow_hidden()
-        .child(strip)
-        .when(!collapsed, |this| this.child(row))
+    shell::panel_card(cx).id("ribbon").min_w_0().overflow_hidden().child(row)
 }
 
 #[cfg(test)]
@@ -1172,7 +1098,9 @@ mod tests {
         };
         assert!(!tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));
         state.diagram = Some(DiagramKind::Class);
-        assert!(tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));
+        // Edit and View come first and keep their place; the diagram's tab follows them.
+        let order: Vec<RibbonTab> = tabs(&state).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(order, [RibbonTab::Home, RibbonTab::View, RibbonTab::Diagram]);
         state.diagram = None;
         state.structogram = Some(crate::nsd::Allowed::default());
         assert!(tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));

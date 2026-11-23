@@ -1,49 +1,27 @@
-//! The window's frame: the backdrop the panels float on, the cards they are drawn as, and
+//! The window's frame: the backdrop the panels sit on, the cards they are drawn as, and
 //! buttons that show an icon.
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex};
 use gpui_kit::*;
 
-/// The part of the window, in window pixels, that the floating panels leave free over the
-/// diagram view that fills the window; `None` until the first layout. The main view writes it
-/// on every frame, the diagram views read it to zoom, center and place what they show.
-pub type ClearArea = std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>;
-
-/// `clear` inside `bounds`, relative to `bounds`; all of `bounds` if nothing is left free there.
-pub fn clear_in(clear: &ClearArea, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
-    let all = Bounds::new(Point::default(), bounds.size);
-    match clear.get().map(|c| c.intersect(&bounds)) {
-        Some(c) if c.size.width > px(40.0) && c.size.height > px(40.0) => {
-            Bounds::new(c.origin - bounds.origin, c.size)
-        }
-        _ => all,
-    }
-}
-
-/// Space between the cards and around them.
-pub const GAP: Pixels = px(8.0);
+/// Space between the cards and around them, as narrow as VS Code's.
+pub const GAP: Pixels = px(4.0);
 pub const RADIUS: Pixels = px(10.0);
 
-/// The surface the cards float on: a grey under white cards in the light theme; in the dark
-/// one the theme's background, with the cards a shade lighter (`card_background`).
+/// The surface the panels sit on, around them and in the title bar: #e8e8e8 in the light
+/// theme, the theme's background in the dark one, with the panels a shade lighter.
 ///
 /// Always opaque. A system backdrop (Mica, the blurred desktop) was tried and dropped: with a
 /// non-opaque window GPUI renders text without ClearType, and on Windows its antialiased
 /// edges come out too dark over the backdrop.
 pub fn backdrop(cx: &App) -> Hsla {
-    let theme = cx.theme();
-    if theme.is_dark() {
-        theme.background
-    } else {
-        theme.background.blend(theme.foreground.opacity(0.07))
-    }
+    if cx.theme().is_dark() { cx.theme().background } else { rgb(0xe8e8e8).into() }
 }
 
-/// The title bar: a grey strip of its own above the diagram, #d8d8d8 in the light theme,
-/// #303030 in the dark one.
+/// The title bar: the backdrop's grey in the light theme, a strip of #303030 in the dark one.
 pub fn title_bar_background(cx: &App) -> Hsla {
-    if cx.theme().is_dark() { rgb(0x303030).into() } else { rgb(0xd8d8d8).into() }
+    if cx.theme().is_dark() { rgb(0x303030).into() } else { backdrop(cx) }
 }
 
 pub fn card_background(cx: &App) -> Hsla {
@@ -51,43 +29,27 @@ pub fn card_background(cx: &App) -> Hsla {
     if theme.is_dark() { theme.background.blend(white().opacity(0.06)) } else { theme.background }
 }
 
-/// A panel floating over the diagram: a very light grey (#f4f4f4) over the white diagram in
-/// the light theme, a shade lighter than the diagram in the dark one.
-pub fn floating_background(cx: &App) -> Hsla {
-    if cx.theme().is_dark() { card_background(cx) } else { rgb(0xf4f4f4).into() }
+/// The ribbon, the model tree, the properties and what floats over the diagram: #fafafa in the
+/// light theme, a shade lighter than the diagram in the dark one.
+pub fn panel_background(cx: &App) -> Hsla {
+    if cx.theme().is_dark() { card_background(cx) } else { rgb(0xfafafa).into() }
 }
 
-fn shadow(cx: &App, alpha: f32, y: f32, blur: f32) -> BoxShadow {
-    BoxShadow {
-        color: black().opacity(if cx.theme().is_dark() { alpha * 3.0 } else { alpha }),
-        offset: point(px(0.0), px(y)),
-        blur_radius: px(blur),
-        spread_radius: px(0.0),
-        inset: false,
-    }
+/// The hairline around the panels: #d8d8d8 in the light theme.
+pub fn panel_border(cx: &App) -> Hsla {
+    if cx.theme().is_dark() { cx.theme().border.opacity(0.9) } else { rgb(0xd8d8d8).into() }
 }
 
-/// A rounded panel with a hairline border and a soft shadow: a tight, darker one at the edge
-/// and a wide, faint one.
+/// A rounded card with a hairline border and no shadow.
 pub fn card(cx: &App) -> Div {
-    div()
-        .bg(card_background(cx))
-        .rounded(RADIUS)
-        .border_1()
-        .border_color(cx.theme().border.opacity(0.8))
-        .shadow(vec![shadow(cx, 0.08, 1.0, 2.0), shadow(cx, 0.06, 2.0, 8.0)])
+    div().bg(card_background(cx)).rounded(RADIUS).border_1().border_color(panel_border(cx))
 }
 
-/// A card floating over the diagram, with a narrow, fairly dark shadow that sets it off the
-/// white; it keeps the mouse from the diagram below.
-pub fn floating_card(cx: &App) -> Div {
-    div()
-        .occlude()
-        .bg(floating_background(cx))
-        .rounded(RADIUS)
-        .border_1()
-        .border_color(cx.theme().border.opacity(0.9))
-        .shadow(vec![shadow(cx, 0.16, 1.0, 2.0), shadow(cx, 0.12, 2.0, 6.0)])
+/// A panel on the backdrop, or a card over the diagram (which then adds `occlude()` to keep the
+/// mouse from it). Not occluding by itself: that would also keep the mouse from whoever holds
+/// the card, such as the ribbon's wheel handler.
+pub fn panel_card(cx: &App) -> Div {
+    div().bg(panel_background(cx)).rounded(RADIUS).border_1().border_color(panel_border(cx))
 }
 
 /// The context menu of a diagram view, opened on releasing the right button: where, in window

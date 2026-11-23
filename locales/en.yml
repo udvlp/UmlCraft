@@ -50,9 +50,8 @@ toolbar:
   zoom_fit: Fit
 ribbon:
   tab:
-    home: Home
+    home: Edit
     view: View
-    tools: Tools
   group:
     new: New
     clipboard: Clipboard
@@ -65,9 +64,6 @@ ribbon:
     notes: Notes
     zoom: Zoom
     appearance: Appearance
-    source: Import source code
-    exchange: Exchange
-    image: Export image
     nsd_simple: Simple
     nsd_branches: Branches
     nsd_loops: Loops
@@ -91,52 +87,25 @@ ribbon:
     idef1x: IDEF1X
   light: Light
   dark: Dark
-  files: Files …
-  folder: Folder …
-  import: Import
-  export: Export
-  export_nsd: Save for Structorizer
-  export_nsd_tip: Saves the structogram as an .nsd file that Structorizer can open and edit
-  export_sql: As SQL
-  export_sql_tip: Writes the entities of the ER diagram as CREATE TABLE statements to an .sql file
-  copy_image: To clipboard
+  copy_as_image: Copy as image
   new_diagram: New diagram
 menu:
   file: File
-  new: New project
-  open: Open …
-  new_structogram: New structogram
-  import_astah: Import .asta project …
-  import_structogram: Import structogram (.nsd) …
-  import_sql: Import SQL dump as ER diagram …
-  export: Export
-  export_svg: Diagram as SVG …
-  export_png: Diagram as PNG …
-  export_astah: .asta project …
-  export_structogram: Structogram as .nsd …
-  export_sql: ER diagram as SQL …
-  recent: Open recent
-  no_recent: (none)
-  save: Save
-  save_as: Save as …
   quit: Exit
   edit: Edit
   delete: Delete from model
   remove_from_diagram: Remove from diagram
   select_all: Select all
   copy: Copy
-  copy_image: Copy diagram as image
   cut: Cut
   paste: Paste (as copy)
   paste_reference: Paste (same elements)
-  align: Align
   align_left: Align left
   align_center: Center horizontally
   align_right: Align right
   align_top: Align top
   align_middle: Center vertically
   align_bottom: Align bottom
-  wrap_in_fragment: Surround with fragment
   line_style: Line style
   line_straight: Line
   line_right_angle: Line (right angle)
@@ -167,26 +136,14 @@ menu:
   total_participation: Total participation (double line)
   clicked_end: "%{end} – the end clicked"
   unspecified: not specified
-  view: View
   zoom_in: Zoom in
   zoom_out: Zoom out
   zoom_reset: Actual size
-  tools: Tools
   java: Java
-  import_java_files: Import Java files …
-  import_java_folder: Import Java folder …
   csharp: C#
-  import_csharp_files: Import C# files …
-  import_csharp_folder: Import C# folder …
   cpp: C++
-  import_cpp_files: Import C++ files …
-  import_cpp_folder: Import C++ folder …
   python: Python
-  import_python_files: Import Python files …
-  import_python_folder: Import Python folder …
   settings: Settings …
-  help: Help
-  open_sample: Open sample project
   about: About UmlCraft …
   open_diagram: Open diagram
   new_prefix: "New:"
@@ -1065,3 +1022,52 @@ sql:
   export_generated: "%{table}.%{column}: generated in the other dialect, a plain column here"
   export_auto_increment: "%{table}.%{column}: MySQL only counts a column that leads the key or is unique, so no AUTO_INCREMENT"
   export_default: "%{table}.%{column}: %{default} has no counterpart in this dialect and is left out"
+file_page:
+  back: Back
+  info: Info
+  new: New
+  open: Open
+  save: Save
+  save_as: Save as
+  import: Import
+  export: Export
+  settings: Settings
+  about: About
+  quit: Exit
+  project: Project
+  file: File
+  not_saved_yet: Not saved yet
+  saved: All changes are saved.
+  unsaved: There are unsaved changes.
+  contents: Contents
+  diagrams: Diagrams
+  structograms: Structograms
+  elements: Model elements
+  new_project: Blank project
+  new_project_note: A new project, without a diagram yet
+  sample: Sample project
+  sample_note: A finished project to try things out
+  browse: Browse …
+  browse_note: Open a UmlCraft project (.ucraft) from this computer
+  recent: Recent
+  no_recent: No projects opened yet.
+  import_astah: Astah project (.asta)
+  import_astah_note: Take over model and diagrams from Astah
+  import_structogram: Structogram (.nsd)
+  import_structogram_note: A structogram from an .nsd file
+  import_sql: SQL dump
+  import_sql_note: The tables of a dump as an ER diagram
+  export_svg: Diagram as SVG
+  export_svg_note: The diagram shown as a vector graphic
+  export_png: Diagram as PNG
+  export_png_note: The diagram shown as an image
+  export_astah: Astah project (.asta)
+  export_astah_note: The project as a file for Astah
+  export_sql: ER diagram as SQL
+  export_sql_note: The entities of the ER diagram shown as CREATE TABLE
+  export_structogram: Structogram (.nsd)
+  export_structogram_note: The structogram shown as an .nsd file
+  source: Source code
+  source_note: Take classes from source code into the model
+  files: Files …
+  folder: Folder …

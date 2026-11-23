@@ -1,5 +1,5 @@
 //! Main window: title bar, ribbon, model tree, the canvas with the diagram and structogram
-//! tabs, properties panel, floating cards and toasts. Also owns file handling (new, open, save,
+//! tabs, properties panel, the cards over the canvas and toasts. Also owns file handling (new, open, save,
 //! recent files, imports and exports).
 
 use std::collections::{HashMap, HashSet};
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::list::ListItem;
-use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tree::{TreeEvent, TreeItem, TreeState, tree};
 use gpui_kit::component::{
@@ -24,7 +24,7 @@ use umlcraft_model::{DiagramKind, Document, ElementData, ElementKind, Id, Model}
 use umlcraft_notation::clipboard::Clip;
 use umlcraft_notation::palette::NodeTool;
 use umlcraft_notation::scene::{self, Alignment, Preview};
-use umlcraft_reverse::{Problem, SourceLanguage};
+use umlcraft_reverse::Problem;
 
 use crate::canvas::{AppMeasure, DiagramCanvas, DraggedElement, FontMeasure};
 use crate::labels;
@@ -34,6 +34,9 @@ use crate::ribbon::{self, RibbonTab};
 use crate::settings::Settings;
 use crate::workspace::{NewItem, Workspace};
 use crate::*;
+
+mod file_page;
+use file_page::FilePage;
 
 /// Something to do once the user has dealt with unsaved changes.
 type Continuation = Box<dyn FnOnce(&mut MainView, &mut Window, &mut Context<MainView>)>;
@@ -90,7 +93,9 @@ pub struct MainView {
     clipboard: Option<(Id, Clip)>,
     paste_count: u32,
     tree_meta: Rc<HashMap<SharedString, TreeMeta>>,
+    /// Tree nodes folded or unfolded by hand; the others follow `labels::tree_folded`.
     collapsed: HashSet<SharedString>,
+    expanded: HashSet<SharedString>,
     tree_revision: Option<(u64, String)>,
     tree_selection: Option<SharedString>,
     /// Set once the user agreed to close despite unsaved changes.
@@ -110,9 +115,9 @@ pub struct MainView {
     ribbon_unfolded_by_click: bool,
     /// Pixels a touchpad scrolled over the ribbon that did not yet make a tab.
     ribbon_wheel: f32,
-    /// What the floating panels leave free of the diagram, for the diagram views.
-    clear: shell::ClearArea,
-    /// The widths of the model tree and the properties while they float.
+    /// The file page shown over the window, opened by the File tab.
+    file_page: Option<FilePage>,
+    /// The widths of the model tree and the properties.
     tree_width: Pixels,
     properties_width: Pixels,
     /// The views of the structograms opened so far, kept while they exist.
@@ -138,17 +143,17 @@ impl MainView {
                 .with_measure(AppMeasure::new(cx, display))
                 .with_keywords(keywords)
         });
-        let clear = shell::ClearArea::default();
         let canvas = cx.new(|cx| {
             let mut canvas = DiagramCanvas::new(workspace.clone(), cx);
             canvas.display = display;
             canvas.align_to_nodes = settings.aligns_to_nodes();
-            canvas.clear = clear.clone();
+            // Inside the card's 1 px border.
+            canvas.corner_radius = f32::from(shell::RADIUS) - 1.0;
             canvas
         });
         let properties = cx.new(|cx| PropertiesPanel::new(workspace.clone(), window, cx));
         let tree = cx.new(|cx| TreeState::new(cx));
-        install_menus(&settings, cx);
+        install_menus(cx);
 
         let subscriptions = vec![
             // What went wrong in an edit shows as a toast, once; the next failure, even the
@@ -161,8 +166,10 @@ impl MainView {
             cx.subscribe(&tree, |this, _, event: &TreeEvent, _| match event {
                 TreeEvent::Expanded(id) => {
                     this.collapsed.remove(id);
+                    this.expanded.insert(id.clone());
                 }
                 TreeEvent::Collapsed(id) => {
+                    this.expanded.remove(id);
                     this.collapsed.insert(id.clone());
                 }
             }),
@@ -206,6 +213,7 @@ impl MainView {
             settings,
             tree_meta: Rc::default(),
             collapsed: HashSet::new(),
+            expanded: HashSet::new(),
             tree_revision: None,
             tree_selection: None,
             close_confirmed: false,
@@ -219,7 +227,7 @@ impl MainView {
             ribbon_diagram: None,
             ribbon_unfolded_by_click: false,
             ribbon_wheel: 0.0,
-            clear,
+            file_page: None,
             tree_width: TREE_WIDTH,
             properties_width: PROPERTIES_WIDTH,
             structograms: HashMap::new(),
@@ -255,7 +263,8 @@ impl MainView {
         if self.tree_revision.as_ref() != Some(&revision) {
             let model = ws.doc.model();
             let mut meta = HashMap::new();
-            let root = tree_item(model, model.root(), &self.collapsed, &mut meta);
+            let folds = TreeFolds { collapsed: &self.collapsed, expanded: &self.expanded };
+            let root = tree_item(model, model.root(), &folds, &mut meta);
             self.tree_meta = Rc::new(meta);
             self.tree_selection = None;
             self.tree.update(cx, |tree, cx| tree.set_items(vec![root], cx));
@@ -561,6 +570,7 @@ impl MainView {
             cx.notify();
         });
         self.collapsed.clear();
+        self.expanded.clear();
         self.tree_revision = None;
         self.generation += 1;
         // What was copied refers to elements that are gone.
@@ -1748,7 +1758,7 @@ impl MainView {
         cx.notify();
     }
 
-    /// The ribbon and the diagram card left of it.
+    /// The tabs and below them, unless folded, the ribbon card.
     fn ribbon(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let ws = self.workspace.read(cx);
         let props =
@@ -1796,7 +1806,14 @@ impl MainView {
         let collapsed = self.settings.ribbon_collapsed;
         let focus = self.view_focus(cx);
         let order: Vec<RibbonTab> = tabs.iter().map(|(t, _)| *t).collect();
-        let card = ribbon::render(&tabs, active, &groups, compact, collapsed, &focus, cx)
+        let strip = ribbon::tab_strip(&t!("menu.file"), &tabs, active, collapsed, cx);
+        let card =
+            (!collapsed).then(|| ribbon::render(&groups, compact, &focus, cx).mt(shell::GAP));
+        v_flex()
+            .id("ribbon-area")
+            .px(shell::GAP)
+            .child(strip)
+            .children(card)
             // As in Word: the wheel over the ribbon steps through its tabs, down to the right.
             .on_scroll(cx.listener(move |this, event: &ScrollEvent, window, cx| {
                 if collapsed || !window.is_window_active() {
@@ -1822,8 +1839,7 @@ impl MainView {
                     cx.notify();
                 }
                 cx.stop_propagation();
-            }));
-        h_flex().items_stretch().gap(shell::GAP).px(shell::GAP).pt(shell::GAP).child(card)
+            }))
     }
 
     pub fn settings(&self) -> &Settings {
@@ -2049,7 +2065,7 @@ impl MainView {
     }
 
     fn reload_menus(&mut self, cx: &mut Context<Self>) {
-        install_menus(&self.settings, cx);
+        install_menus(cx);
         cx.notify();
     }
 
@@ -2070,10 +2086,6 @@ impl MainView {
         let project = ws.file_name().unwrap_or_else(|| {
             model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default()
         });
-        let recent = self.settings.recent.clone();
-        // Menu commands go where shortcuts go, so that this view handles them.
-        let focus = self.view_focus(cx);
-        let structogram = self.active_structogram(cx).is_some();
         let muted = cx.theme().muted_foreground;
         let divider = || div().w(px(1.0)).h(px(16.0)).mx_1().bg(cx.theme().border);
         // A grey strip of its own above the diagram, with no line.
@@ -2093,15 +2105,6 @@ impl MainView {
                     .gap_1()
                     .mr_2(),
                 )
-                .child(
-                    Button::new("file-menu").ghost().small().label(t!("menu.file")).dropdown_menu(
-                        move |menu, window, cx| {
-                            file_menu(menu, &recent, structogram, window, cx)
-                                .action_context(focus.clone())
-                        },
-                    ),
-                )
-                .child(divider())
                 .child(shell::in_title_bar(shell::title_bar_button(
                     "save",
                     icons::fluent("save"),
@@ -2208,7 +2211,7 @@ impl MainView {
                     .label(t!("update.no").to_string())
                     .on_click(answer(false)),
             );
-        Some(div().px(shell::GAP).pt(shell::GAP / 2.0).child(shell::card(cx).child(bar)))
+        Some(div().px(shell::GAP).pt(shell::GAP).child(shell::card(cx).child(bar)))
     }
 
     fn model_browser(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2349,7 +2352,8 @@ impl MainView {
     /// Zoom out, the zoom (resets it), zoom in and zoom to fit, floating over the canvas.
     fn zoom_pill(&self, zoom: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let zoom = (zoom * 100.0).round();
-        shell::floating_card(cx)
+        shell::panel_card(cx)
+            .occlude()
             .rounded_full()
             .flex()
             .items_center()
@@ -2407,7 +2411,8 @@ impl MainView {
                 })
         });
         Some(
-            shell::floating_card(cx)
+            shell::panel_card(cx)
+                .occlude()
                 .flex()
                 .items_center()
                 .gap_2()
@@ -2492,10 +2497,16 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
     menu
 }
 
+/// The tree nodes folded and unfolded by hand.
+struct TreeFolds<'a> {
+    collapsed: &'a HashSet<SharedString>,
+    expanded: &'a HashSet<SharedString>,
+}
+
 fn tree_item(
     model: &Model,
     id: Id,
-    collapsed: &HashSet<SharedString>,
+    folds: &TreeFolds,
     meta: &mut HashMap<SharedString, TreeMeta>,
 ) -> TreeItem {
     let e = model.get(id).expect("tree only visits existing elements");
@@ -2503,11 +2514,16 @@ fn tree_item(
     meta.insert(key.clone(), TreeMeta { id, kind: e.kind().clone(), is_root: id == model.root() });
     let children: Vec<TreeItem> = labels::tree_children(model, e)
         .into_iter()
-        .map(|c| tree_item(model, c, collapsed, meta))
+        .map(|c| tree_item(model, c, folds, meta))
         .collect();
-    TreeItem::new(key.clone(), labels::tree_name(model, e))
-        .expanded(!collapsed.contains(&key))
-        .children(children)
+    let expanded = if folds.expanded.contains(&key) {
+        true
+    } else if folds.collapsed.contains(&key) {
+        false
+    } else {
+        !labels::tree_folded(model, e)
+    };
+    TreeItem::new(key.clone(), labels::tree_name(model, e)).expanded(expanded).children(children)
 }
 
 /// The widths the model tree and the properties start with.
@@ -2546,175 +2562,33 @@ fn menu_item(key: &str, action: impl Action) -> MenuItem {
     MenuItem::action(t!(key).to_string(), action)
 }
 
-fn menus(settings: &Settings) -> Vec<Menu> {
-    let mut recent: Vec<MenuItem> = settings
-        .recent
-        .iter()
-        .enumerate()
-        .map(|(index, path)| MenuItem::action(recent_label(path), OpenRecent { index }))
-        .collect();
-    if recent.is_empty() {
-        recent.push(MenuItem::action(t!("menu.no_recent").to_string(), Cancel).disabled(true));
-    }
-    let mut file = vec![
-        menu_item("menu.new", NewProject),
-        menu_item("menu.open", OpenProject),
-        menu_item("menu.new_structogram", NewStructogram),
-        MenuItem::submenu(Menu::new(t!("menu.recent").to_string()).items(recent)),
-        menu_item("menu.import_astah", ImportAstah),
-        menu_item("menu.import_structogram", ImportStructogram),
-        menu_item("menu.import_sql", ImportSql),
-    ];
-    file.push(MenuItem::submenu(Menu::new(t!("menu.export").to_string()).items([
-        menu_item("menu.export_svg", ExportSvg),
-        menu_item("menu.export_png", ExportPng),
-        menu_item("menu.export_astah", ExportAstah),
-        menu_item("menu.export_sql", ExportSql),
-        menu_item("menu.export_structogram", crate::nsd::ExportStructogram),
-    ])));
-    file.extend([
-        MenuItem::separator(),
-        menu_item("menu.save", SaveProject),
-        menu_item("menu.save_as", SaveProjectAs),
-        MenuItem::separator(),
-        menu_item("menu.quit", Quit),
-    ]);
+/// The platform's menu bar (macOS) holds only what the system expects of every app: the app
+/// menu and the standard edit commands. Everything else is in the ribbon and on the File page,
+/// as on the other systems.
+fn menus() -> Vec<Menu> {
     vec![
-        Menu::new(t!("menu.file").to_string()).items(file),
+        // macOS names the first menu after the app, whatever it is called here.
+        Menu::new("").items([
+            menu_item("menu.about", OpenAbout),
+            menu_item("menu.settings", OpenSettings),
+            MenuItem::separator(),
+            menu_item("menu.quit", Quit),
+        ]),
         Menu::new(t!("menu.edit").to_string()).items([
             menu_item("toolbar.undo", Undo),
             menu_item("toolbar.redo", Redo),
             MenuItem::separator(),
-            menu_item("menu.delete", DeleteSelection),
-            menu_item("menu.remove_from_diagram", RemoveFromDiagram),
-            menu_item("menu.select_all", SelectAll),
-            MenuItem::separator(),
-            menu_item("menu.copy", Copy),
-            menu_item("menu.copy_image", CopyImage),
             menu_item("menu.cut", Cut),
+            menu_item("menu.copy", Copy),
             menu_item("menu.paste", Paste),
-            menu_item("menu.paste_reference", PasteAsReference),
-            MenuItem::separator(),
-            MenuItem::submenu(Menu::new(t!("menu.align").to_string()).items([
-                menu_item("menu.align_left", AlignLeft),
-                menu_item("menu.align_center", AlignCenter),
-                menu_item("menu.align_right", AlignRight),
-                menu_item("menu.align_top", AlignTop),
-                menu_item("menu.align_middle", AlignMiddle),
-                menu_item("menu.align_bottom", AlignBottom),
-            ])),
-            MenuItem::submenu(
-                Menu::new(t!("menu.line_style").to_string())
-                    .items(LINE_SHAPES.map(|(shape, key)| menu_item(key, SetLineShape { shape }))),
-            ),
-            menu_item("menu.wrap_in_fragment", WrapInFragment),
+            menu_item("menu.select_all", SelectAll),
         ]),
-        Menu::new(t!("menu.view").to_string()).items([
-            menu_item("menu.zoom_in", ZoomIn),
-            menu_item("menu.zoom_out", ZoomOut),
-            menu_item("menu.zoom_reset", ResetZoom),
-            menu_item("toolbar.zoom_fit", ZoomToFit),
-            MenuItem::separator(),
-            menu_item("toolbar.theme", ToggleTheme),
-            menu_item("toolbar.language", ToggleLanguage),
-        ]),
-        Menu::new(t!("menu.tools").to_string()).items([
-            MenuItem::submenu(Menu::new(t!("menu.java").to_string()).items([
-                menu_item(
-                    "menu.import_java_files",
-                    ImportSource { language: SourceLanguage::Java, folder: false },
-                ),
-                menu_item(
-                    "menu.import_java_folder",
-                    ImportSource { language: SourceLanguage::Java, folder: true },
-                ),
-            ])),
-            MenuItem::submenu(Menu::new(t!("menu.csharp").to_string()).items([
-                menu_item(
-                    "menu.import_csharp_files",
-                    ImportSource { language: SourceLanguage::CSharp, folder: false },
-                ),
-                menu_item(
-                    "menu.import_csharp_folder",
-                    ImportSource { language: SourceLanguage::CSharp, folder: true },
-                ),
-            ])),
-            MenuItem::submenu(Menu::new(t!("menu.cpp").to_string()).items([
-                menu_item(
-                    "menu.import_cpp_files",
-                    ImportSource { language: SourceLanguage::Cpp, folder: false },
-                ),
-                menu_item(
-                    "menu.import_cpp_folder",
-                    ImportSource { language: SourceLanguage::Cpp, folder: true },
-                ),
-            ])),
-            MenuItem::submenu(Menu::new(t!("menu.python").to_string()).items([
-                menu_item(
-                    "menu.import_python_files",
-                    ImportSource { language: SourceLanguage::Python, folder: false },
-                ),
-                menu_item(
-                    "menu.import_python_folder",
-                    ImportSource { language: SourceLanguage::Python, folder: true },
-                ),
-            ])),
-            MenuItem::separator(),
-            menu_item("menu.settings", OpenSettings),
-        ]),
-        Menu::new(t!("menu.help").to_string())
-            .items([menu_item("menu.open_sample", OpenSample), menu_item("menu.about", OpenAbout)]),
     ]
 }
 
-/// The platform's menu bar (macOS); in the window, the title bar's File menu and the ribbon
-/// take its place.
-fn install_menus(settings: &Settings, cx: &mut App) {
-    cx.set_menus(menus(settings));
-}
-
-/// The title bar's File menu: the same entries as the platform's File menu. Exporting a
-/// structogram needs one to be shown.
-fn file_menu(
-    menu: PopupMenu,
-    recent: &[PathBuf],
-    structogram: bool,
-    window: &mut Window,
-    cx: &mut Context<PopupMenu>,
-) -> PopupMenu {
-    let recent = recent.to_vec();
-    let item = |menu: PopupMenu, key: &str, action: Box<dyn Action>| menu.menu(t!(key), action);
-    let mut menu = item(menu, "menu.new", Box::new(NewProject));
-    menu = item(menu, "menu.open", Box::new(OpenProject));
-    menu = item(menu, "menu.new_structogram", Box::new(NewStructogram));
-    menu = menu.submenu(t!("menu.recent"), window, cx, move |mut menu, _, _| {
-        if recent.is_empty() {
-            return menu.menu_with_disabled(t!("menu.no_recent"), Box::new(Cancel), true);
-        }
-        for (index, path) in recent.iter().enumerate() {
-            menu = menu.menu(recent_label(path), Box::new(OpenRecent { index }));
-        }
-        menu
-    });
-    menu = item(menu, "menu.open_sample", Box::new(OpenSample));
-    menu = item(menu, "menu.import_astah", Box::new(ImportAstah));
-    menu = item(menu, "menu.import_structogram", Box::new(ImportStructogram));
-    menu = item(menu, "menu.import_sql", Box::new(ImportSql));
-    menu = menu.submenu(t!("menu.export"), window, cx, move |menu, _, _| {
-        menu.menu(t!("menu.export_svg"), Box::new(ExportSvg))
-            .menu(t!("menu.export_png"), Box::new(ExportPng))
-            .menu(t!("menu.export_astah"), Box::new(ExportAstah))
-            .menu(t!("menu.export_sql"), Box::new(ExportSql))
-            .menu_with_disabled(
-                t!("menu.export_structogram"),
-                Box::new(crate::nsd::ExportStructogram),
-                !structogram,
-            )
-    });
-    menu = item(menu.separator(), "menu.save", Box::new(SaveProject));
-    menu = item(menu, "menu.save_as", Box::new(SaveProjectAs));
-    menu = item(menu.separator(), "menu.about", Box::new(OpenAbout));
-    item(menu, "menu.quit", Box::new(Quit))
+/// Installs [`menus`] again, as after a change of language.
+fn install_menus(cx: &mut App) {
+    cx.set_menus(menus());
 }
 
 /// The dark or light theme, or with `None` the one of the system's appearance.
@@ -2757,22 +2631,6 @@ fn astah() -> Option<&'static umlcraft_asta_export::Astah> {
     ASTAH.get_or_init(umlcraft_asta_export::Astah::find).as_ref()
 }
 
-/// "name.ucraft — C:\Users\…\folder": file name first, the folder shortened in the middle.
-fn recent_label(path: &Path) -> String {
-    const MAX: usize = 40;
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let dir = path.parent().map(|d| d.display().to_string()).unwrap_or_default();
-    let chars: Vec<char> = dir.chars().collect();
-    let dir = if chars.len() > MAX {
-        let head: String = chars[..12].iter().collect();
-        let tail: String = chars[chars.len() - (MAX - 13)..].iter().collect();
-        format!("{head}…{tail}")
-    } else {
-        dir
-    };
-    format!("{name} — {dir}")
-}
-
 pub(crate) fn sanitize_file_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -2813,49 +2671,52 @@ impl Render for MainView {
         let diagram_area = self.diagram_area().into_any_element();
         let properties_area = self.properties_area(cx).into_any_element();
         let ribbon = self.ribbon(window, cx).into_any_element();
-        // The diagram fills the window below the title bar; ribbon, tree and properties float
-        // over it, and so do the zoom and what is running in the room between.
+        // Below the title bar the ribbon, then model tree, diagram and properties side by side,
+        // each a panel of its own on the backdrop. The zoom and what is running float over the
+        // bottom of the diagram.
         let busy = self.busy_card(cx);
         // The canvas shows its grid and zoom also without a diagram.
         let pill = self.zoom_pill(self.canvas.read(cx).zoom(), cx);
         let bottom = v_flex()
             .absolute()
-            .bottom_0()
+            .bottom_2()
             .left_0()
             .right_0()
             .items_center()
             .gap_2()
             .children(busy)
             .child(pill);
-        let clear =
-            div().relative().flex_1().min_w_0().child(measure(self.clear.clone())).child(bottom);
-        let body = div()
+        let canvas_panel = shell::card(cx)
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .child(diagram_area)
+            .child(bottom);
+        // The file page covers all of it but the title bar.
+        let file_page = self
+            .file_page
+            .map(|page| div().absolute().inset_0().child(self.file_page_view(page, cx)));
+        let body = v_flex()
             .relative()
             .flex_1()
             .min_h_0()
-            .child(div().absolute().inset_0().child(diagram_area))
+            .child(ribbon)
             .child(
-                v_flex().absolute().inset_0().child(ribbon).child(
-                    h_flex()
-                        .flex_1()
-                        .min_h_0()
-                        .items_stretch()
-                        .gap(shell::GAP)
-                        .p(shell::GAP)
-                        .child(floating_panel(
-                            model_browser,
-                            self.tree_width,
-                            PanelResize::Tree,
-                            cx,
-                        ))
-                        .child(clear)
-                        .child(floating_panel(
-                            properties_area,
-                            self.properties_width,
-                            PanelResize::Properties,
-                            cx,
-                        )),
-                ),
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_stretch()
+                    .gap(shell::GAP)
+                    .p(shell::GAP)
+                    .child(side_panel(model_browser, self.tree_width, PanelResize::Tree, cx))
+                    .child(canvas_panel)
+                    .child(side_panel(
+                        properties_area,
+                        self.properties_width,
+                        PanelResize::Properties,
+                        cx,
+                    )),
             )
             .on_drag_move(cx.listener(|this, e: &DragMoveEvent<PanelResize>, window, cx| {
                 let x = e.event.position.x;
@@ -2870,7 +2731,8 @@ impl Render for MainView {
                     }
                 }
                 cx.notify();
-            }));
+            }))
+            .children(file_page);
         let theme = cx.theme();
         let canvas = self.canvas.clone();
         let (c1, c2, c3, c4) = (canvas.clone(), canvas.clone(), canvas.clone(), canvas.clone());
@@ -2913,6 +2775,16 @@ impl Render for MainView {
             .on_action(cx.listener(Self::select_tool))
             .on_action(cx.listener(Self::new_diagram))
             .on_action(cx.listener(Self::select_ribbon_tab))
+            .on_action(cx.listener(Self::open_file_page))
+            // Escape closes the file page before the view shown sees it.
+            .when(self.file_page.is_some(), |this| {
+                this.capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.close_file_page(cx);
+                        cx.stop_propagation();
+                    }
+                }))
+            })
             .on_action(
                 cx.listener(|this, action: &ToggleRibbon, _, cx| this.toggle_ribbon(action, cx)),
             )
@@ -2994,7 +2866,7 @@ fn toast(note: Notification, window: &mut Window, cx: &mut Context<MainView>) {
     cx.defer_in(window, move |_, window, cx| window.push_notification(note, cx));
 }
 
-/// The floating panel whose inner edge is being dragged.
+/// The side panel whose inner edge is being dragged.
 #[derive(Clone, Copy)]
 enum PanelResize {
     Tree,
@@ -3007,27 +2879,11 @@ impl Render for PanelResize {
     }
 }
 
-/// Writes where it is laid out to `clear`; if that moved, the views draw once more with it.
-fn measure(clear: shell::ClearArea) -> impl IntoElement {
-    canvas(
-        move |bounds, window, _| {
-            if clear.replace(Some(bounds)) != Some(bounds) {
-                window.request_animation_frame();
-            }
-        },
-        |_, _, _, _| {},
-    )
-    .absolute()
-    .size_full()
-}
+/// How wide the grip at a side panel's inner edge catches the mouse.
+const GRIP: Pixels = px(8.0);
 
-/// A floating panel of width `width` with a grip in the gap at its inner edge.
-fn floating_panel(
-    content: AnyElement,
-    width: Pixels,
-    side: PanelResize,
-    cx: &App,
-) -> impl IntoElement {
+/// A side panel of width `width` with a grip in the gap at its inner edge.
+fn side_panel(content: AnyElement, width: Pixels, side: PanelResize, cx: &App) -> impl IntoElement {
     let grip = div()
         .id(match side {
             PanelResize::Tree => "tree-grip",
@@ -3036,19 +2892,21 @@ fn floating_panel(
         .absolute()
         .top_0()
         .bottom_0()
-        .w(shell::GAP)
+        .w(GRIP)
         .occlude()
         .cursor_col_resize()
         .on_drag(side, |side, _, _, cx| cx.new(|_| *side));
+    // Centered on the gap, wider than it, so that it is easy to catch.
+    let outside = -(shell::GAP + GRIP) / 2.0;
     let grip = match side {
-        PanelResize::Tree => grip.right(-shell::GAP),
-        PanelResize::Properties => grip.left(-shell::GAP),
+        PanelResize::Tree => grip.right(outside),
+        PanelResize::Properties => grip.left(outside),
     };
     div()
         .relative()
         .flex_none()
         .w(width)
-        .child(shell::floating_card(cx).size_full().overflow_hidden().child(content))
+        .child(shell::panel_card(cx).size_full().overflow_hidden().child(content))
         .child(grip)
 }
 
@@ -3066,35 +2924,5 @@ mod tests {
         assert_eq!(with_project_extension("a/v1.2".into()), PathBuf::from("a/v1.2.ucraft"));
         assert_eq!(sanitize_file_name("Order: System?"), "Order_ System_");
         assert_eq!(sanitize_file_name("  "), "project");
-    }
-
-    // Windows paths: elsewhere the backslashes are not separators.
-    #[cfg(windows)]
-    #[test]
-    fn recent_labels_put_the_file_name_first_and_shorten_folders() {
-        use super::recent_label;
-
-        let short = PathBuf::from(r"C:\Projekte\shop.ucraft");
-        assert_eq!(recent_label(&short), r"shop.ucraft — C:\Projekte");
-        let long =
-            PathBuf::from(r"C:\Users\ulf\AppData\Local\Temp\claude\abcdef\scratchpad\m2.ucraft");
-        let label = recent_label(&long);
-        assert!(label.starts_with(r"m2.ucraft — C:\Users\ulf…"), "{label}");
-        assert!(label.ends_with(r"abcdef\scratchpad"), "{label}");
-        assert!(label.chars().count() <= "m2.ucraft — ".len() + 40, "{label}");
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn recent_labels_put_the_file_name_first_and_shorten_folders() {
-        use super::recent_label;
-
-        let short = PathBuf::from("/home/ulf/shop.ucraft");
-        assert_eq!(recent_label(&short), "shop.ucraft — /home/ulf");
-        let long = PathBuf::from("/home/ulf/projects/teaching/2026/autumn/uml/examples/m2.ucraft");
-        let label = recent_label(&long);
-        assert!(label.starts_with("m2.ucraft — /home/ulf"), "{label}");
-        assert!(label.ends_with("uml/examples"), "{label}");
-        assert!(label.chars().count() <= "m2.ucraft — ".len() + 40, "{label}");
     }
 }

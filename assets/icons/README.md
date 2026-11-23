@@ -44,7 +44,9 @@ project), `attribute`, `operation`, `enumerationLiteral` and `slot` (the compart
 they live in, filled), `parameter`, `templateParameter`, `extensionPoint`, `interaction`,
 `activity` and `stateMachine` (a diagram frame with what they are made of),
 `interactionOperand` and `region`. `messageNumbers.svg` and `flatMessageNumbers.svg` are the sequence diagram's switches for
-message numbers and for numbering them 1, 2, 3.
+message numbers and for numbering them 1, 2, 3. `langJava`, `langCsharp`, `langCpp` and
+`langPython` stand for the source languages of the import (a cup, a C with # or two pluses,
+Py), drawn as lines rather than taken from the languages' logos.
 
 `make_uml_icons.py` writes them; change the shapes there rather than in the SVGs. The shapes
 are laid out on a 20 px grid and mapped onto Fluent's 24 px grid.

@@ -45,10 +45,9 @@ Ctrl+Delete instead. Every change can be undone.
 
 - **Title bar**, at the very top: the File menu, Save, Undo, Redo, and on the right About
   UmlCraft and the settings (the gear).
-- **Ribbon**, below it, with tabs: **Home** (clipboard, delete, alignment, line style,
-  layout, New diagram), a tab for the kind of diagram that is open with its elements and
-  relationships, **View** (zoom, light or dark theme, language) and **Tools** (source code
-  import, exchange with other files, images).
+- **Ribbon**, below it, with tabs: **Edit** (clipboard, delete, alignment, line style,
+  layout, New diagram), **View** (zoom, light or dark theme, language) and, while a diagram
+  is open, a tab for its kind with its elements and relationships.
 - **Model**, the panel on the left: the model tree. Clicking a diagram opens it; clicking an
   element selects it.
 - **Canvas**, in the middle: the open diagram.
@@ -78,7 +77,7 @@ diagrams in the model tree. Then try the idea above:
 ## Your first diagram
 
 1. **File › New project** (Ctrl+N). A new project is empty, without a diagram.
-2. **Home › New diagram › Class diagram**. The ribbon now has a tab *Class diagram* with its
+2. **Edit › New diagram › Class diagram**. The ribbon now has a tab *Class diagram* with its
    tools, and the model tree shows the new diagram.
 3. Choose **Class** in the ribbon and click into the diagram. The new class opens its name
    for typing: type `Customer` and press Enter.
@@ -97,7 +96,7 @@ all there, next to the diagram.
 
 ## The same class on a second diagram
 
-1. **Home › New diagram › Class diagram** again.
+1. **Edit › New diagram › Class diagram** again.
 2. Drag `Customer` from the model tree onto the new diagram, then `Order`. The association
    comes along by itself, because it exists between the two classes in the model.
 3. Rename `Order` to `Purchase` on this diagram (double-click its name), then open the first
@@ -148,9 +147,9 @@ On macOS, Cmd takes the place of Ctrl.
 
 ## Where to go next
 
-- The other diagram kinds: **Home › New diagram** lists them all. The sample project shows
+- The other diagram kinds: **Edit › New diagram** lists them all. The sample project shows
   an example of each.
-- **Structograms** (Nassi-Shneiderman diagrams): **File › New structogram**.
+- **Structograms** (Nassi-Shneiderman diagrams): **Edit › New diagram › Structogram**.
 - **Source code**: **Tools › Import source code** reads Java, C#, C++ or Python into the
   model. That gives you classes in the model tree but no diagram yet: drag them onto one.
 - The [README](README.md) describes everything UmlCraft can do.

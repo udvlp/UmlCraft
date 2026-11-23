@@ -545,8 +545,9 @@ pub struct DiagramCanvas {
     viewports: HashMap<Id, (f32, MPoint)>,
     shown_diagram: Option<Id>,
     bounds: Rc<Cell<Bounds<Pixels>>>,
-    /// What floating panels leave free of the canvas.
-    pub clear: crate::shell::ClearArea,
+    /// The corner radius of the card the canvas fills; background and grid keep inside the
+    /// corners.
+    pub corner_radius: f32,
     /// A diagram shown for the first time waits for the layout to know where its origin goes.
     home_pending: bool,
     /// The scene as last painted; mouse handling works on what the user sees.
@@ -587,7 +588,7 @@ pub struct DiagramCanvas {
     _structogram_watch: Option<Subscription>,
 }
 
-/// Space between the clear area's corner and a structogram, at 100 % and when fitted.
+/// Space between the canvas's corner and a structogram, at 100 % and when fitted.
 const STRUCTOGRAM_MARGIN: f32 = 20.0;
 
 thread_local! {
@@ -729,7 +730,7 @@ impl DiagramCanvas {
             viewports: HashMap::new(),
             shown_diagram: None,
             bounds: Rc::new(Cell::new(Bounds::default())),
-            clear: Rc::default(),
+            corner_radius: 0.0,
             home_pending: false,
             lanes_at_start: None,
             scene: Rc::new(Scene::empty()),
@@ -784,15 +785,15 @@ impl DiagramCanvas {
         (p.x.floor() as i32, p.y.floor() as i32)
     }
 
-    /// The part of the canvas no floating panel covers, relative to the canvas.
-    fn clear_area(&self) -> Bounds<Pixels> {
-        crate::shell::clear_in(&self.clear, self.bounds.get())
+    /// The whole canvas, relative to itself.
+    fn view_area(&self) -> Bounds<Pixels> {
+        Bounds::new(Point::default(), self.bounds.get().size)
     }
 
-    /// The pan at 100 %: the diagram's origin at the top left of the clear area, a
+    /// The pan at 100 %: the diagram's origin at the top left of the canvas, a
     /// structogram's a margin into it.
     fn home(&self) -> MPoint {
-        let origin = self.clear_area().origin;
+        let origin = self.view_area().origin;
         let margin = if self.shown_structogram().is_some() { STRUCTOGRAM_MARGIN } else { 0.0 };
         MPoint::new(f32::from(origin.x) + margin, f32::from(origin.y) + margin)
     }
@@ -803,16 +804,16 @@ impl DiagramCanvas {
         cx.notify();
     }
 
-    /// Zooms by `factor`, keeping the center of the clear area fixed.
+    /// Zooms by `factor`, keeping the center of the canvas fixed.
     pub fn zoom_by(&mut self, factor: f32, cx: &mut Context<Self>) {
-        let center = self.clear_area().center() + self.bounds.get().origin;
+        let center = self.view_area().center() + self.bounds.get().origin;
         self.zoom_at(center, factor);
         cx.notify();
     }
 
-    /// Fits the whole diagram into the clear area (at most 150 %).
+    /// Fits the whole diagram into the canvas (at most 150 %).
     pub fn zoom_to_fit(&mut self, cx: &mut Context<Self>) {
-        let area = self.clear_area();
+        let area = self.view_area();
         let (w, h) = (f32::from(area.size.width), f32::from(area.size.height));
         let structogram = self.shown_structogram().map(|e| {
             let (width, height) = e.read(cx).size();
@@ -839,7 +840,7 @@ impl DiagramCanvas {
         if self.bounds.get().contains(&mouse) {
             return snap_point(self.to_logical(mouse));
         }
-        snap_point(self.to_logical(self.clear_area().center() + self.bounds.get().origin))
+        snap_point(self.to_logical(self.view_area().center() + self.bounds.get().origin))
     }
 
     fn zoom_at(&mut self, screen: Point<Pixels>, factor: f32) {
@@ -2982,11 +2983,22 @@ impl Painter<'_> {
         }
     }
 
-    fn grid(&mut self, bounds: Bounds<Pixels>) {
+    /// The grid, kept inside the corners rounded by `corner`.
+    fn grid(&mut self, bounds: Bounds<Pixels>, corner: f32) {
         let step = GRID * self.t.zoom;
         if step < 8.0 {
             return;
         }
+        // How far a line `inset` from an edge must stay off the perpendicular edge to keep
+        // inside the corner's arc.
+        let cut = |inset: f32| {
+            if inset >= corner {
+                0.0
+            } else {
+                let d = corner - inset.max(0.0);
+                corner - (corner * corner - d * d).sqrt()
+            }
+        };
         let (left, right) = (f32::from(bounds.origin.x), f32::from(bounds.right()));
         let (top, bottom) = (f32::from(bounds.origin.y), f32::from(bounds.bottom()));
         let top_left = self.t.to_logical(bounds.origin);
@@ -2994,8 +3006,12 @@ impl Painter<'_> {
         let mut x = (top_left.x / GRID).floor() * GRID;
         while x <= bottom_right.x {
             let sx = f32::from(self.t.pt(MPoint::new(x, 0.0)).x);
+            let shorten = cut((sx - left).min(right - sx - 1.0));
             self.window.paint_quad(fill(
-                Bounds::new(point(px(sx), px(top)), size(px(1.0), px(bottom - top))),
+                Bounds::new(
+                    point(px(sx), px(top + shorten)),
+                    size(px(1.0), px(bottom - top - 2.0 * shorten)),
+                ),
                 self.c.grid,
             ));
             x += GRID;
@@ -3003,8 +3019,12 @@ impl Painter<'_> {
         let mut y = (top_left.y / GRID).floor() * GRID;
         while y <= bottom_right.y {
             let sy = f32::from(self.t.pt(MPoint::new(0.0, y)).y);
+            let shorten = cut((sy - top).min(bottom - sy - 1.0));
             self.window.paint_quad(fill(
-                Bounds::new(point(px(left), px(sy)), size(px(right - left), px(1.0))),
+                Bounds::new(
+                    point(px(left + shorten), px(sy)),
+                    size(px(right - left - 2.0 * shorten), px(1.0)),
+                ),
                 self.c.grid,
             ));
             y += GRID;
@@ -3212,7 +3232,7 @@ impl Render for DiagramCanvas {
         };
         self.switch_viewport(active);
         let structogram = self.shown_structogram();
-        if self.home_pending && self.clear.get().is_some() && !self.bounds.get().is_empty() {
+        if self.home_pending && !self.bounds.get().is_empty() {
             self.home_pending = false;
             self.pan = self.home();
         }
@@ -3294,6 +3314,7 @@ impl Render for DiagramCanvas {
         };
         let (pan, zoom, drag) = (self.pan, self.zoom, self.drag.clone());
         let column = self.display.visibility_column;
+        let corner = self.corner_radius;
         // The row under the editor is hidden; a new member's empty row covers none.
         let editing_element =
             self.editing.as_ref().filter(|e| e.new_member.is_none()).map(|e| e.element);
@@ -3333,6 +3354,7 @@ impl Render for DiagramCanvas {
             .size_full()
             .overflow_hidden()
             .bg(colors.background)
+            .rounded(px(corner))
             .cursor(cursor)
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_left_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
@@ -3426,7 +3448,7 @@ impl Render for DiagramCanvas {
                                     edge_line: None,
                                     column,
                                 }
-                                .grid(bounds);
+                                .grid(bounds, corner);
                                 let origin = t.pt(MPoint::new(0.0, 0.0));
                                 editor
                                     .update(cx, |e, cx| e.paint(origin, zoom, accent, window, cx));
@@ -3442,7 +3464,7 @@ impl Render for DiagramCanvas {
                                 edge_line: None,
                                 column,
                             };
-                            p.grid(bounds);
+                            p.grid(bounds, corner);
                             for node in &scene.nodes {
                                 p.node(node, editing_element);
                             }

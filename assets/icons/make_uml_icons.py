@@ -77,6 +77,9 @@ NSD_ALTERNATIVE = [rect(2.5, 3.5, 15, 13), path('M2.5 3.5L10 9.5L17.5 3.5M2.5 9.
                    path('M10 9.5V16.5')]
 NSD_LOOP = [path('M2.5 3.5H17.5V7.5H6.5V16.5H2.5Z'), rect(6.5, 7.5, 11, 9)]
 BOX = rect(2.5, 3.5, 15, 13, 2)
+# A C, open to the right, of radius 5 around (7.5, 10): the language icons' letter.
+LETTER_C = ('M11.04 6.46C10.1 5.52 8.83 5 7.5 5C4.74 5 2.5 7.24 2.5 10'
+            'C2.5 12.76 4.74 15 7.5 15C8.83 15 10.1 14.48 11.04 13.54')
 
 
 def band(top):
@@ -301,6 +304,18 @@ ICONS = {
     'flow': NAVIGABLE,
     'transition': NAVIGABLE,
     'freeLine': [path('M16 4L3.5 16.5', dash(2, 2)), path('M11.5 3.5H16.5V8.5')],
+    # Source languages for the import: Java a steaming cup, C# and C++ a C with # or two
+    # raised pluses, Python the letters Py, all drawn as lines.
+    'langJava': [path('M3.5 8.5H13.5V12.5C13.5 14.71 11.71 16.5 9.5 16.5H7.5'
+                      'C5.29 16.5 3.5 14.71 3.5 12.5Z'),
+                 path('M13.5 9.5H15C16.38 9.5 17.5 10.62 17.5 12C17.5 13.38 16.38 14.5 15 14.5'
+                      'H13.5'),
+                 path('M6.5 6.5C6 5.5 7 4.5 6.5 3'), path('M10.5 6.5C10 5.5 11 4.5 10.5 3')],
+    'langCsharp': [path(LETTER_C), path('M14 7V13M16.5 7V13M12.5 8.5H17.5M12.5 11.5H17.5')],
+    'langCpp': [path(LETTER_C), path('M15 4.75V8.25M13.25 6.5H16.75'),
+                path('M15 11.75V15.25M13.25 13.5H16.75')],
+    'langPython': [path('M3.5 16.5V4.5H7C8.93 4.5 10.5 5.8 10.5 7.75C10.5 9.7 8.93 11 7 11H3.5'),
+                   path('M12 8.5L14.75 14M17.5 8.5L13.25 17')],
 }
 
 os.makedirs(OUT, exist_ok=True)

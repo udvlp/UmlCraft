@@ -44,6 +44,17 @@ fn uml(name: &str) -> SharedString {
     format!("icons/uml/{name}.svg").into()
 }
 
+/// The icon of a source language for the import: a cup, a C with # or ++, Py.
+pub fn language_icon(language: umlcraft_reverse::SourceLanguage) -> SharedString {
+    use umlcraft_reverse::SourceLanguage;
+    uml(match language {
+        SourceLanguage::Java => "langJava",
+        SourceLanguage::CSharp => "langCsharp",
+        SourceLanguage::Cpp => "langCpp",
+        SourceLanguage::Python => "langPython",
+    })
+}
+
 pub fn tool_icon(tool: Tool) -> SharedString {
     match tool {
         Tool::Select => fluent("cursor"),
