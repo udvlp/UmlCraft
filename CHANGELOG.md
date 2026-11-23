@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.24.0 – 2026-11-23
 
 - **Diagram in a panel of its own**: the diagram no longer lies under the ribbon, model tree
   and properties; it sits between tree and properties as a white panel with the grid. In the
