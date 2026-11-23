@@ -43,18 +43,21 @@ Ctrl+Delete instead. Every change can be undone.
 
 ## The window
 
-- **Title bar**, at the very top: the File menu, Save, Undo, Redo, and on the right About
-  UmlCraft and the settings (the gear).
-- **Ribbon**, below it, with tabs: **Edit** (clipboard, delete, alignment, line style,
-  layout, New diagram), **View** (zoom, light or dark theme, language) and, while a diagram
-  is open, a tab for its kind with its elements and relationships.
+- **Title bar**, at the very top: Save, Undo, Redo and the project's name, and on the right
+  About UmlCraft and the settings (the gear).
+- **Ribbon**, below it, with its tabs on top. **File** opens a page over the window for new,
+  open, save, import and export; Back or Escape returns to the diagram. **Edit** holds the
+  clipboard, delete, alignment, line style, layout and New diagram, **View** the zoom, the
+  light or dark theme and the language. While a diagram is open, a last tab for its kind
+  holds its elements and relationships.
 - **Model**, the panel on the left: the model tree. Clicking a diagram opens it; clicking an
   element selects it.
 - **Canvas**, in the middle: the open diagram.
 - **Properties**, the panel on the right: everything about what is selected, such as its
   name, its attributes or the color of its box.
 
-The panels float over the canvas. Drag their inner edge to make them wider or narrower.
+The canvas sits between the two panels. Drag a panel's inner edge to make it wider or
+narrower.
 
 Moving around the canvas: the mouse wheel scrolls, Ctrl+wheel (or two fingers on a touchpad)
 zooms, and holding the middle or right mouse button down pans. The zoom box at the bottom
@@ -62,7 +65,7 @@ has a button that fits the whole diagram into the window (Ctrl+Shift+0).
 
 ## A look at the sample project
 
-**File › Open sample project** opens a finished project, a bike rental called Velo, with a
+**File › New › Sample project** opens a finished project, a bike rental called Velo, with a
 diagram of every kind. It opens with the class diagram *Domain model*. Click through the
 diagrams in the model tree. Then try the idea above:
 
@@ -76,7 +79,7 @@ diagrams in the model tree. Then try the idea above:
 
 ## Your first diagram
 
-1. **File › New project** (Ctrl+N). A new project is empty, without a diagram.
+1. **File › New › Blank project** (Ctrl+N). A new project is empty, without a diagram.
 2. **Edit › New diagram › Class diagram**. The ribbon now has a tab *Class diagram* with its
    tools, and the model tree shows the new diagram.
 3. Choose **Class** in the ribbon and click into the diagram. The new class opens its name
@@ -122,10 +125,10 @@ You do not have to place every box and bend every line by hand.
 
 ## Getting it out of UmlCraft
 
-- **File › Export › Diagram as SVG …** or **Diagram as PNG …** writes the open diagram as an
+- **File › Export › Diagram as SVG** or **Diagram as PNG** writes the open diagram as an
   image.
-- **Ctrl+Shift+C** copies the diagram to the clipboard: Word and PowerPoint paste it as a
-  vector image, other programs as a picture.
+- **Edit › Copy as image** (Ctrl+Shift+C) copies the diagram to the clipboard: Word and
+  PowerPoint paste it as a vector image, other programs as a picture.
 
 ## Keys worth knowing
 
@@ -150,6 +153,6 @@ On macOS, Cmd takes the place of Ctrl.
 - The other diagram kinds: **Edit › New diagram** lists them all. The sample project shows
   an example of each.
 - **Structograms** (Nassi-Shneiderman diagrams): **Edit › New diagram › Structogram**.
-- **Source code**: **Tools › Import source code** reads Java, C#, C++ or Python into the
-  model. That gives you classes in the model tree but no diagram yet: drag them onto one.
+- **Source code**: **File › Import › Source code** reads Java, C#, C++ or Python into the
+  model, from single files or a whole folder. That gives you classes in the model tree but no diagram yet: drag them onto one.
 - The [README](README.md) describes everything UmlCraft can do.

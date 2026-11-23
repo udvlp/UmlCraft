@@ -46,20 +46,22 @@ drück Strg+Z und nimm stattdessen Strg+Entf. Jede Änderung lässt sich rückg�
 
 ## Das Fenster
 
-- **Titelleiste**, ganz oben: das Menü Datei, Speichern, Rückgängig, Wiederholen, rechts
-  „Über UmlCraft“ und die Einstellungen (das Zahnrad).
-- **Menüband** darunter, mit Registerkarten: **Bearbeiten** (Zwischenablage, Löschen,
-  Ausrichten, Linienstil, Layout, Neues Diagramm), **Ansicht** (Zoom, helles oder dunkles
-  Design, Sprache) und, solange ein Diagramm offen ist, eine Karte für seine Art mit dessen
-  Elementen und Beziehungen.
+- **Titelleiste**, ganz oben: Speichern, Rückgängig, Wiederholen und der Name des Projekts,
+  rechts „Über UmlCraft“ und die Einstellungen (das Zahnrad).
+- **Menüband** darunter, mit seinen Registerkarten obenauf. **Datei** öffnet eine Seite über
+  dem Fenster für Neu, Öffnen, Speichern, Import und Export; Zurück oder Escape führt zum
+  Diagramm zurück. **Bearbeiten** hat Zwischenablage, Löschen, Ausrichten, Linienstil,
+  Layout und Neues Diagramm, **Ansicht** den Zoom, das helle oder dunkle Design und die
+  Sprache. Solange ein Diagramm offen ist, hat eine letzte Karte für seine Art dessen
+  Elemente und Beziehungen.
 - **Modell**, die Leiste links: der Modellbaum. Ein Klick auf ein Diagramm öffnet es, ein
   Klick auf ein Element wählt es aus.
 - **Zeichenfläche** in der Mitte: das offene Diagramm.
 - **Eigenschaften**, die Leiste rechts: alles über das Ausgewählte, etwa seinen Namen, seine
   Attribute oder die Farbe seines Kastens.
 
-Die Leisten schweben über der Zeichenfläche. Ziehst du an ihrem inneren Rand, werden sie
-breiter oder schmaler.
+Die Zeichenfläche liegt zwischen den beiden Leisten. Ziehst du am inneren Rand einer Leiste,
+wird sie breiter oder schmaler.
 
 Bewegen auf der Zeichenfläche: Das Mausrad scrollt, Strg+Mausrad (oder zwei Finger auf dem
 Touchpad) zoomt, und mit gedrückter mittlerer oder rechter Maustaste verschiebst du die
@@ -68,7 +70,7 @@ Ansicht. Das Zoomfeld unten hat einen Knopf, der das ganze Diagramm ins Fenster 
 
 ## Ein Blick ins Beispielprojekt
 
-**Datei › Beispielprojekt öffnen** öffnet ein fertiges Projekt, einen Fahrradverleih namens
+**Datei › Neu › Beispielprojekt** öffnet ein fertiges Projekt, einen Fahrradverleih namens
 Velo, mit einem Diagramm jeder Art. Es öffnet sich mit dem Klassendiagramm *Domain model*.
 Klick dich im Modellbaum durch die Diagramme. Dann probier den Gedanken von oben aus:
 
@@ -83,7 +85,7 @@ Klick dich im Modellbaum durch die Diagramme. Dann probier den Gedanken von oben
 
 ## Dein erstes Diagramm
 
-1. **Datei › Neues Projekt** (Strg+N). Ein neues Projekt ist leer, ohne Diagramm.
+1. **Datei › Neu › Leeres Projekt** (Strg+N). Ein neues Projekt ist leer, ohne Diagramm.
 2. **Bearbeiten › Neues Diagramm › Klassendiagramm**. Das Menüband hat jetzt eine Karte
    *Klassendiagramm* mit ihren Werkzeugen, und der Modellbaum zeigt das neue Diagramm.
 3. Wähl im Menüband **Klasse** und klick in das Diagramm. Die neue Klasse öffnet ihren Namen
@@ -131,10 +133,11 @@ Du musst nicht jeden Kasten selbst platzieren und jede Linie selbst knicken.
 
 ## Aus UmlCraft heraus
 
-- **Datei › Exportieren › Diagramm als SVG …** oder **Diagramm als PNG …** schreibt das
-  offene Diagramm als Bild.
-- **Strg+Umschalt+C** kopiert das Diagramm in die Zwischenablage: Word und PowerPoint fügen
-  es als Vektorgrafik ein, andere Programme als Bild.
+- **Datei › Exportieren › Diagramm als SVG** oder **Diagramm als PNG** schreibt das offene
+  Diagramm als Bild.
+- **Bearbeiten › Als Bild kopieren** (Strg+Umschalt+C) kopiert das Diagramm in die
+  Zwischenablage: Word und PowerPoint fügen es als Vektorgrafik ein, andere Programme als
+  Bild.
 
 ## Tasten, die sich lohnen
 
@@ -159,6 +162,6 @@ Auf dem Mac tritt Cmd an die Stelle von Strg.
 - Die anderen Diagrammarten: **Bearbeiten › Neues Diagramm** listet sie alle. Das Beispielprojekt
   zeigt zu jeder ein Beispiel.
 - **Struktogramme** (Nassi-Shneiderman-Diagramme): **Bearbeiten › Neues Diagramm › Struktogramm**.
-- **Quellcode**: **Werkzeuge › Quellcode importieren** liest Java, C#, C++ oder Python ins
-  Modell. Dann hast du Klassen im Modellbaum, aber noch kein Diagramm: Zieh sie auf eins.
+- **Quellcode**: **Datei › Importieren › Quellcode** liest Java, C#, C++ oder Python ins
+  Modell, aus einzelnen Dateien oder einem ganzen Ordner. Dann hast du Klassen im Modellbaum, aber noch kein Diagramm: Zieh sie auf eins.
 - Das [README](README.md) beschreibt alles, was UmlCraft kann (auf Englisch).
