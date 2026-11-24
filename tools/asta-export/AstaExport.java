@@ -3064,6 +3064,16 @@ public final class AstaExport {
                 option(node, v + kind[1], "false");
             }
         }
+        // Members hidden one by one, by their ids in Astah; members not made are left out.
+        List<String> hidden = new ArrayList<>();
+        for (Object member : list(style.get("hiddenMembers"))) {
+            if (created.get(member) instanceof IElement made) {
+                hidden.add(made.getId());
+            }
+        }
+        if (!hidden.isEmpty()) {
+            option(node, "invisible_features", String.join(",", hidden));
+        }
     }
 
     /// Whether an operation of the classifier has an `out` or `inout` parameter.

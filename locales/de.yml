@@ -337,6 +337,7 @@ prop:
   parameter_directions_all: Alle, auch in
   shown_attributes: Attribute zeigen
   shown_operations: Operationen zeigen
+  shown_members: Einzelne Attribute und Operationen zeigen
   font_color: Schriftfarbe
   line_color: Linienfarbe
   fill_color: Füllfarbe

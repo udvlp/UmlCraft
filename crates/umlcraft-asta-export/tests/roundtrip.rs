@@ -1083,6 +1083,18 @@ fn member_filters_and_colors_through_astah() {
         })
         .unwrap();
     let (node, class) = (boxed.id, name(doc.model(), boxed.element.unwrap()));
+    // A member hidden by itself; Astah keeps that apart from the visibility filters.
+    let member = doc
+        .model()
+        .children(boxed.element.unwrap())
+        .iter()
+        .copied()
+        .find(|&c| {
+            let kind = doc.model().get(c).unwrap().kind();
+            matches!(kind, ElementKind::Attribute(_) | ElementKind::Operation(_))
+        })
+        .expect("a member");
+    let member_name = name(doc.model(), member);
     let edge = view.presentations().iter().find(|p| p.is_edge() && p.element.is_some()).unwrap().id;
     let red = Color::rgb(0xff, 0, 0);
     let blue = Color::rgb(0, 0, 0xff);
@@ -1098,7 +1110,10 @@ fn member_filters_and_colors_through_astah() {
         s.hidden_operations = vec![Visibility::Protected, Visibility::Package];
     };
     doc.edit("filters", |tx| {
-        tx.update_presentation(d, node, |p| want(&mut p.style))?;
+        tx.update_presentation(d, node, |p| {
+            want(&mut p.style);
+            p.style.hidden_members = vec![member];
+        })?;
         tx.update_presentation(d, edge, |p| {
             p.style.stroke = Some(blue);
             p.style.font_color = Some(red);
@@ -1116,6 +1131,8 @@ fn member_filters_and_colors_through_astah() {
     let mut expected = got.clone();
     want(&mut expected);
     assert_eq!(*got, expected);
+    let hidden: Vec<String> = got.hidden_members.iter().map(|&m| name(&back, m)).collect();
+    assert_eq!(hidden, [member_name]);
     let lines: Vec<(Option<Color>, Option<Color>)> = back
         .elements()
         .flat_map(|e| back.shown_on(e.id()))

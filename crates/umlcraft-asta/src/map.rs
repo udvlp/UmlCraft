@@ -2076,6 +2076,54 @@ mod tests {
         assert_eq!(bounds(item), Rect::new(250.0, 40.0, 100.0, 60.0));
     }
 
+    #[test]
+    fn members_hidden_one_by_one_stay_in_the_model() {
+        let mut b = Builder::default();
+        let model = named(&mut b, "UModelImp", "Model");
+        let class = named(&mut b, "UClassifierImp", "Account");
+        let diagram = named(&mut b, "UDiagramImp", "Overview");
+        let kind = b.string("Class Diagram");
+        b.set(diagram, "type", kind);
+        b.own(model, &[class, diagram]);
+        let mut member = |class_name: &str, name: &str, id: &str| {
+            let m = named(&mut b, class_name, name);
+            let id = b.string(id);
+            b.set(m, "id", id);
+            m
+        };
+        let number = member("UAttributeImp", "number", "1d-x");
+        let balance = member("UAttributeImp", "balance", "1j-x");
+        let deposit = member("UOperationImp", "deposit", "1x-x");
+        let structural = b.list(&[number, balance]);
+        b.set(class, "structuralFeature", structural);
+        let behavioral = b.list(&[deposit]);
+        b.set(class, "behavioralFeature", behavioral);
+        let p = b.instance("ClassifierPresentation");
+        b.set(p, "model", Value::Object(class));
+        let at = point(&mut b, 0.0, 0.0);
+        b.set(p, "location", Value::Object(at));
+        let (hidden_number, hidden_deposit) = (b.string("1d-x"), b.string("1x-x"));
+        let ids: Vec<ObjId> =
+            [hidden_number, hidden_deposit].iter().filter_map(Value::as_object).collect();
+        let invisible = b.list(&ids);
+        b.set(p, "invisibleFeatures", invisible);
+        let presentations = b.list(&[p]);
+        b.set(diagram, "presentation", presentations);
+
+        let imported = import(&b.0).unwrap();
+        let m = &imported.model;
+        m.check().unwrap();
+        let account = m.children(m.root())[0];
+        let names: Vec<&str> =
+            m.children(account).iter().filter_map(|&c| m.get(c)).map(|e| e.name()).collect();
+        assert_eq!(names, ["number", "balance", "deposit"]);
+        let diagram = m.children(m.root())[1];
+        let view = m.view(diagram).unwrap();
+        let shown = view.presentations_of(account).next().unwrap();
+        let children = m.children(account);
+        assert_eq!(shown.style.hidden_members, [children[0], children[2]]);
+    }
+
     /// A point object as Astah stores locations and waypoints.
     fn point(b: &mut Builder, x: f64, y: f64) -> ObjId {
         let at = b.instance("Pnt2d");

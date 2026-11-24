@@ -88,6 +88,23 @@ impl Importer<'_> {
         };
         style.hidden_attributes = hidden("attribute.filter_by_visibility", "attribute");
         style.hidden_operations = hidden("operation.filter_by_visibility", "operation");
+        // Members hidden one by one: `invisibleFeatures` lists their ids as strings.
+        let r = self.r;
+        let invisible: HashSet<&str> = r
+            .obj(p, "invisibleFeatures")
+            .map(|list| {
+                let items = r.g.collection(list).into_iter().filter_map(Value::as_object);
+                items.filter_map(|s| r.g.string(s)).collect()
+            })
+            .unwrap_or_default();
+        if let Some(classifier) = r.obj(p, "model").filter(|_| !invisible.is_empty()) {
+            style.hidden_members = ["structuralFeature", "behavioralFeature"]
+                .into_iter()
+                .flat_map(|list| r.list(classifier, list))
+                .filter(|&f| invisible.contains(r.text(f, "id").as_str()))
+                .filter_map(|f| self.ids.get(&f).copied())
+                .collect();
+        }
     }
 
     /// A text or line color other than Astah's black (`font.color`, `line.color`).

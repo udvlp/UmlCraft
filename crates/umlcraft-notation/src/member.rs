@@ -120,9 +120,13 @@ pub fn member_text(model: &Model, id: Id) -> String {
     member_body(model, id, &Style::default())
 }
 
-/// Whether a classifier box with `style` shows the member: its visibility may be filtered out.
+/// Whether a classifier box with `style` shows the member: it may be hidden by itself, or its
+/// visibility filtered out.
 pub fn member_shown(model: &Model, id: Id, style: &Style) -> bool {
     let Some(e) = model.get(id) else { return false };
+    if style.hidden_members.contains(&id) {
+        return false;
+    }
     let hidden = match e.kind() {
         ElementKind::Attribute(_) => &style.hidden_attributes,
         ElementKind::Operation(_) => &style.hidden_operations,
@@ -1064,6 +1068,9 @@ mod tests {
         let private = Style { hidden_attributes: vec![Visibility::Private], ..Style::default() };
         assert!(!member_shown(model, secret, &private));
         assert!(member_shown(model, swap, &private));
+        let one = Style { hidden_members: vec![swap], ..Style::default() };
+        assert!(!member_shown(model, swap, &one));
+        assert!(member_shown(model, secret, &one));
         // Editing always offers the whole text.
         assert_eq!(member_text(model, secret), "- secret : String = \"x\"");
     }

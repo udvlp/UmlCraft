@@ -184,7 +184,8 @@ Free texts and lines on every diagram (Text and Line tools): texts edited in pla
 dashed or with arrowheads, their ends dragged one by one. Light, dark or system theme, German and
 English. Members show their visibility right before the name (`- name`); UmlCraft's
 visibility column lines up all names of a compartment instead. Per class box, the properties
-panel hides its attributes or operations, stereotypes, the members' visibility, attribute types,
+panel hides its attributes or operations, those of a visibility or single ones (they stay in
+the model), stereotypes, the members' visibility, attribute types,
 initial values, parameters, parameter types or return types. Abstract classes show
 `{abstract}` below their italic name, or «abstract» above it; read-only attributes can end in
 `{readOnly}`. Stereotypes and keywords read `<<include>>` or, in UML's guillemets, `«include»`.

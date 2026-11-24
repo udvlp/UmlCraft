@@ -428,6 +428,10 @@ pub struct Style {
     /// Classifier boxes: the operations of these visibilities are left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_operations: Vec<Visibility>,
+    /// Classifier boxes: these attributes and operations are left out one by one, whatever
+    /// their visibility (Astah's `invisibleFeatures`). They stay in the model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_members: Vec<Id>,
     /// Classifier boxes: hide the attribute compartment; objects: the slot compartment.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_attributes: bool,

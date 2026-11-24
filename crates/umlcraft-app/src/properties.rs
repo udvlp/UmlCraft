@@ -3282,6 +3282,45 @@ impl PropertiesPanel {
                     h_flex().flex_wrap().gap_x_3().gap_y_1().children(boxes).into_any_element(),
                 ));
             }
+            // Each member by itself: the box leaves out those not ticked, whatever their
+            // visibility. They stay in the model.
+            let members: Vec<Id> = p
+                .element
+                .map(|e| model.children(e))
+                .unwrap_or_default()
+                .iter()
+                .copied()
+                .filter(|&c| {
+                    model.get(c).is_some_and(|m| {
+                        matches!(m.kind(), ElementKind::Attribute(_) | ElementKind::Operation(_))
+                    })
+                })
+                .collect();
+            if !members.is_empty() {
+                let boxes = members.into_iter().map(|m| {
+                    let workspace = workspace.clone();
+                    let presentation = p.id;
+                    Checkbox::new(SharedString::from(format!("shown-member-{m}")))
+                        .label(member_text(model, m))
+                        .checked(!p.style.hidden_members.contains(&m))
+                        .on_click(move |checked: &bool, _, cx| {
+                            let shown = *checked;
+                            workspace.update(cx, |ws, cx| {
+                                ws.update_style(presentation, |s| {
+                                    s.hidden_members.retain(|&h| h != m);
+                                    if !shown {
+                                        s.hidden_members.push(m);
+                                    }
+                                });
+                                cx.notify();
+                            });
+                        })
+                });
+                body = body.child(field(
+                    t!("prop.shown_members").into(),
+                    v_flex().gap_1().children(boxes).into_any_element(),
+                ));
+            }
         }
         if matches!(&shown, Some(ElementKind::Lifeline(_))) {
             body = body
