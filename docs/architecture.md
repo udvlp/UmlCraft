@@ -374,7 +374,8 @@ migrations. Writing serializes from the model's own data without copying it.
   painting (`dark_colors` in the app: same hue, lightness mirrored, enough contrast), so the
   model and the `.asta` export keep the colors as chosen. `svg` writes
   them as the canvas shows them in the light theme: black lines, white where a node has no color
-  of its own, a margin of 10 and 4/3 pixels per unit. The app's image export writes coordinates
+  of its own, cut close around the drawing (1 unit for half of the widest line, no empty
+  margin) and 4/3 pixels per unit. The app's image export writes coordinates
   and sizes ten times larger (`render_scaled`, same image size): Word's PDF export puts the
   letters of SVG text on whole units, which at 12 units per letter height spaces them unevenly. So the figure geometry exists once,
   for both. Texts in nodes are centered by Java's whole-pixel width or the exact one, whichever

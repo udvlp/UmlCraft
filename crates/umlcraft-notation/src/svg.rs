@@ -1,6 +1,6 @@
-//! Diagrams as SVG images, drawn as the canvas shows them in the light theme and laid out the
-//! way Astah exports them: black lines, white fill, a margin of 10 and 96 dpi (4/3 pixels per
-//! logical unit).
+//! Diagrams as SVG images, drawn as the canvas shows them in the light theme: black lines,
+//! white fill, cut close around the drawing and 96 dpi (4/3 pixels per logical unit, as Astah
+//! exports).
 
 use umlcraft_model::{Color, Point, Rect};
 
@@ -9,8 +9,9 @@ use crate::scene::{self, FONT_SIZE, LabelAlign, LineStyle, Row, RowRole, Scene, 
 
 /// Arial is the diagram font; the others are close enough where it is missing.
 const FONT_FAMILY: &str = "Arial, Helvetica, sans-serif";
-/// Empty space around the drawing.
-const MARGIN: f32 = 10.0;
+/// Room around the drawing's bounds for half of the widest line (2), which reaches beyond them;
+/// no empty margin, so the image sits in a document where the drawing does.
+const MARGIN: f32 = 1.0;
 /// Pixels per logical unit: Astah exports at 96 dpi what it lays out at 72.
 pub const SCALE: f32 = 4.0 / 3.0;
 const WHITE: &str = "#ffffff";
@@ -581,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn the_image_covers_the_drawing_with_a_margin() {
+    fn the_image_covers_the_drawing_and_its_lines() {
         let (doc, ids) = order_system();
         let scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
         let drawn = scene.bounds().unwrap();
@@ -591,6 +592,8 @@ mod tests {
         assert!(v[0] <= drawn.x - MARGIN && v[1] <= drawn.y - MARGIN, "{view_box}");
         assert!(v[0] + v[2] >= drawn.right() + MARGIN, "{view_box}");
         assert!(v[1] + v[3] >= drawn.bottom() + MARGIN, "{view_box}");
+        // No empty margin beyond the lines.
+        assert!(v[0] >= drawn.x - MARGIN - 0.01 && v[2] <= drawn.width + 2.0 * MARGIN + 0.01);
         let width: f32 =
             svg.split("width=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
         assert_eq!(width, (v[2] * SCALE).ceil());
@@ -631,7 +634,7 @@ mod tests {
     #[test]
     fn an_empty_diagram_is_a_small_blank_image() {
         let svg = render(&Scene::empty(), &ApproxMeasure);
-        assert!(svg.contains("viewBox=\"-10 -10 20 20\""), "{svg}");
+        assert!(svg.contains("viewBox=\"-1 -1 2 2\""), "{svg}");
         assert!(!svg.contains("<text"), "{svg}");
     }
 }
