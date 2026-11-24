@@ -1295,6 +1295,9 @@ struct Line {
     role: RowRole,
     element: Option<Id>,
     color: Option<Color>,
+    /// Room before the text: a member's continued line starts under its name where the
+    /// visibility has a column of its own ([`Line::wrapped`]).
+    indent: f32,
 }
 
 /// `text` as one line: line breaks and tabs become spaces, other control characters are
@@ -1346,6 +1349,7 @@ impl Line {
             role,
             element,
             color: None,
+            indent: 0.0,
         }
     }
 
@@ -1363,7 +1367,7 @@ impl Line {
     }
 
     fn width(&self, measure: &dyn TextMeasure) -> f32 {
-        self.width_of(&self.text, measure, false)
+        self.indent + self.width_of(&self.text, measure, false)
     }
 
     /// Width of `text` in this line's font, a member's visibility in its column.
@@ -1393,11 +1397,20 @@ impl Line {
         self.words().iter().map(|w| self.width_of(w, measure, false)).fold(0.0, f32::max)
     }
 
-    /// This line, broken at spaces into lines no wider than `max`.
+    /// This line, broken at spaces into lines no wider than `max`. Where a member's visibility
+    /// has a column of its own, the further lines start under its name, as narrower lines.
     fn wrapped(self, max: f32, measure: &dyn TextMeasure) -> Vec<Line> {
         if self.width(measure) <= max {
             return vec![self];
         }
+        let indent = if self.role == RowRole::Member
+            && measure.visibility_column()
+            && visibility_column(&self.text).is_some()
+        {
+            measure.width("+", self.size, self.bold) + measure.width(" ", self.size, self.bold)
+        } else {
+            0.0
+        };
         let mut texts = Vec::new();
         let mut current = String::new();
         // The line's width so far, as the sum of its words and spaces: measuring each growing
@@ -1412,6 +1425,7 @@ impl Line {
                 estimate = word_width;
                 continue;
             }
+            let max = if texts.is_empty() { max } else { max - indent };
             let guess = estimate + space + word_width;
             let candidate = format!("{current} {word}");
             // Break where Astah breaks: by the exact width of the plain text, not by the
@@ -1432,7 +1446,15 @@ impl Line {
             }
         }
         texts.push(current);
-        texts.into_iter().map(|text| Line { text, ..self.clone_style() }).collect()
+        texts
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| Line {
+                text,
+                indent: if i == 0 { 0.0 } else { indent },
+                ..self.clone_style()
+            })
+            .collect()
     }
 
     fn clone_style(&self) -> Line {
@@ -1440,6 +1462,7 @@ impl Line {
     }
 
     fn place(self, rect: Rect, align: LabelAlign) -> Row {
+        let rect = Rect::new(rect.x + self.indent, rect.y, rect.width - self.indent, rect.height);
         Row {
             // A line not split, if any, still draws on one line.
             text: if self.text.contains('\n') { single_line(&self.text) } else { self.text },
@@ -6386,6 +6409,24 @@ mod tests {
         assert!(lines.len() >= 2, "wrapped into {} lines", lines.len());
         assert!(lines[0].text.starts_with("+ submit(first"), "{:?}", lines[0].text);
         assert!(lines.iter().all(|l| l.rect.x == order.rect.x + 10.0));
+        // With the visibility in a column of its own, the further lines start under the name
+        // and stay inside the box.
+        let column = Displayed {
+            measure: ApproxMeasure,
+            display: Display { visibility_column: true, ..Display::default() },
+        };
+        let scene = build(doc.model(), d, &Preview::default(), &column);
+        let order = scene.nodes.iter().find(|n| n.element == Some(ids.order)).unwrap();
+        assert_eq!(order.rect.width, stored.bounds().unwrap().width);
+        let lines: Vec<&Row> = order.rows.iter().filter(|r| r.element == Some(operation)).collect();
+        assert!(lines.len() >= 2, "wrapped into {} lines", lines.len());
+        let name = order.rect.x + 10.0 + ApproxMeasure.width("+ ", FONT_SIZE, false);
+        assert_eq!(lines[0].rect.x, order.rect.x + 10.0);
+        for l in &lines[1..] {
+            assert!((l.rect.x - name).abs() < 1e-3, "{:?}", l.rect);
+            let width = ApproxMeasure.width(&l.text, FONT_SIZE, false);
+            assert!(l.rect.x + width <= order.rect.right() - 10.0 + 1e-3, "{:?}", l.text);
+        }
     }
 
     #[test]
