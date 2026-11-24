@@ -3,6 +3,29 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## 0.24.1 – 2026-11-24
+
+- **Details start folded in the model tree**: after opening a project or the sample, only the
+  project and its packages are unfolded; a class with its members and structograms, an IS-A
+  with its specializations, a relationship with its participations, a component with its
+  parts and an interaction with its diagram and lifelines are folded. One folded or unfolded
+  by hand stays so until another project is opened.
+- **Dark theme for the panels**: the window around the panels and the title bar are a dark
+  grey, the panels a lighter one, the diagram a shade between them with a grid that shows;
+  the diagram no longer has the same color as the window. The line around the panels is a
+  little clearer, in the light theme too.
+- **Single attributes and operations hidden on a diagram**: the properties panel of a class box
+  lists its attributes and operations, and one not ticked is left out of that box only; it
+  stays in the model and on other diagrams. Members Astah hides one by one in `.asta` files
+  are now hidden on import too, and the Astah export hides them again.
+- **Wrapped members in the visibility column**: a member's continued lines start under its
+  name, not under the visibility symbol, and the box keeps its width.
+- **Images closer around the drawing**: SVG and PNG exports and Copy as image leave only a
+  hairline of margin instead of 10, so a pasted diagram no longer stands apart from the text.
+- **Borders of rhombi, triangles and filled arrowheads in SVG**: they have their own line
+  width, so an image scaled for another program, such as Word, draws them as full lines
+  instead of broken hairlines.
+
 ## 0.24.0 – 2026-11-23
 
 - **Diagram in a panel of its own**: the diagram no longer lies under the ribbon, model tree

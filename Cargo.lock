@@ -6890,7 +6890,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-app"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -6924,7 +6924,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-asta"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "thiserror 2.0.21",
  "ttf-parser",
@@ -6936,7 +6936,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-asta-export"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -6951,7 +6951,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-cli"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "serde_json",
  "umlcraft-mcp",
@@ -6959,7 +6959,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-erm-sql"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "encoding_rs",
  "indexmap",
@@ -6972,7 +6972,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-format"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -6984,7 +6984,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-mcp"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "resvg 0.50.0",
  "serde_json",
@@ -6998,7 +6998,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-model"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "indexmap",
  "pretty_assertions",
@@ -7010,7 +7010,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-notation"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "indexmap",
  "pretty_assertions",
@@ -7019,7 +7019,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-nsd"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "indexmap",
  "pretty_assertions",
@@ -7032,7 +7032,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-nsd-code"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "pretty_assertions",
  "tree-sitter",
@@ -7043,7 +7043,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-reverse"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "encoding_rs",
  "pretty_assertions",
@@ -7060,7 +7060,7 @@ dependencies = [
 
 [[package]]
 name = "umlcraft-screenshot"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "raw-window-handle",
  "windows 0.62.2",
@@ -8559,7 +8559,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.24.0"
+version = "0.24.1"
 dependencies = [
  "serde_json",
 ]
