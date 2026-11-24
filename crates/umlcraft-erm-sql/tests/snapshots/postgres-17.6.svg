@@ -41,7 +41,7 @@
 <text x="203.4" y="1239.51" font-size="12">ID</text>
 <ellipse cx="210" cy="1275" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="200.1" y="1279.51" font-size="12">Typ</text>
-<polygon points="130,1040 170,1065 130,1090 90,1065" fill="#ffffff" stroke="#000000"/>
+<polygon points="130,1040 170,1065 130,1090 90,1065" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="120.1" y="1069.51" font-size="12">hat</text>
 <ellipse cx="1350.16" cy="494.17" rx="40.16" ry="24.17" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1321.66" y="491.14" font-size="12">Sendungs</text>
@@ -51,15 +51,15 @@
 <text x="1343.4" y="566.23" font-size="12">kg</text>
 <ellipse cx="1364.16" cy="615" rx="54.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1327.16" y="619.51" font-size="12">flug_nummer</text>
-<polygon points="1456.6,250 1533.2,275 1456.6,300 1380,275" fill="#ffffff" stroke="#000000"/>
+<polygon points="1456.6,250 1533.2,275 1456.6,300 1380,275" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1420.3" y="279.51" font-size="12">kunde_email</text>
-<polygon points="1109.8,270 1199.6,295 1109.8,320 1020,295" fill="#ffffff" stroke="#000000"/>
+<polygon points="1109.8,270 1199.6,295 1109.8,320 1020,295" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1066.9" y="299.51" font-size="12">buchung_extra</text>
 <ellipse cx="1270" cy="275" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1250.2" y="279.51" font-size="12">anzahl</text>
 <ellipse cx="1270" cy="315" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1253.5" y="319.51" font-size="12">preis</text>
-<polygon points="820.2,1050 870.4,1075 820.2,1100 770,1075" fill="#ffffff" stroke="#000000"/>
+<polygon points="820.2,1050 870.4,1075 820.2,1100 770,1075" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="797.1" y="1079.51" font-size="12">einsatz</text>
 <ellipse cx="940" cy="1075" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="916.9" y="1079.51" font-size="12">stunden</text>
@@ -84,15 +84,15 @@
 <ellipse cx="664.83" cy="985" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="0"/>
 <polyline points="709.66,985 709.49,986.31 708.98,987.6 708.13,988.88 706.96,990.13 705.46,991.34 703.66,992.5 701.55,993.6 699.17,994.64 696.53,995.61 693.65,996.49 690.54,997.29 687.25,997.99 683.78,998.59 680.16,999.1 676.43,999.49 672.62,999.77 668.74,999.94 664.83,1000 660.92,999.94 657.05,999.77 653.23,999.49 649.5,999.1 645.88,998.59 642.42,997.99 639.12,997.29 636.01,996.49 633.13,995.61 630.49,994.64 628.11,993.6 626.01,992.5 624.2,991.34 622.7,990.13 621.53,988.88 620.68,987.6 620.17,986.31 620,985 620.17,983.69 620.68,982.4 621.53,981.12 622.7,979.87 624.2,978.66 626.01,977.5 628.11,976.4 630.49,975.36 633.13,974.39 636.01,973.51 639.12,972.71 642.42,972.01 645.88,971.41 649.5,970.9 653.23,970.51 657.05,970.23 660.92,970.06 664.83,970 668.74,970.06 672.62,970.23 676.43,970.51 680.16,970.9 683.78,971.41 687.25,972.01 690.54,972.71 693.65,973.51 696.53,974.39 699.17,975.36 701.55,976.4 703.66,977.5 705.46,978.66 706.96,979.87 708.13,981.12 708.98,982.4 709.49,983.69 709.66,985" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="5 5"/>
 <text x="634.83" y="989.51" font-size="12">dauer_min</text>
-<polygon points="620,670 660,695 620,720 580,695" fill="#ffffff" stroke="#000000"/>
+<polygon points="620,670 660,695 620,720 580,695" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="610.1" y="699.51" font-size="12">hat</text>
-<polygon points="750,670 790,695 750,720 710,695" fill="#ffffff" stroke="#000000"/>
+<polygon points="750,670 790,695 750,720 710,695" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="740.1" y="699.51" font-size="12">hat</text>
-<polygon points="453,250 556,275 453,300 350,275" fill="#ffffff" stroke="#000000"/>
+<polygon points="453,250 556,275 453,300 350,275" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="403.5" y="279.51" font-size="12">start_flughafen</text>
-<polygon points="716.4,250 812.8,275 716.4,300 620,275" fill="#ffffff" stroke="#000000"/>
+<polygon points="716.4,250 812.8,275 716.4,300 620,275" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="670.2" y="279.51" font-size="12">ziel_flughafen</text>
-<polygon points="433.4,1040 496.8,1065 433.4,1090 370,1065" fill="#ffffff" stroke="#000000"/>
+<polygon points="433.4,1040 496.8,1065 433.4,1090 370,1065" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="403.7" y="1069.51" font-size="12">flug_crew</text>
 <ellipse cx="110" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <polyline points="103.4,41.79 116.6,41.79" fill="none" stroke="#000000" stroke-width="1"/>
@@ -123,15 +123,15 @@
 <text x="323.5" y="549.51" font-size="12">sitze</text>
 <ellipse cx="212.83" cy="525" rx="72.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="163.33" y="529.51" font-size="12">geschwindigkeit</text>
-<polygon points="250,250 290,275 250,300 210,275" fill="#ffffff" stroke="#000000"/>
+<polygon points="250,250 290,275 250,300 210,275" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="240.1" y="279.51" font-size="12">hat</text>
 <ellipse cx="850" cy="485" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <polyline points="830.2,491.79 869.8,491.79" fill="none" stroke="#000000" stroke-width="1" stroke-dasharray="3 3"/>
 <text x="826.5" y="489.51" font-size="12">nummer</text>
 <ellipse cx="850.16" cy="525" rx="40.16" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="823.76" y="529.51" font-size="12">terminal</text>
-<polygon points="910,250 950,277.09 910,304.19 870,277.09" fill="#ffffff" stroke="#000000"/>
-<polygon points="910,255.42 942,277.09 910,298.77 878,277.09" fill="none" stroke="#000000"/>
+<polygon points="910,250 950,277.09 910,304.19 870,277.09" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polygon points="910,255.42 942,277.09 910,298.77 878,277.09" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="900.1" y="281.61" font-size="12">hat</text>
 <ellipse cx="1590" cy="35" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <polyline points="1583.4,41.79 1596.6,41.79" fill="none" stroke="#000000" stroke-width="1"/>
@@ -153,14 +153,14 @@
 <text x="1453.5" y="479.51" font-size="12">login</text>
 <ellipse cx="1423.5" cy="665" rx="63.5" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1380.5" y="669.51" font-size="12">passwort_hash</text>
-<polygon points="1630,250 1670,275 1630,300 1590,275" fill="#ffffff" stroke="#000000"/>
+<polygon points="1630,250 1670,275 1630,300 1590,275" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1620.1" y="279.51" font-size="12">hat</text>
 <ellipse cx="500" cy="1235" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <polyline points="493.4,1241.79 506.6,1241.79" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="493.4" y="1239.51" font-size="12">id</text>
 <ellipse cx="540" cy="1275" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="524" y="1279.51" font-size="12">name</text>
-<polygon points="433.2,1410 516.4,1435 433.2,1460 350,1435" fill="#ffffff" stroke="#000000"/>
+<polygon points="433.2,1410 516.4,1435 433.2,1460 350,1435" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="393.6" y="1439.51" font-size="12">vorgesetzter</text>
 <ellipse cx="790" cy="1235" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <polyline points="783.4,1241.79 796.6,1241.79" fill="none" stroke="#000000" stroke-width="1"/>
@@ -182,8 +182,8 @@
 <text x="245.13" y="889.51" font-size="12">buchstabe</text>
 <ellipse cx="270" cy="925" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="250.2" y="929.51" font-size="12">klasse</text>
-<polygon points="210,670 250,697.09 210,724.19 170,697.09" fill="#ffffff" stroke="#000000"/>
-<polygon points="210,675.42 242,697.09 210,718.77 178,697.09" fill="none" stroke="#000000"/>
+<polygon points="210,670 250,697.09 210,724.19 170,697.09" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+<polygon points="210,675.42 242,697.09 210,718.77 178,697.09" fill="none" stroke="#000000" stroke-width="1"/>
 <text x="200.1" y="701.61" font-size="12">hat</text>
 <ellipse cx="1410" cy="1235" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <polyline points="1403.4,1241.79 1416.6,1241.79" fill="none" stroke="#000000" stroke-width="1"/>
@@ -192,15 +192,15 @@
 <text x="1390.2" y="1279.51" font-size="12">status</text>
 <ellipse cx="1414.83" cy="1315" rx="44.83" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1385.13" y="1319.51" font-size="12">sitzplatz</text>
-<polygon points="1320,1040 1360,1065 1320,1090 1280,1065" fill="#ffffff" stroke="#000000"/>
+<polygon points="1320,1040 1360,1065 1320,1090 1280,1065" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1310.1" y="1069.51" font-size="12">hat</text>
-<polygon points="1780,250 1820,275 1780,300 1740,275" fill="#ffffff" stroke="#000000"/>
+<polygon points="1780,250 1820,275 1780,300 1740,275" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="1770.1" y="279.51" font-size="12">hat</text>
 <ellipse cx="2090" cy="485" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="2070.2" y="489.51" font-size="12">meilen</text>
 <ellipse cx="2090" cy="525" rx="40" ry="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="2073.5" y="529.51" font-size="12">stufe</text>
-<polygon points="2030,250 2070,275 2030,300 1990,275" fill="#ffffff" stroke="#000000"/>
+<polygon points="2030,250 2070,275 2030,300 1990,275" fill="#ffffff" stroke="#000000" stroke-width="1"/>
 <text x="2020.1" y="279.51" font-size="12">hat</text>
 <polyline points="135.6,1243.44 171.71,1239.34" fill="none" stroke="#000000" stroke-width="1"/>
 <polyline points="135.6,1260.93 174.28,1268.25" fill="none" stroke="#000000" stroke-width="1"/>

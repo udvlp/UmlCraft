@@ -207,11 +207,14 @@ impl Svg<'_> {
                 num(*width),
                 dashes(*style, k),
             ),
+            // The 1 px border the canvas draws, written out: SVG's default of 1 would be a tenth
+            // of it in images scaled for other programs.
             Primitive::Polygon { points, fill } => format!(
-                "<polygon points=\"{}\"{} stroke=\"{}\"/>",
+                "<polygon points=\"{}\"{} stroke=\"{}\" stroke-width=\"{}\"/>",
                 points_attr(points, k),
                 self.fill_attr(*fill),
                 self.line_color(),
+                num(1.0),
             ),
             Primitive::Ellipse { center, rx, ry, fill, width } => format!(
                 "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{} stroke=\"{BLACK}\" \
@@ -619,6 +622,10 @@ mod tests {
         assert!(a.iter().zip(&b).all(|(a, b)| (a * FINE_UNITS - b).abs() < 0.1), "{a:?} {b:?}");
         assert!(fine.contains("font-size=\"120\"") && !fine.contains("font-size=\"12\""));
         assert!(fine.contains("stroke-width=\"20\""));
+        // Polygons (the generalization's triangle) keep their 1 px border, not SVG's default.
+        let polygons: Vec<&str> = fine.lines().filter(|l| l.starts_with("<polygon")).collect();
+        assert!(!polygons.is_empty(), "{fine}");
+        assert!(polygons.iter().all(|l| l.contains(" stroke-width=\"10\"")), "{polygons:?}");
     }
 
     #[test]
