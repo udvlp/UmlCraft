@@ -46,31 +46,13 @@ pub fn tree_children(model: &Model, e: &Element) -> Vec<Id> {
     children
 }
 
-/// Whether the model tree shows `e` folded until it is unfolded by hand: an element holding
-/// only its own parts, such as a class with attributes and operations or an entity with its
-/// attributes. One holding anything else (a nested class, a structogram, a diagram) or nothing
-/// stays unfolded.
-pub fn tree_folded(model: &Model, e: &Element) -> bool {
-    !e.children().is_empty()
-        && e.children().iter().all(|&c| model.get(c).is_some_and(|c| is_part(c.kind())))
-}
-
-/// The parts an element lists below itself: features, literals, parameters and the like.
-fn is_part(kind: &ElementKind) -> bool {
-    use ElementKind as K;
-    matches!(
-        kind,
-        K::Attribute(_)
-            | K::Operation(_)
-            | K::Parameter(_)
-            | K::TemplateParameter(_)
-            | K::EnumerationLiteral
-            | K::Slot(_)
-            | K::Port(_)
-            | K::ExtensionPoint
-            | K::InternalTransition(_)
-            | K::ErAttribute(_)
-    )
+/// Whether the model tree shows `e` folded until it is unfolded by hand, as it does after a
+/// project is opened: everything holding details, such as a class with its members and
+/// structograms, an IS-A with its specializations, a relationship with its participations or
+/// an interaction with its diagram and lifelines. Only the project and packages stay unfolded;
+/// nothing to fold is not folded.
+pub fn tree_folded(e: &Element) -> bool {
+    !e.children().is_empty() && !matches!(e.kind(), ElementKind::Model | ElementKind::Package)
 }
 
 /// Where an element of `kind` goes among its siblings in the model tree: its group, then its
@@ -343,25 +325,30 @@ mod tests {
     }
 
     #[test]
-    fn only_elements_holding_their_parts_start_folded() {
+    fn details_start_folded() {
         let (mut doc, ids) = order_system();
-        let (empty, outer) = doc
+        let (empty, outer, interaction) = doc
             .edit("more", |tx| {
                 let empty =
                     tx.create(ids.domain, ElementData::new("Empty", ElementKind::class()))?;
                 let outer =
                     tx.create(ids.domain, ElementData::new("Outer", ElementKind::class()))?;
                 tx.create(outer, ElementData::new("Inner", ElementKind::class()))?;
-                Ok((empty, outer))
+                let interaction =
+                    tx.create(ids.domain, ElementData::new("Order", ElementKind::Interaction))?;
+                let diagram = ElementKind::diagram(DiagramKind::Sequence);
+                tx.create(interaction, ElementData::new("Order", diagram))?;
+                Ok((empty, outer, interaction))
             })
             .unwrap();
         let model = doc.model();
-        let folded = |id| tree_folded(model, model.get(id).unwrap());
+        let folded = |id| tree_folded(model.get(id).unwrap());
         assert!(folded(ids.customer), "a class with its members");
         assert!(!folded(ids.domain), "a package");
         assert!(!folded(model.root()), "the project");
         assert!(!folded(empty), "nothing to fold");
-        assert!(!folded(outer), "a nested class");
+        assert!(folded(outer), "a class with a nested class");
+        assert!(folded(interaction), "an interaction holding its diagram");
     }
 
     #[test]

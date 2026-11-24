@@ -10,34 +10,36 @@ pub const GAP: Pixels = px(4.0);
 pub const RADIUS: Pixels = px(10.0);
 
 /// The surface the panels sit on, around them and in the title bar: #e8e8e8 in the light
-/// theme, the theme's background in the dark one, with the panels a shade lighter.
+/// theme, #181818 in the dark one.
 ///
 /// Always opaque. A system backdrop (Mica, the blurred desktop) was tried and dropped: with a
 /// non-opaque window GPUI renders text without ClearType, and on Windows its antialiased
 /// edges come out too dark over the backdrop.
 pub fn backdrop(cx: &App) -> Hsla {
-    if cx.theme().is_dark() { cx.theme().background } else { rgb(0xe8e8e8).into() }
+    if cx.theme().is_dark() { rgb(0x181818).into() } else { rgb(0xe8e8e8).into() }
 }
 
-/// The title bar: the backdrop's grey in the light theme, a strip of #303030 in the dark one.
+/// The title bar: the backdrop's grey in both themes.
 pub fn title_bar_background(cx: &App) -> Hsla {
-    if cx.theme().is_dark() { rgb(0x303030).into() } else { backdrop(cx) }
+    backdrop(cx)
 }
 
+/// The diagram and the file page's content: the theme's white in the light theme, #1e1e1e in
+/// the dark one.
 pub fn card_background(cx: &App) -> Hsla {
     let theme = cx.theme();
-    if theme.is_dark() { theme.background.blend(white().opacity(0.06)) } else { theme.background }
+    if theme.is_dark() { rgb(0x1e1e1e).into() } else { theme.background }
 }
 
 /// The ribbon, the model tree, the properties and what floats over the diagram: #fafafa in the
-/// light theme, a shade lighter than the diagram in the dark one.
+/// light theme, #282828 in the dark one.
 pub fn panel_background(cx: &App) -> Hsla {
-    if cx.theme().is_dark() { card_background(cx) } else { rgb(0xfafafa).into() }
+    if cx.theme().is_dark() { rgb(0x282828).into() } else { rgb(0xfafafa).into() }
 }
 
-/// The hairline around the panels: #d8d8d8 in the light theme.
+/// The hairline around the panels: #cccccc in the light theme, #404040 in the dark one.
 pub fn panel_border(cx: &App) -> Hsla {
-    if cx.theme().is_dark() { cx.theme().border.opacity(0.9) } else { rgb(0xd8d8d8).into() }
+    if cx.theme().is_dark() { rgb(0x404040).into() } else { rgb(0xcccccc).into() }
 }
 
 /// A rounded card with a hairline border and no shadow.

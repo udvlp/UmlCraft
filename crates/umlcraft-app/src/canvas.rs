@@ -3304,8 +3304,14 @@ impl Render for DiagramCanvas {
             (gpui_kit::white(), gpui_kit::black())
         };
         let colors = Colors {
-            background: theme.background,
-            grid: Hsla { a: if theme.is_dark() { 0.25 } else { 0.45 }, ..theme.border },
+            // As the card it fills, #1e1e1e in the dark theme.
+            background: crate::shell::card_background(cx),
+            // 12 steps off the background in both themes: #2a2a2a on #1e1e1e when dark.
+            grid: if theme.is_dark() {
+                gpui_kit::rgb(0x2a2a2a).into()
+            } else {
+                Hsla { a: 0.45, ..theme.border }
+            },
             fill,
             line: ink,
             text: ink,

@@ -2521,7 +2521,7 @@ fn tree_item(
     } else if folds.collapsed.contains(&key) {
         false
     } else {
-        !labels::tree_folded(model, e)
+        !labels::tree_folded(e)
     };
     TreeItem::new(key.clone(), labels::tree_name(model, e)).expanded(expanded).children(children)
 }
