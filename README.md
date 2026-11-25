@@ -68,8 +68,9 @@ theme draws a dark counterpart of each, of the same hue and as far from the defa
   Methods of Java, C#, Python or C++ files become structograms without types, with
   assignments as `x := 42 + a`, conditions as `a > 0?` and returns as `return x`; what has no
   place in a structogram (`continue`, labels …) is listed. New structograms and imported
-  methods use the keywords of a language (German `solange ?`, `für i := 1 bis n`, `gib x`, or
-  Structorizer's English ones), as chosen in the settings; by default as the user interface.
+  methods use the keywords of a language (German `solange ?`, `für i := 1 bis n`, `gib x`;
+  French `tant que ?`, `pour i <- 1 à n`, `renvoyer x`; or Structorizer's English ones), as
+  chosen in the settings; by default as the user interface.
 - **SQL dumps as ER diagrams** (File › Import SQL dump as ER diagram …): dumps of MySQL,
   MariaDB and PostgreSQL (`mysqldump`, `mariadb-dump`, `pg_dump` in plain format) become laid
   out ER diagrams in the open project, each in a package named after the database: tables
@@ -181,8 +182,8 @@ their specifics, activities along their flows with partitions kept as columns, s
 machines along their transitions with each region on its own, actors beside the system
 boundary; with a selection only that, pushing other nodes aside.
 Free texts and lines on every diagram (Text and Line tools): texts edited in place, lines
-dashed or with arrowheads, their ends dragged one by one. Light, dark or system theme, German and
-English. Members show their visibility right before the name (`- name`); UmlCraft's
+dashed or with arrowheads, their ends dragged one by one. Light, dark or system theme, German,
+English and French. Members show their visibility right before the name (`- name`); UmlCraft's
 visibility column lines up all names of a compartment instead. Per class box, the properties
 panel hides its attributes or operations, those of a visibility or single ones (they stay in
 the model), stereotypes, the members' visibility, attribute types,

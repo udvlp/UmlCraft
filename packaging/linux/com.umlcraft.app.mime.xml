@@ -3,6 +3,7 @@
   <mime-type type="application/x-umlcraft">
     <comment>UmlCraft project</comment>
     <comment xml:lang="de">UmlCraft-Projekt</comment>
+    <comment xml:lang="fr">Projet UmlCraft</comment>
     <sub-class-of type="application/json"/>
     <icon name="com.umlcraft.app"/>
     <glob pattern="*.ucraft"/>
@@ -10,11 +11,13 @@
   <mime-type type="application/x-astah">
     <comment>Astah project</comment>
     <comment xml:lang="de">Astah-Projekt</comment>
+    <comment xml:lang="fr">Projet Astah</comment>
     <glob pattern="*.asta"/>
   </mime-type>
   <mime-type type="application/x-structorizer">
     <comment>Structorizer structogram</comment>
     <comment xml:lang="de">Structorizer-Struktogramm</comment>
+    <comment xml:lang="fr">Structogramme Structorizer</comment>
     <sub-class-of type="application/xml"/>
     <glob pattern="*.nsd"/>
   </mime-type>

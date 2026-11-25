@@ -42,14 +42,18 @@ ShowLanguageDialog=auto
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "de"; MessagesFile: "compiler:Languages\German.isl"
+Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
 
 [CustomMessages]
 en.ProjectType=UmlCraft project
 de.ProjectType=UmlCraft-Projekt
+fr.ProjectType=Projet UmlCraft
 en.AstaType=.asta project
 de.AstaType=.asta-Projekt
+fr.AstaType=Projet .asta
 en.NsdType=Structogram
 de.NsdType=Struktogramm
+fr.NsdType=Structogramme
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

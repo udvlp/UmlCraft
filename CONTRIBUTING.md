@@ -41,7 +41,8 @@ and in the language menu of the View tab. Texts left out show in English. The `s
 section holds the keywords of structograms (`while`, `for`, `return` …). Translate it too, or
 leave it out to use the English keywords. A counting loop must keep `<-` or `:=` after its
 variable, because Structorizer recognises only those. Run `cargo test --workspace`; it checks
-that the new file has no key `en.yml` has not.
+that the new file has no key `en.yml` has not, and the same `%{…}` placeholders in each text
+it has.
 
 ## Tests
 
