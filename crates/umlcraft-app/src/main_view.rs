@@ -26,7 +26,7 @@ use umlcraft_notation::palette::NodeTool;
 use umlcraft_notation::scene::{self, Alignment, Preview};
 use umlcraft_reverse::Problem;
 
-use crate::canvas::{AppMeasure, DiagramCanvas, DraggedElement, FontMeasure};
+use crate::canvas::{AppMeasure, DiagramCanvas, Display, DraggedElement, FontMeasure};
 use crate::labels;
 use crate::nsd::{NsdView, source};
 use crate::properties::PropertiesPanel;
@@ -482,10 +482,7 @@ impl MainView {
         }
         // An AI client changed how diagrams are drawn: the settings say so from now on.
         if let Some(display) = effects.display {
-            self.settings.visibility_column = display.visibility_column;
-            self.settings.abstract_stereotype = display.abstract_stereotype;
-            self.settings.read_only_constraint = display.read_only_constraint;
-            self.settings.guillemets = display.guillemets;
+            self.settings.set_display(display);
             self.apply_display(cx);
         }
         if let Some((id, selection)) = effects.structogram_selection {
@@ -1896,27 +1893,12 @@ impl MainView {
         self.workspace.update(cx, |ws, _| ws.keywords = keywords);
     }
 
-    /// Turns UmlCraft's visibility column on or off, for drawing, sizing boxes and exporting.
-    pub fn set_visibility_column(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.settings.visibility_column = on;
-        self.apply_display(cx);
-    }
-
-    /// Marks abstract classes with «abstract» above their name, or with `{abstract}` below it.
-    pub fn set_abstract_stereotype(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.settings.abstract_stereotype = on;
-        self.apply_display(cx);
-    }
-
-    /// Ends read-only attributes in `{readOnly}`, or not.
-    pub fn set_read_only_constraint(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.settings.read_only_constraint = on;
-        self.apply_display(cx);
-    }
-
-    /// Writes stereotypes and keywords in guillemets (`«include»`), or as `<<include>>`.
-    pub fn set_guillemets(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.settings.guillemets = on;
+    /// Changes how diagrams are drawn (visibility column, «abstract», `{readOnly}`,
+    /// guillemets), for drawing, sizing boxes and exporting.
+    pub fn change_display(&mut self, change: impl FnOnce(&mut Display), cx: &mut Context<Self>) {
+        let mut display = self.settings.display();
+        change(&mut display);
+        self.settings.set_display(display);
         self.apply_display(cx);
     }
 

@@ -603,19 +603,18 @@ thread_local! {
 const MAX_MEASURED: usize = 50_000;
 
 /// How diagrams are drawn beyond what they store: the user's settings.
-pub use umlcraft_notation::scene::Display;
+pub use umlcraft_notation::scene::{Display, Displayed};
 
 /// Measures text with the window's font system, at 100 % zoom.
 pub struct FontMeasure<'a> {
     window: &'a Window,
     family: SharedString,
-    display: Display,
 }
 
 impl<'a> FontMeasure<'a> {
     /// Measures in the diagram font, for drawing as `display` says.
-    pub fn new(window: &'a Window, display: Display) -> Self {
-        Self { window, family: diagram_font(), display }
+    pub fn new(window: &'a Window, display: Display) -> Displayed<Self> {
+        Displayed { measure: Self { window, family: diagram_font() }, display }
     }
 }
 
@@ -651,22 +650,6 @@ impl TextMeasure for FontMeasure<'_> {
         });
         width
     }
-
-    fn visibility_column(&self) -> bool {
-        self.display.visibility_column
-    }
-
-    fn abstract_stereotype(&self) -> bool {
-        self.display.abstract_stereotype
-    }
-
-    fn read_only_constraint(&self) -> bool {
-        self.display.read_only_constraint
-    }
-
-    fn guillemets(&self) -> bool {
-        self.display.guillemets
-    }
 }
 
 /// Measures text with the app's font system by adding up the advances of the characters, as
@@ -675,16 +658,15 @@ pub struct AppMeasure {
     text: Arc<TextSystem>,
     regular: FontId,
     bold: FontId,
-    display: Display,
 }
 
 impl AppMeasure {
     /// Measures for drawing as `display` says.
-    pub fn new(cx: &App, display: Display) -> Self {
+    pub fn new(cx: &App, display: Display) -> Displayed<Self> {
         let text = cx.text_system().clone();
         let regular = text.resolve_font(&font(diagram_font()));
         let bold = text.resolve_font(&font(diagram_font()).bold());
-        Self { text, regular, bold, display }
+        Displayed { measure: Self { text, regular, bold }, display }
     }
 }
 
@@ -700,22 +682,6 @@ impl TextMeasure for AppMeasure {
         let advance =
             |c| self.text.advance(font, px(font_size), c).map_or(0.0, |s| f32::from(s.width));
         text.chars().map(advance).sum()
-    }
-
-    fn visibility_column(&self) -> bool {
-        self.display.visibility_column
-    }
-
-    fn abstract_stereotype(&self) -> bool {
-        self.display.abstract_stereotype
-    }
-
-    fn read_only_constraint(&self) -> bool {
-        self.display.read_only_constraint
-    }
-
-    fn guillemets(&self) -> bool {
-        self.display.guillemets
     }
 }
 
@@ -2975,8 +2941,8 @@ impl Painter<'_> {
         let width = match column {
             // The visibility symbol centered in a column as wide as a "+", the rest after it.
             Some((symbol, rest)) => {
-                let column = Display { visibility_column: true, ..Display::default() };
-                let slot = AppMeasure::new(self.cx, column).width("+", row.size, row.bold);
+                let slot =
+                    AppMeasure::new(self.cx, Display::default()).width("+", row.size, row.bold);
                 let r = row.rect;
                 let cell = Rect::new(r.x, r.y, slot, r.height);
                 self.text(symbol, cell, row.size, row.bold, row.italic, color, LabelAlign::Center);

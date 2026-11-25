@@ -86,7 +86,10 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                     .checked(column)
                     .label(t!("settings.visibility_column").to_string())
                     .on_change(move |&on, _, cx| {
-                        v3.update(cx, |this, cx| this.set_visibility_column(on, cx)).ok();
+                        v3.update(cx, |this, cx| {
+                            this.change_display(|d| d.visibility_column = on, cx);
+                        })
+                        .ok();
                     }),
             )
             .child(
@@ -109,7 +112,7 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                         let on = ix == 1;
                         v4.update(cx, |this, cx| {
                             if this.settings().abstract_stereotype != on {
-                                this.set_abstract_stereotype(on, cx);
+                                this.change_display(|d| d.abstract_stereotype = on, cx);
                             }
                         })
                         .ok();
@@ -119,7 +122,8 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             .checked(read_only)
             .label(t!("settings.read_only").to_string())
             .on_change(move |&on, _, cx| {
-                v5.update(cx, |this, cx| this.set_read_only_constraint(on, cx)).ok();
+                v5.update(cx, |this, cx| this.change_display(|d| d.read_only_constraint = on, cx))
+                    .ok();
             });
         let classes =
             v_flex().gap_3().child(visibility_column).child(abstract_mark).child(read_only_mark);
@@ -131,7 +135,8 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                     .checked(guillemets)
                     .label(t!("settings.guillemets").to_string())
                     .on_change(move |&on, _, cx| {
-                        v8.update(cx, |this, cx| this.set_guillemets(on, cx)).ok();
+                        v8.update(cx, |this, cx| this.change_display(|d| d.guillemets = on, cx))
+                            .ok();
                     }),
             )
             .child(

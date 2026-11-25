@@ -301,7 +301,7 @@ impl Svg<'_> {
     fn row(&mut self, row: &Row) {
         if let Some((symbol, rest)) = scene::visibility_column(&row.text)
             .filter(|_| row.role == RowRole::Member && row.align == LabelAlign::Left && !row.hinted)
-            .filter(|_| self.measure.visibility_column())
+            .filter(|_| self.measure.display().visibility_column)
         {
             self.member_row(row, symbol, rest);
             return;
@@ -473,7 +473,7 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{ApproxMeasure, Preview, build};
+    use crate::scene::{ApproxMeasure, Display, Preview, build};
     use umlcraft_model::sample::order_system;
 
     fn sample_svg() -> String {
@@ -570,8 +570,8 @@ mod tests {
                 .sum()
         }
 
-        fn visibility_column(&self) -> bool {
-            self.0
+        fn display(&self) -> Display {
+            Display { visibility_column: self.0, ..Display::default() }
         }
     }
 

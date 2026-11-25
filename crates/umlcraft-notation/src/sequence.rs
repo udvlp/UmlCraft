@@ -1284,7 +1284,7 @@ fn message_edge(
 
     let (stereotype, text) = m
         .element
-        .map(|e| message_parts(model, e, &m.style, false, measure.guillemets()))
+        .map(|e| message_parts(model, e, &m.style, false, measure.display().guillemets))
         .unwrap_or_default();
     let guard = match m.element.and_then(|e| model.get(e)).map(|e| e.kind()) {
         Some(ElementKind::Message(p)) if !p.guard.trim().is_empty() => format!("[{}] ", p.guard),

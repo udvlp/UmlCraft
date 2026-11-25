@@ -149,6 +149,14 @@ impl Settings {
         }
     }
 
+    /// Takes how diagrams are drawn from `display`.
+    pub fn set_display(&mut self, display: crate::canvas::Display) {
+        self.visibility_column = display.visibility_column;
+        self.abstract_stereotype = display.abstract_stereotype;
+        self.read_only_constraint = display.read_only_constraint;
+        self.guillemets = display.guillemets;
+    }
+
     /// Whether moved nodes line up with the others; on unless switched off.
     pub fn aligns_to_nodes(&self) -> bool {
         self.align_to_nodes != Some(false)

@@ -42,7 +42,7 @@ pub trait Host {
     }
     /// How diagrams are drawn beyond what they store.
     fn display(&mut self) -> Display {
-        Display::of(self.parts().1)
+        self.parts().1.display()
     }
     /// Draws diagrams as `display` says from now on: in the app, as if the user changed its
     /// settings.

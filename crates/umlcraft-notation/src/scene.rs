@@ -36,27 +36,10 @@ pub trait TextMeasure {
         self.width(text, font_size, bold).max(self.rounded_width(text, font_size, bold))
     }
 
-    /// Whether members draw their visibility in UmlCraft's own column
-    /// ([`visibility_column`]), a setting. Off, they look as in Astah.
-    fn visibility_column(&self) -> bool {
-        false
-    }
-
-    /// Whether abstract classes say so with the stereotype «abstract» above their name instead
-    /// of UML's `{abstract}` below it, a setting.
-    fn abstract_stereotype(&self) -> bool {
-        false
-    }
-
-    /// Whether read-only attributes end in UML's `{readOnly}`, a setting.
-    fn read_only_constraint(&self) -> bool {
-        false
-    }
-
-    /// Whether stereotypes and keywords stand in guillemets (`«include»`), as UML writes them,
-    /// a setting. Off, they look as in Astah (`<<include>>`).
-    fn guillemets(&self) -> bool {
-        false
+    /// How diagrams measured by this are drawn beyond what they store: the settings
+    /// ([`Display`]). All off by default, as in Astah.
+    fn display(&self) -> Display {
+        Display::default()
     }
 }
 
@@ -72,7 +55,8 @@ impl TextMeasure for ApproxMeasure {
 /// server's own in a headless MCP session. All off, diagrams look as in Astah.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Display {
-    /// Members show their visibility in UmlCraft's own column, a minus as wide as a plus.
+    /// Members show their visibility in UmlCraft's own column ([`visibility_column`]), a minus
+    /// as wide as a plus.
     pub visibility_column: bool,
     /// Abstract classes show «abstract» above their name instead of `{abstract}` below it.
     pub abstract_stereotype: bool,
@@ -80,18 +64,6 @@ pub struct Display {
     pub read_only_constraint: bool,
     /// Stereotypes and keywords stand in guillemets: `«include»` instead of `<<include>>`.
     pub guillemets: bool,
-}
-
-impl Display {
-    /// What `measure` draws by.
-    pub fn of(measure: &dyn TextMeasure) -> Self {
-        Self {
-            visibility_column: measure.visibility_column(),
-            abstract_stereotype: measure.abstract_stereotype(),
-            read_only_constraint: measure.read_only_constraint(),
-            guillemets: measure.guillemets(),
-        }
-    }
 }
 
 impl<T: TextMeasure + ?Sized> TextMeasure for Box<T> {
@@ -103,24 +75,8 @@ impl<T: TextMeasure + ?Sized> TextMeasure for Box<T> {
         (**self).rounded_width(text, font_size, bold)
     }
 
-    fn astah_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
-        (**self).astah_width(text, font_size, bold)
-    }
-
-    fn visibility_column(&self) -> bool {
-        (**self).visibility_column()
-    }
-
-    fn abstract_stereotype(&self) -> bool {
-        (**self).abstract_stereotype()
-    }
-
-    fn read_only_constraint(&self) -> bool {
-        (**self).read_only_constraint()
-    }
-
-    fn guillemets(&self) -> bool {
-        (**self).guillemets()
+    fn display(&self) -> Display {
+        (**self).display()
     }
 }
 
@@ -139,24 +95,8 @@ impl<M: TextMeasure> TextMeasure for Displayed<M> {
         self.measure.rounded_width(text, font_size, bold)
     }
 
-    fn astah_width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
-        self.measure.astah_width(text, font_size, bold)
-    }
-
-    fn visibility_column(&self) -> bool {
-        self.display.visibility_column
-    }
-
-    fn abstract_stereotype(&self) -> bool {
-        self.display.abstract_stereotype
-    }
-
-    fn read_only_constraint(&self) -> bool {
-        self.display.read_only_constraint
-    }
-
-    fn guillemets(&self) -> bool {
-        self.display.guillemets
+    fn display(&self) -> Display {
+        self.display
     }
 }
 
@@ -1272,7 +1212,8 @@ pub fn row_text_width(
             measure.width(text, size, bold)
         }
     };
-    match visibility_column(text).filter(|_| role == RowRole::Member && measure.visibility_column())
+    match visibility_column(text)
+        .filter(|_| role == RowRole::Member && measure.display().visibility_column)
     {
         Some((_, rest)) => width("+") + width(rest),
         None => width(text),
@@ -1399,7 +1340,7 @@ impl Line {
             return vec![self];
         }
         let indent = if self.role == RowRole::Member
-            && measure.visibility_column()
+            && measure.display().visibility_column
             && visibility_column(&self.text).is_some()
         {
             measure.width("+", self.size, self.bold) + measure.width(" ", self.size, self.bold)
@@ -1645,7 +1586,7 @@ fn build_with(
             }
             _ => None,
         });
-        let keyword = binding.is_some().then(|| keyword_text("bind", measure.guillemets()));
+        let keyword = binding.is_some().then(|| keyword_text("bind", measure.display().guillemets));
         // A line to a socket is its «use» already, as Astah draws it.
         let to_socket = sockets.contains(target) || sockets.contains(source);
         let label = element.and_then(|e| {
@@ -1660,7 +1601,8 @@ fn build_with(
             let stereotypes = stereotypes.join(", ");
             let name = name(e);
             let parts: Vec<String> = [
-                (!stereotypes.is_empty()).then(|| keyword_text(&stereotypes, measure.guillemets())),
+                (!stereotypes.is_empty())
+                    .then(|| keyword_text(&stereotypes, measure.display().guillemets)),
                 (!name.is_empty()).then_some(name),
                 binding.clone(),
             ]
@@ -2445,7 +2387,7 @@ fn layout_activity_node(
         ActivityNodeKind::AcceptEvent => Some("signal receipt"),
         _ => None,
     }
-    .map(|k| keyword_text(k, measure.guillemets()));
+    .map(|k| keyword_text(k, measure.display().guillemets));
     let width = bounds.width.max(min_width);
     let names = wrap(&text, width - 2.0 * pad_x, FONT_SIZE, measure);
     // Object nodes in a state show it as `[state]` in a line of its own below the name; the
@@ -2718,7 +2660,7 @@ fn stereotype_lines<'a>(
     id: Id,
     measure: &dyn TextMeasure,
 ) -> Vec<Line> {
-    let guillemets = measure.guillemets();
+    let guillemets = measure.display().guillemets;
     sets.into_iter()
         .filter(|s| !s.is_empty())
         .map(|s| Line::new(stereotype_text(s, guillemets), size, RowRole::Stereotype, Some(id)))
@@ -4094,7 +4036,7 @@ fn layout_classifier(
     };
     let says_so =
         named_so || !style.hide_stereotypes && e.data().stereotypes.iter().any(|s| s == "abstract");
-    let keyword = is_abstract && !measure.abstract_stereotype() && !says_so;
+    let keyword = is_abstract && !measure.display().abstract_stereotype && !says_so;
     let mut stereotypes: Vec<String> = match kind {
         ElementKind::Interface(_) => vec!["interface".into()],
         ElementKind::Enumeration(_) => vec!["enumeration".into()],
@@ -4122,9 +4064,9 @@ fn layout_classifier(
             .filter_map(|&c| model.get(c))
             .filter(|c| pick(c.kind()) && member_shown(model, c.id(), style))
             .map(|c| {
-                let mut text = member_label(model, c.id(), style, measure.guillemets());
+                let mut text = member_label(model, c.id(), style, measure.display().guillemets);
                 if matches!(c.kind(), ElementKind::Attribute(p) if p.is_read_only)
-                    && measure.read_only_constraint()
+                    && measure.display().read_only_constraint
                 {
                     text.push_str(" {readOnly}");
                 }
@@ -4431,7 +4373,7 @@ fn edge_for(
                 // A minus as wide as the plus, as in compartments (`visibility_column`).
                 let role = (!end.role.is_empty()).then(|| {
                     let text = format!("{} {}", end.visibility.symbol(), end.role);
-                    match visibility_column(&text).filter(|_| measure.visibility_column()) {
+                    match visibility_column(&text).filter(|_| measure.display().visibility_column) {
                         Some((symbol, rest)) => format!("{symbol}{rest}"),
                         None => text,
                     }
@@ -4481,13 +4423,13 @@ fn edge_for(
         Some(ElementKind::Include(_)) => {
             edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::OpenArrow;
-            keyword = Some(keyword_text("include", measure.guillemets()));
+            keyword = Some(keyword_text("include", measure.display().guillemets));
         }
         Some(ElementKind::Extend(_)) => {
             // Astah shows an extend's condition in its properties only, not at the line.
             edge.line = LineStyle::ShortDashed;
             edge.target_marker = EndMarker::OpenArrow;
-            keyword = Some(keyword_text("extend", measure.guillemets()));
+            keyword = Some(keyword_text("extend", measure.display().guillemets));
         }
         Some(ElementKind::Message(p)) => match p.sort {
             MessageSort::Asynchronous => edge.target_marker = EndMarker::OpenArrow,
@@ -5639,8 +5581,8 @@ mod tests {
             fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
                 ApproxMeasure.width(text, font_size, bold)
             }
-            fn abstract_stereotype(&self) -> bool {
-                true
+            fn display(&self) -> Display {
+                Display { abstract_stereotype: true, ..Display::default() }
             }
         }
         let (mut doc, ids) = order_system();
@@ -5708,8 +5650,8 @@ mod tests {
             fn width(&self, text: &str, font_size: f32, bold: bool) -> f32 {
                 ApproxMeasure.width(text, font_size, bold)
             }
-            fn read_only_constraint(&self) -> bool {
-                true
+            fn display(&self) -> Display {
+                Display { read_only_constraint: true, ..Display::default() }
             }
         }
         let (mut doc, ids) = order_system();
