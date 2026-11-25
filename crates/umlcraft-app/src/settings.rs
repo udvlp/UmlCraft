@@ -318,6 +318,8 @@ mod tests {
         assert_eq!(language_of("de-AT"), "de");
         assert_eq!(language_of("de"), "de");
         assert_eq!(language_of("en-US"), "en");
+        assert_eq!(language_of("fr-FR"), "fr");
+        assert_eq!(language_of("fr-CA"), "fr");
         assert_eq!(language_of("xx-YY"), "en");
         assert_eq!(language_of(""), "en");
     }
@@ -328,5 +330,6 @@ mod tests {
         assert!(all.is_sorted_by(|a, b| a.0 <= b.0));
         assert!(all.contains(&("de".into(), "Deutsch".into())));
         assert!(all.contains(&("en".into(), "English".into())));
+        assert!(all.contains(&("fr".into(), "Français".into())));
     }
 }

@@ -399,7 +399,7 @@ mod tests {
     fn languages_are_listed_by_code() {
         let codes: Vec<_> = Keywords::all().map(Keywords::code).collect();
         assert!(codes.is_sorted());
-        assert!(codes.contains(&"de") && codes.contains(&"en"));
+        assert!(codes.contains(&"de") && codes.contains(&"en") && codes.contains(&"fr"));
         assert_eq!(Keywords::by_code("xx"), None);
         assert_eq!(Keywords::by_code("xx-YY"), None);
     }
