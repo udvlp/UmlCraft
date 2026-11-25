@@ -4,7 +4,6 @@ mod about_dialog;
 mod align;
 mod canvas;
 mod dark_colors;
-mod demo;
 mod errors;
 #[cfg(test)]
 mod fuzz;

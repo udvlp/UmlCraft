@@ -13,7 +13,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
-use umlcraft_model::{DiagramKind, ErNotation};
+use umlcraft_model::{DiagramKind, DiagramProps, ErNotation};
 use umlcraft_notation::layout::{self, Direction};
 use umlcraft_notation::palette::{EdgeTool, NodeTool, Tool};
 
@@ -33,9 +33,8 @@ pub enum RibbonTab {
 
 /// What the buttons show, read once per render from the workspace.
 pub struct State {
-    pub diagram: Option<DiagramKind>,
-    /// Whether the class diagram shown is an object diagram.
-    pub objects: bool,
+    /// The diagram shown, if one is.
+    pub props: Option<DiagramProps>,
     /// What the selection of the structogram shown allows, if one is shown.
     pub structogram: Option<crate::nsd::Allowed>,
     pub tool: Tool,
@@ -43,14 +42,15 @@ pub struct State {
     pub can_align: bool,
     pub can_paste: bool,
     pub can_wrap: bool,
-    /// On a sequence diagram: whether it shows message numbers, and whether flat ones.
-    pub numbering: Option<(bool, bool)>,
-    /// On an ER diagram: its notation.
-    pub notation: Option<ErNotation>,
-    /// The tools of the diagram shown ([`palette::diagram_palette`]).
-    pub palette: Vec<Tool>,
     /// The chosen theme; `None` follows the system's appearance.
     pub theme: Option<bool>,
+}
+
+impl State {
+    /// The kind of the diagram shown.
+    pub fn diagram(&self) -> Option<DiagramKind> {
+        self.props.map(|p| p.diagram)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,23 +76,6 @@ pub enum MenuEntry {
         checked: bool,
         action: Box<dyn Action>,
     },
-}
-
-impl Clone for MenuEntry {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Command { label, icon, action } => Self::Command {
-                label: label.clone(),
-                icon: icon.clone(),
-                action: action.boxed_clone(),
-            },
-            Self::Check { label, checked, action } => Self::Check {
-                label: label.clone(),
-                checked: *checked,
-                action: action.boxed_clone(),
-            },
-        }
-    }
 }
 
 pub struct Item {
@@ -197,10 +180,10 @@ pub fn tabs(state: &State) -> Vec<(RibbonTab, String)> {
         (RibbonTab::Home, t!("ribbon.tab.home").to_string()),
         (RibbonTab::View, t!("ribbon.tab.view").to_string()),
     ];
-    if let Some(kind) = state.diagram {
-        let key = match state.objects {
+    if let Some(p) = state.props {
+        let key = match p.objects {
             true => crate::workspace::NewItem::ObjectDiagram.key(),
-            false => diagram_key(kind),
+            false => diagram_key(p.diagram),
         };
         tabs.push((RibbonTab::Diagram, t!(key).to_string()));
     } else if state.structogram.is_some() {
@@ -216,8 +199,15 @@ pub fn diagram_key(kind: DiagramKind) -> String {
 pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
     match tab {
         RibbonTab::Home => home(state),
-        RibbonTab::Diagram => match (state.diagram, state.structogram) {
-            (Some(_), _) => diagram(&state.palette, state.tool, state.numbering, state.notation),
+        RibbonTab::Diagram => match (state.props, state.structogram) {
+            (Some(p), _) => {
+                // On a sequence diagram: whether it shows message numbers, and whether flat ones.
+                let numbering = (p.diagram == DiagramKind::Sequence)
+                    .then_some((!p.hide_message_numbers, p.flat_message_numbers));
+                let notation = (p.diagram == DiagramKind::EntityRelationship).then_some(p.notation);
+                let palette = umlcraft_notation::palette::diagram_palette(&p);
+                diagram(&palette, state.tool, numbering, notation)
+            }
             (None, Some(allowed)) => structogram(allowed),
             (None, None) => Vec::new(),
         },
@@ -266,7 +256,7 @@ fn home(state: &State) -> Vec<Group> {
                 Item::new("copy-image", fluent("image_copy"), t!("ribbon.copy_as_image"))
                     .action(CopyImage)
                     .size(Size::Small)
-                    .enabled(state.diagram.is_some() || state.structogram.is_some()),
+                    .enabled(state.props.is_some() || state.structogram.is_some()),
             ],
         ),
         group(
@@ -282,7 +272,7 @@ fn home(state: &State) -> Vec<Group> {
                 Item::new("select-all", fluent("select_all_on"), t!("ribbon.select_all"))
                     .action(SelectAll)
                     .size(Size::Small)
-                    .enabled(state.diagram.is_some()),
+                    .enabled(state.props.is_some()),
             ],
         ),
         group(
@@ -311,11 +301,11 @@ fn home(state: &State) -> Vec<Group> {
                         t!("menu.arrange_right"),
                         Arrange { direction: Some(Direction::Right) },
                     )
-                    .enabled(state.diagram.is_some_and(layout::can_arrange)),
+                    .enabled(state.diagram().is_some_and(layout::can_arrange)),
                 Item::new("route-lines", fluent("arrow_routing"), t!("ribbon.route_lines"))
                     .action(RouteLines)
                     .size(Size::Small)
-                    .enabled(state.diagram.is_some_and(|k| k != DiagramKind::Sequence)),
+                    .enabled(state.diagram().is_some_and(|k| k != DiagramKind::Sequence)),
             ],
         ),
     ]
@@ -411,38 +401,11 @@ fn diagram(
                 .action(SelectTool { tool })
                 .size(size)
                 .selected(tool == current);
-                // Tools whose name alone does not say how they are used.
-                match tool {
-                    Tool::Edge(
-                        EdgeTool::AssociationClass
-                        | EdgeTool::Constraint
-                        | EdgeTool::FoundMessage
-                        | EdgeTool::LostMessage
-                        | EdgeTool::DurationConstraint
-                        | EdgeTool::TimeConstraint
-                        | EdgeTool::ErLine
-                        | EdgeTool::ErIdentifying
-                        | EdgeTool::ErNonIdentifying
-                        | EdgeTool::ErManyToMany
-                        | EdgeTool::ErSubtype,
-                    )
-                    | Tool::Node(
-                        NodeTool::StateInvariant
-                        | NodeTool::Termination
-                        | NodeTool::Part
-                        | NodeTool::Port
-                        | NodeTool::InputPin
-                        | NodeTool::OutputPin
-                        | NodeTool::ActivityParameter
-                        | NodeTool::ActivityConnector
-                        | NodeTool::SubmachineState
-                        | NodeTool::EntryPoint
-                        | NodeTool::ExitPoint
-                        | NodeTool::StubState
-                        | NodeTool::ErAssociativeEntity
-                        | NodeTool::ErPartialKeyAttribute,
-                    ) => item.tooltip(t!(format!("tool_tip.{}", tool.key()))),
-                    _ => item,
+                // Tools whose name alone does not say how they are used have a `tool_tip` text.
+                let tip = format!("tool_tip.{}", tool.key());
+                match crate::_rust_i18n_try_translate(&rust_i18n::locale(), tip) {
+                    Some(tip) => item.tooltip(tip.into_owned()),
+                    None => item,
                 }
             })
             .collect()
@@ -746,9 +709,9 @@ fn entries_menu(
     }
 }
 
-fn large_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> AnyElement {
+fn large_button(mut item: Item, compact: bool, focus: &FocusHandle, cx: &App) -> AnyElement {
     let icon = shell::icon(item.icon.clone()).size(if compact { COMPACT_ICON } else { LARGE_ICON });
-    let menu: Entries = Rc::new(item.menu.clone());
+    let menu: Entries = Rc::new(std::mem::take(&mut item.menu));
     let caret = (!menu.is_empty())
         .then(|| Icon::new(IconName::ChevronDown).size_3().text_color(cx.theme().muted_foreground));
     // Two lines, a caret after the second, as Office labels its large buttons, so that their
@@ -805,7 +768,7 @@ fn large_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> An
     }
 }
 
-fn small_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> AnyElement {
+fn small_button(mut item: Item, compact: bool, focus: &FocusHandle, cx: &App) -> AnyElement {
     let label = item.size == Size::Small && !compact;
     let (selected_bg, selected_text) = selected_colors(cx);
     let button = Button::new(item.id.clone())
@@ -829,7 +792,7 @@ fn small_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> An
     match &item.action {
         Some(action) => button.on_click(dispatch(action.as_ref(), focus)).into_any_element(),
         None => {
-            let menu: Entries = Rc::new(item.menu.clone());
+            let menu: Entries = Rc::new(std::mem::take(&mut item.menu));
             button
                 .dropdown_caret(true)
                 .dropdown_menu(entries_menu(menu, focus.clone()))
@@ -838,7 +801,7 @@ fn small_button(item: &Item, compact: bool, focus: &FocusHandle, cx: &App) -> An
     }
 }
 
-fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> impl IntoElement {
+fn group_view(group: Group, compact: bool, focus: &FocusHandle, cx: &App) -> impl IntoElement {
     let mut row = h_flex().gap_1().items_start().h(HEIGHT - px(8.0));
     let mut column: Vec<AnyElement> = Vec::new();
     let flush = |row: Div, column: &mut Vec<AnyElement>| {
@@ -856,7 +819,7 @@ fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> im
             )
         }
     };
-    for item in &group.items {
+    for item in group.items {
         match item.size {
             Size::Large => {
                 row = flush(row, &mut column);
@@ -878,7 +841,7 @@ fn group_view(group: &Group, compact: bool, focus: &FocusHandle, cx: &App) -> im
         .items_center()
         .text_size(CAPTION)
         .text_color(cx.theme().muted_foreground)
-        .child(group.caption.clone());
+        .child(group.caption);
     v_flex()
         .id(SharedString::from(format!("group-{}", group.id)))
         .flex_shrink_0()
@@ -957,12 +920,12 @@ pub fn tab_strip(
 }
 
 /// The ribbon card: the open tab's groups.
-pub fn render(groups: &[Group], compact: bool, focus: &FocusHandle, cx: &App) -> Stateful<Div> {
+pub fn render(groups: Vec<Group>, compact: bool, focus: &FocusHandle, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
     // A short line between groups, from the buttons' top to the captions' bottom.
     let line = || div().flex_none().w(px(1.0)).my_1().bg(theme.border);
     let mut row = h_flex().px_1().pt_1().pb_0p5().items_stretch();
-    for (i, group) in groups.iter().enumerate() {
+    for (i, group) in groups.into_iter().enumerate() {
         if i > 0 {
             row = row.child(line());
         }
@@ -1066,25 +1029,21 @@ mod tests {
     #[test]
     fn the_diagram_tab_is_there_only_with_a_diagram() {
         let mut state = State {
-            diagram: None,
-            objects: false,
+            props: None,
             structogram: None,
             tool: Tool::Select,
             has_selection: false,
             can_align: false,
             can_paste: false,
             can_wrap: false,
-            numbering: None,
-            notation: None,
-            palette: Vec::new(),
             theme: None,
         };
         assert!(!tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));
-        state.diagram = Some(DiagramKind::Class);
+        state.props = Some(props(DiagramKind::Class));
         // Edit and View come first and keep their place; the diagram's tab follows them.
         let order: Vec<RibbonTab> = tabs(&state).into_iter().map(|(t, _)| t).collect();
         assert_eq!(order, [RibbonTab::Home, RibbonTab::View, RibbonTab::Diagram]);
-        state.diagram = None;
+        state.props = None;
         state.structogram = Some(crate::nsd::Allowed::default());
         assert!(tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));
     }

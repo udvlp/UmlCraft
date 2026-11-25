@@ -1,4 +1,5 @@
-//! The sample project that File › Open sample project opens: Velo, the bike sharing of a city.
+//! The sample project that the app's File › Open sample project and `new_document` with
+//! `sample` open: Velo, the bike sharing of a city.
 //! It has a well-filled diagram of every kind, an object and a package diagram, and
 //! structograms of three methods. Class boxes take the size their content needs with the
 //! app's text widths, and the sequence diagram is drawn with the editor's own operations, so
@@ -1403,7 +1404,6 @@ fn release_body() -> Vec<Block> {
 
 #[cfg(test)]
 mod tests {
-    // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
     use umlcraft_model::{DiagramKind, Document, ElementKind, Id, Shape};
     use umlcraft_notation::scene::{self, ApproxMeasure};
 
@@ -1440,7 +1440,7 @@ mod tests {
     }
 
     /// Writes every diagram of the sample as a PNG to the folder `UMLCRAFT_SAMPLE_PNG` names,
-    /// to look at the layout: `cargo test -p umlcraft-app sample_png -- --ignored`.
+    /// to look at the layout: `cargo test -p umlcraft-mcp sample_png -- --ignored`.
     #[test]
     #[ignore]
     fn sample_png() {
@@ -1488,7 +1488,7 @@ mod tests {
         for (diagram, _) in model.views() {
             let scene = scene::build(model, diagram, &scene::Preview::default(), &ApproxMeasure);
             let svg = umlcraft_notation::svg::render(&scene, &ApproxMeasure);
-            let png = crate::png::from_svg(&svg, 1.0).unwrap();
+            let png = crate::tools::png(&svg, 1.0).unwrap();
             let name = model.element(diagram).unwrap().name().replace([',', ':', ' '], "_");
             std::fs::write(dir.join(format!("{prefix}{name}.png")), png).unwrap();
         }

@@ -229,14 +229,7 @@ impl NsdView {
             cx.notify();
             return;
         };
-        if changed != self.diagram {
-            let id = self.id;
-            self.workspace.update(cx, |ws, cx| {
-                ws.edit_structogram(id, &changed);
-                cx.notify();
-            });
-            self.sync(cx);
-        }
+        self.commit(changed, cx);
         self.select(selection, cx);
     }
 
@@ -248,7 +241,15 @@ impl NsdView {
         f: impl FnOnce(&mut Diagram) -> Result<(), EditError>,
     ) {
         let mut changed = self.diagram.clone();
-        if f(&mut changed).is_ok() && changed != self.diagram {
+        if f(&mut changed).is_ok() {
+            self.commit(changed, cx);
+        }
+        cx.notify();
+    }
+
+    /// Writes `changed` into the project as one undo step, unless it changes nothing.
+    fn commit(&mut self, changed: Diagram, cx: &mut Context<Self>) {
+        if changed != self.diagram {
             let id = self.id;
             self.workspace.update(cx, |ws, cx| {
                 ws.edit_structogram(id, &changed);
@@ -256,7 +257,6 @@ impl NsdView {
             });
             self.sync(cx);
         }
-        cx.notify();
     }
 
     fn select(&mut self, selection: Selection, cx: &mut Context<Self>) {
@@ -641,9 +641,7 @@ impl NsdView {
 
     fn toggle_disabled(&mut self, _: &ToggleDisabled, _: &mut Window, cx: &mut Context<Self>) {
         let Some(span) = self.span() else { return };
-        let d = &self.diagram;
-        let all = (span.start..span.end)
-            .all(|i| path::element(d, &span.element(i)).is_some_and(|e| e.disabled()));
+        let all = self.allowed().disabled;
         self.change(cx, |d| edit::set_disabled(d, &span, !all));
     }
 
@@ -668,21 +666,15 @@ impl NsdView {
         let Some((at, _)) = self.branching() else { return };
         let Some(e) = path::element(&self.diagram, &at) else { return };
         // A new case goes before the default branch.
-        let index = match e.kind {
-            ElementKind::Case => e.branches.len() - 1,
-            _ => e.branches.len(),
-        };
+        let Some(index) = edit::cases(e) else { return };
         self.change(cx, |d| edit::add_branch(d, &at, index));
     }
 
     fn remove_branch(&mut self, _: &RemoveBranch, _: &mut Window, cx: &mut Context<Self>) {
         let Some((at, branch)) = self.branching() else { return };
         let Some(e) = path::element(&self.diagram, &at) else { return };
-        let last = match e.kind {
-            ElementKind::Case => e.branches.len().saturating_sub(2),
-            _ => e.branches.len().saturating_sub(1),
-        };
-        let index = branch.unwrap_or(last);
+        let Some(cases) = edit::cases(e) else { return };
+        let index = branch.unwrap_or(cases.saturating_sub(1));
         self.change(cx, |d| edit::remove_branch(d, &at, index));
     }
 
@@ -829,31 +821,17 @@ impl NsdView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let directory = crate::main_view::start_directory(self.workspace.read(cx).path.as_deref());
-        let suggested = format!("{}.{extension}", self.file_stem());
-        let rx = cx.prompt_for_new_path(&directory, Some(&suggested));
-        cx.spawn_in(window, async move |_, cx| {
-            let Ok(Ok(Some(path))) = rx.await else { return };
-            let path = crate::main_view::with_extension(path, extension);
-            let written = cx
-                .background_executor()
-                .spawn(async move { anyhow::Ok(write_file(&path, &bytes()?)?) })
-                .await;
-            if let Err(err) = written {
-                cx.update(|window, cx| {
-                    let rx = window.prompt(
-                        PromptLevel::Critical,
-                        &t!(failed),
-                        Some(&err.to_string()),
-                        &[t!("dialog.ok").as_ref()],
-                        cx,
-                    );
-                    cx.spawn(async move |_| rx.await.ok()).detach();
-                })
-                .ok();
-            }
-        })
-        .detach();
+        let project = self.workspace.read(cx).path.clone();
+        let stem = self.file_stem();
+        crate::main_view::write_export(
+            project.as_deref(),
+            &stem,
+            extension,
+            failed,
+            bytes,
+            window,
+            cx,
+        );
     }
 
     pub fn export_image(&mut self, png: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1029,8 +1007,7 @@ impl NsdView {
             )
         };
         let (branching, disabled) = (allowed.branching, allowed.disabled);
-        let editable = matches!(selection, Selection::Root) || selection.single().is_some();
-        let has_span = selection.span().is_some();
+        let (editable, has_span) = (allowed.edit, allowed.span);
         let copyable = has_span || matches!(selection, Selection::Root);
         let mut menu = menu
             .action_context(focus)
@@ -1081,17 +1058,6 @@ fn drops_somewhere(span: &Span, slot: &Slot, copy: bool) -> bool {
 
 fn rect(r: umlcraft_nsd::layout::Rect) -> [i32; 4] {
     [r.x, r.y, r.w, r.h]
-}
-
-/// Writes `bytes` through a temporary file, so that a failed write leaves the old file whole.
-fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = std::path::PathBuf::from(temporary);
-    std::fs::write(&temporary, bytes)?;
-    std::fs::rename(&temporary, path).inspect_err(|_| {
-        std::fs::remove_file(&temporary).ok();
-    })
 }
 
 /// What exports have and the light theme shows.

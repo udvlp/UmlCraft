@@ -21,6 +21,7 @@ use umlcraft_model::{
     Point, Presentation, Rect, Result, Tx, TypeRef, View, Visibility,
 };
 
+use crate::labels::overlap_area;
 use crate::palette::{NodeTool, unique_name};
 
 /// Width and height of a port's square.
@@ -625,7 +626,7 @@ fn hold_parts(tx: &mut Tx<'_>, before: &HashMap<(Id, Id), Rect>) -> Result<()> {
                 .get(&owner)
                 .into_iter()
                 .flatten()
-                .max_by(|a, b| overlap(a.1, r).total_cmp(&overlap(b.1, r)));
+                .max_by(|a, b| overlap_area(a.1, r).total_cmp(&overlap_area(b.1, r)));
             let Some(&(class, bounds)) = class else { continue };
             let bounds =
                 grow.iter().find(|g| g.0 == diagram && g.1 == class).map_or(bounds, |g| g.2);
@@ -640,13 +641,6 @@ fn hold_parts(tx: &mut Tx<'_>, before: &HashMap<(Id, Id), Rect>) -> Result<()> {
         tx.set_bounds(diagram, class, bounds)?;
     }
     Ok(())
-}
-
-/// How much of `a` and `b` overlap.
-fn overlap(a: Rect, b: Rect) -> f32 {
-    let w = a.right().min(b.right()) - a.x.max(b.x);
-    let h = a.bottom().min(b.bottom()) - a.y.max(b.y);
-    w.max(0.0) * h.max(0.0)
 }
 
 fn follow_ports(tx: &mut Tx<'_>, before: &HashMap<(Id, Id), PortPlace>) -> Result<()> {

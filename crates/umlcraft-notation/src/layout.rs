@@ -610,6 +610,56 @@ fn crowded_sides(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> HashM
     grow
 }
 
+/// A node [`arrange`] lays out: its size and what holds it.
+struct Node {
+    id: Id,
+    bounds: Rect,
+    size: Size,
+    container: bool,
+    name_width: f32,
+    element: Option<Id>,
+    /// An orthogonal state's regions as drawn.
+    regions: Option<Regions>,
+    partition: bool,
+    /// A fork or join bar.
+    bar: bool,
+    /// Room around the node for what is drawn outside it (left, top, right, bottom); its
+    /// `size` includes it.
+    margin: [f32; 4],
+}
+
+impl Node {
+    /// The node's bounds in the box `cell` laid out for it with its margin.
+    fn inner(&self, cell: Rect) -> Rect {
+        let [left, top, right, bottom] = self.margin;
+        Rect::new(
+            cell.x + left,
+            cell.y + top,
+            cell.width - left - right,
+            cell.height - top - bottom,
+        )
+    }
+
+    /// The size laid out for the node at `size` with its margin.
+    fn with_margin(&self, size: Size) -> Size {
+        let [left, top, right, bottom] = self.margin;
+        Size::new(size.width + left + right, size.height + top + bottom)
+    }
+}
+
+/// `i` and the containers around it in `parent`, inside out.
+fn ancestors(parent: &[Option<usize>], mut i: usize) -> Vec<usize> {
+    let mut chain = vec![i];
+    // `parent` has no cycles; the bound only keeps a slip there from hanging Arrange.
+    while let Some(p) = parent[i]
+        && chain.len() <= parent.len()
+    {
+        chain.push(p);
+        i = p;
+    }
+    chain
+}
+
 /// [`arrange`], with the nodes in `grow` that much higher than they need to be.
 fn arrange_grown(
     tx: &mut Tx<'_>,
@@ -637,23 +687,6 @@ fn arrange_grown(
     let model = tx.model();
     let view = model.view_of(diagram)?;
 
-    // The nodes, their sizes and what holds them.
-    struct Node {
-        id: Id,
-        bounds: Rect,
-        size: Size,
-        container: bool,
-        name_width: f32,
-        element: Option<Id>,
-        /// An orthogonal state's regions as drawn.
-        regions: Option<Regions>,
-        partition: bool,
-        /// A fork or join bar.
-        bar: bool,
-        /// Room around the node for what is drawn outside it (left, top, right, bottom); its
-        /// `size` includes it.
-        margin: [f32; 4],
-    }
     let mut nodes: Vec<Node> = Vec::new();
     // Pins go along with their action and activity parameters stay on the frame, so lines to
     // them count as lines to the action or not at all.
@@ -720,21 +753,6 @@ fn arrange_grown(
             margin,
         });
     }
-    // The node's bounds in the box laid out for it with its margin.
-    let inner = |i: usize, cell: Rect| {
-        let [left, top, right, bottom] = nodes[i].margin;
-        Rect::new(
-            cell.x + left,
-            cell.y + top,
-            cell.width - left - right,
-            cell.height - top - bottom,
-        )
-    };
-    // The size laid out for a node of `size` with its margin.
-    let with_margin = |i: usize, size: Size| {
-        let [left, top, right, bottom] = nodes[i].margin;
-        Size::new(size.width + left + right, size.height + top + bottom)
-    };
     let index: HashMap<Id, usize> = nodes.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
     // Each node's container: on state machine diagrams the nearest state it belongs to that
     // is drawn, wherever it is drawn; otherwise the smallest container drawn around it.
@@ -775,17 +793,6 @@ fn arrange_grown(
         let element = nodes[i].element.and_then(|e| model.get(e));
         element.is_some_and(|e| matches!(e.kind(), ElementKind::Actor(_)))
     };
-    let ancestors = |mut i: usize| {
-        let mut chain = vec![i];
-        // `parent` has no cycles; the bound only keeps a slip there from hanging Arrange.
-        while let Some(p) = parent[i]
-            && chain.len() <= parent.len()
-        {
-            chain.push(p);
-            i = p;
-        }
-        chain
-    };
 
     // What to lay out: the scope's nodes that nothing else in it holds, and what they hold.
     let all: Vec<usize> = (0..nodes.len()).collect();
@@ -797,7 +804,7 @@ fn arrange_grown(
             picked
                 .iter()
                 .copied()
-                .filter(|&i| !ancestors(i)[1..].iter().any(|a| picked.contains(a)))
+                .filter(|&i| !ancestors(&parent, i)[1..].iter().any(|a| picked.contains(a)))
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect()
@@ -806,8 +813,11 @@ fn arrange_grown(
     if roots.is_empty() {
         return Ok(Vec::new());
     }
-    let in_scope: HashSet<usize> =
-        all.iter().copied().filter(|&i| ancestors(i).iter().any(|a| roots.contains(a))).collect();
+    let in_scope: HashSet<usize> = all
+        .iter()
+        .copied()
+        .filter(|&i| ancestors(&parent, i).iter().any(|a| roots.contains(a)))
+        .collect();
 
     // The edges between nodes in scope.
     let mut edges: Vec<(usize, usize, bool, bool)> = Vec::new();
@@ -857,166 +867,8 @@ fn arrange_grown(
 
     // Activities: the flows give the rows, partitions stay columns side by side and each node
     // stays in its own.
-    let partitions: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].partition).collect();
-    let lanes: Option<Vec<(usize, Rect)>> = if kind == DiagramKind::Activity && scope.is_none() {
-        let leaves: Vec<usize> = {
-            let mut leaves: Vec<usize> = partitions
-                .iter()
-                .copied()
-                .filter(|&q| !partitions.iter().any(|&r| parent[r] == Some(q)))
-                .collect();
-            leaves.sort_by(|&a, &b| nodes[a].bounds.x.total_cmp(&nodes[b].bounds.x));
-            leaves
-        };
-        let side_by_side = leaves.windows(2).all(|w| {
-            let (a, b) = (nodes[w[0]].bounds, nodes[w[1]].bounds);
-            a.right().min(b.right()) - b.x <= a.width.min(b.width) / 2.0
-        });
-        if !side_by_side {
-            return Err(ModelError::Refused(umlcraft_model::Refusal::PartitionsStacked));
-        }
-        let movable: Vec<usize> = (0..nodes.len()).filter(|&i| !nodes[i].partition).collect();
-        let local: HashMap<usize, usize> =
-            movable.iter().enumerate().map(|(l, &g)| (g, l)).collect();
-        let flows: Vec<Edge> = edges
-            .iter()
-            .filter_map(|&(s, t, above, hierarchy)| {
-                let (a, b) = (*local.get(&s)?, *local.get(&t)?);
-                let (upper, lower) = if above { (a, b) } else { (b, a) };
-                Some(Edge { upper, lower, hierarchy })
-            })
-            .collect();
-        // Fork and join bars get as wide as what they join after the others are placed; they
-        // may reach across partitions.
-        let sizes: Vec<Size> = movable
-            .iter()
-            .map(|&i| {
-                if nodes[i].bar {
-                    Size::new(BAR_REACH, nodes[i].size.height)
-                } else {
-                    nodes[i].size
-                }
-            })
-            .collect();
-        let points = layered(&sizes, &flows, Direction::Down);
-        // Rows from the layers (nodes of a layer share their top), columns from the partitions.
-        let mut tops: Vec<f32> = points.iter().map(|p| p.y).collect();
-        tops.sort_by(f32::total_cmp);
-        tops.dedup_by(|a, b| (*a - *b).abs() < 0.5);
-        let row_of =
-            |l: usize| tops.iter().position(|t| (t - points[l].y).abs() < 0.5).unwrap_or(0);
-        let lane_of = |i: usize| parent[i].and_then(|p| leaves.iter().position(|&q| q == p));
-        // Column 0 holds what lies in no partition, the partitions follow.
-        let columns = leaves.len() + 1;
-        let mut cells: Vec<Vec<Vec<usize>>> = vec![vec![Vec::new(); tops.len()]; columns];
-        let mut row_depth = vec![0.0f32; tops.len()];
-        let mut bars: Vec<usize> = Vec::new();
-        for (l, &i) in movable.iter().enumerate() {
-            row_depth[row_of(l)] = row_depth[row_of(l)].max(sizes[l].height);
-            if nodes[i].bar {
-                bars.push(l);
-                continue;
-            }
-            let column = lane_of(i).map_or(0, |k| k + 1);
-            cells[column][row_of(l)].push(l);
-        }
-        for column in &mut cells {
-            for cell in column.iter_mut() {
-                cell.sort_by(|&a, &b| points[a].x.total_cmp(&points[b].x));
-            }
-        }
-        let needed = |cell: &[usize]| {
-            cell.iter().map(|&l| sizes[l].width).sum::<f32>()
-                + NODE_GAP * cell.len().saturating_sub(1) as f32
-        };
-        let widths: Vec<f32> = (0..columns)
-            .map(|c| {
-                let content = cells[c].iter().map(|cell| needed(cell)).fold(0.0, f32::max);
-                if c == 0 {
-                    content
-                } else {
-                    let name = nodes[leaves[c - 1]].name_width;
-                    (content.max(name) + 2.0 * PADDING).max(MIN_LANE)
-                }
-            })
-            .collect();
-        let depth_of = |q: usize| ancestors(q)[1..].iter().filter(|&&a| nodes[a].partition).count();
-        let deepest = leaves.iter().map(|&q| depth_of(q)).max().unwrap_or(0);
-        let origin = (0..nodes.len())
-            .map(|i| nodes[i].bounds)
-            .reduce(|a, b| a.union(&b))
-            .expect("a diagram with flows has nodes")
-            .origin();
-        let mut row_top = Vec::with_capacity(tops.len());
-        let mut y = origin.y + (deepest + 1) as f32 * scene::PARTITION_HEADER + PADDING;
-        for depth in &row_depth {
-            row_top.push(y);
-            y += depth + LAYER_GAP;
-        }
-        let bottom = y - LAYER_GAP + PADDING;
-        let mut x = origin.x;
-        let mut placed: Vec<(usize, Rect)> = Vec::new();
-        for c in 0..columns {
-            if c == 0 && widths[0] == 0.0 {
-                continue;
-            }
-            for (row, cell) in cells[c].iter().enumerate() {
-                let mut at = x + (widths[c] - needed(cell)) / 2.0;
-                for &l in cell {
-                    let top = row_top[row] + (row_depth[row] - sizes[l].height) / 2.0;
-                    let cell = Rect::from_origin_size(Point::new(at, top), sizes[l]);
-                    placed.push((movable[l], inner(movable[l], cell)));
-                    at += sizes[l].width + NODE_GAP;
-                }
-            }
-            if c > 0 {
-                let q = leaves[c - 1];
-                let top = origin.y + depth_of(q) as f32 * scene::PARTITION_HEADER;
-                placed.push((q, Rect::new(x, top, widths[c], bottom - top)));
-            }
-            x += widths[c] + if c == 0 { NODE_GAP } else { 0.0 };
-        }
-        // The bars from the leftmost to the rightmost of what they join, and a little beyond.
-        for l in bars {
-            // A fork spans where it leads, a join what leads to it: the side with more flows.
-            let after: Vec<usize> =
-                flows.iter().filter(|e| e.upper == l).map(|e| e.lower).collect();
-            let before: Vec<usize> =
-                flows.iter().filter(|e| e.lower == l).map(|e| e.upper).collect();
-            let joined = if after.len() >= before.len() { after } else { before };
-            let centers: Vec<f32> = joined
-                .into_iter()
-                .filter_map(|o| placed.iter().find(|(i, _)| *i == movable[o]))
-                .map(|(_, r)| r.center().x)
-                .collect();
-            let (lo, hi) = centers
-                .iter()
-                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &c| (lo.min(c), hi.max(c)));
-            let (left, width) = if lo.is_finite() {
-                (lo - BAR_REACH / 2.0, hi - lo + BAR_REACH)
-            } else {
-                (points[l].x + origin.x, BAR_REACH)
-            };
-            let row = row_of(l);
-            let top = row_top[row] + (row_depth[row] - sizes[l].height) / 2.0;
-            placed.push((movable[l], Rect::new(left, top, width, sizes[l].height)));
-        }
-        // Partitions that hold others span them.
-        let mut outer: Vec<usize> =
-            partitions.iter().copied().filter(|q| !leaves.contains(q)).collect();
-        outer.sort_by_key(|&q| std::cmp::Reverse(depth_of(q)));
-        for q in outer {
-            let inner = placed
-                .iter()
-                .filter(|(i, _)| nodes[*i].partition && parent[*i] == Some(q))
-                .map(|(_, r)| *r)
-                .reduce(|a, b| a.union(&b));
-            if let Some(inner) = inner {
-                let top = origin.y + depth_of(q) as f32 * scene::PARTITION_HEADER;
-                placed.push((q, Rect::new(inner.x, top, inner.width, bottom - top)));
-            }
-        }
-        Some(placed)
+    let lanes = if kind == DiagramKind::Activity && scope.is_none() {
+        Some(lay_out_lanes(&nodes, &parent, &edges)?)
     } else {
         None
     };
@@ -1030,7 +882,7 @@ fn arrange_grown(
     } else {
         let mut size: Vec<Size> = nodes.iter().map(|n| n.size).collect();
         let mut offset: Vec<Point> = vec![Point::new(0.0, 0.0); nodes.len()];
-        let depth = |i: usize| ancestors(i).len();
+        let depth = |i: usize| ancestors(&parent, i).len();
         let mut containers: Vec<usize> = in_scope
             .iter()
             .copied()
@@ -1043,7 +895,7 @@ fn arrange_grown(
                 children.iter().enumerate().map(|(l, &g)| (g, l)).collect();
             // An edge counts between the children that hold its ends.
             let representative =
-                |i: usize| ancestors(i).into_iter().find(|a| local.contains_key(a));
+                |i: usize| ancestors(&parent, i).into_iter().find(|a| local.contains_key(a));
             let level_edges: Vec<Edge> = edges
                 .iter()
                 .filter_map(|&(s, t, source_above, hierarchy)| {
@@ -1061,56 +913,11 @@ fn arrange_grown(
             let mut children: Vec<usize> =
                 (0..nodes.len()).filter(|&i| parent[i] == Some(c)).collect();
             children.sort();
-            if let (Some(regions), Some(state)) = (&nodes[c].regions, nodes[c].element) {
-                // Each region on its own, the regions one below the other or side by side; the
-                // first one holds the name.
-                let owners = crate::state_edit::regions_of(model, state);
-                let count = owners.len().max(regions.separators.len() + 1);
-                let mut groups: Vec<Vec<usize>> = vec![Vec::new(); count];
-                for &child in &children {
-                    let owner =
-                        nodes[child].element.and_then(|e| model.get(e)).and_then(|e| e.owner());
-                    let k = owners.iter().position(|&r| Some(r) == owner).unwrap_or(0);
-                    groups[k].push(child);
-                }
-                let (mut along, mut deepest, mut separators) = (0.0f32, 0.0f32, Vec::new());
-                for (k, group) in groups.iter().enumerate() {
-                    let points = lay_out(group, &size);
-                    let (mut w, mut h) = (0.0f32, 0.0f32);
-                    for (&child, p) in group.iter().zip(&points) {
-                        w = w.max(p.x + size[child].width);
-                        h = h.max(p.y + size[child].height);
-                    }
-                    let (w, h) = (w.max(EMPTY_REGION), h.max(EMPTY_REGION));
-                    let at = if regions.vertical {
-                        if k > 0 {
-                            separators.push(along);
-                        }
-                        let at = Point::new(along + PADDING, HEADER);
-                        (along, deepest) = (along + w + 2.0 * PADDING, deepest.max(h));
-                        at
-                    } else {
-                        let top = if k == 0 { HEADER } else { along + PADDING };
-                        if k > 0 {
-                            separators.push(along);
-                        }
-                        (along, deepest) = (top + h + PADDING, deepest.max(w));
-                        Point::new(PADDING, top)
-                    };
-                    for (&child, p) in group.iter().zip(&points) {
-                        offset[child] = p.offset(at.x, at.y);
-                    }
-                }
-                let name = nodes[c].name_width + 2.0 * PADDING;
-                size[c] = with_margin(
-                    c,
-                    if regions.vertical {
-                        Size::new(along.max(name), HEADER + deepest + PADDING)
-                    } else {
-                        Size::new((deepest + 2.0 * PADDING).max(name), along)
-                    },
-                );
-                new_regions.push((c, Regions { vertical: regions.vertical, separators }));
+            if let Some((s, regions)) =
+                lay_out_regions(model, &nodes, c, &children, &size, &mut offset, lay_out)
+            {
+                size[c] = s;
+                new_regions.push((c, regions));
                 continue;
             }
             let mut points = lay_out(&children, &size);
@@ -1145,7 +952,7 @@ fn arrange_grown(
                 bottom = bottom.max(p.y + size[child].height);
             }
             let width = (right + 2.0 * PADDING).max(nodes[c].name_width + 2.0 * PADDING);
-            size[c] = with_margin(c, Size::new(width, bottom + HEADER + PADDING));
+            size[c] = nodes[c].with_margin(Size::new(width, bottom + HEADER + PADDING));
         }
         let mut top: Vec<usize> = roots.clone();
         top.sort();
@@ -1162,7 +969,7 @@ fn arrange_grown(
         let mut bounds: HashMap<usize, Rect> = HashMap::new();
         for (&root, p) in top.iter().zip(&points) {
             let cell = Rect::from_origin_size(p.offset(origin.x, origin.y), size[root]);
-            bounds.insert(root, inner(root, cell));
+            bounds.insert(root, nodes[root].inner(cell));
         }
         // Then what each container holds, outside in.
         let mut pending: Vec<usize> = top.clone();
@@ -1170,7 +977,7 @@ fn arrange_grown(
             let at = bounds[&c].origin();
             for i in (0..nodes.len()).filter(|&i| parent[i] == Some(c)) {
                 let cell = Rect::from_origin_size(at.offset(offset[i].x, offset[i].y), size[i]);
-                bounds.insert(i, inner(i, cell));
+                bounds.insert(i, nodes[i].inner(cell));
                 pending.push(i);
             }
         }
@@ -1260,7 +1067,7 @@ fn arrange_grown(
                 };
                 if dx != 0.0 || dy != 0.0 {
                     // What it holds moves along.
-                    for j in (0..nodes.len()).filter(|&j| ancestors(j).contains(&i)) {
+                    for j in (0..nodes.len()).filter(|&j| ancestors(&parent, j).contains(&i)) {
                         moved.push((j, nodes[j].bounds.translate(dx, dy)));
                     }
                 }
@@ -1294,15 +1101,252 @@ fn arrange_grown(
         })?;
     }
     // The frame goes around what was arranged; arranging a selection only widens it.
+    if let Some(frame) = fit_frame(tx, diagram, &nodes, scope.is_some())? {
+        changed.push(frame);
+    }
+    reroute(tx, diagram, scope, &changed, straight, &bars, direction)?;
+    Ok(changed)
+}
+
+/// Lays out an activity diagram in lanes: the flows (`edges`, as [`arrange_grown`] gathers them)
+/// give the rows, partitions stay columns side by side and each node stays in its own. The new
+/// bounds by index into `nodes`.
+fn lay_out_lanes(
+    nodes: &[Node],
+    parent: &[Option<usize>],
+    edges: &[(usize, usize, bool, bool)],
+) -> Result<Vec<(usize, Rect)>> {
+    let partitions: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].partition).collect();
+    let leaves: Vec<usize> = {
+        let mut leaves: Vec<usize> = partitions
+            .iter()
+            .copied()
+            .filter(|&q| !partitions.iter().any(|&r| parent[r] == Some(q)))
+            .collect();
+        leaves.sort_by(|&a, &b| nodes[a].bounds.x.total_cmp(&nodes[b].bounds.x));
+        leaves
+    };
+    let side_by_side = leaves.windows(2).all(|w| {
+        let (a, b) = (nodes[w[0]].bounds, nodes[w[1]].bounds);
+        a.right().min(b.right()) - b.x <= a.width.min(b.width) / 2.0
+    });
+    if !side_by_side {
+        return Err(ModelError::Refused(umlcraft_model::Refusal::PartitionsStacked));
+    }
+    let movable: Vec<usize> = (0..nodes.len()).filter(|&i| !nodes[i].partition).collect();
+    let local: HashMap<usize, usize> = movable.iter().enumerate().map(|(l, &g)| (g, l)).collect();
+    let flows: Vec<Edge> = edges
+        .iter()
+        .filter_map(|&(s, t, above, hierarchy)| {
+            let (a, b) = (*local.get(&s)?, *local.get(&t)?);
+            let (upper, lower) = if above { (a, b) } else { (b, a) };
+            Some(Edge { upper, lower, hierarchy })
+        })
+        .collect();
+    // Fork and join bars get as wide as what they join after the others are placed; they
+    // may reach across partitions.
+    let sizes: Vec<Size> =
+        movable
+            .iter()
+            .map(|&i| {
+                if nodes[i].bar {
+                    Size::new(BAR_REACH, nodes[i].size.height)
+                } else {
+                    nodes[i].size
+                }
+            })
+            .collect();
+    let points = layered(&sizes, &flows, Direction::Down);
+    // Rows from the layers (nodes of a layer share their top), columns from the partitions.
+    let mut tops: Vec<f32> = points.iter().map(|p| p.y).collect();
+    tops.sort_by(f32::total_cmp);
+    tops.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+    let row_of = |l: usize| tops.iter().position(|t| (t - points[l].y).abs() < 0.5).unwrap_or(0);
+    let lane_of = |i: usize| parent[i].and_then(|p| leaves.iter().position(|&q| q == p));
+    // Column 0 holds what lies in no partition, the partitions follow.
+    let columns = leaves.len() + 1;
+    let mut cells: Vec<Vec<Vec<usize>>> = vec![vec![Vec::new(); tops.len()]; columns];
+    let mut row_depth = vec![0.0f32; tops.len()];
+    let mut bars: Vec<usize> = Vec::new();
+    for (l, &i) in movable.iter().enumerate() {
+        row_depth[row_of(l)] = row_depth[row_of(l)].max(sizes[l].height);
+        if nodes[i].bar {
+            bars.push(l);
+            continue;
+        }
+        let column = lane_of(i).map_or(0, |k| k + 1);
+        cells[column][row_of(l)].push(l);
+    }
+    for column in &mut cells {
+        for cell in column.iter_mut() {
+            cell.sort_by(|&a, &b| points[a].x.total_cmp(&points[b].x));
+        }
+    }
+    let needed = |cell: &[usize]| {
+        cell.iter().map(|&l| sizes[l].width).sum::<f32>()
+            + NODE_GAP * cell.len().saturating_sub(1) as f32
+    };
+    let widths: Vec<f32> = (0..columns)
+        .map(|c| {
+            let content = cells[c].iter().map(|cell| needed(cell)).fold(0.0, f32::max);
+            if c == 0 {
+                content
+            } else {
+                let name = nodes[leaves[c - 1]].name_width;
+                (content.max(name) + 2.0 * PADDING).max(MIN_LANE)
+            }
+        })
+        .collect();
+    let depth_of =
+        |q: usize| ancestors(parent, q)[1..].iter().filter(|&&a| nodes[a].partition).count();
+    let deepest = leaves.iter().map(|&q| depth_of(q)).max().unwrap_or(0);
+    let origin = (0..nodes.len())
+        .map(|i| nodes[i].bounds)
+        .reduce(|a, b| a.union(&b))
+        .expect("a diagram with flows has nodes")
+        .origin();
+    let mut row_top = Vec::with_capacity(tops.len());
+    let mut y = origin.y + (deepest + 1) as f32 * scene::PARTITION_HEADER + PADDING;
+    for depth in &row_depth {
+        row_top.push(y);
+        y += depth + LAYER_GAP;
+    }
+    let bottom = y - LAYER_GAP + PADDING;
+    let mut x = origin.x;
+    let mut placed: Vec<(usize, Rect)> = Vec::new();
+    for c in 0..columns {
+        if c == 0 && widths[0] == 0.0 {
+            continue;
+        }
+        for (row, cell) in cells[c].iter().enumerate() {
+            let mut at = x + (widths[c] - needed(cell)) / 2.0;
+            for &l in cell {
+                let top = row_top[row] + (row_depth[row] - sizes[l].height) / 2.0;
+                let cell = Rect::from_origin_size(Point::new(at, top), sizes[l]);
+                placed.push((movable[l], nodes[movable[l]].inner(cell)));
+                at += sizes[l].width + NODE_GAP;
+            }
+        }
+        if c > 0 {
+            let q = leaves[c - 1];
+            let top = origin.y + depth_of(q) as f32 * scene::PARTITION_HEADER;
+            placed.push((q, Rect::new(x, top, widths[c], bottom - top)));
+        }
+        x += widths[c] + if c == 0 { NODE_GAP } else { 0.0 };
+    }
+    // The bars from the leftmost to the rightmost of what they join, and a little beyond.
+    for l in bars {
+        // A fork spans where it leads, a join what leads to it: the side with more flows.
+        let after: Vec<usize> = flows.iter().filter(|e| e.upper == l).map(|e| e.lower).collect();
+        let before: Vec<usize> = flows.iter().filter(|e| e.lower == l).map(|e| e.upper).collect();
+        let joined = if after.len() >= before.len() { after } else { before };
+        let centers: Vec<f32> = joined
+            .into_iter()
+            .filter_map(|o| placed.iter().find(|(i, _)| *i == movable[o]))
+            .map(|(_, r)| r.center().x)
+            .collect();
+        let (lo, hi) = centers
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &c| (lo.min(c), hi.max(c)));
+        let (left, width) = if lo.is_finite() {
+            (lo - BAR_REACH / 2.0, hi - lo + BAR_REACH)
+        } else {
+            (points[l].x + origin.x, BAR_REACH)
+        };
+        let row = row_of(l);
+        let top = row_top[row] + (row_depth[row] - sizes[l].height) / 2.0;
+        placed.push((movable[l], Rect::new(left, top, width, sizes[l].height)));
+    }
+    // Partitions that hold others span them.
+    let mut outer: Vec<usize> =
+        partitions.iter().copied().filter(|q| !leaves.contains(q)).collect();
+    outer.sort_by_key(|&q| std::cmp::Reverse(depth_of(q)));
+    for q in outer {
+        let inner = placed
+            .iter()
+            .filter(|(i, _)| nodes[*i].partition && parent[*i] == Some(q))
+            .map(|(_, r)| *r)
+            .reduce(|a, b| a.union(&b));
+        if let Some(inner) = inner {
+            let top = origin.y + depth_of(q) as f32 * scene::PARTITION_HEADER;
+            placed.push((q, Rect::new(inner.x, top, inner.width, bottom - top)));
+        }
+    }
+    Ok(placed)
+}
+
+/// Lays out what orthogonal state `c` holds (`children`), region by region: each on its own,
+/// the regions one below the other or side by side, the first one holding the name. Sets the
+/// children's `offset` in the state and returns its size and regions; None for other nodes.
+fn lay_out_regions(
+    model: &Model,
+    nodes: &[Node],
+    c: usize,
+    children: &[usize],
+    size: &[Size],
+    offset: &mut [Point],
+    lay_out: impl Fn(&[usize], &[Size]) -> Vec<Point>,
+) -> Option<(Size, Regions)> {
+    let (Some(regions), Some(state)) = (&nodes[c].regions, nodes[c].element) else {
+        return None;
+    };
+    let owners = crate::state_edit::regions_of(model, state);
+    let count = owners.len().max(regions.separators.len() + 1);
+    let mut groups: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for &child in children {
+        let owner = nodes[child].element.and_then(|e| model.get(e)).and_then(|e| e.owner());
+        let k = owners.iter().position(|&r| Some(r) == owner).unwrap_or(0);
+        groups[k].push(child);
+    }
+    let (mut along, mut deepest, mut separators) = (0.0f32, 0.0f32, Vec::new());
+    for (k, group) in groups.iter().enumerate() {
+        let points = lay_out(group, size);
+        let (mut w, mut h) = (0.0f32, 0.0f32);
+        for (&child, p) in group.iter().zip(&points) {
+            w = w.max(p.x + size[child].width);
+            h = h.max(p.y + size[child].height);
+        }
+        let (w, h) = (w.max(EMPTY_REGION), h.max(EMPTY_REGION));
+        let at = if regions.vertical {
+            if k > 0 {
+                separators.push(along);
+            }
+            let at = Point::new(along + PADDING, HEADER);
+            (along, deepest) = (along + w + 2.0 * PADDING, deepest.max(h));
+            at
+        } else {
+            let top = if k == 0 { HEADER } else { along + PADDING };
+            if k > 0 {
+                separators.push(along);
+            }
+            (along, deepest) = (top + h + PADDING, deepest.max(w));
+            Point::new(PADDING, top)
+        };
+        for (&child, p) in group.iter().zip(&points) {
+            offset[child] = p.offset(at.x, at.y);
+        }
+    }
+    let name = nodes[c].name_width + 2.0 * PADDING;
+    let size = nodes[c].with_margin(if regions.vertical {
+        Size::new(along.max(name), HEADER + deepest + PADDING)
+    } else {
+        Size::new((deepest + 2.0 * PADDING).max(name), along)
+    });
+    Some((size, Regions { vertical: regions.vertical, separators }))
+}
+
+/// Fits the frame of `diagram` around the arranged `nodes` and the texts outside them, which
+/// Astah's frame also holds; `widen_only` (arranging a selection) only widens it. Returns the
+/// frame if it changed.
+fn fit_frame(tx: &mut Tx<'_>, diagram: Id, nodes: &[Node], widen_only: bool) -> Result<Option<Id>> {
     let view = tx.model().view_of(diagram)?;
     let frame = view.presentations().iter().find(|p| p.element == Some(diagram));
     if let Some((frame, old_frame)) = frame.and_then(|f| Some((f.id, f.bounds()?))) {
         // With the texts outside the nodes, which Astah's frame also holds.
-        let content = ids
+        let content = nodes
             .iter()
-            .zip(&nodes)
-            .filter_map(|(&id, n)| {
-                let r = view.get(id).and_then(|p| p.bounds())?;
+            .filter_map(|n| {
+                let r = view.get(n.id).and_then(|p| p.bounds())?;
                 let [left, top, right, bottom] = n.margin;
                 Some(Rect::new(
                     r.x - left,
@@ -1334,15 +1378,29 @@ fn arrange_grown(
                     around.bottom().max(content.bottom() + reach[2]),
                 ),
             );
-            let wanted = if scope.is_some() { old_frame.union(&around) } else { around };
+            let wanted = if widen_only { old_frame.union(&around) } else { around };
             if wanted != old_frame {
                 tx.set_bounds(diagram, frame, wanted)?;
-                changed.push(frame);
+                return Ok(Some(frame));
             }
         }
     }
 
-    // Loops follow their node; the lines of what moved are routed.
+    Ok(None)
+}
+
+/// After arranging: loops follow their node, and the lines at the nodes that moved (`changed`,
+/// or all without a `scope`) are routed; with `straight`, the lines of actors beside the system
+/// boundary run straight.
+fn reroute(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    scope: Option<&[Id]>,
+    changed: &[Id],
+    straight: bool,
+    bars: &[Id],
+    direction: Direction,
+) -> Result<()> {
     let view = tx.model().view_of(diagram)?;
     let mut loops = Vec::new();
     let mut lines = Vec::new();
@@ -1401,7 +1459,7 @@ fn arrange_grown(
         }
     }
     crate::autoroute::route_lines(tx, diagram, &lines)?;
-    straighten_at_bars(tx, diagram, &bars, &lines)?;
+    straighten_at_bars(tx, diagram, bars, &lines)?;
     share_generalization_trees(tx, diagram, &lines, direction)?;
     // The other lines at the nodes of a shared tree are routed again, now that the tree runs
     // over its common line: the way a generalization took on its own is free again.
@@ -1433,7 +1491,7 @@ fn arrange_grown(
     if !in_trees.is_empty() && !again.is_empty() {
         crate::autoroute::route_lines(tx, diagram, &again)?;
     }
-    Ok(changed)
+    Ok(())
 }
 
 /// Room between use cases one below the other in a system boundary.
@@ -1791,30 +1849,41 @@ fn actors_beside_boundary(
     true
 }
 
+/// The pins on `diagram` on the border of their action: each pin's presentation and bounds,
+/// and its action's presentation and bounds.
+fn borne_pins<'a>(
+    model: &'a Model,
+    view: &'a View,
+    diagram: Id,
+) -> impl Iterator<Item = (&'a umlcraft_model::Presentation, Rect, Id, Rect)> {
+    crate::composite::borne_nodes(model, diagram).into_iter().filter_map(move |(pin, host)| {
+        let (host, p) = (host?, view.get(pin)?);
+        let is_pin = p
+            .element
+            .and_then(|e| model.get(e))
+            .is_some_and(|e| matches!(e.kind(), ElementKind::ActivityNode(n) if n.node.is_pin()));
+        if !is_pin {
+            return None;
+        }
+        Some((p, p.bounds()?, host, view.get(host)?.bounds()?))
+    })
+}
+
 /// Takes the pins of the actions that moved (`old` bounds by presentation) along to the same
 /// place on their action's border.
 fn carry_pins(tx: &mut Tx<'_>, diagram: Id, old: &HashMap<Id, Rect>) -> Result<()> {
     let model = tx.model();
     let view = model.view_of(diagram)?;
-    let borne = crate::composite::borne_nodes(model, diagram);
     let reach = scene::PIN_SIZE / 2.0;
     let mut moves: Vec<(Id, Rect)> = Vec::new();
-    for (&pin, &host) in &borne {
-        let Some(host) = host else { continue };
-        let (Some(p), Some(&was)) = (view.get(pin), old.get(&host)) else { continue };
-        let is_pin = p
-            .element
-            .and_then(|e| model.get(e))
-            .is_some_and(|e| matches!(e.kind(), ElementKind::ActivityNode(n) if n.node.is_pin()));
-        let (Some(r), Some(now)) = (p.bounds(), view.get(host).and_then(|h| h.bounds())) else {
-            continue;
-        };
-        if !is_pin || now == was {
+    for (p, r, host, now) in borne_pins(model, view, diagram) {
+        let Some(&was) = old.get(&host) else { continue };
+        if now == was {
             continue;
         }
         let place = crate::composite::border_place(was.inflate(reach), r.center());
         let at = crate::composite::border_point(now.inflate(reach), place);
-        moves.push((pin, crate::composite::centered(at, r)));
+        moves.push((p.id, crate::composite::centered(at, r)));
     }
     moves.sort_by_key(|(pin, _)| *pin);
     for (pin, r) in moves {
@@ -1829,28 +1898,16 @@ fn carry_pins(tx: &mut Tx<'_>, diagram: Id, old: &HashMap<Id, Rect>) -> Result<(
 fn pins_to_bottom(tx: &mut Tx<'_>, diagram: Id, hosts: Option<&[Id]>) -> Result<()> {
     let model = tx.model();
     let view = model.view_of(diagram)?;
-    let borne = crate::composite::borne_nodes(model, diagram);
     // The pins on each side of each action: the pin, its bounds and the action's.
     type Placed = (Id, Rect, Rect);
     let mut sides: HashMap<(Id, u8), Vec<Placed>> = HashMap::new();
-    for (&pin, &host) in &borne {
-        let Some(host) = host.filter(|h| hosts.is_none_or(|hs| hs.contains(h))) else {
-            continue;
-        };
-        let Some(p) = view.get(pin) else { continue };
-        let is_pin = p
-            .element
-            .and_then(|e| model.get(e))
-            .is_some_and(|e| matches!(e.kind(), ElementKind::ActivityNode(n) if n.node.is_pin()));
-        let (Some(r), Some(h)) = (p.bounds(), view.get(host).and_then(|h| h.bounds())) else {
-            continue;
-        };
-        if !is_pin || p.style.name_offset.is_some() {
+    for (p, r, host, h) in borne_pins(model, view, diagram) {
+        if hosts.is_some_and(|hs| !hs.contains(&host)) || p.style.name_offset.is_some() {
             continue;
         }
         let side = crate::composite::border_place(h.inflate(scene::PIN_SIZE / 2.0), r.center()).0;
         if side == 1 || side == 3 {
-            sides.entry((host, side)).or_default().push((pin, r, h));
+            sides.entry((host, side)).or_default().push((p.id, r, h));
         }
     }
     let mut moves: Vec<(Id, Rect)> = sides

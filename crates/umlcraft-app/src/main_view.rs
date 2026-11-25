@@ -293,10 +293,7 @@ impl MainView {
             };
         }
 
-        let model = ws.doc.model();
-        let name = ws.file_name().unwrap_or_else(|| {
-            model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default()
-        });
+        let name = ws.file_name().unwrap_or_else(|| ws.project_name());
         let dirty = if ws.doc.is_dirty() { "*" } else { "" };
         let version = env!("CARGO_PKG_VERSION");
         window.set_window_title(&format!("{name}{dirty} – UmlCraft {version}"));
@@ -594,7 +591,7 @@ impl MainView {
             cx,
             Box::new(|this, _, cx| {
                 let measure = AppMeasure::new(cx, this.settings.display());
-                this.replace_document(crate::demo::velo(&measure), None, cx)
+                this.replace_document(umlcraft_mcp::sample::velo(&measure), None, cx)
             }),
         );
     }
@@ -682,11 +679,7 @@ impl MainView {
         let diagram = match crate::nsd::read(&path) {
             Ok(diagram) => diagram,
             Err(detail) => {
-                // A recent file that no longer opens leaves the list.
-                if self.settings.remove_recent(&path) {
-                    self.settings.save();
-                    self.reload_menus(cx);
-                }
+                self.forget_recent(&path, cx);
                 self.show_error(&crate::nsd::open_failed(), &detail, window, cx);
                 return;
             }
@@ -818,14 +811,18 @@ impl MainView {
                 self.remember(&path, cx);
             }
             Err(err) => {
-                // A recent file that no longer opens leaves the list.
-                if self.settings.remove_recent(&path) {
-                    self.settings.save();
-                    self.reload_menus(cx);
-                }
+                self.forget_recent(&path, cx);
                 let detail = crate::errors::format_error(&err);
                 self.show_error(&t!("dialog.open_failed"), &detail, window, cx)
             }
+        }
+    }
+
+    /// A recent file that no longer opens leaves the list.
+    fn forget_recent(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if self.settings.remove_recent(path) {
+            self.settings.save();
+            self.reload_menus(cx);
         }
     }
 
@@ -917,7 +914,7 @@ impl MainView {
         self.flush_edits(window, cx);
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
-        let project = model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default();
+        let project = ws.project_name();
         let suggested = ws
             .path
             .as_deref()
@@ -1449,31 +1446,24 @@ impl MainView {
     fn export_image(&mut self, png: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some((svg, name)) = self.diagram_svg(window, cx) else { return };
         let extension = if png { "png" } else { "svg" };
-        let suggested = format!("{}.{extension}", sanitize_file_name(&name));
-        let directory = start_directory(self.workspace.read(cx).path.as_deref());
-        let rx = cx.prompt_for_new_path(&directory, Some(&suggested));
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(path))) = rx.await else { return };
-            let path = with_extension(path, extension);
-            let written = cx
-                .background_executor()
-                .spawn(async move {
-                    let bytes = if png {
-                        crate::png::from_svg(&svg, crate::png::SCALE)?
-                    } else {
-                        svg.into()
-                    };
-                    anyhow::Ok(std::fs::write(&path, bytes)?)
-                })
-                .await;
-            if let Err(err) = written {
-                this.update_in(cx, |this, window, cx| {
-                    this.show_error(&t!("dialog.image_failed"), &err.to_string(), window, cx);
-                })
-                .ok();
-            }
-        })
-        .detach();
+        let bytes = move || {
+            anyhow::Ok(if png {
+                crate::png::from_svg(&svg, crate::png::SCALE)?
+            } else {
+                svg.into()
+            })
+        };
+        let project = self.workspace.read(cx).path.clone();
+        let stem = sanitize_file_name(&name);
+        write_export(
+            project.as_deref(),
+            &stem,
+            extension,
+            "dialog.image_failed",
+            bytes,
+            window,
+            cx,
+        );
     }
 
     fn report_export(
@@ -1541,8 +1531,7 @@ impl MainView {
             }
             return;
         }
-        let model = ws.doc.model();
-        let project = model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default();
+        let project = ws.project_name();
         let suggested = draft
             .as_deref()
             .and_then(Path::file_name)
@@ -1781,23 +1770,13 @@ impl MainView {
             None => !ws.selection.is_empty(),
         };
         let state = ribbon::State {
-            diagram,
-            objects: props.is_some_and(|p| p.objects),
+            props,
             structogram,
             tool: ws.tool,
             has_selection,
             can_align: ws.selected_nodes().len() > 1,
             can_paste: structogram.is_some() || (self.clipboard.is_some() && diagram.is_some()),
             can_wrap: has_selection && diagram == Some(DiagramKind::Sequence),
-            numbering: props
-                .filter(|p| p.diagram == DiagramKind::Sequence)
-                .map(|p| (!p.hide_message_numbers, p.flat_message_numbers)),
-            notation: props
-                .filter(|p| p.diagram == DiagramKind::EntityRelationship)
-                .map(|p| p.notation),
-            palette: props
-                .map(|p| umlcraft_notation::palette::diagram_palette(&p))
-                .unwrap_or_default(),
             theme: self.settings.dark,
         };
         let tabs = ribbon::tabs(&state);
@@ -1814,8 +1793,7 @@ impl MainView {
         let focus = self.view_focus(cx);
         let order: Vec<RibbonTab> = tabs.iter().map(|(t, _)| *t).collect();
         let strip = ribbon::tab_strip(&t!("menu.file"), &tabs, active, collapsed, cx);
-        let card =
-            (!collapsed).then(|| ribbon::render(&groups, compact, &focus, cx).mt(shell::GAP));
+        let card = (!collapsed).then(|| ribbon::render(groups, compact, &focus, cx).mt(shell::GAP));
         v_flex()
             .id("ribbon-area")
             .px(shell::GAP)
@@ -2074,10 +2052,7 @@ impl MainView {
         };
         let undo_tip = named(ws.doc.undo_label(), "toolbar.undo_named", "toolbar.undo");
         let redo_tip = named(ws.doc.redo_label(), "toolbar.redo_named", "toolbar.redo");
-        let model = ws.doc.model();
-        let project = ws.file_name().unwrap_or_else(|| {
-            model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default()
-        });
+        let project = ws.file_name().unwrap_or_else(|| ws.project_name());
         let muted = cx.theme().muted_foreground;
         let divider = || div().w(px(1.0)).h(px(16.0)).mx_1().bg(cx.theme().border);
         // A grey strip of its own above the diagram, with no line.
@@ -2449,39 +2424,25 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         NewItem::ExtensionPoint,
         NewItem::TemplateParameter,
     ];
-    let mut any = false;
-    for item in items.into_iter().filter(|i| i.applies_to(&meta.kind)) {
-        let key = item.key();
-        let label = format!("{} {}", t!("menu.new_prefix"), t!(key.as_str()));
-        menu = menu.menu(label, command(TreeCommandKind::New(item)));
-        any = true;
-    }
-    if any {
-        menu = menu.separator();
-    }
-    let mut any = false;
-    for kind in DiagramKind::ALL {
-        let mut items = vec![NewItem::Diagram(kind)];
-        if kind == DiagramKind::Class {
-            items.push(NewItem::ObjectDiagram);
-        }
-        for item in items {
-            if item.applies_to(&meta.kind) {
-                let key = item.key();
-                let label = format!("{} {}", t!("menu.new_prefix"), t!(key.as_str()));
-                menu = menu.menu(label, command(TreeCommandKind::New(item)));
-                any = true;
-            }
-        }
-    }
-    if NewItem::Structogram.applies_to(&meta.kind) {
-        let label = format!("{} {}", t!("menu.new_prefix"), t!("kind.structogram"));
-        menu = menu.menu(label, command(TreeCommandKind::New(NewItem::Structogram)));
-        any = true;
-    }
-    if any {
-        menu = menu.separator();
-    }
+    // The object diagram follows the class diagram, the structogram the diagrams.
+    let diagrams = DiagramKind::ALL.into_iter().flat_map(|kind| {
+        let object = (kind == DiagramKind::Class).then_some(NewItem::ObjectDiagram);
+        std::iter::once(NewItem::Diagram(kind)).chain(object)
+    });
+    let diagrams = diagrams.chain([NewItem::Structogram]);
+    // "New …" for each item that applies, the group closed by a separator.
+    let section = |menu: PopupMenu, items: &mut dyn Iterator<Item = NewItem>| {
+        let mut items = items.filter(|i| i.applies_to(&meta.kind)).peekable();
+        let any = items.peek().is_some();
+        let menu = items.fold(menu, |menu, item| {
+            let key = item.key();
+            let label = format!("{} {}", t!("menu.new_prefix"), t!(key.as_str()));
+            menu.menu(label, command(TreeCommandKind::New(item)))
+        });
+        if any { menu.separator() } else { menu }
+    };
+    menu = section(menu, &mut items.into_iter());
+    menu = section(menu, &mut diagrams.into_iter());
     menu = menu.menu(t!("menu.rename"), command(TreeCommandKind::Rename));
     if !meta.is_root {
         menu = menu.menu(t!("menu.delete"), command(TreeCommandKind::Delete));
@@ -2630,6 +2591,46 @@ pub(crate) fn sanitize_file_name(name: &str) -> String {
         .collect();
     let cleaned = cleaned.trim();
     if cleaned.is_empty() { "project".to_owned() } else { cleaned.to_owned() }
+}
+
+/// Asks where to write an export with `extension`, suggesting `stem` next to `project`, then
+/// writes what `bytes` makes in the background; a failure is reported with the message `failed`.
+pub(crate) fn write_export<T: 'static>(
+    project: Option<&Path>,
+    stem: &str,
+    extension: &'static str,
+    failed: &'static str,
+    bytes: impl FnOnce() -> anyhow::Result<Vec<u8>> + Send + 'static,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    let suggested = format!("{stem}.{extension}");
+    let rx = cx.prompt_for_new_path(&start_directory(project), Some(&suggested));
+    cx.spawn_in(window, async move |_, cx| {
+        let Ok(Ok(Some(path))) = rx.await else { return };
+        let path = with_extension(path, extension);
+        let written = cx
+            .background_executor()
+            .spawn(async move {
+                umlcraft_mcp::host::write_replacing(&path, &bytes()?).map_err(anyhow::Error::msg)
+            })
+            .await;
+        if let Err(err) = written {
+            cx.update(|window, cx| {
+                let detail = err.to_string();
+                let rx = window.prompt(
+                    PromptLevel::Critical,
+                    &t!(failed),
+                    Some(&detail),
+                    &[t!("dialog.ok").as_ref()],
+                    cx,
+                );
+                cx.spawn(async move |_| rx.await.ok()).detach();
+            })
+            .ok();
+        }
+    })
+    .detach();
 }
 
 /// Where file dialogs start: next to the project file, else in the user's documents.

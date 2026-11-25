@@ -19,6 +19,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use umlcraft_model::{
@@ -195,12 +196,15 @@ pub fn from_str_versioned(json: &str) -> Result<(Model, u32), FormatError> {
 /// than serde_json's own limit of 128.
 pub fn parse_value(json: &str) -> Result<Value, FormatError> {
     check_depth(json)?;
-    on_large_stack(|| {
-        let mut de = deserializer(json);
-        let value = Value::deserialize(&mut de)?;
-        de.end()?;
-        Ok(value)
-    })?
+    on_large_stack(|| Ok(parse(json)?))?
+}
+
+/// Reads all of `json` as a `T`, without serde_json's own nesting limit (see [`deserializer`]).
+fn parse<T: DeserializeOwned>(json: &str) -> serde_json::Result<T> {
+    let mut de = deserializer(json);
+    let value = T::deserialize(&mut de)?;
+    de.end()?;
+    Ok(value)
 }
 
 /// A JSON reader for `json` without serde_json's own nesting limit (128), which the model's
@@ -239,15 +243,10 @@ fn read_json(json: &str) -> Result<(Model, u32), FormatError> {
     }
     // A current file is read straight into its records; an older one as a JSON tree first,
     // for the migrations.
-    let file = if version == FORMAT_VERSION {
-        let mut de = deserializer(json);
-        let file = ProjectFile::deserialize(&mut de)?;
-        de.end()?;
-        file
+    let file: ProjectFile = if version == FORMAT_VERSION {
+        parse(json)?
     } else {
-        let mut de = deserializer(json);
-        let mut value = Value::deserialize(&mut de)?;
-        de.end()?;
+        let mut value: Value = parse(json)?;
         for (index, migrate) in MIGRATIONS.iter().enumerate().skip(version as usize - 1) {
             migrate(&mut value)?;
             value["formatVersion"] = Value::from(index as u32 + 2);
@@ -298,8 +297,6 @@ fn check_depth(json: &str) -> Result<(), FormatError> {
 /// Version 2 files may keep the tagged values of languages under Astah's keys
 /// (`jude.java.transient`); UmlCraft's are `java.`, `csharp.` and `cpp.`.
 fn rename_language_tags(value: &mut Value) -> Result<(), FormatError> {
-    const RENAMES: [(&str, &str); 3] =
-        [("jude.java.", "java."), ("jude.c_sharp.", "csharp."), ("jude.c_plus.", "cpp.")];
     let Some(elements) = value.get_mut("elements").and_then(Value::as_array_mut) else {
         return Ok(());
     };
@@ -309,10 +306,7 @@ fn rename_language_tags(value: &mut Value) -> Result<(), FormatError> {
         .flatten();
     for tag in tags {
         let Some(key) = tag.get("key").and_then(Value::as_str) else { continue };
-        let renamed = RENAMES
-            .iter()
-            .find_map(|(old, new)| key.strip_prefix(old).map(|rest| format!("{new}{rest}")));
-        if let Some(renamed) = renamed {
+        if let Some(renamed) = umlcraft_model::TaggedValue::neutral_key(key) {
             tag["key"] = Value::from(renamed);
         }
     }

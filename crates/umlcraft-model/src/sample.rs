@@ -2,7 +2,7 @@
 //! use case, sequence, activity, state machine, component, deployment); no ER diagram and no
 //! structogram.
 //! Used by tests and the format round trip; the app's sample project is its own
-//! (`umlcraft-app/src/demo.rs`).
+//! (`umlcraft-mcp/src/sample.rs`).
 
 use crate::diagram::{DiagramKind, Presentation};
 use crate::document::Document;

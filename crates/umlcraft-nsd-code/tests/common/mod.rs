@@ -1,4 +1,6 @@
-//! What the tests share: a diagram as a readable tree.
+//! What the tests share: who makes their diagrams, and a diagram as a readable tree.
+// Each test file uses only some of it.
+#![allow(dead_code)]
 
 use std::fmt::Write;
 

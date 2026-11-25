@@ -106,8 +106,26 @@ fn thick_frame(rect: Rect) -> Primitive {
     }
 }
 
+/// A filled box with a solid border of `width` and corners of `radius`, as far as the box's
+/// size allows.
+fn rounded(rect: Rect, width: f32, radius: f32) -> Primitive {
+    Primitive::Frame {
+        rect,
+        width,
+        radius: radius.min(rect.height / 2.0).min(rect.width / 2.0),
+        fill: Paint::Fill,
+        border: Paint::Line,
+        style: LineStyle::Solid,
+    }
+}
+
 fn ellipse(center: Point, rx: f32, ry: f32) -> Primitive {
     Primitive::Ellipse { center, rx, ry, fill: Paint::Fill, width: 1.0 }
+}
+
+/// A filled ellipse outlined 2 px wide.
+fn thick_ellipse(center: Point, rx: f32, ry: f32) -> Primitive {
+    Primitive::Ellipse { center, rx, ry, fill: Paint::Fill, width: 2.0 }
 }
 
 /// Astah draws lifeline heads and their icons with 2 px lines.
@@ -133,23 +151,9 @@ const TAB_CUT: f32 = 10.0;
 
 /// A lifeline's head: a box with 2 px border or one of the robustness icons.
 fn head(head: Rect, icon: HeadIcon) -> Vec<Primitive> {
-    let filled = |center: Point, rx: f32, ry: f32| Primitive::Ellipse {
-        center,
-        rx,
-        ry,
-        fill: Paint::Fill,
-        width: 2.0,
-    };
     let (x, y, cy) = (head.x, head.y, head.center().y);
     match icon {
-        HeadIcon::Box => vec![Primitive::Frame {
-            rect: head,
-            width: 2.0,
-            radius: 0.0,
-            fill: Paint::Fill,
-            border: Paint::Line,
-            style: LineStyle::Solid,
-        }],
+        HeadIcon::Box => vec![thick_frame(head)],
         HeadIcon::Boundary => {
             // A T on its side left of an ellipse two thirds of the width.
             let r = head.height / 2.0;
@@ -158,7 +162,7 @@ fn head(head: Rect, icon: HeadIcon) -> Vec<Primitive> {
             vec![
                 thick(vec![Point::new(left, cy), Point::new(circle_left, cy)]),
                 thick(vec![Point::new(left, y + 5.0), Point::new(left, head.bottom() - 5.0)]),
-                filled(
+                thick_ellipse(
                     Point::new((circle_left + head.right()) / 2.0, cy),
                     (head.right() - circle_left) / 2.0,
                     r,
@@ -171,7 +175,7 @@ fn head(head: Rect, icon: HeadIcon) -> Vec<Primitive> {
             let r = head.height / 2.0;
             let arm = 3.12;
             vec![
-                filled(c, r, r),
+                thick_ellipse(c, r, r),
                 thick(vec![Point::new(c.x + arm, y - arm), Point::new(c.x, y)]),
                 thick(vec![Point::new(c.x, y), Point::new(c.x + arm, y + arm)]),
             ]
@@ -181,7 +185,7 @@ fn head(head: Rect, icon: HeadIcon) -> Vec<Primitive> {
             let c = head.center();
             let r = head.height / 2.0;
             vec![
-                filled(c, r, r),
+                thick_ellipse(c, r, r),
                 thick(vec![Point::new(c.x - r, head.bottom()), Point::new(c.x + r, head.bottom())]),
             ]
         }
@@ -192,7 +196,7 @@ fn head(head: Rect, icon: HeadIcon) -> Vec<Primitive> {
             let hip = y + head.height * 0.62;
             let arms = y + head.height * 0.38;
             vec![
-                filled(Point::new(cx, y + r), r, r),
+                thick_ellipse(Point::new(cx, y + r), r, r),
                 line(vec![Point::new(cx, neck), Point::new(cx, hip)], LineStyle::Solid),
                 line(
                     vec![Point::new(cx - r * 1.5, arms), Point::new(cx + r * 1.5, arms)],
@@ -220,13 +224,7 @@ fn robustness(r: Rect, icon: HeadIcon) -> Vec<Primitive> {
     const RADIUS: f32 = 20.0;
     let size = crate::scene::robustness_size(icon);
     let c = r.center();
-    let circle = |center: Point| Primitive::Ellipse {
-        center,
-        rx: RADIUS,
-        ry: RADIUS,
-        fill: Paint::Fill,
-        width: 2.0,
-    };
+    let circle = |center: Point| thick_ellipse(center, RADIUS, RADIUS);
     match icon {
         HeadIcon::Boundary => {
             let left = c.x - size.width / 2.0;
@@ -261,14 +259,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
     match &node.figure {
         Figure::Classifier { separators, template, .. } => {
             // Astah draws classifier boxes with a 2 px border, compartment lines with 1 px.
-            let mut result = vec![Primitive::Frame {
-                rect: r,
-                width: 2.0,
-                radius: 0.0,
-                fill: Paint::Fill,
-                border: Paint::Line,
-                style: solid,
-            }];
+            let mut result = vec![thick_frame(r)];
             result.extend(
                 separators
                     .iter()
@@ -288,13 +279,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
         }
         Figure::Lollipop => {
             let radius = crate::scene::LOLLIPOP_RADIUS;
-            vec![Primitive::Ellipse {
-                center: r.center(),
-                rx: radius,
-                ry: radius,
-                fill: Paint::Fill,
-                width: 2.0,
-            }]
+            vec![thick_ellipse(r.center(), radius, radius)]
         }
         Figure::Socket { open } => {
             // Like Astah, a 150° arc behind the center, as two 75° pieces.
@@ -327,15 +312,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
         Figure::Package { tab, subsystem } => {
             // Astah draws packages with 2 px lines.
             let body = Rect::new(r.x, r.y + tab.height, r.width, r.height - tab.height);
-            let thick = |rect| Primitive::Frame {
-                rect,
-                width: 2.0,
-                radius: 0.0,
-                fill: Paint::Fill,
-                border: Paint::Line,
-                style: solid,
-            };
-            let mut result = vec![thick(*tab), thick(body)];
+            let mut result = vec![thick_frame(*tab), thick_frame(body)];
             if *subsystem {
                 // A fork 7 wide ending 5 left of the tab's right edge, 4 to 11 below its top.
                 let (right, top) = (tab.right() - 5.0, tab.y);
@@ -367,13 +344,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             let arms = neck + 6.75;
             let feet = top + crate::scene::ACTOR_FIGURE.height;
             vec![
-                Primitive::Ellipse {
-                    center: Point::new((cx - head + 0.5).floor() + head, top + head),
-                    rx: head,
-                    ry: head,
-                    fill: Paint::Fill,
-                    width: 2.0,
-                },
+                thick_ellipse(Point::new((cx - head + 0.5).floor() + head, top + head), head, head),
                 thick(vec![Point::new(cx, neck), Point::new(cx, hip)]),
                 thick(vec![Point::new(cx - half, arms), Point::new(cx + half, arms)]),
                 thick(vec![Point::new(cx, hip), Point::new(cx - half, feet)]),
@@ -385,13 +356,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             // Astah: a 2 px ellipse; the line below the name spans the rectangle inscribed in
             // the ellipse.
             let center = r.center();
-            let mut result = vec![Primitive::Ellipse {
-                center,
-                rx: r.width / 2.0,
-                ry: r.height / 2.0,
-                fill: Paint::Fill,
-                width: 2.0,
-            }];
+            let mut result = vec![thick_ellipse(center, r.width / 2.0, r.height / 2.0)];
             if let Some(y) = *separator {
                 let half = r.width / (2.0 * std::f32::consts::SQRT_2);
                 result.push(line(
@@ -476,14 +441,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
                 ),
             ]
         }
-        Figure::Action => vec![Primitive::Frame {
-            rect: r,
-            width: 1.0,
-            radius: ACTION_RADIUS.min(r.height / 2.0).min(r.width / 2.0),
-            fill: Paint::Fill,
-            border: Paint::Line,
-            style: solid,
-        }],
+        Figure::Action => vec![rounded(r, 1.0, ACTION_RADIUS)],
         Figure::Initial => {
             vec![Primitive::Ellipse {
                 center: r.center(),
@@ -582,14 +540,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             let (stem, bar, foot) = (bottom - 12.0, bottom - 7.5, bottom - 3.0);
             let mid = right - 17.5;
             vec![
-                Primitive::Frame {
-                    rect: r,
-                    width: 1.0,
-                    radius: ACTION_RADIUS.min(r.height / 2.0).min(r.width / 2.0),
-                    fill: Paint::Fill,
-                    border: Paint::Line,
-                    style: solid,
-                },
+                rounded(r, 1.0, ACTION_RADIUS),
                 thick(vec![Point::new(mid, foot), Point::new(mid, stem)]),
                 thick(vec![
                     Point::new(right - 12.0, foot),
@@ -623,14 +574,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
         ],
         Figure::State { separator, regions, vertical, submachine } => {
             // Astah outlines states 2 px wide.
-            let mut result = vec![Primitive::Frame {
-                rect: r,
-                width: 2.0,
-                radius: state_radius(r).min(r.height / 2.0).min(r.width / 2.0),
-                fill: Paint::Fill,
-                border: Paint::Line,
-                style: solid,
-            }];
+            let mut result = vec![rounded(r, 2.0, state_radius(r))];
             result.extend(
                 separator
                     .iter()
@@ -674,8 +618,7 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
         Figure::EntryPoint | Figure::ExitPoint => {
             let c = r.center();
             let (rx, ry) = (r.width / 2.0, r.height / 2.0);
-            let mut result =
-                vec![Primitive::Ellipse { center: c, rx, ry, fill: Paint::Fill, width: 2.0 }];
+            let mut result = vec![thick_ellipse(c, rx, ry)];
             if matches!(node.figure, Figure::ExitPoint) {
                 let (dx, dy) = (rx * FRAC_1_SQRT_2 * 0.9, ry * FRAC_1_SQRT_2 * 0.9);
                 result.push(thick(vec![c.offset(-dx, dy), c.offset(dx, -dy)]));
@@ -814,15 +757,9 @@ pub fn figure(node: &NodeShape) -> Vec<Primitive> {
             ],
             fill: Paint::Fill,
         }],
-        Figure::ErTable { separators, rounded, .. } => {
-            let mut result = vec![Primitive::Frame {
-                rect: r,
-                width: 2.0,
-                radius: if *rounded { ER_ROUNDED.min(r.height / 2.0) } else { 0.0 },
-                fill: Paint::Fill,
-                border: Paint::Line,
-                style: solid,
-            }];
+        Figure::ErTable { separators, rounded: round, .. } => {
+            // The radius also stays within half the width, as for every rounded box.
+            let mut result = vec![rounded(r, 2.0, if *round { ER_ROUNDED } else { 0.0 })];
             // The first separator is the box's top.
             result.extend(
                 separators

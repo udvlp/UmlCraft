@@ -32,6 +32,47 @@ use crate::workspace::Workspace;
 
 type Choice = SelectState<Vec<SharedString>>;
 
+/// Subscribes to `state`, a choice of the values in `table`: the picked one goes into the
+/// field `field` of the shown element's `ElementKind::Kind` props, written `Kind.field`.
+macro_rules! pick_kind {
+    ($cx:expr, $window:expr, $state:expr, $table:expr, $kind:ident . $field:ident) => {
+        Self::on_pick($window, $cx, $state, |this, ix, cx| {
+            let Some(v) = $table.get(ix).copied() else { return };
+            this.apply_shown(cx, move |data| {
+                if let ElementKind::$kind(p) = &mut data.kind {
+                    p.$field = v;
+                }
+            });
+        })
+    };
+}
+
+/// A [`style_flag`] for the boolean `field` of the presentation's style.
+macro_rules! style_flag {
+    ($ws:expr, $p:expr, $id:literal, $key:literal, $field:ident) => {
+        style_flag($id, t!($key).into(), $p.style.$field, $ws.clone(), $p.id, |s, v| s.$field = v)
+    };
+}
+
+/// A [`flag`] for the boolean `field` of the element's `ElementKind::Kind` props, written
+/// `Kind.field`; `!Kind.field` for one that is stored the other way round.
+macro_rules! kind_flag {
+    ($ws:expr, $element:expr, $id:literal, $key:literal, $checked:expr, $kind:ident . $field:ident) => {
+        flag($id, t!($key).into(), $checked, $ws.clone(), $element, |d, v| {
+            if let ElementKind::$kind(p) = &mut d.kind {
+                p.$field = v;
+            }
+        })
+    };
+    ($ws:expr, $element:expr, $id:literal, $key:literal, $checked:expr, !$kind:ident . $field:ident) => {
+        flag($id, t!($key).into(), $checked, $ws.clone(), $element, |d, v| {
+            if let ElementKind::$kind(p) = &mut d.kind {
+                p.$field = !v;
+            }
+        })
+    };
+}
+
 const NAVIGABILITIES: [Navigability; 3] =
     [Navigability::Unspecified, Navigability::Navigable, Navigability::NonNavigable];
 const AGGREGATIONS: [Aggregation; 3] =
@@ -328,14 +369,6 @@ fn model_color(color: Hsla) -> Color {
     Color { r: byte(c.r), g: byte(c.g), b: byte(c.b), a: byte(c.a) }
 }
 
-/// The one node or line selected on the diagram shown.
-fn selected_presentation(ws: &Workspace) -> Option<&Presentation> {
-    match (ws.active_diagram, ws.selection.as_slice()) {
-        (Some(d), [p]) => ws.doc.model().view(d)?.get(*p),
-        _ => None,
-    }
-}
-
 /// Splits `text` at the commas that are not inside `<…>`: "A, Map<K, V>" is two types.
 fn split_types(text: &str) -> Vec<&str> {
     let mut parts = Vec::new();
@@ -473,14 +506,6 @@ fn submachines(model: &Model, state: Id) -> Vec<Option<Id>> {
         .collect()
 }
 
-/// The classifiers a lifeline can represent, by name.
-fn classifiers(model: &Model) -> Vec<Option<Id>> {
-    let mut all: Vec<(&str, Id)> =
-        model.elements().filter(|e| e.kind().is_classifier()).map(|e| (e.name(), e.id())).collect();
-    all.sort_by(|a, b| a.0.cmp(b.0));
-    std::iter::once(None).chain(all.into_iter().map(|(_, id)| Some(id))).collect()
-}
-
 impl PropertiesPanel {
     pub fn new(workspace: Entity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input =
@@ -592,273 +617,121 @@ impl PropertiesPanel {
             watch(&end.multiplicity, Field::Multiplicity(i), cx);
             watch(&end.constraints, Field::Constraints(i), cx);
         }
-        for (state, field) in [(&er_checks, Field::ErChecks), (&er_indexes, Field::ErIndexes)] {
+        let areas = [
+            (&text, Field::Text),
+            (&slots, Field::Slots),
+            (&constraints, Field::ElementConstraints),
+            (&er_checks, Field::ErChecks),
+            (&er_indexes, Field::ErIndexes),
+        ];
+        for (state, field) in areas {
             subscriptions.push(cx.subscribe_in(
                 state,
                 window,
                 move |this, _, ev: &InputEvent, _, cx| {
+                    // Enter makes a new line in a text area; only leaving it commits.
                     if !matches!(ev, InputEvent::PressEnter { .. }) {
                         this.on_input(field, ev, cx);
                     }
                 },
             ));
         }
-        subscriptions.push(cx.subscribe_in(&text, window, |this, _, ev: &InputEvent, _, cx| {
-            // Enter makes a new line in the text area; only leaving it commits.
-            if !matches!(ev, InputEvent::PressEnter { .. }) {
-                this.on_input(Field::Text, ev, cx);
-            }
-        }));
-        subscriptions.push(cx.subscribe_in(&slots, window, |this, _, ev: &InputEvent, _, cx| {
-            if !matches!(ev, InputEvent::PressEnter { .. }) {
-                this.on_input(Field::Slots, ev, cx);
-            }
-        }));
-        subscriptions.push(cx.subscribe_in(
-            &constraints,
-            window,
-            |this, _, ev: &InputEvent, _, cx| {
-                if !matches!(ev, InputEvent::PressEnter { .. }) {
-                    this.on_input(Field::ElementConstraints, ev, cx);
+        subscriptions.push(Self::on_pick(window, cx, &association, |this, ix, cx| {
+            let Some(&target) = this.association_ids.get(ix) else { return };
+            this.apply_shown(cx, move |data| {
+                if let ElementKind::Link(p) = &mut data.kind {
+                    p.association = target;
                 }
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &association,
+            });
+        }));
+        subscriptions.push(Self::on_pick(window, cx, &visibility, |this, ix, cx| {
+            let Some(v) = VISIBILITIES.get(ix).copied() else { return };
+            this.apply_shown(cx, move |data| data.visibility = v);
+        }));
+        subscriptions.push(pick_kind!(cx, window, &sort, SORTS, Message.sort));
+        subscriptions.push(pick_kind!(
+            cx,
             window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(&target) = selected(state, cx).and_then(|ix| this.association_ids.get(ix))
-                else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::Link(p) = &mut data.kind {
-                        p.association = target;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &visibility,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(v) = selected(state, cx).and_then(|ix| VISIBILITIES.get(ix).copied())
-                else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| data.visibility = v);
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &sort,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(s) = selected(state, cx).and_then(|ix| SORTS.get(ix).copied()) else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::Message(p) = &mut data.kind {
-                        p.sort = s;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
             &parameter_kind,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(k) = selected(state, cx).and_then(|ix| PARAMETER_KINDS.get(ix).copied())
-                else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::TemplateParameter(p) = &mut data.kind {
-                        p.parameter = k;
-                    }
-                });
-            },
+            PARAMETER_KINDS,
+            TemplateParameter.parameter
         ));
-        subscriptions.push(cx.subscribe_in(
-            &operator,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(o) = selected(state, cx).and_then(|ix| OPERATORS.get(ix).copied()) else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::CombinedFragment(p) = &mut data.kind {
-                        p.operator = o;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &ordering,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(ix) = selected(state, cx) else { return };
-                let ordering = ix.checked_sub(1).and_then(|i| ObjectOrdering::ALL.get(i).copied());
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::ActivityNode(p) = &mut data.kind {
-                        p.ordering = ordering;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &object_effect,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(ix) = selected(state, cx) else { return };
-                let effect = ix.checked_sub(1).and_then(|i| ObjectEffect::ALL.get(i).copied());
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::ActivityNode(p) = &mut data.kind {
-                        p.effect = effect;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &operation,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(&target) = selected(state, cx).and_then(|ix| this.operation_ids.get(ix))
-                else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::Message(p) = &mut data.kind {
-                        p.operation = target;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &represents,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(&target) = selected(state, cx).and_then(|ix| this.represents_ids.get(ix))
-                else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| match &mut data.kind {
-                    ElementKind::Lifeline(p) => p.represents = target,
-                    ElementKind::Instance(p) => p.classifier = target,
-                    ElementKind::InteractionUse(p) => p.refers_to = target,
-                    ElementKind::ActivityNode(p) => p.behavior = target,
-                    // A submachine state always stands for a state machine.
-                    ElementKind::State(p) if target.is_some() => p.submachine = target,
-                    _ => {}
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &er_key,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(key) = selected(state, cx).and_then(|ix| ER_KEYS.get(ix).copied()) else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::ErAttribute(p) = &mut data.kind {
-                        p.key = key;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &er_notation,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(n) = selected(state, cx).and_then(|ix| ErNotation::ALL.get(ix).copied())
-                else {
-                    return;
-                };
-                let Some(diagram) = this.shown_id() else { return };
-                // Switching converts what the diagram shows, which a plain change does not.
-                this.workspace.update(cx, |ws, cx| {
-                    ws.set_er_notation(diagram, n);
-                    cx.notify();
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &er_display,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(d) = selected(state, cx).and_then(|ix| ER_DISPLAYS.get(ix).copied())
-                else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::Diagram(p) = &mut data.kind {
-                        p.er_display = d;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &er_cardinalities,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(r) =
-                    selected(state, cx).and_then(|ix| CARDINALITY_READINGS.get(ix).copied())
-                else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::Diagram(p) = &mut data.kind {
-                        p.look_here = r == CardinalityReading::LookHere;
-                        p.ratios = r == CardinalityReading::Ratios;
-                    }
-                });
-            },
-        ));
-        subscriptions.push(cx.subscribe_in(
-            &disjoint,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(d) = selected(state, cx).and_then(|ix| DISJOINT.get(ix).copied()) else {
-                    return;
-                };
-                this.apply_shown(cx, move |data| {
-                    if let ElementKind::ErIsA(p) = &mut data.kind {
-                        p.disjoint = d;
-                    }
-                });
-            },
-        ));
+        subscriptions.push(pick_kind!(cx, window, &operator, OPERATORS, CombinedFragment.operator));
+        subscriptions.push(Self::on_pick(window, cx, &ordering, |this, ix, cx| {
+            let ordering = ix.checked_sub(1).and_then(|i| ObjectOrdering::ALL.get(i).copied());
+            this.apply_shown(cx, move |data| {
+                if let ElementKind::ActivityNode(p) = &mut data.kind {
+                    p.ordering = ordering;
+                }
+            });
+        }));
+        subscriptions.push(Self::on_pick(window, cx, &object_effect, |this, ix, cx| {
+            let effect = ix.checked_sub(1).and_then(|i| ObjectEffect::ALL.get(i).copied());
+            this.apply_shown(cx, move |data| {
+                if let ElementKind::ActivityNode(p) = &mut data.kind {
+                    p.effect = effect;
+                }
+            });
+        }));
+        subscriptions.push(Self::on_pick(window, cx, &operation, |this, ix, cx| {
+            let Some(&target) = this.operation_ids.get(ix) else { return };
+            this.apply_shown(cx, move |data| {
+                if let ElementKind::Message(p) = &mut data.kind {
+                    p.operation = target;
+                }
+            });
+        }));
+        subscriptions.push(Self::on_pick(window, cx, &represents, |this, ix, cx| {
+            let Some(&target) = this.represents_ids.get(ix) else { return };
+            this.apply_shown(cx, move |data| match &mut data.kind {
+                ElementKind::Lifeline(p) => p.represents = target,
+                ElementKind::Instance(p) => p.classifier = target,
+                ElementKind::InteractionUse(p) => p.refers_to = target,
+                ElementKind::ActivityNode(p) => p.behavior = target,
+                // A submachine state always stands for a state machine.
+                ElementKind::State(p) if target.is_some() => p.submachine = target,
+                _ => {}
+            });
+        }));
+        subscriptions.push(pick_kind!(cx, window, &er_key, ER_KEYS, ErAttribute.key));
+        subscriptions.push(Self::on_pick(window, cx, &er_notation, |this, ix, cx| {
+            let Some(n) = ErNotation::ALL.get(ix).copied() else { return };
+            let Some(diagram) = this.shown_id() else { return };
+            // Switching converts what the diagram shows, which a plain change does not.
+            this.workspace.update(cx, |ws, cx| {
+                ws.set_er_notation(diagram, n);
+                cx.notify();
+            });
+        }));
+        subscriptions.push(pick_kind!(cx, window, &er_display, ER_DISPLAYS, Diagram.er_display));
+        subscriptions.push(Self::on_pick(window, cx, &er_cardinalities, |this, ix, cx| {
+            let Some(r) = CARDINALITY_READINGS.get(ix).copied() else { return };
+            this.apply_shown(cx, move |data| {
+                if let ElementKind::Diagram(p) = &mut data.kind {
+                    p.look_here = r == CardinalityReading::LookHere;
+                    p.ratios = r == CardinalityReading::Ratios;
+                }
+            });
+        }));
+        subscriptions.push(pick_kind!(cx, window, &disjoint, DISJOINT, ErIsA.disjoint));
         for (state, delete) in [(&on_delete, true), (&on_update, false)] {
-            subscriptions.push(cx.subscribe_in(
-                state,
-                window,
-                move |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                    let Some(a) = selected(state, cx).and_then(|ix| ER_ACTIONS.get(ix).copied())
-                    else {
-                        return;
-                    };
-                    this.apply_shown(cx, move |data| {
-                        if let ElementKind::ErRelationship(p) = &mut data.kind {
-                            if delete {
-                                p.on_delete = a;
-                            } else {
-                                p.on_update = a;
-                            }
+            subscriptions.push(Self::on_pick(window, cx, state, move |this, ix, cx| {
+                let Some(a) = ER_ACTIONS.get(ix).copied() else { return };
+                this.apply_shown(cx, move |data| {
+                    if let ElementKind::ErRelationship(p) = &mut data.kind {
+                        if delete {
+                            p.on_delete = a;
+                        } else {
+                            p.on_update = a;
                         }
-                    });
-                },
-            ));
+                    }
+                });
+            }));
         }
-        subscriptions.push(cx.subscribe_in(
-            &directions,
-            window,
-            |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(d) = selected(state, cx).and_then(|ix| DIRECTIONS.get(ix).copied()) else {
-                    return;
-                };
-                this.update_style(cx, move |s| s.parameter_directions = d);
-            },
-        ));
+        subscriptions.push(Self::on_pick(window, cx, &directions, |this, ix, cx| {
+            let Some(d) = DIRECTIONS.get(ix).copied() else { return };
+            this.update_style(cx, move |s| s.parameter_directions = d);
+        }));
         let pickers = [
             (&font_color, ColorOf::Font),
             (&line_color, ColorOf::Line),
@@ -880,15 +753,12 @@ impl PropertiesPanel {
             }));
         }
         for (i, end) in ends.iter().enumerate() {
-            subscriptions.push(cx.subscribe_in(
-                &end.navigability,
+            subscriptions.push(Self::on_pick(
                 window,
-                move |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                    let Some(n) =
-                        selected(state, cx).and_then(|ix| NAVIGABILITIES.get(ix).copied())
-                    else {
-                        return;
-                    };
+                cx,
+                &end.navigability,
+                move |this, ix, cx| {
+                    let Some(n) = NAVIGABILITIES.get(ix).copied() else { return };
                     this.apply_shown(cx, move |data| match &mut data.kind {
                         ElementKind::Association(p) => p.ends[i].navigability = n,
                         ElementKind::Link(p) => p.ends[i].navigability = n,
@@ -896,21 +766,14 @@ impl PropertiesPanel {
                     });
                 },
             ));
-            subscriptions.push(cx.subscribe_in(
-                &end.aggregation,
-                window,
-                move |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                    let Some(a) = selected(state, cx).and_then(|ix| AGGREGATIONS.get(ix).copied())
-                    else {
-                        return;
-                    };
-                    this.apply_shown(cx, move |data| match &mut data.kind {
-                        ElementKind::Association(p) => p.ends[i].aggregation = a,
-                        ElementKind::Link(p) => p.ends[i].aggregation = a,
-                        _ => {}
-                    });
-                },
-            ));
+            subscriptions.push(Self::on_pick(window, cx, &end.aggregation, move |this, ix, cx| {
+                let Some(a) = AGGREGATIONS.get(ix).copied() else { return };
+                this.apply_shown(cx, move |data| match &mut data.kind {
+                    ElementKind::Association(p) => p.ends[i].aggregation = a,
+                    ElementKind::Link(p) => p.ends[i].aggregation = a,
+                    _ => {}
+                });
+            }));
         }
 
         let mut panel = Self {
@@ -981,6 +844,24 @@ impl PropertiesPanel {
         panel
     }
 
+    /// Subscribes to the choice `state`: `f` gets the index of what is picked.
+    fn on_pick(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        state: &Entity<Choice>,
+        f: impl Fn(&mut Self, usize, &mut Context<Self>) + 'static,
+    ) -> Subscription {
+        cx.subscribe_in(
+            state,
+            window,
+            move |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
+                if let Some(ix) = selected(state, cx) {
+                    f(this, ix, cx);
+                }
+            },
+        )
+    }
+
     /// Sets the placeholders that come from the locales, in the current language.
     fn set_placeholders(&self, window: &mut Window, cx: &mut Context<Self>) {
         let inputs = [
@@ -1036,7 +917,7 @@ impl PropertiesPanel {
     /// Changes the display options of the selected node or line as one undo step.
     fn update_style(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Style)) {
         self.workspace.update(cx, |ws, cx| {
-            let Some(p) = selected_presentation(ws).map(|p| p.id) else { return };
+            let Some(p) = ws.selected_presentation().map(|p| p.id) else { return };
             ws.update_style(p, f);
             cx.notify();
         });
@@ -1047,7 +928,7 @@ impl PropertiesPanel {
     fn set_color(&mut self, of: ColorOf, color: Option<Color>, cx: &mut Context<Self>) {
         let step = self.color_step;
         self.color_step = self.workspace.update(cx, |ws, cx| {
-            let p = selected_presentation(ws)?.id;
+            let p = ws.selected_presentation()?.id;
             let depth = ws.doc.undo_depth();
             let start = match step {
                 Some((start, end)) if end == depth => start,
@@ -1307,19 +1188,11 @@ impl PropertiesPanel {
             }
             Field::MemberMultiplicity => {
                 let text = Self::value(&self.member_multiplicity, cx);
-                let parsed =
-                    if text.is_empty() { Ok(None) } else { text.parse::<Multiplicity>().map(Some) };
-                match parsed {
-                    Ok(m) => self.apply(id, cx, move |data| {
-                        if let ElementKind::Attribute(p) = &mut data.kind {
-                            p.multiplicity = m;
-                        }
-                    }),
-                    Err(err) => self.workspace.update(cx, |ws, cx| {
-                        ws.complain(crate::errors::multiplicity_error(&err));
-                        cx.notify();
-                    }),
-                }
+                self.commit_multiplicity(&text, id, cx, |kind, m| {
+                    if let ElementKind::Attribute(p) = kind {
+                        p.multiplicity = m;
+                    }
+                });
             }
             Field::Binding => {
                 // A template with its arguments, linked as a declaration links its types; text
@@ -1392,19 +1265,11 @@ impl PropertiesPanel {
             }
             Field::Multiplicity(i) => {
                 let text = Self::value(&self.ends[i].multiplicity, cx);
-                let parsed =
-                    if text.is_empty() { Ok(None) } else { text.parse::<Multiplicity>().map(Some) };
-                match parsed {
-                    Ok(m) => self.apply(id, cx, move |data| {
-                        if let ElementKind::Association(p) = &mut data.kind {
-                            p.ends[i].multiplicity = m;
-                        }
-                    }),
-                    Err(err) => self.workspace.update(cx, |ws, cx| {
-                        ws.complain(crate::errors::multiplicity_error(&err));
-                        cx.notify();
-                    }),
-                }
+                self.commit_multiplicity(&text, id, cx, move |kind, m| {
+                    if let ElementKind::Association(p) = kind {
+                        p.ends[i].multiplicity = m;
+                    }
+                });
             }
             Field::Constraints(i) => {
                 // Written without braces, separated by commas: "ordered, unique".
@@ -1430,6 +1295,24 @@ impl PropertiesPanel {
         }
     }
 
+    /// Sets a multiplicity of element `id` with `set` to the one `text` writes (none if empty),
+    /// or complains that `text` writes none.
+    fn commit_multiplicity(
+        &mut self,
+        text: &str,
+        id: Id,
+        cx: &mut Context<Self>,
+        set: impl FnOnce(&mut ElementKind, Option<Multiplicity>),
+    ) {
+        match (!text.is_empty()).then(|| text.parse::<Multiplicity>()).transpose() {
+            Ok(m) => self.apply(id, cx, move |data| set(&mut data.kind, m)),
+            Err(err) => self.workspace.update(cx, |ws, cx| {
+                ws.complain(crate::errors::multiplicity_error(&err));
+                cx.notify();
+            }),
+        }
+    }
+
     /// Changes element `id` as one undo step, if the change changes anything.
     fn apply(&mut self, id: Id, cx: &mut Context<Self>, f: impl FnOnce(&mut ElementData)) {
         self.workspace.update(cx, |ws, cx| {
@@ -1448,7 +1331,7 @@ impl PropertiesPanel {
     pub fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected = |this: &Self, cx: &App| {
             let ws = this.workspace.read(cx);
-            let presentation = selected_presentation(ws).map(|p| p.id);
+            let presentation = ws.selected_presentation().map(|p| p.id);
             (ws.shown_element(), presentation, ws.doc.revision(), ws.cardinality_reading())
         };
         // The selection moved away while a field was being edited: save that edit first.
@@ -1482,7 +1365,7 @@ impl PropertiesPanel {
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
         let data = model.get(id).expect("checked above").data().clone();
-        let style = selected_presentation(ws).map(|p| p.style.clone()).unwrap_or_default();
+        let style = ws.selected_presentation().map(|p| p.style.clone()).unwrap_or_default();
         let declaration = member_text(model, id);
         // An ER participation's cardinality as the active diagram reads it.
         let cardinality = ws.shown_cardinality(id).map_or_else(String::new, |c| reading.text(c));
@@ -1519,7 +1402,10 @@ impl PropertiesPanel {
         // What a message, lifeline or instance may refer to.
         let references = match &data.kind {
             ElementKind::Message(_) => operations_for(model, id),
-            ElementKind::Lifeline(_) | ElementKind::Instance(_) => classifiers(model),
+            // The classifiers a lifeline or object can stand for.
+            ElementKind::Lifeline(_) | ElementKind::Instance(_) => {
+                behaviors(model, ElementKind::is_classifier)
+            }
             ElementKind::InteractionUse(_) => {
                 behaviors(model, |k| matches!(k, ElementKind::Interaction))
             }
@@ -1894,6 +1780,31 @@ fn parse_index(line: &str) -> Option<ErIndex> {
     Some(ErIndex { name: head.to_owned(), columns, unique })
 }
 
+/// A field of the panel: `label` in small muted type above `content`.
+fn field(muted: Hsla, label: impl Into<SharedString>, content: impl IntoElement) -> Div {
+    v_flex().gap_1().child(div().text_xs().text_color(muted).child(label.into())).child(content)
+}
+
+/// A heading above a group of fields.
+fn heading(muted: Hsla, label: impl Into<SharedString>) -> Div {
+    div().pt_2().text_xs().font_semibold().text_color(muted).child(label.into())
+}
+
+/// A one-line text field labelled by the text of `key`.
+fn input(muted: Hsla, key: &str, state: &Entity<InputState>) -> Div {
+    field(muted, t!(key), Input::new(state).small())
+}
+
+/// A choice labelled by the text of `key`.
+fn select(muted: Hsla, key: &str, state: &Entity<Choice>) -> Div {
+    field(muted, t!(key), Select::new(state).small())
+}
+
+/// A text area labelled by the text of `key`.
+fn area(muted: Hsla, key: &str, state: &Entity<TextareaState>) -> Div {
+    field(muted, t!(key), Textarea::new(state).small())
+}
+
 /// A checkbox that flips one boolean of the element via `set`.
 fn flag(
     id: &'static str,
@@ -1933,11 +1844,6 @@ fn style_flag(
 impl Render for PropertiesPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        let field = |label: SharedString, content: AnyElement| {
-            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
-        };
-        let heading =
-            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
         let body = v_flex().gap_3().p_3();
         if self.structogram.read(cx).is_active(cx) {
             return body.child(self.structogram.clone());
@@ -1953,8 +1859,9 @@ impl Render for PropertiesPanel {
             Some((_, Shape::Text { text, .. })) => {
                 return body
                     .child(field(
-                        t!("prop.type").into(),
-                        div().text_sm().child(t!("kind.text").to_string()).into_any_element(),
+                        muted,
+                        t!("prop.type"),
+                        div().text_sm().child(t!("kind.text").to_string()),
                     ))
                     .child(div().text_sm().whitespace_normal().child(text.clone()));
             }
@@ -1976,8 +1883,9 @@ impl Render for PropertiesPanel {
                 };
                 return body
                     .child(field(
-                        t!("prop.type").into(),
-                        div().text_sm().child(t!("tool.line").to_string()).into_any_element(),
+                        muted,
+                        t!("prop.type"),
+                        div().text_sm().child(t!("tool.line").to_string()),
                     ))
                     .child(flag("line-dashed", t!("prop.dashed").into(), dashed, 0))
                     .child(flag("line-start-arrow", t!("prop.start_arrow").into(), start_arrow, 1))
@@ -1993,10 +1901,8 @@ impl Render for PropertiesPanel {
         let kind = e.kind().clone();
         let workspace = self.workspace.clone();
 
-        let mut body = body.child(field(
-            t!("prop.type").into(),
-            div().text_sm().child(labels::kind_label(e)).into_any_element(),
-        ));
+        let mut body =
+            body.child(field(muted, t!("prop.type"), div().text_sm().child(labels::kind_label(e))));
         let unnamed = matches!(
             kind,
             ElementKind::Comment(_)
@@ -2010,10 +1916,7 @@ impl Render for PropertiesPanel {
         match &kind {
             _ if unnamed => {}
             k if is_member(k) => {
-                body = body.child(field(
-                    t!("prop.declaration").into(),
-                    Input::new(&self.declaration).small().into_any_element(),
-                ));
+                body = body.child(input(muted, "prop.declaration", &self.declaration));
             }
             // Visibility matters where code is made of it: packages and classifiers. Objects,
             // actors, use cases, states and lines have it in the metamodel only.
@@ -2023,41 +1926,25 @@ impl Render for PropertiesPanel {
             | ElementKind::Enumeration(_)
             | ElementKind::DataType(_)
             | ElementKind::Component(_) => {
-                body = body
-                    .child(field(
-                        t!("prop.name").into(),
-                        Input::new(&self.name).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.visibility").into(),
-                        Select::new(&self.visibility).small().into_any_element(),
-                    ));
+                body = body.child(input(muted, "prop.name", &self.name)).child(select(
+                    muted,
+                    "prop.visibility",
+                    &self.visibility,
+                ));
             }
             // Their name is the text they show.
             ElementKind::StateInvariant(_) => {
-                body = body.child(field(
-                    t!("prop.condition").into(),
-                    Input::new(&self.name).small().into_any_element(),
-                ));
+                body = body.child(input(muted, "prop.condition", &self.name));
             }
             ElementKind::DurationConstraint(_) | ElementKind::TimeConstraint(_) => {
-                body = body.child(field(
-                    t!("prop.constraint").into(),
-                    Input::new(&self.name).small().into_any_element(),
-                ));
+                body = body.child(input(muted, "prop.constraint", &self.name));
             }
             _ => {
-                body = body.child(field(
-                    t!("prop.name").into(),
-                    Input::new(&self.name).small().into_any_element(),
-                ));
+                body = body.child(input(muted, "prop.name", &self.name));
             }
         }
         if !unnamed {
-            body = body.child(field(
-                t!("prop.stereotypes").into(),
-                Input::new(&self.stereotypes).small().into_any_element(),
-            ));
+            body = body.child(input(muted, "prop.stereotypes", &self.stereotypes));
         }
 
         body = self.kind_options(body, &kind, id, model, cx);
@@ -2074,7 +1961,7 @@ impl Render for PropertiesPanel {
                 .filter(|c| matches!(c.kind(), ElementKind::Lifeline(_)))
                 .map(|c| (c.id(), labels::display_name(c)))
                 .collect();
-            body = body.child(heading(t!("prop.covered").to_string()));
+            body = body.child(heading(muted, t!("prop.covered")));
             if covered.is_empty() {
                 body = body
                     .child(div().text_xs().text_color(muted).child(t!("prop.covered_automatic")));
@@ -2104,22 +1991,16 @@ impl Render for PropertiesPanel {
         }
 
         if has_constraints(&kind) {
-            body = body.child(field(
-                t!("prop.element_constraints").into(),
-                Textarea::new(&self.constraints).small().into_any_element(),
-            ));
+            body = body.child(area(muted, "prop.element_constraints", &self.constraints));
         }
         let text_label = if matches!(kind, ElementKind::Comment(_)) {
             t!("prop.text")
         } else {
             t!("prop.documentation")
         };
-        body = body
-            .child(field(text_label.into(), Textarea::new(&self.text).small().into_any_element()))
-            .child(field(
-                t!("prop.owner").into(),
-                div().text_sm().child(labels::owner_path(model, id)).into_any_element(),
-            ));
+        body = body.child(field(muted, text_label, Textarea::new(&self.text).small())).child(
+            field(muted, t!("prop.owner"), div().text_sm().child(labels::owner_path(model, id))),
+        );
 
         // Display options of the one selected node.
         // Fragments size themselves, so they have no display options.
@@ -2128,12 +2009,13 @@ impl Render for PropertiesPanel {
                 .and_then(|e| model.get(e))
                 .is_some_and(|e| matches!(e.kind(), ElementKind::CombinedFragment(_)))
         };
-        let presentation = selected_presentation(ws).filter(|p| !is_fragment(p)).cloned();
+        let presentation = ws.selected_presentation().filter(|p| !is_fragment(p)).cloned();
         if let Some(p) = presentation.as_ref().filter(|p| matches!(p.shape, Shape::Edge { .. })) {
             body = body
-                .child(heading(t!("prop.display").to_string()))
+                .child(heading(muted, t!("prop.display")))
                 .child(field(
-                    t!("prop.font_color").into(),
+                    muted,
+                    t!("prop.font_color"),
                     self.color_select(
                         &self.font_color,
                         p.style.font_color.is_some(),
@@ -2142,7 +2024,8 @@ impl Render for PropertiesPanel {
                     ),
                 ))
                 .child(field(
-                    t!("prop.line_color").into(),
+                    muted,
+                    t!("prop.line_color"),
                     self.color_select(
                         &self.line_color,
                         p.style.stroke.is_some(),
@@ -2209,267 +2092,155 @@ impl PropertiesPanel {
         cx: &Context<Self>,
     ) -> Div {
         let muted = cx.theme().muted_foreground;
-        let field = |label: SharedString, content: AnyElement| {
-            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
-        };
-        let heading =
-            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
         let workspace = self.workspace.clone();
         match kind {
             ElementKind::Diagram(p) if p.diagram == DiagramKind::EntityRelationship => {
-                body = body.child(field(
-                    t!("prop.er_notation").into(),
-                    Select::new(&self.er_notation).small().into_any_element(),
-                ));
+                body = body.child(select(muted, "prop.er_notation", &self.er_notation));
                 if p.notation.lists_attributes() {
-                    body = body
-                        .child(field(
-                            t!("prop.er_display").into(),
-                            Select::new(&self.er_display).small().into_any_element(),
-                        ))
-                        .child(flag(
-                            "er-physical-names",
-                            t!("prop.er_physical_names").into(),
-                            p.physical_names,
-                            workspace.clone(),
+                    body = body.child(select(muted, "prop.er_display", &self.er_display)).child(
+                        kind_flag!(
+                            workspace,
                             id,
-                            |d, v| {
-                                if let ElementKind::Diagram(p) = &mut d.kind {
-                                    p.physical_names = v;
-                                }
-                            },
-                        ));
+                            "er-physical-names",
+                            "prop.er_physical_names",
+                            p.physical_names,
+                            Diagram.physical_names
+                        ),
+                    );
                 } else {
-                    body = body.child(field(
-                        t!("prop.er_cardinalities").into(),
-                        Select::new(&self.er_cardinalities).small().into_any_element(),
-                    ));
+                    body =
+                        body.child(select(muted, "prop.er_cardinalities", &self.er_cardinalities));
                 }
             }
             ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => {
                 body = body
-                    .child(flag(
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "message-numbers",
-                        t!("prop.message_numbers").into(),
+                        "prop.message_numbers",
                         !p.hide_message_numbers,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Diagram(p) = &mut d.kind {
-                                p.hide_message_numbers = !v;
-                            }
-                        },
+                        !Diagram.hide_message_numbers
                     ))
-                    .child(flag(
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "flat-message-numbers",
-                        t!("prop.flat_message_numbers").into(),
+                        "prop.flat_message_numbers",
                         p.flat_message_numbers,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Diagram(p) = &mut d.kind {
-                                p.flat_message_numbers = v;
-                            }
-                        },
+                        Diagram.flat_message_numbers
                     ))
-                    .child(flag(
-                        "return-values",
-                        t!("prop.return_values").into(),
-                        !p.hide_return_values,
-                        workspace.clone(),
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::Diagram(p) = &mut d.kind {
-                                p.hide_return_values = !v;
-                            }
-                        },
+                        "return-values",
+                        "prop.return_values",
+                        !p.hide_return_values,
+                        !Diagram.hide_return_values
                     ));
             }
             ElementKind::Diagram(p) if p.diagram == DiagramKind::StateMachine => {
-                body = body.child(flag(
-                    "simple-states",
-                    t!("prop.simple_states").into(),
-                    p.simple_states,
-                    workspace.clone(),
+                body = body.child(kind_flag!(
+                    workspace,
                     id,
-                    |d, v| {
-                        if let ElementKind::Diagram(p) = &mut d.kind {
-                            p.simple_states = v;
-                        }
-                    },
+                    "simple-states",
+                    "prop.simple_states",
+                    p.simple_states,
+                    Diagram.simple_states
                 ));
             }
             ElementKind::Class(p) => {
                 body = body
-                    .child(flag(
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "abstract",
-                        t!("prop.abstract").into(),
+                        "prop.abstract",
                         p.is_abstract,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Class(p) = &mut d.kind {
-                                p.is_abstract = v;
-                            }
-                        },
+                        Class.is_abstract
                     ))
-                    .child(flag(
-                        "leaf",
-                        t!("prop.leaf").into(),
-                        p.is_leaf,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Class(p) = &mut d.kind {
-                                p.is_leaf = v;
-                            }
-                        },
-                    ))
-                    .child(field(
-                        t!("prop.binding").into(),
-                        Input::new(&self.binding).small().into_any_element(),
-                    ));
+                    .child(kind_flag!(workspace, id, "leaf", "prop.leaf", p.is_leaf, Class.is_leaf))
+                    .child(input(muted, "prop.binding", &self.binding));
             }
             ElementKind::TemplateParameter(p) => {
-                body = body.child(field(
-                    t!("prop.parameter_kind").into(),
-                    Select::new(&self.parameter_kind).small().into_any_element(),
-                ));
+                body = body.child(select(muted, "prop.parameter_kind", &self.parameter_kind));
                 if p.parameter == TemplateParameterKind::Value {
-                    body = body.child(field(
-                        t!("prop.value_type").into(),
-                        Input::new(&self.value_type).small().into_any_element(),
-                    ));
+                    body = body.child(input(muted, "prop.value_type", &self.value_type));
                 }
                 body = body
-                    .child(field(
-                        t!("prop.type_bounds").into(),
-                        Input::new(&self.bounds).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.default").into(),
-                        Input::new(&self.default).small().into_any_element(),
-                    ))
-                    .child(flag(
-                        "variadic",
-                        t!("prop.variadic").into(),
-                        p.is_variadic,
-                        workspace.clone(),
+                    .child(input(muted, "prop.type_bounds", &self.bounds))
+                    .child(input(muted, "prop.default", &self.default))
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::TemplateParameter(p) = &mut d.kind {
-                                p.is_variadic = v;
-                            }
-                        },
+                        "variadic",
+                        "prop.variadic",
+                        p.is_variadic,
+                        TemplateParameter.is_variadic
                     ));
             }
             ElementKind::Attribute(p) => {
                 body = body
-                    .child(field(
-                        t!("prop.name").into(),
-                        Input::new(&self.name).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.object_type").into(),
-                        Input::new(&self.value_type).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.multiplicity").into(),
-                        Input::new(&self.member_multiplicity).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.initial_value").into(),
-                        Input::new(&self.default).small().into_any_element(),
-                    ))
-                    .child(flag(
+                    .child(input(muted, "prop.name", &self.name))
+                    .child(input(muted, "prop.object_type", &self.value_type))
+                    .child(input(muted, "prop.multiplicity", &self.member_multiplicity))
+                    .child(input(muted, "prop.initial_value", &self.default))
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "static",
-                        t!("prop.static").into(),
+                        "prop.static",
                         p.is_static,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Attribute(p) = &mut d.kind {
-                                p.is_static = v;
-                            }
-                        },
+                        Attribute.is_static
                     ))
-                    .child(flag(
-                        "read-only",
-                        t!("prop.read_only").into(),
-                        p.is_read_only,
-                        workspace.clone(),
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::Attribute(p) = &mut d.kind {
-                                p.is_read_only = v;
-                            }
-                        },
+                        "read-only",
+                        "prop.read_only",
+                        p.is_read_only,
+                        Attribute.is_read_only
                     ));
             }
             ElementKind::Operation(p) => {
                 body = body
-                    .child(field(
-                        t!("prop.name").into(),
-                        Input::new(&self.name).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.return_type").into(),
-                        Input::new(&self.value_type).small().into_any_element(),
-                    ))
-                    .child(flag(
+                    .child(input(muted, "prop.name", &self.name))
+                    .child(input(muted, "prop.return_type", &self.value_type))
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "static",
-                        t!("prop.static").into(),
+                        "prop.static",
                         p.is_static,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Operation(p) = &mut d.kind {
-                                p.is_static = v;
-                            }
-                        },
+                        Operation.is_static
                     ))
-                    .child(flag(
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "abstract",
-                        t!("prop.abstract").into(),
+                        "prop.abstract",
                         p.is_abstract,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Operation(p) = &mut d.kind {
-                                p.is_abstract = v;
-                            }
-                        },
+                        Operation.is_abstract
                     ))
-                    .child(flag(
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "leaf",
-                        t!("prop.leaf").into(),
+                        "prop.leaf",
                         p.is_leaf,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::Operation(p) = &mut d.kind {
-                                p.is_leaf = v;
-                            }
-                        },
+                        Operation.is_leaf
                     ))
-                    .child(flag(
-                        "query",
-                        t!("prop.query").into(),
-                        p.is_query,
-                        workspace.clone(),
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::Operation(p) = &mut d.kind {
-                                p.is_query = v;
-                            }
-                        },
+                        "query",
+                        "prop.query",
+                        p.is_query,
+                        Operation.is_query
                     ));
             }
             ElementKind::Extend(p) => {
-                body = body.child(field(
-                    t!("prop.condition").into(),
-                    Input::new(&self.condition).small().into_any_element(),
-                ));
+                body = body.child(input(muted, "prop.condition", &self.condition));
                 // The extension points of the extended use case, ticked where this extends.
                 let points: Vec<(Id, String)> = model
                     .children(p.extended)
@@ -2479,7 +2250,7 @@ impl PropertiesPanel {
                     .map(|c| (c.id(), c.name().to_owned()))
                     .collect();
                 if !points.is_empty() {
-                    body = body.child(heading(t!("prop.extension_points").to_string()));
+                    body = body.child(heading(muted, t!("prop.extension_points")));
                 }
                 for (ix, (point, name)) in points.into_iter().enumerate() {
                     let workspace = workspace.clone();
@@ -2511,31 +2282,15 @@ impl PropertiesPanel {
                         model.get(end.participant).map(labels::display_name).unwrap_or_default();
                     let fields = &self.ends[i];
                     body = body
-                        .child(heading(format!(
-                            "{} {} – {participant}",
-                            t!("prop.end"),
-                            ["A", "B"][i]
-                        )))
-                        .child(field(
-                            t!("prop.role").into(),
-                            Input::new(&fields.role).small().into_any_element(),
+                        .child(heading(
+                            muted,
+                            format!("{} {} – {participant}", t!("prop.end"), ["A", "B"][i]),
                         ))
-                        .child(field(
-                            t!("prop.multiplicity").into(),
-                            Input::new(&fields.multiplicity).small().into_any_element(),
-                        ))
-                        .child(field(
-                            t!("prop.constraints").into(),
-                            Input::new(&fields.constraints).small().into_any_element(),
-                        ))
-                        .child(field(
-                            t!("prop.navigability").into(),
-                            Select::new(&fields.navigability).small().into_any_element(),
-                        ))
-                        .child(field(
-                            t!("prop.aggregation").into(),
-                            Select::new(&fields.aggregation).small().into_any_element(),
-                        ));
+                        .child(input(muted, "prop.role", &fields.role))
+                        .child(input(muted, "prop.multiplicity", &fields.multiplicity))
+                        .child(input(muted, "prop.constraints", &fields.constraints))
+                        .child(select(muted, "prop.navigability", &fields.navigability))
+                        .child(select(muted, "prop.aggregation", &fields.aggregation));
                 }
             }
             _ => {}
@@ -2546,29 +2301,17 @@ impl PropertiesPanel {
     /// Fields of the elements of ER diagrams.
     fn er_options(&self, mut body: Div, kind: &ElementKind, id: Id, cx: &Context<Self>) -> Div {
         let muted = cx.theme().muted_foreground;
-        let field = |label: SharedString, content: AnyElement| {
-            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
-        };
-        let heading =
-            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
-        let input = |label: &str, state: &Entity<InputState>| {
-            field(t!(label).into(), Input::new(state).small().into_any_element())
-        };
         let workspace = self.workspace.clone();
         match kind {
             ElementKind::ErEntity(p) => {
                 body = body
-                    .child(flag(
-                        "er-weak",
-                        t!("prop.er_weak").into(),
-                        p.weak,
-                        workspace.clone(),
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::ErEntity(p) = &mut d.kind {
-                                p.weak = v;
-                            }
-                        },
+                        "er-weak",
+                        "prop.er_weak",
+                        p.weak,
+                        ErEntity.weak
                     ))
                     .child({
                         // Refused while entities take part in it.
@@ -2584,122 +2327,85 @@ impl PropertiesPanel {
                                 });
                             })
                     })
-                    .child(heading(t!("prop.er_database").to_string()))
-                    .child(input("prop.er_physical_name", &self.physical_name))
-                    .child(field(
-                        t!("prop.er_checks").into(),
-                        Textarea::new(&self.er_checks).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.er_indexes").into(),
-                        Textarea::new(&self.er_indexes).small().into_any_element(),
-                    ));
+                    .child(heading(muted, t!("prop.er_database")))
+                    .child(input(muted, "prop.er_physical_name", &self.physical_name))
+                    .child(area(muted, "prop.er_checks", &self.er_checks))
+                    .child(area(muted, "prop.er_indexes", &self.er_indexes));
             }
             ElementKind::ErDomain(p) => {
                 body = body
-                    .child(input("prop.er_datatype", &self.datatype))
-                    .child(input("prop.er_length_precision", &self.length_precision))
-                    .child(input("prop.er_values", &self.er_values))
-                    .child(input("prop.er_default_value", &self.default))
-                    .child(flag(
-                        "er-domain-not-null",
-                        t!("prop.er_not_null").into(),
-                        p.not_null,
-                        workspace.clone(),
+                    .child(input(muted, "prop.er_datatype", &self.datatype))
+                    .child(input(muted, "prop.er_length_precision", &self.length_precision))
+                    .child(input(muted, "prop.er_values", &self.er_values))
+                    .child(input(muted, "prop.er_default_value", &self.default))
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::ErDomain(p) = &mut d.kind {
-                                p.not_null = v;
-                            }
-                        },
+                        "er-domain-not-null",
+                        "prop.er_not_null",
+                        p.not_null,
+                        ErDomain.not_null
                     ))
-                    .child(input("prop.er_check", &self.er_check));
+                    .child(input(muted, "prop.er_check", &self.er_check));
             }
             ElementKind::ErAttribute(p) => {
                 body = body
-                    .child(field(
-                        t!("prop.er_key").into(),
-                        Select::new(&self.er_key).small().into_any_element(),
-                    ))
-                    .child(flag(
+                    .child(select(muted, "prop.er_key", &self.er_key))
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "er-derived",
-                        t!("prop.er_derived").into(),
+                        "prop.er_derived",
                         p.derived,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::ErAttribute(p) = &mut d.kind {
-                                p.derived = v;
-                            }
-                        },
+                        ErAttribute.derived
                     ))
-                    .child(flag(
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "er-multivalued",
-                        t!("prop.er_multivalued").into(),
+                        "prop.er_multivalued",
                         p.multivalued,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::ErAttribute(p) = &mut d.kind {
-                                p.multivalued = v;
-                            }
-                        },
+                        ErAttribute.multivalued
                     ))
-                    .child(heading(t!("prop.er_database").to_string()))
-                    .child(input("prop.er_physical_name", &self.physical_name))
-                    .child(input("prop.er_datatype", &self.datatype))
-                    .child(input("prop.er_length_precision", &self.length_precision))
-                    .child(input("prop.er_default_value", &self.default))
-                    .child(flag(
+                    .child(heading(muted, t!("prop.er_database")))
+                    .child(input(muted, "prop.er_physical_name", &self.physical_name))
+                    .child(input(muted, "prop.er_datatype", &self.datatype))
+                    .child(input(muted, "prop.er_length_precision", &self.length_precision))
+                    .child(input(muted, "prop.er_default_value", &self.default))
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "er-not-null",
-                        t!("prop.er_not_null").into(),
+                        "prop.er_not_null",
                         p.not_null,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::ErAttribute(p) = &mut d.kind {
-                                p.not_null = v;
-                            }
-                        },
+                        ErAttribute.not_null
                     ))
-                    .child(flag(
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "er-unique",
-                        t!("prop.er_unique").into(),
+                        "prop.er_unique",
                         p.unique,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::ErAttribute(p) = &mut d.kind {
-                                p.unique = v;
-                            }
-                        },
+                        ErAttribute.unique
                     ))
-                    .child(flag(
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "er-auto-increment",
-                        t!("prop.er_auto_increment").into(),
+                        "prop.er_auto_increment",
                         p.auto_increment,
-                        workspace.clone(),
-                        id,
-                        |d, v| {
-                            if let ElementKind::ErAttribute(p) = &mut d.kind {
-                                p.auto_increment = v;
-                            }
-                        },
+                        ErAttribute.auto_increment
                     ))
-                    .child(input("prop.er_check", &self.er_check));
+                    .child(input(muted, "prop.er_check", &self.er_check));
                 // A derived column's expression is its default: stored or computed when read.
                 if p.derived {
-                    body = body.child(flag(
-                        "er-virtual",
-                        t!("prop.er_virtual").into(),
-                        p.virtual_column,
-                        workspace.clone(),
+                    body = body.child(kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::ErAttribute(p) = &mut d.kind {
-                                p.virtual_column = v;
-                            }
-                        },
+                        "er-virtual",
+                        "prop.er_virtual",
+                        p.virtual_column,
+                        ErAttribute.virtual_column
                     ));
                 }
                 // A foreign key column: of which relationship, by its name.
@@ -2710,8 +2416,9 @@ impl PropertiesPanel {
                         name => name.to_owned(),
                     };
                     body = body.child(field(
-                        t!("prop.er_foreign_key").into(),
-                        div().text_sm().child(name).into_any_element(),
+                        muted,
+                        t!("prop.er_foreign_key"),
+                        div().text_sm().child(name),
                     ));
                 }
             }
@@ -2729,50 +2436,33 @@ impl PropertiesPanel {
                     });
                 body = body
                     .child(identifying)
-                    .child(heading(t!("prop.er_database").to_string()))
-                    .child(field(
-                        t!("prop.er_on_delete").into(),
-                        Select::new(&self.on_delete).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.er_on_update").into(),
-                        Select::new(&self.on_update).small().into_any_element(),
-                    ));
+                    .child(heading(muted, t!("prop.er_database")))
+                    .child(select(muted, "prop.er_on_delete", &self.on_delete))
+                    .child(select(muted, "prop.er_on_update", &self.on_update));
             }
             ElementKind::ErIsA(p) => {
-                body = body
-                    .child(field(
-                        t!("prop.er_disjoint").into(),
-                        Select::new(&self.disjoint).small().into_any_element(),
-                    ))
-                    .child(flag(
-                        "er-total-specialization",
-                        t!("prop.er_total_specialization").into(),
-                        p.total,
-                        workspace.clone(),
+                body = body.child(select(muted, "prop.er_disjoint", &self.disjoint)).child(
+                    kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::ErIsA(p) = &mut d.kind {
-                                p.total = v;
-                            }
-                        },
-                    ));
+                        "er-total-specialization",
+                        "prop.er_total_specialization",
+                        p.total,
+                        ErIsA.total
+                    ),
+                );
             }
             ElementKind::ErParticipation(p) => {
                 body = body
-                    .child(input("prop.er_cardinality", &self.cardinality))
-                    .child(input("prop.role", &self.ends[0].role))
-                    .child(flag(
-                        "er-total-participation",
-                        t!("prop.er_total_participation").into(),
-                        p.total,
-                        workspace.clone(),
+                    .child(input(muted, "prop.er_cardinality", &self.cardinality))
+                    .child(input(muted, "prop.role", &self.ends[0].role))
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, v| {
-                            if let ElementKind::ErParticipation(p) = &mut d.kind {
-                                p.total = v;
-                            }
-                        },
+                        "er-total-participation",
+                        "prop.er_total_participation",
+                        p.total,
+                        ErParticipation.total
                     ));
             }
             _ => {}
@@ -2790,98 +2480,53 @@ impl PropertiesPanel {
         cx: &Context<Self>,
     ) -> Div {
         let muted = cx.theme().muted_foreground;
-        let field = |label: SharedString, content: AnyElement| {
-            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
-        };
-        let heading =
-            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
         let workspace = self.workspace.clone();
         match kind {
             ElementKind::Message(_) => {
                 body = body
-                    .child(field(
-                        t!("prop.message_sort").into(),
-                        Select::new(&self.sort).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.guard").into(),
-                        Input::new(&self.guard).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.arguments").into(),
-                        Input::new(&self.arguments).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.return_value").into(),
-                        Input::new(&self.return_value).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.operation").into(),
-                        Select::new(&self.operation).small().into_any_element(),
-                    ));
+                    .child(select(muted, "prop.message_sort", &self.sort))
+                    .child(input(muted, "prop.guard", &self.guard))
+                    .child(input(muted, "prop.arguments", &self.arguments))
+                    .child(input(muted, "prop.return_value", &self.return_value))
+                    .child(select(muted, "prop.operation", &self.operation));
             }
             ElementKind::Lifeline(_) => {
-                body = body.child(field(
-                    t!("prop.represents").into(),
-                    Select::new(&self.represents).small().into_any_element(),
-                ));
+                body = body.child(select(muted, "prop.represents", &self.represents));
             }
             ElementKind::Instance(p) => {
-                body = body.child(field(
-                    t!("prop.classifier").into(),
-                    Select::new(&self.represents).small().into_any_element(),
-                ));
+                body = body.child(select(muted, "prop.classifier", &self.represents));
                 // Objects give their classifier's attributes values.
                 if p.instance == InstanceKind::Object && p.classifier.is_some() {
-                    body = body.child(field(
-                        t!("prop.slots").into(),
-                        Textarea::new(&self.slots).small().into_any_element(),
-                    ));
+                    body = body.child(area(muted, "prop.slots", &self.slots));
                 }
             }
             ElementKind::Link(p) => {
-                body = body.child(field(
-                    t!("prop.instance_of_association").into(),
-                    Select::new(&self.association).small().into_any_element(),
-                ));
+                body = body.child(select(muted, "prop.instance_of_association", &self.association));
                 for (i, end) in p.ends.iter().enumerate() {
                     let object =
                         model.get(end.instance).map(labels::display_name).unwrap_or_default();
                     let fields = &self.ends[i];
                     body = body
-                        .child(heading(format!("{} {} – {object}", t!("prop.end"), ["A", "B"][i])))
-                        .child(field(
-                            t!("prop.role").into(),
-                            Input::new(&fields.role).small().into_any_element(),
+                        .child(heading(
+                            muted,
+                            format!("{} {} – {object}", t!("prop.end"), ["A", "B"][i]),
                         ))
-                        .child(field(
-                            t!("prop.navigability").into(),
-                            Select::new(&fields.navigability).small().into_any_element(),
-                        ))
-                        .child(field(
-                            t!("prop.aggregation").into(),
-                            Select::new(&fields.aggregation).small().into_any_element(),
-                        ));
+                        .child(input(muted, "prop.role", &fields.role))
+                        .child(select(muted, "prop.navigability", &fields.navigability))
+                        .child(select(muted, "prop.aggregation", &fields.aggregation));
                 }
             }
             ElementKind::InteractionUse(_) => {
-                body = body
-                    .child(field(
-                        t!("prop.refers_to").into(),
-                        Select::new(&self.represents).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.arguments").into(),
-                        Input::new(&self.arguments).small().into_any_element(),
-                    ));
+                body = body.child(select(muted, "prop.refers_to", &self.represents)).child(input(
+                    muted,
+                    "prop.arguments",
+                    &self.arguments,
+                ));
             }
             ElementKind::CombinedFragment(_) => {
                 body = body
-                    .child(field(
-                        t!("prop.operator").into(),
-                        Select::new(&self.operator).small().into_any_element(),
-                    ))
-                    .child(heading(t!("prop.operands").to_string()));
+                    .child(select(muted, "prop.operator", &self.operator))
+                    .child(heading(muted, t!("prop.operands")));
                 for (ix, &operand) in model.children(id).iter().enumerate() {
                     let Some(ElementKind::InteractionOperand(o)) =
                         model.get(operand).map(|e| e.kind())
@@ -2918,93 +2563,55 @@ impl PropertiesPanel {
             }
             ElementKind::InteractionOperand(_) => {
                 let delete = workspace.clone();
-                body = body
-                    .child(field(
-                        t!("prop.guard").into(),
-                        Input::new(&self.guard).small().into_any_element(),
-                    ))
-                    .child(
-                        Button::new("delete-operand")
-                            .small()
-                            .label(t!("prop.delete_operand"))
-                            .on_click(move |_, _, cx| {
-                                delete.update(cx, |ws, cx| {
-                                    ws.delete_element(id);
-                                    cx.notify();
-                                });
-                            }),
-                    );
+                body = body.child(input(muted, "prop.guard", &self.guard)).child(
+                    Button::new("delete-operand")
+                        .small()
+                        .label(t!("prop.delete_operand"))
+                        .on_click(move |_, _, cx| {
+                            delete.update(cx, |ws, cx| {
+                                ws.delete_element(id);
+                                cx.notify();
+                            });
+                        }),
+                );
             }
             ElementKind::ActivityNode(p) if p.node.is_object() => {
                 body = body
-                    .child(field(
-                        t!("prop.object_type").into(),
-                        Input::new(&self.value_type).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.in_state").into(),
-                        Input::new(&self.in_state).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.ordering").into(),
-                        Select::new(&self.ordering).small().into_any_element(),
-                    ))
-                    .child(field(
-                        t!("prop.upper_bound").into(),
-                        Input::new(&self.upper_bound).small().into_any_element(),
-                    ))
-                    .child(flag(
+                    .child(input(muted, "prop.object_type", &self.value_type))
+                    .child(input(muted, "prop.in_state", &self.in_state))
+                    .child(select(muted, "prop.ordering", &self.ordering))
+                    .child(input(muted, "prop.upper_bound", &self.upper_bound))
+                    .child(kind_flag!(
+                        workspace,
+                        id,
                         "object-stream",
-                        t!("prop.stream").into(),
+                        "prop.stream",
                         p.is_stream,
-                        workspace.clone(),
+                        ActivityNode.is_stream
+                    ))
+                    .child(select(muted, "prop.object_effect", &self.object_effect))
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, on| {
-                            if let ElementKind::ActivityNode(p) = &mut d.kind {
-                                p.is_stream = on;
-                            }
-                        },
-                    ))
-                    .child(field(
-                        t!("prop.object_effect").into(),
-                        Select::new(&self.object_effect).small().into_any_element(),
-                    ))
-                    .child(flag(
                         "object-control",
-                        t!("prop.object_control").into(),
+                        "prop.object_control",
                         p.is_control,
-                        workspace.clone(),
-                        id,
-                        |d, on| {
-                            if let ElementKind::ActivityNode(p) = &mut d.kind {
-                                p.is_control = on;
-                            }
-                        },
+                        ActivityNode.is_control
                     ))
-                    .child(flag(
-                        "object-exception",
-                        t!("prop.object_exception").into(),
-                        p.is_exception,
-                        workspace.clone(),
+                    .child(kind_flag!(
+                        workspace,
                         id,
-                        |d, on| {
-                            if let ElementKind::ActivityNode(p) = &mut d.kind {
-                                p.is_exception = on;
-                            }
-                        },
+                        "object-exception",
+                        "prop.object_exception",
+                        p.is_exception,
+                        ActivityNode.is_exception
                     ));
             }
             ElementKind::ActivityNode(p) if p.node == ActivityNodeKind::CallBehavior => {
-                body = body.child(field(
-                    t!("prop.calls").into(),
-                    Select::new(&self.represents).small().into_any_element(),
-                ));
+                body = body.child(select(muted, "prop.calls", &self.represents));
             }
             ElementKind::ActivityEdge(_) => {
-                body = body.child(field(
-                    t!("prop.guard").into(),
-                    Input::new(&self.guard).small().into_any_element(),
-                ));
+                body = body.child(input(muted, "prop.guard", &self.guard));
             }
             ElementKind::Transition(_) | ElementKind::InternalTransition(_) => {
                 for (label, state) in [
@@ -3012,10 +2619,7 @@ impl PropertiesPanel {
                     ("prop.guard", &self.guard),
                     ("prop.effect", &self.effect),
                 ] {
-                    body = body.child(field(
-                        t!(label).into(),
-                        Input::new(state).small().into_any_element(),
-                    ));
+                    body = body.child(field(muted, t!(label), Input::new(state).small()));
                 }
                 if matches!(kind, ElementKind::InternalTransition(_)) {
                     body = body.child(delete_button(
@@ -3036,20 +2640,14 @@ impl PropertiesPanel {
             }
             ElementKind::State(p) => {
                 if p.submachine.is_some() {
-                    body = body.child(field(
-                        t!("prop.submachine").into(),
-                        Select::new(&self.represents).small().into_any_element(),
-                    ));
+                    body = body.child(select(muted, "prop.submachine", &self.represents));
                 }
                 for (label, state) in [
                     ("prop.entry", &self.entry),
                     ("prop.do_activity", &self.do_activity),
                     ("prop.exit", &self.exit),
                 ] {
-                    body = body.child(field(
-                        t!(label).into(),
-                        Input::new(state).small().into_any_element(),
-                    ));
+                    body = body.child(field(muted, t!(label), Input::new(state).small()));
                 }
                 // Internal transitions and regions, each selectable, and buttons to add more.
                 let children = |pick: fn(&ElementKind) -> bool| -> Vec<(Id, String)> {
@@ -3063,7 +2661,7 @@ impl PropertiesPanel {
                 };
                 let internal = children(|k| matches!(k, ElementKind::InternalTransition(_)));
                 let regions = children(|k| matches!(k, ElementKind::Region));
-                body = body.child(heading(t!("prop.internal_transitions").to_string()));
+                body = body.child(heading(muted, t!("prop.internal_transitions")));
                 for (ix, (transition, label)) in internal.into_iter().enumerate() {
                     body = body.child(select_button(
                         ("internal-transition", ix),
@@ -3084,7 +2682,7 @@ impl PropertiesPanel {
                             });
                         }),
                 );
-                body = body.child(heading(t!("prop.regions").to_string()));
+                body = body.child(heading(muted, t!("prop.regions")));
                 let has_regions = !regions.is_empty();
                 for (ix, (region, label)) in regions.into_iter().enumerate() {
                     let label = if model.get(region).is_some_and(|r| r.name().is_empty()) {
@@ -3130,18 +2728,14 @@ impl PropertiesPanel {
         cx: &Context<Self>,
     ) -> Div {
         let muted = cx.theme().muted_foreground;
-        let field = |label: SharedString, content: AnyElement| {
-            v_flex().gap_1().child(div().text_xs().text_color(muted).child(label)).child(content)
-        };
-        let heading =
-            |label: String| div().pt_2().text_xs().font_semibold().text_color(muted).child(label);
         let workspace = self.workspace.clone();
         let shown = p.element.and_then(|e| model.get(e)).map(|e| e.kind().clone());
-        body = body.child(heading(t!("prop.display").to_string()));
+        body = body.child(heading(muted, t!("prop.display")));
         if matches!(p.shape, Shape::Node { .. }) {
             body = body
                 .child(field(
-                    t!("prop.font_color").into(),
+                    muted,
+                    t!("prop.font_color"),
                     self.color_select(
                         &self.font_color,
                         p.style.font_color.is_some(),
@@ -3150,7 +2744,8 @@ impl PropertiesPanel {
                     ),
                 ))
                 .child(field(
-                    t!("prop.fill_color").into(),
+                    muted,
+                    t!("prop.fill_color"),
                     self.color_select(&self.fill_color, p.style.fill.is_some(), ColorOf::Fill, cx),
                 ));
         }
@@ -3165,21 +2760,19 @@ impl PropertiesPanel {
         );
         if boxed && !p.style.iconic {
             body = body
-                .child(style_flag(
+                .child(style_flag!(
+                    workspace,
+                    p,
                     "hide-attributes",
-                    t!("prop.hide_attributes").into(),
-                    p.style.hide_attributes,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.hide_attributes = v,
+                    "prop.hide_attributes",
+                    hide_attributes
                 ))
-                .child(style_flag(
+                .child(style_flag!(
+                    workspace,
+                    p,
                     "hide-operations",
-                    t!("prop.hide_operations").into(),
-                    p.style.hide_operations,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.hide_operations = v,
+                    "prop.hide_operations",
+                    hide_operations
                 ));
             // What the box leaves out of its members, as Astah offers it per box.
             type Flag = (&'static str, &'static str, fn(&Style) -> bool, fn(&mut Style, bool));
@@ -3249,10 +2842,7 @@ impl PropertiesPanel {
                     set,
                 ));
             }
-            body = body.child(field(
-                t!("prop.parameter_directions").into(),
-                Select::new(&self.directions).small().into_any_element(),
-            ));
+            body = body.child(select(muted, "prop.parameter_directions", &self.directions));
             // The members shown by visibility; the box leaves out those not ticked.
             type Hidden = fn(&mut Style) -> &mut Vec<Visibility>;
             let filters: [(&str, &str, &[Visibility], Hidden); 2] = [
@@ -3288,8 +2878,9 @@ impl PropertiesPanel {
                         })
                 });
                 body = body.child(field(
-                    t!(key).into(),
-                    h_flex().flex_wrap().gap_x_3().gap_y_1().children(boxes).into_any_element(),
+                    muted,
+                    t!(key),
+                    h_flex().flex_wrap().gap_x_3().gap_y_1().children(boxes),
                 ));
             }
             // Each member by itself: the box leaves out those not ticked, whatever their
@@ -3327,78 +2918,53 @@ impl PropertiesPanel {
                         })
                 });
                 body = body.child(field(
-                    t!("prop.shown_members").into(),
-                    v_flex().gap_1().children(boxes).into_any_element(),
+                    muted,
+                    t!("prop.shown_members"),
+                    v_flex().gap_1().children(boxes),
                 ));
             }
         }
-        if matches!(&shown, Some(ElementKind::Lifeline(_))) {
+        if matches!(&shown, Some(ElementKind::Lifeline(_) | ElementKind::Instance(_))) {
             body = body
-                .child(style_flag(
+                .child(style_flag!(
+                    workspace,
+                    p,
                     "hide-instance-name",
-                    t!("prop.hide_instance_name").into(),
-                    p.style.hide_instance_name,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.hide_instance_name = v,
+                    "prop.hide_instance_name",
+                    hide_instance_name
                 ))
-                .child(style_flag(
+                .child(style_flag!(
+                    workspace,
+                    p,
                     "hide-instance-type",
-                    t!("prop.hide_instance_type").into(),
-                    p.style.hide_instance_type,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.hide_instance_type = v,
+                    "prop.hide_instance_type",
+                    hide_instance_type
                 ));
-            // A lifeline that stands for an actor or a robustness class: its icon as the head.
-            if p.element.is_some_and(|l| umlcraft_notation::sequence::has_head_icon(model, l)) {
-                body = body.child(style_flag(
-                    "lifeline-icon",
-                    t!("prop.robustness_icon").into(),
-                    p.style.iconic,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.iconic = v,
-                ));
-            }
         }
-        if let Some(ElementKind::Instance(instance)) = &shown {
+        // A lifeline that stands for an actor or a robustness class: its icon as the head.
+        if matches!(&shown, Some(ElementKind::Lifeline(_)))
+            && p.element.is_some_and(|l| umlcraft_notation::sequence::has_head_icon(model, l))
+        {
+            body = body.child(style_flag!(
+                workspace,
+                p,
+                "lifeline-icon",
+                "prop.robustness_icon",
+                iconic
+            ));
+        }
+        if let Some(ElementKind::Instance(instance)) = &shown
+            && instance.instance == umlcraft_model::InstanceKind::Object
+        {
             body = body
-                .child(style_flag(
-                    "hide-instance-name",
-                    t!("prop.hide_instance_name").into(),
-                    p.style.hide_instance_name,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.hide_instance_name = v,
-                ))
-                .child(style_flag(
-                    "hide-instance-type",
-                    t!("prop.hide_instance_type").into(),
-                    p.style.hide_instance_type,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.hide_instance_type = v,
+                .child(style_flag!(workspace, p, "hide-slots", "prop.hide_slots", hide_attributes))
+                .child(style_flag!(
+                    workspace,
+                    p,
+                    "hide-empty-slots",
+                    "prop.hide_empty_slots",
+                    hide_empty_slots
                 ));
-            if instance.instance == umlcraft_model::InstanceKind::Object {
-                body = body
-                    .child(style_flag(
-                        "hide-slots",
-                        t!("prop.hide_slots").into(),
-                        p.style.hide_attributes,
-                        workspace.clone(),
-                        p.id,
-                        |s, v| s.hide_attributes = v,
-                    ))
-                    .child(style_flag(
-                        "hide-empty-slots",
-                        t!("prop.hide_empty_slots").into(),
-                        p.style.hide_empty_slots,
-                        workspace.clone(),
-                        p.id,
-                        |s, v| s.hide_empty_slots = v,
-                    ));
-            }
         }
         // A class whose first stereotype is «boundary», «control» or «entity».
         let robustness = p
@@ -3406,85 +2972,59 @@ impl PropertiesPanel {
             .and_then(|e| model.get(e))
             .is_some_and(|e| umlcraft_notation::scene::robustness_icon(e).is_some());
         if robustness {
-            body = body.child(style_flag(
+            body = body.child(style_flag!(
+                workspace,
+                p,
                 "robustness-icon",
-                t!("prop.robustness_icon").into(),
-                p.style.iconic,
-                workspace.clone(),
-                p.id,
-                |s, v| s.iconic = v,
+                "prop.robustness_icon",
+                iconic
             ));
         }
         if matches!(shown, Some(ElementKind::Class(_) | ElementKind::Interface(_)))
             && !p.style.iconic
         {
             body = body
-                .child(style_flag(
+                .child(style_flag!(
+                    workspace,
+                    p,
                     "hide-attribute-constraints",
-                    t!("prop.hide_attribute_constraints").into(),
-                    p.style.hide_attribute_constraints,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.hide_attribute_constraints = v,
+                    "prop.hide_attribute_constraints",
+                    hide_attribute_constraints
                 ))
-                .child(style_flag(
+                .child(style_flag!(
+                    workspace,
+                    p,
                     "hide-operation-constraints",
-                    t!("prop.hide_operation_constraints").into(),
-                    p.style.hide_operation_constraints,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.hide_operation_constraints = v,
+                    "prop.hide_operation_constraints",
+                    hide_operation_constraints
                 ));
         }
         if matches!(p.shape, umlcraft_model::Shape::Edge { .. })
             && shown.as_ref().is_some_and(has_constraints)
         {
-            body = body.child(style_flag(
+            body = body.child(style_flag!(
+                workspace,
+                p,
                 "hide-constraints",
-                t!("prop.hide_constraints").into(),
-                p.style.hide_constraints,
-                workspace.clone(),
-                p.id,
-                |s, v| s.hide_constraints = v,
+                "prop.hide_constraints",
+                hide_constraints
             ));
         }
         if matches!(shown, Some(ElementKind::Interface(_))) {
-            body = body.child(style_flag(
-                "iconic",
-                t!("prop.iconic").into(),
-                p.style.iconic,
-                workspace.clone(),
-                p.id,
-                |s, v| s.iconic = v,
-            ));
+            body = body.child(style_flag!(workspace, p, "iconic", "prop.iconic", iconic));
             // A required interface: a half circle instead of the circle.
             if p.style.iconic {
-                body = body.child(style_flag(
-                    "socket",
-                    t!("prop.socket").into(),
-                    p.style.socket,
-                    workspace.clone(),
-                    p.id,
-                    |s, v| s.socket = v,
-                ));
+                body = body.child(style_flag!(workspace, p, "socket", "prop.socket", socket));
             }
         }
         if let Some(b) = p.bounds() {
             body = body.child(field(
-                t!("prop.bounds").into(),
-                div()
-                    .text_sm()
-                    .child(
-                        t!(
-                            "prop.bounds_value",
-                            x = b.x,
-                            y = b.y,
-                            width = b.width,
-                            height = b.height
-                        )
+                muted,
+                t!("prop.bounds"),
+                div().text_sm().child(
+                    t!("prop.bounds_value", x = b.x, y = b.y, width = b.width, height = b.height)
                         .to_string(),
-                    )
-                    .into_any_element(),
+                ),
             ));
         }
         body

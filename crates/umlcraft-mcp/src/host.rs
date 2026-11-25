@@ -36,10 +36,6 @@ pub trait Host {
     /// Selects in `structogram`, which is shown: an element, the structogram as a whole or
     /// nothing. Only the app's editor has a selection in a structogram.
     fn select_in_structogram(&mut self, _structogram: Id, _selection: umlcraft_nsd::Selection) {}
-    /// The app's sample project; only the app has it.
-    fn sample(&self) -> Result<Document, String> {
-        Err("The sample project comes with the UmlCraft app, which is not running.".into())
-    }
     /// How diagrams are drawn beyond what they store.
     fn display(&mut self) -> Display {
         self.parts().1.display()
@@ -49,19 +45,41 @@ pub trait Host {
     fn set_display(&mut self, display: Display);
 }
 
-/// The app's settings file, `UmlCraft/settings.json` in the platform's folder for such
-/// settings: `%APPDATA%` on Windows, `~/Library/Application Support` on macOS,
-/// `$XDG_CONFIG_HOME` (else `~/.config`) elsewhere.
-pub fn settings_file() -> Option<PathBuf> {
-    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let base = if cfg!(windows) {
-        var("APPDATA")
+/// The path in the environment variable `name`, unless it is missing or empty.
+pub fn env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+/// The platform's folder for the settings of applications: `%APPDATA%` on Windows,
+/// `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` (else `~/.config`) elsewhere.
+pub fn config_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        env_path("APPDATA")
     } else if cfg!(target_os = "macos") {
-        var("HOME").map(|h| h.join("Library").join("Application Support"))
+        env_path("HOME").map(|h| h.join("Library").join("Application Support"))
     } else {
-        var("XDG_CONFIG_HOME").or_else(|| var("HOME").map(|h| h.join(".config")))
-    }?;
-    Some(base.join("UmlCraft").join("settings.json"))
+        env_path("XDG_CONFIG_HOME").or_else(|| env_path("HOME").map(|h| h.join(".config")))
+    }
+}
+
+/// The app's settings file, `UmlCraft/settings.json` in the [`config_dir`].
+pub fn settings_file() -> Option<PathBuf> {
+    Some(config_dir()?.join("UmlCraft").join("settings.json"))
+}
+
+/// Writes `bytes` to a file beside `path` that then takes its place, so that `path` is never
+/// left half written and a hard link to a file elsewhere is replaced rather than written
+/// through.
+pub fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".umlcraft-tmp");
+    let tmp = PathBuf::from(tmp);
+    let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{}: {e}", path.display()));
+    }
+    Ok(())
 }
 
 /// How the app draws diagrams, from its settings file, so that a headless session draws them
@@ -96,7 +114,8 @@ pub struct Access {
 
 impl Access {
     /// `folders` to read and write in.
-    pub fn folders(folders: Vec<PathBuf>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn folders(folders: Vec<PathBuf>) -> Self {
         Self { write: folders, ..Self::default() }
     }
 
@@ -247,16 +266,20 @@ fn device_name(path: &Path) -> Option<String> {
     path.components().find_map(|c| {
         let std::path::Component::Normal(name) = c else { return None };
         let name = name.to_string_lossy();
-        let stem = name.split('.').next().unwrap_or("").trim_end().to_uppercase();
-        let numbered = |prefix: &str| {
-            stem.strip_prefix(prefix)
-                .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
-        };
-        (matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
-            || numbered("COM")
-            || numbered("LPT"))
-        .then(|| name.into_owned())
+        is_device_name(&name).then(|| name.into_owned())
     })
+}
+
+/// Whether Windows takes the file name `name` for a device (`NUL`, `com1.txt`, `CONOUT$`),
+/// on any system.
+pub fn is_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim_end().to_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
+    };
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || numbered("COM")
+        || numbered("LPT")
 }
 
 /// `path` absolute and without `.` and `..`, also for files that do not exist yet: the
@@ -437,14 +460,7 @@ pub fn new_document(name: &str) -> Document {
 
 /// The first diagram of the model, in tree order.
 pub fn first_diagram(model: &Model) -> Option<Id> {
-    let mut stack = vec![model.root()];
-    while let Some(id) = stack.pop() {
-        if model.view(id).is_some() {
-            return Some(id);
-        }
-        stack.extend(model.children(id).iter().rev());
-    }
-    None
+    model.subtree(model.root()).into_iter().find(|&id| model.view(id).is_some())
 }
 
 #[cfg(test)]

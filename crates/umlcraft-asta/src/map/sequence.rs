@@ -97,7 +97,7 @@ impl Importer<'_> {
                 r.points(p, "allPoints")
                     .first()
                     .map(|pt| pt.y)
-                    .or_else(|| r.obj(p, "location").and_then(|l| r.point(l)).map(|pt| pt.y))
+                    .or_else(|| r.point_at(p, "location").map(|pt| pt.y))
             })
             .unwrap_or(f32::MAX)
     }
@@ -263,10 +263,7 @@ impl Importer<'_> {
             let Some(id) = self.create(fragment, data, Some(operand)) else { continue };
             let messages = self.r.list(operand, "messages");
             let fragments = self.r.list(operand, "fragments");
-            if self.deeper(operand) {
-                self.interaction_items(id, messages, fragments);
-                self.nesting -= 1;
-            }
+            self.nested(operand, |im| im.interaction_items(id, messages, fragments));
         }
     }
 
@@ -311,7 +308,7 @@ impl Importer<'_> {
                     let bounds = node.bounds.translate(shift.x, shift.y);
                     let mut presentation = Presentation::node(node.element, bounds);
                     presentation.style = node.style;
-                    if let Some(id) = self.insert(diagram, presentation, false) {
+                    if let Some(id) = self.insert(diagram, presentation, None) {
                         presentation_of.insert(p, id);
                     }
                 }
@@ -364,7 +361,7 @@ impl Importer<'_> {
             };
             // The diagram frame is always behind everything.
             let back = presentation.element == Some(diagram);
-            if let Some(id) = self.insert(diagram, presentation, back) {
+            if let Some(id) = self.insert(diagram, presentation, back.then_some(0)) {
                 presentation_of.insert(p, id);
             }
         }
@@ -413,7 +410,7 @@ impl Importer<'_> {
                 *width = (bounds.width.abs() < 1e-3).then_some(0.0);
             }
             presentation.style = self.fill(p);
-            if let Some(id) = self.insert(diagram, presentation, false) {
+            if let Some(id) = self.insert(diagram, presentation, None) {
                 presentation_of.insert(p, id);
             }
         }
@@ -468,7 +465,7 @@ impl Importer<'_> {
             let mut presentation = Presentation::node(Some(e), bounds);
             presentation.style = self.fill(p);
             presentation.style.name_offset = self.constraint_label(p, shift);
-            if let Some(id) = self.insert(diagram, presentation, false) {
+            if let Some(id) = self.insert(diagram, presentation, None) {
                 presentation_of.insert(p, id);
             }
         }
@@ -480,7 +477,7 @@ impl Importer<'_> {
         // Astah draws free texts and lines in front of the bars.
         for &p in &sources {
             if let Some(presentation) = self.free_shape(p, shift) {
-                self.insert(diagram, presentation, false);
+                self.insert(diagram, presentation, None);
             }
         }
     }
@@ -493,8 +490,7 @@ impl Importer<'_> {
         use umlcraft_notation::sequence::{ConstraintAnchor, constraint_label_box};
         let r = self.r;
         let label = r.obj(p, "namePresentation")?;
-        let at = r.obj(label, "location").and_then(|l| r.point(l))?;
-        let moved = r.obj(label, "localMovement").and_then(|l| r.point(l)).unwrap_or_default();
+        let at = r.moved_location(label)?;
         let width = r.num(label, "width")? as f32;
         let anchor = match r.class(p) {
             "DurationConstraintPresentation" => {
@@ -511,7 +507,7 @@ impl Importer<'_> {
             _ => return None,
         };
         let usual = constraint_label_box(anchor, width, None);
-        let by = Point::new(at.x + moved.x + shift.x - usual.x, at.y + moved.y + shift.y - usual.y);
+        let by = Point::new(at.x + shift.x - usual.x, at.y + shift.y - usual.y);
         (by.x.abs() > 0.05 || by.y.abs() > 0.05).then_some(by)
     }
 
@@ -538,9 +534,7 @@ impl Importer<'_> {
                 .list(p, "guardPresentations")
                 .iter()
                 .map(|&g| {
-                    r.obj(g, "localMovement")
-                        .and_then(|l| r.point(l))
-                        .filter(|m| m.x.abs() > 1e-3 || m.y.abs() > 1e-3)
+                    r.point_at(g, "localMovement").filter(|m| m.x.abs() > 1e-3 || m.y.abs() > 1e-3)
                 })
                 .collect();
             if guards.iter().all(Option::is_none) {
@@ -609,11 +603,11 @@ impl Importer<'_> {
             // `location`, which older versions left stale in height, and up from the label's
             // place above the line.
             labels.name = r.obj(p, "namePresentation").and_then(|label| {
-                let moved = r.obj(label, "localMovement").and_then(|l| r.point(l))?;
+                let moved = r.point_at(label, "localMovement")?;
                 if moved.x.abs() < 1e-3 && moved.y.abs() < 1e-3 {
                     return None;
                 }
-                let at = r.obj(label, "location").and_then(|l| r.point(l))?;
+                let at = r.point_at(label, "location")?;
                 // Astah centers the text in the stored box by Java's whole-pixel width; the box
                 // is as wide as the exact width (newer files) or the whole-pixel one (older).
                 // Labels broken into several lines are left as they are.
@@ -636,6 +630,6 @@ impl Importer<'_> {
         presentation.style.hide_parameter_types =
             call && flag("parameterTypeVisibility") == Some(false);
         presentation.style.show_return_type = call && flag("returnValueVisibility") == Some(true);
-        self.insert(diagram, presentation, false)
+        self.insert(diagram, presentation, None)
     }
 }

@@ -76,21 +76,24 @@ fn agent(timeout: Option<Duration>) -> ureq::Agent {
 }
 
 /// A GET request that names UmlCraft and its version, and nothing else.
+fn request(agent: &ureq::Agent, url: &str) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
+    agent.get(url).header("User-Agent", format!("UmlCraft/{}", env!("CARGO_PKG_VERSION")))
+}
+
 fn get(agent: &ureq::Agent, url: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
-    agent
-        .get(url)
-        .header("User-Agent", format!("UmlCraft/{}", env!("CARGO_PKG_VERSION")))
-        .call()
-        .map_err(|e| e.to_string())
+    request(agent, url).call().map_err(|e| e.to_string())
+}
+
+/// The body of `url`, as text.
+fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, String> {
+    get(agent, url)?.body_mut().read_to_string().map_err(|e| e.to_string())
 }
 
 /// Asks GitHub for the tag of the latest release. It blocks for up to 10 seconds: call it off
 /// the main thread.
 pub fn fetch_latest() -> Result<String, String> {
     let agent = agent(Some(Duration::from_secs(10)));
-    let mut response = agent
-        .get(LATEST)
-        .header("User-Agent", format!("UmlCraft/{}", env!("CARGO_PKG_VERSION")))
+    let mut response = request(&agent, LATEST)
         .header("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| e.to_string())?;
@@ -273,11 +276,9 @@ pub fn download(
     let dir = install.download_dir().ok_or("no folder for the download")?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let agent = agent(Some(Duration::from_secs(30 * 60)));
-    let mut sums = get(&agent, &download_url(version, "SHA256SUMS.txt"))?;
-    let sums = sums.body_mut().read_to_string().map_err(|e| e.to_string())?;
+    let sums = get_text(&agent, &download_url(version, "SHA256SUMS.txt"))?;
     if let Some(key) = UPDATE_KEY {
-        let mut signature = get(&agent, &download_url(version, "SHA256SUMS.txt.minisig"))?;
-        let signature = signature.body_mut().read_to_string().map_err(|e| e.to_string())?;
+        let signature = get_text(&agent, &download_url(version, "SHA256SUMS.txt.minisig"))?;
         verify_sums(key, &sums, &signature, version)?;
     }
     let expected = checksum_of(&sums, &name).ok_or("the release lists no checksum for it")?;

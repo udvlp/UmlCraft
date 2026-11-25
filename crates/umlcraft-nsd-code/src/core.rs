@@ -7,11 +7,13 @@ use std::marker::PhantomData;
 
 use tree_sitter::Node;
 use umlcraft_nsd::edit::new_element;
-use umlcraft_nsd::{Color, Diagram, Element, ElementKind, Keywords, Sequence};
+use umlcraft_nsd::{
+    Color, Diagram, Element, ElementKind, Keywords, Provenance, RootKind, Sequence,
+};
 
 use crate::pseudo;
-use crate::text::{comment, condition, lines, lines_at, without_semicolon};
-use crate::{Note, NoteKind, Report, Unbuilt};
+use crate::text::{comment, condition, lines, lines_at, node_text, without_semicolon};
+use crate::{Made, Note, NoteKind, Report, Unbuilt};
 
 /// Structorizer's colour for what its import could not express.
 const RED: Color = Color([0xff, 0x00, 0x00]);
@@ -97,8 +99,9 @@ const CATCH_ALL: &[&str] = &["...", "BaseException", "Exception", "Throwable"];
 
 pub struct Builder<'a, G> {
     pub src: &'a str,
-    /// The diagram's header, for the keywords for loops are read with.
-    header: Diagram,
+    /// The diagram being built, without its elements until [`Builder::finish`]; its header
+    /// gives the keywords loops are read with.
+    diagram: Diagram,
     pub notes: Vec<Note>,
     /// The switch expressions being built, innermost last (for `yield`).
     sinks: Vec<Sink>,
@@ -113,10 +116,18 @@ pub struct Builder<'a, G> {
 }
 
 impl<'a, G: Grammar> Builder<'a, G> {
-    pub fn new(src: &'a str, header: Diagram) -> Self {
+    /// A builder of the subroutine diagram `title` of code in `src`, made by `made`, with
+    /// `doc` as its comment.
+    pub fn new(src: &'a str, made: &Made, title: &str, doc: Option<&[String]>) -> Self {
+        let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
+        let mut diagram = Diagram::new(RootKind::Sub, &[title.to_owned()], &provenance);
+        diagram.set_keywords(made.keywords);
+        if let Some(doc) = doc {
+            diagram.set_comment(doc);
+        }
         Builder {
             src,
-            header,
+            diagram,
             notes: Vec::new(),
             sinks: Vec::new(),
             own_functions: &NO_FUNCTIONS,
@@ -128,14 +139,11 @@ impl<'a, G: Grammar> Builder<'a, G> {
 
     /// The diagram with `body` as its elements, and its report; none for a body that nests
     /// deeper than a structogram may (`umlcraft_nsd::read::MAX_DEPTH`).
-    pub fn finish(
-        self,
-        mut diagram: Diagram,
-        body: Vec<Element>,
-    ) -> Result<(Diagram, Report), Unbuilt> {
+    pub fn finish(self, body: Vec<Element>) -> Result<(Diagram, Report), Unbuilt> {
         if self.too_deep || umlcraft_nsd::model::depth(&body) > umlcraft_nsd::read::MAX_DEPTH {
             return Err(Unbuilt::TooDeep);
         }
+        let mut diagram = self.diagram;
         diagram.children = Sequence::new(body);
         Ok((diagram, Report { notes: self.notes }))
     }
@@ -158,16 +166,37 @@ impl<'a, G: Grammar> Builder<'a, G> {
 
     /// The language of the diagram's keywords.
     pub fn keywords(&self) -> Keywords {
-        Keywords::of(&self.header)
+        Keywords::of(&self.diagram)
     }
 
     pub fn element(&self, kind: ElementKind, text: &[String]) -> Element {
-        new_element(&self.header, kind, text)
+        new_element(&self.diagram, kind, text)
     }
 
     /// A statement as written, without its `;`.
     pub fn instruction(&self, node: Node) -> Element {
         self.element(ElementKind::Instruction, &without_semicolon(lines(node, self.src)))
+    }
+
+    /// A statement as a jump, without its `;`: `break`, `throw e`, `goto case 2`.
+    pub fn jump(&self, node: Node) -> Element {
+        self.element(ElementKind::Jump, &without_semicolon(lines(node, self.src)))
+    }
+
+    /// `continue`, which has no element: a stand-in, named in the report.
+    pub fn continued(&mut self, node: Node) -> Element {
+        self.note(node, NoteKind::Continue);
+        self.stand_in(node)
+    }
+
+    /// The statement of `outer: …` without its label (a child of kind `label`), the label
+    /// named in the report.
+    pub fn labeled(&mut self, node: Node, label: &str) -> Vec<Element> {
+        self.note(node, NoteKind::Label);
+        let mut cursor = node.walk();
+        let inner: Vec<Node> =
+            node.named_children(&mut cursor).filter(|c| c.kind() != label).collect();
+        self.statements(&inner)
     }
 
     /// A stand-in for what cannot be shown, as written: red and disabled, as Structorizer
@@ -552,6 +581,16 @@ impl<'a, G: Grammar> Builder<'a, G> {
     fn catch_body(&mut self, catch: &Catch) -> Vec<Element> {
         catch.body.map(|b| self.block(b)).unwrap_or_default()
     }
+}
+
+/// `x = switch …` (an `assignment_expression`, Java's and C#'s): where its values go and the
+/// switch.
+pub fn assigned_switch<'t>(expr: Node<'t>, src: &str) -> Option<(Sink, Node<'t>)> {
+    let op = node_text(expr.child_by_field_name("operator")?, src);
+    let left = expr.child_by_field_name("left")?;
+    let right = expr.child_by_field_name("right")?;
+    (op == "=" && right.kind() == "switch_expression")
+        .then(|| (Sink::Assign(node_text(left, src).to_owned()), right))
 }
 
 /// A for loop's initializations and updates (`init` in Java, `initializer` in C#), without

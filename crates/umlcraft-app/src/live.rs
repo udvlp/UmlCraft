@@ -174,10 +174,6 @@ impl Host for AppHost<'_> {
         self.effects.structogram_selection = Some((structogram, selection));
     }
 
-    fn sample(&self) -> Result<Document, String> {
-        Ok(crate::demo::velo(&*self.ws.measure))
-    }
-
     /// Draws as `display` says at once, for the rest of a batch; the main view then makes it
     /// the user's setting, as the settings dialog does.
     fn set_display(&mut self, display: Display) {

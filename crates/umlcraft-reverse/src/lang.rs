@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 
 use tree_sitter::Node;
 
+use crate::SourceLanguage;
+use crate::comment;
 use crate::ir::{Scope, TypeKind};
+use crate::library::TableLibrary;
 
 /// How a library type holds other values, which decides how an attribute of that type becomes
 /// an association (see [`crate::associations`]).
@@ -33,22 +36,15 @@ pub struct LibraryType {
     pub container: Container,
 }
 
-/// The standard library's public types, so names imported from it resolve to placeholders of
-/// the right kind at the right place.
-pub trait Library: Sync {
-    /// The type `name` (nested types as several segments) in `package`.
-    fn get(&self, package: &[String], name: &[String]) -> Option<&LibraryType>;
-    /// Whether `path` names a package of the library.
-    fn is_package(&self, path: &[String]) -> bool;
-}
-
 /// What the mapping needs to know about a language besides its IR.
 pub struct Rules {
     /// Built-in types, kept as text.
     pub primitives: &'static [&'static str],
     /// Packages whose types are visible without an import (`java.lang`).
     pub implicit_imports: &'static [&'static [&'static str]],
-    pub library: &'static dyn Library,
+    /// The standard library's public types, so names imported from it resolve to placeholders
+    /// of the right kind at the right place.
+    pub library: &'static TableLibrary,
     /// Packages whose types never become association ends (`java.lang`: `String`, `Integer` …).
     pub value_packages: &'static [&'static [&'static str]],
     /// Splits a qualified name that names nothing known into package and type segments.
@@ -161,6 +157,66 @@ pub trait Frontend: Sync {
     /// `text` (see [`crate::parse_tree`]), counting what is left out in `skipped`. `module` is
     /// the module the file is, for languages whose files are modules (Python), else empty.
     fn lower(&self, root: Node, text: &str, module: &[String], skipped: &mut Skipped) -> Scope;
+}
+
+/// The language a front-end's [`Reader`] reads.
+pub(crate) trait Language {
+    const LANGUAGE: SourceLanguage;
+}
+
+/// What a front-end reads one file with: the text the tree was parsed from and the count of
+/// what it leaves out. Each front-end adds its own methods for its `L`, which also holds what
+/// it keeps per file.
+pub(crate) struct Reader<'a, L> {
+    pub src: &'a str,
+    pub skipped: &'a mut Skipped,
+    pub lang: L,
+}
+
+impl<'a, L: Language> Reader<'a, L> {
+    pub fn text(&self, node: Node) -> &'a str {
+        &self.src[node.byte_range()]
+    }
+
+    pub fn count(&mut self, skip: Skip) {
+        *self.skipped.entry(skip).or_default() += 1;
+    }
+
+    /// The documentation comment right before `node`, as the language writes it
+    /// ([`comment::documentation`]).
+    pub fn documentation(&self, node: Node) -> String {
+        comment::documentation(L::LANGUAGE, node, self.src)
+    }
+}
+
+pub(crate) fn named_children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).collect()
+}
+
+pub(crate) fn children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor).collect()
+}
+
+/// Text with its whitespace runs made single blanks: `unsigned  long` is `unsigned long`.
+pub(crate) fn squeeze(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// [`Rules::split_qualified`] where namespaces and types look alike (C#, C++): the type is the
+/// last segment.
+pub(crate) fn split_at_last(path: &[String]) -> usize {
+    path.len().saturating_sub(1)
+}
+
+/// [`Rules::split_qualified`] where packages are lower case and types start with a capital
+/// letter (Java, Python's PEP 8): the package ends before the first segment that starts with a
+/// capital letter or contains a `$` (Java's nested types), else the type is the last segment.
+pub(crate) fn split_at_capital(path: &[String]) -> usize {
+    path.iter()
+        .position(|s| s.starts_with(|c: char| c.is_uppercase()) || s.contains('$'))
+        .unwrap_or(split_at_last(path))
 }
 
 /// The first syntax error in a tree-sitter tree, if any.

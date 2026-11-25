@@ -1,107 +1,108 @@
 //! A Java method body as structogram elements (the mapping of `docs/nsd-spec.md` § 4).
 
 use tree_sitter::Node;
-use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind};
+use umlcraft_nsd::{Diagram, Element, ElementKind};
 
 use super::{Java, declaration, title};
-use crate::core::{Builder, Catch, Group, Sink};
+use crate::core::{Builder, Catch, Grammar, Group, Sink, assigned_switch};
 use crate::pseudo;
-use crate::text::{condition, documentation, lines, lines_at, node_text, without_semicolon};
+use crate::text::{condition, documentation, lines, lines_at, node_text};
 use crate::{Made, NoteKind, Report, SourceLanguage, Unbuilt};
 
 const LOCAL_TYPES: [&str; 4] =
     ["class_declaration", "record_declaration", "enum_declaration", "interface_declaration"];
 
 pub fn diagram(method: Node, src: &str, made: &Made) -> Result<(Diagram, Report), Unbuilt> {
-    let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
-    let mut d = Diagram::new(RootKind::Sub, &[title(method, src)], &provenance);
-    d.set_keywords(made.keywords);
-    if let Some(doc) = documentation(SourceLanguage::Java, method, src) {
-        d.set_comment(&doc);
-    }
-    let mut b = Builder::<Java>::new(src, d.clone());
+    let doc = documentation(SourceLanguage::Java, method, src);
+    let mut b = Builder::<Java>::new(src, made, &title(method, src), doc.as_deref());
     let body = method.child_by_field_name("body").map(|n| b.block(n)).unwrap_or_default();
-    b.finish(d, body)
+    b.finish(body)
 }
 
-pub fn statement(b: &mut Builder<Java>, node: Node, out: &mut Vec<Element>) {
-    let src = b.src;
-    match node.kind() {
-        "block" => out.extend(b.block(node)),
-        ";" | "empty_statement" => {}
-        "local_variable_declaration" => {
-            if let Some((name, switch)) = declared_switch(node, src) {
-                out.extend(b.switch(switch, Some(Sink::Assign(name))));
-            } else if node.has_error() {
-                out.push(b.syntax_error(node));
-            } else {
-                out.extend(simple(b, node));
+impl Grammar for Java {
+    const COMMENTS: &'static [&'static str] = &["line_comment", "block_comment"];
+    const BLOCKS: &'static [&'static str] =
+        &["block", "constructor_body", "switch_block_statement_group"];
+    const IGNORED: &'static [&'static str] = &["switch_label"];
+    const ENDS_CASE: &'static [&'static str] = &[
+        "break_statement",
+        "return_statement",
+        "throw_statement",
+        "continue_statement",
+        "yield_statement",
+    ];
+    const RUNS_ON: bool = true;
+    const BREAK_ENDS_CASE: bool = true;
+    const TRUE: &'static str = "true";
+
+    fn statement(b: &mut Builder<'_, Self>, node: Node, out: &mut Vec<Element>) {
+        let src = b.src;
+        match node.kind() {
+            "block" => out.extend(b.block(node)),
+            ";" | "empty_statement" => {}
+            "local_variable_declaration" => {
+                if let Some((name, switch)) = declared_switch(node, src) {
+                    out.extend(b.switch(switch, Some(Sink::Assign(name))));
+                } else if node.has_error() {
+                    out.push(b.syntax_error(node));
+                } else {
+                    out.extend(Self::simple(b, node));
+                }
             }
+            "expression_statement" => out.extend(b.expression_statement(node)),
+            "switch_expression" => out.extend(b.switch(node, None)),
+            "if_statement" => out.push(b.if_statement(node)),
+            "for_statement" => {
+                let counting = counted(node, src)
+                    .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
+                b.for_loop(node, counting, out);
+            }
+            "enhanced_for_statement" => {
+                let name = node.child_by_field_name("name").map(|n| node_text(n, src));
+                out.push(b.traversal(
+                    node,
+                    name.unwrap_or_default(),
+                    node.child_by_field_name("value"),
+                ));
+            }
+            "while_statement" => out.push(b.while_statement(node)),
+            "do_statement" => out.push(b.do_statement(node)),
+            "return_statement"
+                if node.named_child(0).is_some_and(|v| v.kind() == "switch_expression") =>
+            {
+                let switch = node.named_child(0).expect("checked above");
+                out.extend(b.switch(switch, Some(Sink::Return)));
+            }
+            "return_statement" => out.push(b.returned(node)),
+            "throw_statement" | "break_statement" => out.push(b.jump(node)),
+            "yield_statement" => {
+                let value = node.named_child(0).map(|v| lines(v, src)).unwrap_or_default();
+                out.push(b.valued(value, node));
+            }
+            "continue_statement" => out.push(b.continued(node)),
+            "labeled_statement" => out.extend(b.labeled(node, "identifier")),
+            "try_statement" | "try_with_resources_statement" => out.push(b.try_statement(node)),
+            "synchronized_statement" => {
+                b.note(node, NoteKind::Synchronized);
+                let lock = node.child_by_field_name("lock").or_else(|| node.named_child(0));
+                let lock = lock.map(|l| node_text(l, src)).unwrap_or_default();
+                b.framed(format!("synchronized {lock}"), node.child_by_field_name("body"), out);
+            }
+            kind if LOCAL_TYPES.contains(&kind) => b.note(node, NoteKind::LocalClass),
+            _ if node.has_error() => out.push(b.syntax_error(node)),
+            _ => out.push(b.instruction(node)),
         }
-        "expression_statement" => out.extend(b.expression_statement(node)),
-        "switch_expression" => out.extend(b.switch(node, None)),
-        "if_statement" => out.push(b.if_statement(node)),
-        "for_statement" => {
-            let counting = counted(node, src)
-                .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
-            b.for_loop(node, counting, out);
-        }
-        "enhanced_for_statement" => {
-            let name = node.child_by_field_name("name").map(|n| node_text(n, src));
-            out.push(b.traversal(
-                node,
-                name.unwrap_or_default(),
-                node.child_by_field_name("value"),
-            ));
-        }
-        "while_statement" => out.push(b.while_statement(node)),
-        "do_statement" => out.push(b.do_statement(node)),
-        "return_statement"
-            if node.named_child(0).is_some_and(|v| v.kind() == "switch_expression") =>
-        {
-            let switch = node.named_child(0).expect("checked above");
-            out.extend(b.switch(switch, Some(Sink::Return)));
-        }
-        "return_statement" => out.push(b.returned(node)),
-        "throw_statement" | "break_statement" => {
-            out.push(b.element(ElementKind::Jump, &without_semicolon(lines(node, src))));
-        }
-        "yield_statement" => {
-            let value = node.named_child(0).map(|v| lines(v, src)).unwrap_or_default();
-            out.push(b.valued(value, node));
-        }
-        "continue_statement" => {
-            b.note(node, NoteKind::Continue);
-            out.push(b.stand_in(node));
-        }
-        "labeled_statement" => {
-            b.note(node, NoteKind::Label);
-            let mut cursor = node.walk();
-            let inner: Vec<Node> =
-                node.named_children(&mut cursor).filter(|c| c.kind() != "identifier").collect();
-            out.extend(b.statements(&inner));
-        }
-        "try_statement" | "try_with_resources_statement" => out.push(b.try_statement(node)),
-        "synchronized_statement" => {
-            b.note(node, NoteKind::Synchronized);
-            let lock = node.child_by_field_name("lock").or_else(|| node.named_child(0));
-            let lock = lock.map(|l| node_text(l, src)).unwrap_or_default();
-            b.framed(format!("synchronized {lock}"), node.child_by_field_name("body"), out);
-        }
-        kind if LOCAL_TYPES.contains(&kind) => b.note(node, NoteKind::LocalClass),
-        _ if node.has_error() => out.push(b.syntax_error(node)),
-        _ => out.push(b.instruction(node)),
     }
-}
 
-/// A declaration or expression without its statement: one instruction per assignment
-/// (`x := 1`, none for `int x;`), other expressions as written.
-pub fn simple(b: &Builder<Java>, node: Node) -> Vec<Element> {
-    let texts = match node.kind() {
-        "local_variable_declaration" => declaration(node, b.src),
-        _ => vec![pseudo::assignment(node, b.src).unwrap_or_else(|| lines(node, b.src))],
-    };
-    texts.iter().map(|text| b.element(ElementKind::Instruction, text)).collect()
+    /// A declaration or expression without its statement: one instruction per assignment
+    /// (`x := 1`, none for `int x;`), other expressions as written.
+    fn simple(b: &Builder<'_, Self>, node: Node) -> Vec<Element> {
+        let texts = match node.kind() {
+            "local_variable_declaration" => declaration(node, b.src),
+            _ => vec![pseudo::assignment(node, b.src).unwrap_or_else(|| lines(node, b.src))],
+        };
+        texts.iter().map(|text| b.element(ElementKind::Instruction, text)).collect()
+    }
 }
 
 /// The variable a for loop counts and its start: `int i = 0` or `i = 0` as its only
@@ -117,12 +118,7 @@ fn counted<'t>(node: Node<'t>, src: &str) -> Option<(Node<'t>, Node<'t>)> {
             let [d] = declarators.as_slice() else { return None };
             Some((d.child_by_field_name("name")?, d.child_by_field_name("value")?))
         }
-        [init] if init.kind() == "assignment_expression" => {
-            let op = node_text(init.child_by_field_name("operator")?, src);
-            let left = init.child_by_field_name("left")?;
-            (op == "=" && left.kind() == "identifier")
-                .then_some((left, init.child_by_field_name("right")?))
-        }
+        [init] if init.kind() == "assignment_expression" => pseudo::counted_assignment(*init, src),
         _ => None,
     }
 }
@@ -142,13 +138,8 @@ impl Builder<'_, Java> {
                 }
             }
             "assignment_expression" => {
-                let op = expr.child_by_field_name("operator").map(|o| node_text(o, src));
-                if let (Some("="), Some(left), Some(right)) =
-                    (op, expr.child_by_field_name("left"), expr.child_by_field_name("right"))
-                    && right.kind() == "switch_expression"
-                {
-                    let sink = Sink::Assign(node_text(left, src).to_owned());
-                    return self.switch(right, Some(sink));
+                if let Some((sink, switch)) = assigned_switch(expr, src) {
+                    return self.switch(switch, Some(sink));
                 }
             }
             "switch_expression" => return self.switch(expr, None),
@@ -157,7 +148,7 @@ impl Builder<'_, Java> {
         if node.has_error() {
             return vec![self.syntax_error(node)];
         }
-        simple(self, expr)
+        Java::simple(self, expr)
     }
 
     /// A switch statement or expression as a case element (see [`Builder::cases`]).

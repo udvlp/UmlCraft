@@ -218,8 +218,7 @@ fn mensa(host: &mut Headless, at: [Option<(f32, f32)>; 3]) -> (String, Vec<Value
 
 /// The drawn rectangles of the nodes `made` on diagram `d`.
 fn drawn_rects(host: &mut Headless, d: &str, made: &[Value]) -> Vec<Rect> {
-    let (doc, measure) = host.parts();
-    let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+    let scene = drawn(host, d);
     made.iter().map(|v| scene.node(id(&v["presentation"]).parse().unwrap()).unwrap().rect).collect()
 }
 
@@ -281,10 +280,55 @@ fn build(host: &mut Headless, calls: Value) -> Vec<Value> {
     run(host, "batch", json!({ "calls": calls }))["results"].as_array().unwrap().clone()
 }
 
+/// A diagram as the tests hold it: a reply's field, its id as text, or its id.
+trait DiagramRef {
+    fn diagram(&self) -> Id;
+}
+
+impl DiagramRef for Value {
+    fn diagram(&self) -> Id {
+        id(self).parse().unwrap()
+    }
+}
+
+impl DiagramRef for str {
+    fn diagram(&self) -> Id {
+        self.parse().unwrap()
+    }
+}
+
+impl DiagramRef for String {
+    fn diagram(&self) -> Id {
+        self.as_str().diagram()
+    }
+}
+
+impl DiagramRef for Id {
+    fn diagram(&self) -> Id {
+        *self
+    }
+}
+
 /// The scene of the diagram `d`.
-fn drawn(host: &mut Headless, d: &Value) -> scene::Scene {
+fn drawn(host: &mut Headless, d: &(impl DiagramRef + ?Sized)) -> scene::Scene {
     let (doc, measure) = host.parts();
-    scene::build(doc.model(), id(d).parse().unwrap(), &Preview::default(), measure)
+    scene::build(doc.model(), d.diagram(), &Preview::default(), measure)
+}
+
+/// The diagram `d` as SVG.
+fn drawn_svg(host: &mut Headless, d: &(impl DiagramRef + ?Sized)) -> String {
+    let (doc, measure) = host.parts();
+    svg::render(&scene::build(doc.model(), d.diagram(), &Preview::default(), measure), measure)
+}
+
+/// The text of the error `name` answers `args` with.
+fn refusal(host: &mut Headless, name: &str, args: Value) -> String {
+    let reply = call(host, &Access::default(), name, &args);
+    assert!(reply.is_error, "{name} {args}");
+    match &reply.content[0] {
+        Content::Text(text) => text.clone(),
+        Content::Image(_) => unreachable!(),
+    }
 }
 
 /// The heights of the messages of the sequence diagram `d`, by name.

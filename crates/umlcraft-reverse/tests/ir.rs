@@ -2,65 +2,21 @@
 //! sources. Run with `UPDATE_SNAPSHOTS=1` to write the snapshots after a deliberate change, and
 //! review the diff.
 
+#[macro_use]
 mod common;
 
 use umlcraft_reverse::SourceLanguage;
 
-fn check(case: &str) {
-    common::check_ir(SourceLanguage::Java, case);
-}
-
-#[test]
-fn packages() {
-    check("packages");
-}
-
-#[test]
-fn kinds() {
-    check("kinds");
-}
-
-#[test]
-fn modifiers() {
-    check("modifiers");
-}
-
-#[test]
-fn javadoc() {
-    check("javadoc");
-}
-
-#[test]
-fn annotations() {
-    check("annotations");
-}
-
-#[test]
-fn initializers() {
-    check("initializers");
-}
-
-#[test]
-fn inheritance() {
-    check("inheritance");
-}
-
-#[test]
-fn generics() {
-    check("generics");
-}
-
-#[test]
-fn arrays_varargs() {
-    check("arrays_varargs");
-}
-
-#[test]
-fn syntax_error() {
-    check("syntax_error");
-}
-
-#[test]
-fn encoding() {
-    check("encoding");
-}
+ir_tests!(SourceLanguage::Java;
+    packages,
+    kinds,
+    modifiers,
+    javadoc,
+    annotations,
+    initializers,
+    inheritance,
+    generics,
+    arrays_varargs,
+    syntax_error,
+    encoding,
+);

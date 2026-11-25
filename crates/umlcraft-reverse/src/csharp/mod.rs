@@ -34,21 +34,22 @@ use crate::ir::{
     Field, Import, Item, Literal, Member, Operation, Param, Relation, Scope, Supertype,
     TemplateParam, TypeDecl, TypeExpr, TypeKind, TypeName,
 };
-use crate::lang::{Frontend, Skip, Skipped};
+use crate::lang::{Frontend, Language, Skip, Skipped, children, named_children, squeeze};
 
 pub struct CSharp;
 
 impl Frontend for CSharp {
     fn lower(&self, root: Node, text: &str, _module: &[String], skipped: &mut Skipped) -> Scope {
-        let mut reader = Reader { src: text, skipped };
+        let mut reader = Reader { src: text, skipped, lang: CSharp };
         reader.scope(&named_children(root))
     }
 }
 
-struct Reader<'a> {
-    src: &'a str,
-    skipped: &'a mut Skipped,
+impl Language for CSharp {
+    const LANGUAGE: crate::SourceLanguage = crate::SourceLanguage::CSharp;
 }
+
+type Reader<'a> = crate::lang::Reader<'a, CSharp>;
 
 /// Where a declaration sits; it decides the implicit modifiers.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,16 +80,6 @@ struct Accessor {
     span: std::ops::Range<usize>,
 }
 
-fn named_children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor).collect()
-}
-
-fn children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
-    let mut cursor = node.walk();
-    node.children(&mut cursor).collect()
-}
-
 /// The node right after the `=` among `node`'s children: an initializer or default value.
 fn after_equals(node: Node) -> Option<Node> {
     let parts = children(node);
@@ -103,15 +94,7 @@ fn is_interface_name(ty: &TypeExpr) -> bool {
     chars.next() == Some('I') && chars.next().is_some_and(char::is_uppercase)
 }
 
-impl<'a> Reader<'a> {
-    fn text(&self, node: Node) -> &'a str {
-        &self.src[node.byte_range()]
-    }
-
-    fn count(&mut self, skip: Skip) {
-        *self.skipped.entry(skip).or_default() += 1;
-    }
-
+impl Reader<'_> {
     /// The declarations among `nodes`, the children of a file or a namespace body.
     fn scope(&mut self, nodes: &[Node]) -> Scope {
         let mut scope = Scope::default();
@@ -173,12 +156,6 @@ impl<'a> Reader<'a> {
         }
         let alias = alias.map(|a| self.text(a).to_owned());
         Some(Import { path, wildcard: alias.is_none(), is_static, alias })
-    }
-
-    /// The documentation right before `node`: a run of `///` comments on the lines just above
-    /// it, or a `/** */` comment.
-    fn documentation(&self, node: Node) -> String {
-        crate::comment::documentation(crate::SourceLanguage::CSharp, node, self.src)
     }
 
     fn count_attributes(&mut self, list: Node) {
@@ -272,28 +249,18 @@ impl<'a> Reader<'a> {
                         name: p.name,
                         ty: p.ty,
                         visibility: Visibility::Public,
-                        is_static: false,
                         is_read_only,
-                        default: None,
-                        tags: Vec::new(),
-                        documentation: String::new(),
+                        ..Default::default()
                     }));
                 }
             } else {
                 t.members.push(Member::Operation(Operation {
                     name: t.name.clone(),
                     parameters: params,
-                    return_type: None,
                     visibility: Visibility::Public,
-                    is_static: false,
-                    is_abstract: false,
-                    is_leaf: false,
                     is_constructor: true,
-                    is_query: false,
-                    template_parameters: Vec::new(),
-                    tags: Vec::new(),
-                    documentation: String::new(),
                     span: list.byte_range(),
+                    ..Default::default()
                 }));
             }
         }
@@ -402,8 +369,8 @@ impl<'a> Reader<'a> {
                     is_static: m.is_static || m.is_const,
                     is_read_only: m.is_readonly || m.is_const,
                     default,
-                    tags: Vec::new(),
                     documentation: documentation.clone(),
+                    ..Default::default()
                 })
             })
             .collect()
@@ -455,8 +422,8 @@ impl<'a> Reader<'a> {
                 is_static: m.is_static,
                 is_read_only: !accessors.iter().any(|a| a.kind == "set"),
                 default: value.map(|v| self.text(v).to_owned()),
-                tags: Vec::new(),
                 documentation,
+                ..Default::default()
             }));
             return;
         }
@@ -469,12 +436,7 @@ impl<'a> Reader<'a> {
                 (format!("get_{name}"), index.clone(), Some(ty.clone()))
             } else {
                 let mut params = index.clone();
-                params.push(Param {
-                    name: "value".into(),
-                    ty: ty.clone(),
-                    default: None,
-                    direction: ParameterDirection::In,
-                });
+                params.push(Param { name: "value".into(), ty: ty.clone(), ..Default::default() });
                 (format!("set_{name}"), params, Some(TypeExpr::builtin("void")))
             };
             members.push(Member::Operation(Operation {
@@ -485,12 +447,9 @@ impl<'a> Reader<'a> {
                 is_static: m.is_static,
                 is_abstract: !a.has_body && is_abstract,
                 is_leaf: m.is_sealed,
-                is_constructor: false,
-                is_query: false,
-                template_parameters: Vec::new(),
-                tags: Vec::new(),
                 documentation: documentation.clone(),
                 span: a.span,
+                ..Default::default()
             }));
         }
     }
@@ -545,11 +504,10 @@ impl<'a> Reader<'a> {
             is_abstract: m.is_abstract || (interface && !has_body && !m.is_static),
             is_leaf: m.is_sealed,
             is_constructor,
-            is_query: false,
             template_parameters,
-            tags: Vec::new(),
             documentation,
             span: node.byte_range(),
+            ..Default::default()
         })
     }
 
@@ -576,8 +534,7 @@ impl<'a> Reader<'a> {
                 (Some("name"), _) => {
                     if let Some(ty) = spread.take() {
                         let name = self.text(node).to_owned();
-                        let direction = ParameterDirection::In;
-                        params.push(Param { name, ty, default: None, direction });
+                        params.push(Param { name, ty, ..Default::default() });
                     }
                 }
                 _ => {}
@@ -676,9 +633,7 @@ impl<'a> Reader<'a> {
             "ref_type" | "scoped_type" => {
                 return self.type_expr(node.child_by_field_name("type")?);
             }
-            "tuple_type" | "function_pointer_type" => {
-                TypeExpr::builtin(self.text(node).split_whitespace().collect::<Vec<_>>().join(" "))
-            }
+            "tuple_type" | "function_pointer_type" => TypeExpr::builtin(squeeze(self.text(node))),
             _ => return None,
         })
     }
@@ -687,17 +642,10 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SourceLanguage, dump_text};
 
     fn parse(text: &str) -> (String, Skipped) {
-        let mut skipped = Skipped::new();
-        let scope = crate::lower_scope(
-            &crate::parse_tree(crate::SourceLanguage::CSharp, text),
-            &[],
-            &mut skipped,
-        )
-        .unwrap();
-        let unit = crate::ir::Unit { path: Default::default(), scope };
-        (unit.dump(), skipped)
+        dump_text(SourceLanguage::CSharp, text, &[]).unwrap()
     }
 
     #[test]
@@ -723,13 +671,8 @@ mod tests {
 
     #[test]
     fn reports_the_first_syntax_error() {
-        let mut skipped = Skipped::new();
-        let error = crate::lower_scope(
-            &crate::parse_tree(crate::SourceLanguage::CSharp, "class A {\n  int x = ;\n}\n"),
-            &[],
-            &mut skipped,
-        )
-        .unwrap_err();
+        let error =
+            dump_text(SourceLanguage::CSharp, "class A {\n  int x = ;\n}\n", &[]).unwrap_err();
         assert_eq!((error.line, error.column, error.token.as_str()), (2, 9, "="));
     }
 }

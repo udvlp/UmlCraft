@@ -4,13 +4,13 @@
 use std::collections::BTreeSet;
 
 use tree_sitter::Node;
-use umlcraft_nsd::{Diagram, Element, ElementKind, Keywords, Provenance, RootKind, Sequence};
+use umlcraft_nsd::{Diagram, Element, ElementKind, Keywords, Sequence};
 
 use super::Python;
 use super::methods::Member;
-use crate::core::{Builder, Catch, Group, append_comment};
+use crate::core::{Builder, Catch, Grammar, Group, append_comment};
 use crate::pseudo;
-use crate::text::{condition, lines, lines_at, node_text, one_line, without_semicolon};
+use crate::text::{condition, lines, lines_at, node_text, one_line};
 use crate::{Made, NoteKind, Report, Unbuilt};
 
 /// The diagram of `member`; `own` are the names of the functions the file defines
@@ -21,89 +21,88 @@ pub fn diagram(
     src: &str,
     made: &Made,
 ) -> Result<(Diagram, Report), Unbuilt> {
-    let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
-    let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
-    d.set_keywords(made.keywords);
-    if let Some(doc) = &member.doc {
-        d.set_comment(doc);
-    }
-    let mut b = Builder::<Python>::new(src, d.clone());
+    let mut b = Builder::<Python>::new(src, made, &member.title, member.doc.as_deref());
     b.own_functions = own;
     let body = b.statements(&member.statements);
-    b.finish(d, body)
+    b.finish(body)
 }
 
-pub fn statement(b: &mut Builder<Python>, node: Node, out: &mut Vec<Element>) {
-    let src = b.src;
-    match node.kind() {
-        "pass_statement" => {}
-        _ if node.has_error() => out.push(b.syntax_error(node)),
-        "block" => out.extend(b.block(node)),
-        // `f(), g()`: each expression on its own.
-        "expression_statement" => {
-            let mut cursor = node.walk();
-            let expressions: Vec<Node> =
-                node.named_children(&mut cursor).filter(|c| c.kind() != "comment").collect();
-            if expressions.is_empty() {
-                out.push(b.instruction(node));
-            }
-            for expr in expressions {
-                out.extend(b.expression(expr));
-            }
-        }
-        "if_statement" => {
-            let alternatives = alternatives(node);
-            out.push(b.if_chain(node, &alternatives));
-        }
-        "for_statement" => {
-            let left = node.child_by_field_name("left");
-            let right = node.child_by_field_name("right");
-            let name = left.map(|l| one_line(node_text(l, src))).unwrap_or_default();
-            let counting = left
-                .filter(|l| l.kind() == "identifier")
-                .zip(right)
-                .and_then(|(_, r)| range_counting(b.keywords(), &name, r, src));
-            out.push(match counting {
-                Some(text) => {
-                    let mut e = b.element(ElementKind::For, &[text]);
-                    e.branches[0] = b.body(node);
-                    e
+impl Grammar for Python {
+    const COMMENTS: &'static [&'static str] = &["comment"];
+    const BLOCKS: &'static [&'static str] = &["block"];
+    const IGNORED: &'static [&'static str] = &[];
+    const ENDS_CASE: &'static [&'static str] = &[];
+    const RUNS_ON: bool = false;
+    const BREAK_ENDS_CASE: bool = false;
+    const TRUE: &'static str = "True";
+
+    fn statement(b: &mut Builder<'_, Self>, node: Node, out: &mut Vec<Element>) {
+        let src = b.src;
+        match node.kind() {
+            "pass_statement" => {}
+            _ if node.has_error() => out.push(b.syntax_error(node)),
+            "block" => out.extend(b.block(node)),
+            // `f(), g()`: each expression on its own.
+            "expression_statement" => {
+                let mut cursor = node.walk();
+                let expressions: Vec<Node> =
+                    node.named_children(&mut cursor).filter(|c| c.kind() != "comment").collect();
+                if expressions.is_empty() {
+                    out.push(b.instruction(node));
                 }
-                None => b.traversal(node, &name, right),
-            });
-            b.loop_else(node, out);
+                for expr in expressions {
+                    out.extend(b.expression(expr));
+                }
+            }
+            "if_statement" => {
+                let alternatives = alternatives(node);
+                out.push(b.if_chain(node, &alternatives));
+            }
+            "for_statement" => {
+                let left = node.child_by_field_name("left");
+                let right = node.child_by_field_name("right");
+                let name = left.map(|l| one_line(node_text(l, src))).unwrap_or_default();
+                let counting = left
+                    .filter(|l| l.kind() == "identifier")
+                    .zip(right)
+                    .and_then(|(_, r)| range_counting(b.keywords(), &name, r, src));
+                out.push(match counting {
+                    Some(text) => {
+                        let mut e = b.element(ElementKind::For, &[text]);
+                        e.branches[0] = b.body(node);
+                        e
+                    }
+                    None => b.traversal(node, &name, right),
+                });
+                b.loop_else(node, out);
+            }
+            "while_statement" => {
+                out.push(b.while_statement(node));
+                b.loop_else(node, out);
+            }
+            "match_statement" => out.extend(b.match_statement(node)),
+            "return_statement" => out.push(b.returned(node)),
+            "raise_statement" | "break_statement" => out.push(b.jump(node)),
+            "continue_statement" => out.push(b.continued(node)),
+            "try_statement" => out.push(b.try_statement(node)),
+            "with_statement" => b.with_statement(node, out),
+            "function_definition" | "decorated_definition" => {
+                b.note(node, NoteKind::NestedFunction);
+            }
+            "class_definition" => b.note(node, NoteKind::LocalClass),
+            _ => out.push(b.instruction(node)),
         }
-        "while_statement" => {
-            out.push(b.while_statement(node));
-            b.loop_else(node, out);
-        }
-        "match_statement" => out.extend(b.match_statement(node)),
-        "return_statement" => out.push(b.returned(node)),
-        "raise_statement" | "break_statement" => {
-            out.push(b.element(ElementKind::Jump, &without_semicolon(lines(node, src))));
-        }
-        "continue_statement" => {
-            b.note(node, NoteKind::Continue);
-            out.push(b.stand_in(node));
-        }
-        "try_statement" => out.push(b.try_statement(node)),
-        "with_statement" => b.with_statement(node, out),
-        "function_definition" | "decorated_definition" => {
-            b.note(node, NoteKind::NestedFunction);
-        }
-        "class_definition" => b.note(node, NoteKind::LocalClass),
-        _ => out.push(b.instruction(node)),
     }
-}
 
-/// An expression without its statement: one instruction per assignment, other expressions
-/// as written.
-pub fn simple(b: &Builder<Python>, node: Node) -> Vec<Element> {
-    let texts = match node.kind() {
-        "assignment" => assignments(node, b.src),
-        _ => vec![pseudo::assignment(node, b.src).unwrap_or_else(|| lines(node, b.src))],
-    };
-    texts.iter().map(|text| b.element(ElementKind::Instruction, text)).collect()
+    /// An expression without its statement: one instruction per assignment, other
+    /// expressions as written.
+    fn simple(b: &Builder<'_, Self>, node: Node) -> Vec<Element> {
+        let texts = match node.kind() {
+            "assignment" => assignments(node, b.src),
+            _ => vec![pseudo::assignment(node, b.src).unwrap_or_else(|| lines(node, b.src))],
+        };
+        texts.iter().map(|text| b.element(ElementKind::Instruction, text)).collect()
+    }
 }
 
 /// `x = 1`, `x: int = 1` → `x := 1`; `a = b = 0` → `a := 0`, `b := 0`; `x: int` → nothing.
@@ -205,9 +204,9 @@ impl Builder<'_, Python> {
                 if expr.child_by_field_name("right").is_some_and(|r| r.kind() == "yield") {
                     self.note(expr, NoteKind::Yield);
                 }
-                simple(self, expr)
+                Python::simple(self, expr)
             }
-            _ => simple(self, expr),
+            _ => Python::simple(self, expr),
         }
     }
 

@@ -39,6 +39,14 @@ fn relative(rect: Rect, p: Point) -> Point {
     Point::new(fraction(p.x, rect.x, rect.width), fraction(p.y, rect.y, rect.height))
 }
 
+/// [`relative`] kept inside `rect`: `p` moved onto it first if it lies outside.
+pub(crate) fn clamped_relative(rect: Rect, p: Point) -> Point {
+    let fraction = |v: f32, start: f32, size: f32| {
+        if size > 0.0 { ((v - start) / size).clamp(0.0, 1.0) } else { 0.5 }
+    };
+    Point::new(fraction(p.x, rect.x, rect.width), fraction(p.y, rect.y, rect.height))
+}
+
 /// Ends of a right-angled line closer than this across its direction are joined by a straight,
 /// slightly slanted line instead of a step (Astah: 1.8 apart straight, 2.21 a step).
 pub(crate) const NO_STEP: f32 = 2.0;

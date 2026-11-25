@@ -75,6 +75,28 @@ pub(crate) fn add_frame(tx: &mut Tx<'_>, diagram: Id, at: Point) -> Result<Rect>
     Ok(bounds)
 }
 
+/// A new node of `kind` at `at` that goes on the frame of `diagram`: its owner, the closest one
+/// up from the diagram's that may own it (else [`ModelError::Invalid`] saying `no_owner`), and
+/// the frame's bounds, the frame being added first if the diagram has none.
+pub(crate) fn onto_frame(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    kind: &ElementKind,
+    at: Point,
+    no_owner: &str,
+) -> Result<(Id, Rect)> {
+    let model = tx.model();
+    let start = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
+    let owner =
+        owner_for(model, start, kind).ok_or_else(|| ModelError::Invalid(no_owner.into()))?;
+    let view = model.view_of(diagram)?;
+    let frame = match frame(view, diagram).and_then(|f| f.bounds()) {
+        Some(r) => r,
+        None => add_frame(tx, diagram, at)?,
+    };
+    Ok((owner, frame))
+}
+
 /// Creates a pin or an activity parameter node with `tool` at `origin` on the activity diagram
 /// `diagram`. A pin goes on the action at or nearest to the point and belongs to it; an
 /// activity parameter node belongs to the activity and goes on the frame's border nearest to
@@ -101,14 +123,7 @@ pub fn create_node(
             action.element.ok_or(ModelError::NotFound(action.id))?
         }
         _ => {
-            let start = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
-            let owner = owner_for(model, start, &kind)
-                .ok_or_else(|| ModelError::Invalid("no activity for the parameter".into()))?;
-            let framed = frame(view, diagram).and_then(|f| f.bounds());
-            let r = match framed {
-                Some(r) => r,
-                None => add_frame(tx, diagram, at)?,
-            };
+            let (owner, r) = onto_frame(tx, diagram, &kind, at, "no activity for the parameter")?;
             bounds = snap(bounds, r);
             owner
         }

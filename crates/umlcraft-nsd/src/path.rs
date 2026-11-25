@@ -204,19 +204,17 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Element, Provenance, RootKind, lines};
+    use crate::create::test_diagram;
+    use crate::{Element, lines};
 
     fn sample() -> Diagram {
-        let made = Provenance { author: "t", date: "2026-10-29", origin: "test" };
-        let mut d = Diagram::new(RootKind::Program, &lines(&["demo"]), &made);
         let mut alt = Element::alternative(&lines(&["a > b"]));
         alt.branches[0] = Sequence::new(vec![Element::instruction(&lines(&["x"]))]);
-        d.children = Sequence::new(vec![
+        test_diagram(vec![
             Element::instruction(&lines(&["a"])),
             alt,
             Element::instruction(&lines(&["b"])),
-        ]);
-        d
+        ])
     }
 
     #[test]

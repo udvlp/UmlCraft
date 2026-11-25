@@ -1,8 +1,12 @@
 //! Exports the sample project through the installed Astah and reads the file back with
 //! UmlCraft's own importer. Skipped when no Astah installation with the API is found.
 
+#[path = "../../umlcraft-asta/tests/common/mod.rs"]
+mod common;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use common::{astah_home, skip};
 use umlcraft_asta_export::Astah;
 use umlcraft_model::sample::order_system;
 use umlcraft_model::{
@@ -623,13 +627,6 @@ fn interactions(model: &Model) -> Vec<String> {
         .collect();
     blocks.sort();
     blocks.concat()
-}
-
-/// Reports a test that cannot run here. With `UMLCRAFT_REQUIRE_ASTAH` set, as on a machine that
-/// has Astah, a skip fails instead, so a missing installation cannot pass for a green run.
-fn skip(reason: &str) {
-    assert!(std::env::var_os("UMLCRAFT_REQUIRE_ASTAH").is_none(), "not skipped: {reason}");
-    eprintln!("skipped: {reason}");
 }
 
 /// Exports `model` and imports the result again.
@@ -2137,11 +2134,7 @@ fn er_diagrams_through_astah() {
 /// keys and foreign keys, relationships and the notation of each diagram.
 #[test]
 fn sample_er_model_through_astah() {
-    let home = std::env::var_os("ASTAH_HOME").map_or_else(
-        || std::path::PathBuf::from(r"C:\Program Files\astah-professional"),
-        std::path::PathBuf::from,
-    );
-    let sample = home.join("Sample.asta");
+    let sample = astah_home().join("Sample.asta");
     if !sample.exists() {
         skip("Sample.asta not found");
         return;

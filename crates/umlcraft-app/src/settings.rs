@@ -116,10 +116,7 @@ impl Settings {
             && fs::create_dir_all(dir).is_ok()
             && let Ok(json) = serde_json::to_string_pretty(&merged)
         {
-            let partial = file.with_extension("json.tmp");
-            if fs::write(&partial, json).is_ok() && fs::rename(&partial, &file).is_err() {
-                let _ = fs::remove_file(&partial);
-            }
+            let _ = umlcraft_mcp::host::write_replacing(&file, json.as_bytes());
         }
         self.base = Some(mine);
     }

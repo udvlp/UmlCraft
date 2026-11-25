@@ -70,6 +70,22 @@ pub(crate) fn child_package(model: &Model, owner: Id, name: &str) -> Option<Id> 
         .find(|&c| model.get(c).is_some_and(|e| matches!(e.kind(), ElementKind::Package)))
 }
 
+/// Finds or creates the packages of `path` under `at`, one inside the other: the innermost, and
+/// how many were created.
+pub(crate) fn packages(tx: &mut Tx<'_>, mut at: Id, path: &[String]) -> Result<(Id, usize)> {
+    let mut created = 0;
+    for name in path {
+        at = match child_package(tx.model(), at, name) {
+            Some(p) => p,
+            None => {
+                created += 1;
+                tx.create(at, ElementData::new(name.clone(), ElementKind::Package))?
+            }
+        };
+    }
+    Ok((at, created))
+}
+
 /// The package or type at `path` from the root.
 fn path_lookup(model: &Model, path: &[String]) -> Option<Id> {
     path_lookup_from(model, model.root(), path)
@@ -400,18 +416,14 @@ impl<'p> Importer<'p> {
         {
             return Ok(t);
         }
-        let chain = self.chain(ctx.entry);
-        for &e in &chain {
+        for e in self.chain(ctx.entry) {
             if let Some(t) = named(model, template_parameters(model, self.entries[e].id), name) {
                 return Ok(t);
             }
         }
         // 2. Member types, also those inherited.
-        for &e in &chain {
-            let mut seen = HashSet::new();
-            if let Some(t) = self.member_type(model, self.entries[e].id, name, &mut seen) {
-                return Ok(t);
-            }
+        if let Some(t) = self.member_type_around(model, ctx.entry, name) {
+            return Ok(t);
         }
         let entry = &self.entries[ctx.entry];
         let (namespace, imports) = (entry.namespace, entry.imports.clone());
@@ -485,11 +497,8 @@ impl<'p> Importer<'p> {
     /// The type of the model a simple name stands for in `ctx`, without creating anything:
     /// member types, single-type imports, the packages around and on-demand imports.
     fn type_in_scope(&self, model: &Model, ctx: Ctx, name: &str) -> Option<Id> {
-        for e in self.chain(ctx.entry) {
-            let mut seen = HashSet::new();
-            if let Some(t) = self.member_type(model, self.entries[e].id, name, &mut seen) {
-                return Some(t);
-            }
+        if let Some(t) = self.member_type_around(model, ctx.entry, name) {
+            return Some(t);
         }
         let entry = &self.entries[ctx.entry];
         let imports = entry.imports.iter().filter(|i| !i.is_static);
@@ -566,8 +575,16 @@ impl<'p> Importer<'p> {
     }
 
     /// The entry and its outer entries, innermost first.
-    fn chain(&self, entry: usize) -> Vec<usize> {
+    pub(crate) fn chain(&self, entry: usize) -> Vec<usize> {
         std::iter::successors(Some(entry), |&e| self.entries[e].outer).collect()
+    }
+
+    /// A type nested in the type of `entry`, in one of its outer types or in one of their
+    /// supertypes, innermost first.
+    fn member_type_around(&self, model: &Model, entry: usize, name: &str) -> Option<Id> {
+        self.chain(entry)
+            .into_iter()
+            .find_map(|e| self.member_type(model, self.entries[e].id, name, &mut HashSet::new()))
     }
 
     /// A type nested in `class` or in one of its supertypes.
@@ -598,18 +615,10 @@ impl<'p> Importer<'p> {
         types: &[String],
         hint: TypeKind,
     ) -> Result<Id> {
-        let mut at = tx.model().root();
-        for name in package {
-            at = match child_package(tx.model(), at, name) {
-                Some(p) => p,
-                None => {
-                    self.report.placeholders += 1;
-                    tx.create(at, ElementData::new(name.clone(), ElementKind::Package))?
-                }
-            };
-        }
-        let (package_path, at) = (package.to_vec(), at);
-        self.nested_placeholder(tx, at, &package_path, &[], types, hint)
+        let root = tx.model().root();
+        let (at, created) = packages(tx, root, package)?;
+        self.report.placeholders += created;
+        self.nested_placeholder(tx, at, package, &[], types, hint)
     }
 
     /// A placeholder for `types` under `owner`, a package of unknown path.

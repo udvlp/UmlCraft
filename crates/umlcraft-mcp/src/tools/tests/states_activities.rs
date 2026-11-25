@@ -48,7 +48,7 @@ fn activity_pins_parameters_and_calls() {
         json!({ "id": param["element"], "ordering": "sideways" }),
         json!({ "id": pack["element"], "calls": pin_in["element"] }),
     ] {
-        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error, "{wrong}");
+        refusal(&mut host, "update_element", wrong);
     }
     let model = host.document().model();
     model.check().unwrap();
@@ -195,7 +195,7 @@ fn control_exception_and_effect_of_object_nodes() {
         ("update_element", json!({ "id": object["element"], "control": "yes" })),
         ("create_element", json!({ "diagram": d, "tool": "action", "name": "X", "control": true })),
     ] {
-        assert!(call(&mut host, &Access::default(), tool, &wrong).is_error, "{wrong}");
+        refusal(&mut host, tool, wrong);
     }
     let model = host.document().model();
     model.check().unwrap();
@@ -276,8 +276,7 @@ fn opposite_transitions_between_states_side_by_side_run_apart() {
     };
     let there = connect(&mut host, &a, &b);
     let back = connect(&mut host, &b, &a);
-    let (doc, measure) = host.parts();
-    let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+    let scene = drawn(&mut host, &d);
     let points = |e: &str| scene.edge(e.parse().unwrap()).unwrap().points.clone();
     let ys = |e: &str| points(e).iter().map(|p| p.y).collect::<Vec<_>>();
     // The second line, routed with the first, does not lie on it.
@@ -516,7 +515,7 @@ fn states_take_activities_and_internal_transitions() {
         json!({ "diagram": class["diagram"], "tool": "class", "name": "K" }),
     );
     let wrong = json!({ "id": class["element"], "entry": "x" });
-    assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+    refusal(&mut host, "update_element", wrong);
 
     // A transition's name is read as `trigger [guard] / effect`, as the app shows it.
     let other = run(&mut host, "create_element", json!({ "diagram": d, "tool": "state" }));
@@ -584,7 +583,7 @@ fn submachine_states_points_and_stubs() {
         json!({ "id": drive["element"], "submachine": car }),
         json!({ "id": drive["element"], "submachine": parked["element"] }),
     ] {
-        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error, "{wrong}");
+        refusal(&mut host, "update_element", wrong);
     }
     let model = host.document().model();
     model.check().unwrap();
@@ -621,9 +620,8 @@ fn simple_states_show_only_their_name_when_asked() {
     let mut host = Headless::new();
     // Whether the state's line is drawn, and how far the name's center lies from the
     // state's.
-    let drawn = |host: &mut Headless, d: &str, state: &Value| {
-        let (doc, measure) = host.parts();
-        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+    let shown = |host: &mut Headless, d: &str, state: &Value| {
+        let scene = drawn(host, d);
         let node = scene.node(id(&state["presentation"]).parse().unwrap()).unwrap();
         let scene::Figure::State { separator, .. } = node.figure else { panic!("a state") };
         (separator.is_some(), (node.rows[0].rect.center().y - node.rect.center().y).abs())
@@ -638,19 +636,19 @@ fn simple_states_show_only_their_name_when_asked() {
         let (ready, running) = (state("bereit"), state("aktiv"));
         let args = json!({ "owner": running["element"], "text": "entry / starten" });
         run(&mut host, "add_member", args);
-        let (line, off) = drawn(&mut host, &d, &ready);
+        let (line, off) = shown(&mut host, &d, &ready);
         assert_eq!(line, !simple, "simple_states {simple}");
         if simple {
             assert!(off < 0.5, "the name centered: {off}");
         }
-        assert!(drawn(&mut host, &d, &running).0, "a state with an activity keeps its line");
+        assert!(shown(&mut host, &d, &running).0, "a state with an activity keeps its line");
         // Switched afterwards on the diagram.
         run(&mut host, "update_element", json!({ "id": d, "simple_states": !simple }));
-        assert_eq!(drawn(&mut host, &d, &ready).0, simple);
+        assert_eq!(shown(&mut host, &d, &ready).0, simple);
     }
     let class = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "C" }));
     let args = json!({ "id": class["diagram"], "simple_states": true });
-    assert!(call(&mut host, &Access::default(), "update_element", &args).is_error);
+    refusal(&mut host, "update_element", args);
 }
 
 #[test]
@@ -720,8 +718,7 @@ fn arranged_transitions_run_around_the_states_between() {
     ]);
     let replies = run(&mut host, "batch", json!({ "calls": calls }));
     let d = id(&replies["results"][0]["diagram"]);
-    let (doc, measure) = host.parts();
-    let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+    let scene = drawn(&mut host, &d);
     let mut through = Vec::new();
     for e in &scene.edges {
         for n in scene.nodes.iter().filter(|n| !e.ends.contains(&n.rect)) {
@@ -810,7 +807,7 @@ fn a_state_is_divided_into_regions_that_take_substates() {
         json!({ "id": on["element"], "side_by_side": true }),
         json!({ "id": d, "regions": 2 }),
     ] {
-        assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+        refusal(&mut host, "update_element", wrong);
     }
     host.document().model().check().unwrap();
 }

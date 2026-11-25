@@ -42,6 +42,12 @@ pub fn panel_border(cx: &App) -> Hsla {
     if cx.theme().is_dark() { rgb(0x404040).into() } else { rgb(0xcccccc).into() }
 }
 
+/// A dialog's heading with what it sets below.
+pub fn section(title: String, body: impl IntoElement) -> impl IntoElement {
+    use gpui_kit::component::{StyledExt, v_flex};
+    v_flex().gap_2().child(div().text_sm().font_semibold().child(title)).child(body)
+}
+
 /// A rounded card with a hairline border and no shadow.
 pub fn card(cx: &App) -> Div {
     div().bg(card_background(cx)).rounded(RADIUS).border_1().border_color(panel_border(cx))

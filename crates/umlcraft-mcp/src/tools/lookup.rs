@@ -245,6 +245,18 @@ pub(super) fn is_sequence(model: &Model, diagram: Id) -> bool {
     model.diagram_kind(diagram) == Some(DiagramKind::Sequence)
 }
 
+/// Where height `y` of the sequence diagram `diagram` lies: the interaction or operand there,
+/// as dragging to it finds it.
+pub(super) fn slot_at(
+    host: &mut dyn Host,
+    diagram: Id,
+    y: f32,
+) -> Option<umlcraft_notation::sequence::Slot> {
+    let (doc, measure) = host.parts();
+    let scene = scene::build(doc.model(), diagram, &Preview::default(), measure);
+    scene.sequence.as_ref().and_then(|l| l.slot_at(y))
+}
+
 /// One undo step on the host's document.
 pub(super) fn change<R>(
     host: &mut dyn Host,

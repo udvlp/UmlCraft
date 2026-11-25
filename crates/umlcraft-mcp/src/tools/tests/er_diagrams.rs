@@ -48,13 +48,7 @@ fn an_ie_diagram_copies_keys_and_switches_notation() {
     run(&mut host, "update_element", json!({ "id": d, "notation": "chen", "er_display": "keys" }));
     let chen = run(&mut host, "get_diagram", json!({ "diagram": d })).to_string();
     assert!(chen.contains("erLine") && !chen.contains("erIdentifying\""), "{chen}");
-    let bad = call(
-        &mut host,
-        &Access::default(),
-        "update_element",
-        &json!({ "id": customer, "notation": "ie" }),
-    );
-    assert!(bad.is_error);
+    refusal(&mut host, "update_element", json!({ "id": customer, "notation": "ie" }));
     // An associative entity that entities take part in stays one.
     let enrolment = run(
         &mut host,
@@ -108,9 +102,7 @@ fn an_er_diagram_comes_out_as_sql() {
     assert!(sql.contains("REFERENCES \"Customer\" (id);"), "{sql}");
     assert_eq!((out["tables"].as_u64(), out["foreign_keys"].as_u64()), (Some(2), Some(1)));
     let class = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "C" }));
-    let wrong =
-        call(&mut host, &Access::default(), "export_sql", &json!({ "diagram": class["diagram"] }));
-    assert!(wrong.is_error);
+    refusal(&mut host, "export_sql", json!({ "diagram": class["diagram"] }));
 }
 
 #[test]
@@ -157,7 +149,7 @@ fn domains_checks_and_indexes_go_into_the_sql() {
     let actions = json!({ "id": has, "on_delete": "cascade", "on_update": "SET NULL" });
     run(&mut host, "update_element", actions);
     let bad = json!({ "id": has, "on_delete": "drop" });
-    assert!(call(&mut host, &Access::default(), "update_element", &bad).is_error);
+    refusal(&mut host, "update_element", bad);
     run(&mut host, "update_element", json!({ "id": id(&status["id"]), "datatype": "state" }));
     run(&mut host, "update_element", json!({ "id": id(&total["id"]), "check": "total >= 0" }));
     let indexes = json!([{ "name": "ix_status", "columns": ["status"] }]);
@@ -234,13 +226,11 @@ fn spread_lines_follow_a_moved_node() {
     });
     let args = json!({ "diagram": d, "node": refers["presentation"], "x": 260, "y": 95 });
     run(&mut host, "move_node", args);
-    let (doc, measure) = host.parts();
-    let points = |d: &String, line: &String| {
-        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
-        scene.edge(line.parse().unwrap()).unwrap().points.clone()
+    let points = |host: &mut Headless, d: &String, line: &String| {
+        drawn(host, d).edge(line.parse().unwrap()).unwrap().points.clone()
     };
     for (moved, placed_line) in lines.iter().zip(&placed_lines) {
-        let (got, want) = (points(&d, moved), points(&placed, placed_line));
+        let (got, want) = (points(&mut host, &d, moved), points(&mut host, &placed, placed_line));
         assert_eq!(got.len(), want.len(), "{got:?} vs {want:?}");
         for (g, w) in got.iter().zip(&want) {
             assert!(g.distance(*w) < 1.5, "{got:?} vs {want:?}");
@@ -253,8 +243,7 @@ fn routed_lines_end_on_the_rhombus() {
     let mut host = Headless::new();
     let (d, refers, lines) = recursive_relationship(&mut host);
     run(&mut host, "route_lines", json!({ "diagram": d }));
-    let (doc, measure) = host.parts();
-    let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+    let scene = drawn(&mut host, &d);
     let rhombus = scene.node(refers.parse().unwrap()).unwrap().rect;
     let c = rhombus.center();
     for line in &lines {
@@ -291,8 +280,7 @@ fn er_diagrams_arrange_to_the_right_by_default_and_down_when_asked() {
         run(&mut host, "connect", args);
     }
     let centers = |host: &mut Headless| {
-        let (doc, measure) = host.parts();
-        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+        let scene = drawn(host, &d);
         [&person, &gets, &vaccine]
             .map(|n| scene.node(id(&n["presentation"]).parse().unwrap()).unwrap().rect.center())
     };
@@ -754,11 +742,11 @@ fn chen_ratios_show_the_maximum_of_each_cardinality() {
     let diagram = run(&mut host, "get_element", json!({ "id": r[0]["diagram"] }));
     assert!(!diagram["properties"].to_string().contains("\"ratios\":true"), "{diagram}");
     let both = json!({ "id": r[0]["diagram"], "look_here": true, "ratios": true });
-    assert!(call(&mut host, &Access::default(), "update_element", &both).is_error);
+    refusal(&mut host, "update_element", both);
     // Only ER diagrams take it.
     let class = run(&mut host, "create_diagram", json!({ "kind": "class", "name": "c" }));
     let args = json!({ "id": class["diagram"], "ratios": true });
-    assert!(call(&mut host, &Access::default(), "update_element", &args).is_error);
+    refusal(&mut host, "update_element", args);
 }
 
 #[test]
@@ -814,6 +802,6 @@ fn any_letter_is_a_maximum_of_many() {
     // One letter only.
     for bad in ["[0,nn]", "[1,ä]", "[1,#]"] {
         let args = json!({ "id": r[4]["element"], "cardinality": bad });
-        assert!(call(&mut host, &Access::default(), "update_element", &args).is_error, "{bad}");
+        refusal(&mut host, "update_element", args);
     }
 }

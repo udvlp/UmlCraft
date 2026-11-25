@@ -19,10 +19,30 @@ default (label `%` for none); a parallel element has at most 99 branches. Elemen
 digits). `kind` of the root: program (default), sub for a method, includable; `keywords`: \
 english (default) or german (`für`, `solange`, `bis`, `gib`).";
 
+/// The names of a table of names and values, for a schema's `enum`.
+fn names<T>(table: &[(&'static str, T)]) -> Vec<&'static str> {
+    table.iter().map(|(name, _)| *name).collect()
+}
+
+/// `names` after "" for none, for a schema's `enum`.
+fn or_none<S: Into<String>>(names: impl IntoIterator<Item = S>) -> Vec<String> {
+    std::iter::once(String::new()).chain(names.into_iter().map(Into::into)).collect()
+}
+
+/// `properties` with those of each of `more` added, in order.
+fn merged(mut properties: Value, more: &[&Value]) -> Value {
+    if let Some(p) = properties.as_object_mut() {
+        for m in more.iter().filter_map(|m| m.as_object()) {
+            p.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+    }
+    properties
+}
+
 /// The tools with their descriptions and JSON schemas, as `tools/list` returns them.
 pub fn list() -> Vec<Value> {
-    let id = |description: &str| json!({ "type": "string", "description": description });
     let text = |description: &str| json!({ "type": "string", "description": description });
+    let id = text;
     let number = |description: &str| json!({ "type": "number", "description": description });
     let tool = |name: &str, description: &str, properties: Value, required: &[&str]| {
         json!({
@@ -35,15 +55,20 @@ pub fn list() -> Vec<Value> {
         tool["annotations"] = json!({ "readOnlyHint": true });
         tool
     };
-    let mut kinds: Vec<&str> = DIAGRAM_KINDS.iter().map(|(key, _)| *key).collect();
+    let mut kinds = names(&DIAGRAM_KINDS);
     kinds.insert(1, "object");
+    let operators = names(&OPERATORS);
+    let notations = names(&ER_NOTATIONS);
+    // What a relationship's foreign keys do, as `set_er` reads them.
+    let er_actions = or_none(ErAction::ALL.map(|a| a.sql().to_lowercase()));
     // The settings of activity nodes, which both `create_element` and `update_element` take.
     let activity_node = json!({
         "object_type": text("Object nodes, pins, activity parameters: the type of the \
                              objects, a class name (\"\" for none)."),
         "in_state": text("Object nodes, pins, activity parameters: the state of the \
                           objects, without brackets."),
-        "ordering": { "type": "string", "enum": ["", "unordered", "ordered", "LIFO", "FIFO"],
+        "ordering": { "type": "string",
+                      "enum": or_none(umlcraft_model::ObjectOrdering::ALL.map(|o| o.as_str())),
                       "description": "Object nodes, pins, activity parameters: the \
                                       order objects leave in, \"\" for none." },
         "upper_bound": text("Object nodes, pins, activity parameters: how many objects \
@@ -60,19 +85,13 @@ pub fn list() -> Vec<Value> {
                                        objects are exceptions (an exception pin, \
                                        marked by a small triangle)." },
         "object_effect": { "type": "string",
-                           "enum": ["", "create", "read", "update", "delete"],
+                           "enum": or_none(umlcraft_model::ObjectEffect::ALL.map(|e| e.as_str())),
                            "description": "Object nodes, pins, activity parameters: \
                                            what the action does to the objects \
                                            (`{create}`), \"\" for nothing said." },
         "calls": text("Call behavior actions: the id of the activity called or of its \
                        diagram, or \"\" for none."),
     });
-    let with = |mut properties: Value, more: &Value| {
-        if let (Some(p), Some(m)) = (properties.as_object_mut(), more.as_object()) {
-            p.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
-        properties
-    };
     let flag = |description: &str| json!({ "type": "boolean", "description": description });
     // The ends of associations and links, which `connect` and `update_element` take.
     let end = |which: &str| {
@@ -111,7 +130,7 @@ pub fn list() -> Vec<Value> {
         "source_anchor": anchor("source"),
         "target_anchor": anchor("target"),
         "line_shape": { "type": "string",
-                        "enum": ["line", "right_angle", "curve", "curve_right_angle"],
+                        "enum": names(&line::SHAPES),
                         "description": "Lines: straight segments, horizontal and vertical ones \
                                         (the waypoints are the corners), a curve, or a curve \
                                         over right-angled corners." },
@@ -203,12 +222,12 @@ pub fn list() -> Vec<Value> {
         "virtual": flag("ER attributes: a derived column whose expression (its default_value) \
                          is computed when read (VIRTUAL), not stored."),
         "on_delete": { "type": "string",
-                       "enum": ["", "cascade", "set null", "set default", "restrict", "no action"],
+                       "enum": er_actions,
                        "description": "ER relationships: what their foreign keys do when a \
                                        referenced row is deleted; \"\" leaves it to the \
                                        database." },
         "on_update": { "type": "string",
-                       "enum": ["", "cascade", "set null", "set default", "restrict", "no action"],
+                       "enum": er_actions,
                        "description": "ER relationships: what their foreign keys do when a \
                                        referenced key changes; \"\" leaves it to the \
                                        database." },
@@ -225,7 +244,7 @@ pub fn list() -> Vec<Value> {
     });
     // The settings of ER diagrams, which `update_element` takes.
     let er_diagram = json!({
-        "notation": { "type": "string", "enum": ["chen", "ie", "idef1x"],
+        "notation": { "type": "string", "enum": notations,
                       "description": "ER diagrams: how they are drawn. Switching converts what \
                                       the diagram shows and keeps its entities in place: IE \
                                       and IDEF1X list the attributes in the tables and draw \
@@ -389,12 +408,12 @@ pub fn list() -> Vec<Value> {
              interaction, activity or state machine of the same name) and shows it. An \
              `object` diagram is a class diagram whose tools start with `object` and `link` \
              (every class diagram has them).",
-            with(
+            merged(
                 json!({
                     "kind": { "type": "string", "enum": kinds },
                     "name": text("Its name."),
                     "owner": id("Package (or class) to put it in; the model's root if omitted."),
-                    "notation": { "type": "string", "enum": ["chen", "ie", "idef1x"],
+                    "notation": { "type": "string", "enum": notations,
                                   "description": "ER diagrams: Chen (by default), IE with \
                                                   crow's feet, or IDEF1X. IE and IDEF1X have \
                                                   identifying, non-identifying, many-to-many \
@@ -402,7 +421,7 @@ pub fn list() -> Vec<Value> {
                                                   child, which copy the parent's key into the \
                                                   child." },
                 }),
-                &sequence,
+                &[&sequence],
             ),
             &["kind", "name"],
         ),
@@ -433,7 +452,7 @@ pub fn list() -> Vec<Value> {
              (the × that ends a lifeline) goes on the lifeline `on`, with its top at `y` or \
              below everything; a termination stays below what happens on its lifeline. \
              Duration and time constraints are drawn with `connect`.",
-            with(
+            merged(
                 json!({
                     "diagram": id("The diagram."),
                     "tool": text("The diagram tool."),
@@ -449,7 +468,7 @@ pub fn list() -> Vec<Value> {
                               given. Sequence diagrams: the lifeline a state invariant or \
                               termination goes on, with or without `y`."),
                 }),
-                &with(activity_node.clone(), &classes),
+                &[&activity_node, &classes],
             ),
             &["diagram", "tool"],
         ),
@@ -501,7 +520,7 @@ pub fn list() -> Vec<Value> {
              `extension_points`. A `constraint` (class diagrams) joins two associations, \
              `source` and `target`, with a dashed line between the middles of their lines; \
              `name` is the constraint, `xor` unless given (drawn `{xor}`).",
-            with(
+            merged(
                 json!({
                     "diagram": id("The diagram."),
                     "tool": text("The relationship tool."),
@@ -515,7 +534,7 @@ pub fn list() -> Vec<Value> {
                     "source_end": ends["source_end"],
                     "target_end": ends["target_end"],
                 }),
-                &with(route.clone(), &extend),
+                &[&route, &extend],
             ),
             &["diagram", "tool", "source"],
         ),
@@ -551,8 +570,7 @@ pub fn list() -> Vec<Value> {
                 "items": { "type": "array", "items": { "type": "string" },
                            "description": "The messages, fragments or interaction uses." },
                 "operator": { "type": "string",
-                              "enum": ["alt", "opt", "loop", "par", "break", "critical", "neg",
-                                       "assert", "strict", "seq", "ignore", "consider"],
+                              "enum": operators,
                               "description": "`opt` if omitted." },
                 "guard": text("The first operand's guard, without brackets."),
             }),
@@ -633,7 +651,7 @@ pub fn list() -> Vec<Value> {
              `line_shape`, `auto_route`, as `get_diagram` lists them), also of a line given \
              by its presentation, such as a note anchor; the condition and extension points of \
              an extend; the text of a comment (note).",
-            with(
+            merged(
                 json!({
                     "id": id("The element."),
                     "name": text("New name."),
@@ -655,8 +673,7 @@ pub fn list() -> Vec<Value> {
                     "documentation": text("New documentation."),
                     "stereotypes": { "type": "array", "items": { "type": "string" } },
                     "guard": text("Messages, operands, flows, transitions: the guard, without brackets."),
-                    "sort": { "type": "string",
-                              "enum": ["synchronous", "asynchronous", "reply", "create", "destroy"] },
+                    "sort": { "type": "string", "enum": names(&SORTS) },
                     "arguments": { "type": ["string", "null"],
                                    "description": "Messages: the arguments, written between the \
                                                    parentheses; null for no parentheses, as a \
@@ -664,9 +681,7 @@ pub fn list() -> Vec<Value> {
                                                    named without them has none)." },
                     "return_value": text("Replies: the value they return."),
                     "operation": text("Messages: the id of the operation it calls, or \"\" for none."),
-                    "operator": { "type": "string",
-                                  "enum": ["alt", "opt", "loop", "par", "break", "critical", "neg",
-                                           "assert", "strict", "seq", "ignore", "consider"] },
+                    "operator": { "type": "string", "enum": operators },
                     "covered": { "type": "array", "items": { "type": "string" },
                                  "description": "Fragments and interaction uses: the lifelines \
                                                  covered; all if empty." },
@@ -676,7 +691,7 @@ pub fn list() -> Vec<Value> {
                                      "description": "The element's constraints without braces, \
                                                      e.g. [\"age >= 18\"]; [] for none." },
                     "shared_style": { "type": "string",
-                                      "enum": ["separate", "vertical", "horizontal"],
+                                      "enum": names(&SHARED_STYLES),
                                       "description": "Generalizations: share one triangle with \
                                                       the other generalizations to the same \
                                                       general element, joining on a horizontal \
@@ -688,18 +703,21 @@ pub fn list() -> Vec<Value> {
                                               class: the head drawn as its icon (an actor's \
                                               is on by default)." },
                 }),
-                &with(
-                    with(with(with(activity_node.clone(), &er), &er_diagram), &sequence),
-                    &with(
-                        with(with(with(ends.clone(), &classes), &route), &extend),
-                        &json!({
-                            "static": flag("Attributes and operations: static (underlined)."),
-                            "diagram": id("Lines: the diagram whose drawing of the line takes \
-                                           the route; needed only when several diagrams show \
-                                           it."),
-                        }),
-                    ),
-                ),
+                &[
+                    &activity_node,
+                    &er,
+                    &er_diagram,
+                    &sequence,
+                    &ends,
+                    &classes,
+                    &route,
+                    &extend,
+                    &json!({
+                        "static": flag("Attributes and operations: static (underlined)."),
+                        "diagram": id("Lines: the diagram whose drawing of the line takes the \
+                                       route; needed only when several diagrams show it."),
+                    }),
+                ],
             ),
             &["id"],
         ),
@@ -806,12 +824,12 @@ pub fn list() -> Vec<Value> {
         ),
         tool(
             "new_document",
-            "Starts a new project with one class diagram, or with `sample` the app's sample \
-             project (Velo, every diagram kind; File › Open sample project). In the app only \
+            "Starts a new project with one class diagram, or with `sample` the sample project \
+             (Velo, every diagram kind; the app's File › Open sample project). In the app only \
              when the open project has no unsaved changes.",
             json!({
                 "name": text("The project's name."),
-                "sample": { "type": "boolean", "description": "The sample project (only in the app)." },
+                "sample": { "type": "boolean", "description": "The sample project." },
             }),
             &[],
         ),
@@ -851,7 +869,7 @@ pub fn list() -> Vec<Value> {
              (an existing file only with `overwrite`).",
             json!({
                 "diagram": id("The ER diagram; the one shown if omitted."),
-                "dialect": { "type": "string", "enum": ["mysql", "mariadb", "postgres"],
+                "dialect": { "type": "string", "enum": names(&DIALECTS),
                              "description": "The SQL dialect; the one the diagram was \
                                              imported from if omitted, else mysql." },
                 "path": text("The .sql file (`.sql` is added if missing); the SQL comes back \

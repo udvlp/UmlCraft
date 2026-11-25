@@ -10,7 +10,8 @@ use umlcraft_notation::{autoroute, shared};
 pub const KEYS: [&str; 5] =
     ["waypoints", "source_anchor", "target_anchor", "line_shape", "auto_route"];
 
-const SHAPES: [(&str, LineShape); 4] = [
+/// The names of the line shapes `line_shape` takes.
+pub const SHAPES: [(&str, LineShape); 4] = [
     ("line", LineShape::Line),
     ("right_angle", LineShape::RightAngle),
     ("curve", LineShape::Curve),
@@ -88,10 +89,7 @@ impl Route {
                 })?)
             }
         };
-        let auto_route = match args.get("auto_route") {
-            None => None,
-            Some(v) => Some(v.as_bool().ok_or("`auto_route` is true or false")?),
-        };
+        let auto_route = crate::tools::bool_arg(args, "auto_route")?;
         let by_hand = waypoints.is_some()
             || source_anchor.is_some()
             || target_anchor.is_some()

@@ -15,18 +15,22 @@ impl Importer<'_> {
     /// Location and size of a node presentation as stored.
     pub(super) fn rect(&self, p: ObjId) -> Option<Rect> {
         let r = self.r;
-        let at = r.obj(p, "location").and_then(|l| r.point(l))?;
+        let at = r.point_at(p, "location")?;
         Some(Rect::new(at.x, at.y, r.num(p, "width")? as f32, r.num(p, "height")? as f32))
     }
 
-    /// Adds a presentation, at the back or in front of everything so far.
+    /// Adds a presentation at `index` (0 is the back), or by default in front of everything so
+    /// far. A presentation the model refuses counts as lost.
     pub(super) fn insert(
         &mut self,
         diagram: Id,
         presentation: Presentation,
-        back: bool,
+        index: Option<usize>,
     ) -> Option<Id> {
-        let index = if back { 0 } else { self.model.view(diagram)?.presentations().len() };
+        let index = match index {
+            Some(index) => index,
+            None => self.model.view(diagram)?.presentations().len(),
+        };
         let id = presentation.id;
         if self.model.apply(Op::InsertPresentation { diagram, index, presentation }).is_err() {
             self.lost_presentations += 1;
@@ -163,7 +167,7 @@ impl Importer<'_> {
         for (source, node) in placed {
             let Some(mut node) = node else {
                 if let Some(presentation) = self.free_shape(source, shift) {
-                    self.insert(diagram, presentation, false);
+                    self.insert(diagram, presentation, None);
                 }
                 continue;
             };
@@ -182,19 +186,11 @@ impl Importer<'_> {
                 shape: Shape::Node { bounds: node.bounds, regions: node.regions },
                 style: node.style,
             };
-            let index = if container {
-                containers
-            } else {
-                self.model.view(diagram).map_or(0, |v| v.presentations().len())
-            };
-            let id = presentation.id;
-            if self.model.apply(Op::InsertPresentation { diagram, index, presentation }).is_ok() {
+            if let Some(id) = self.insert(diagram, presentation, container.then_some(containers)) {
                 presentation_of.insert(source, id);
                 if container {
                     containers += 1;
                 }
-            } else {
-                self.lost_presentations += 1;
             }
         }
         // Generalizations in a shared group run over its common line.
@@ -204,7 +200,7 @@ impl Importer<'_> {
                 Some(1) => SharedStyle::Horizontal,
                 _ => SharedStyle::Vertical,
             };
-            let Some(at) = self.r.obj(group, "location").and_then(|l| self.r.point(l)) else {
+            let Some(at) = self.r.point_at(group, "location") else {
                 continue;
             };
             let at = if style == SharedStyle::Horizontal { at.x + shift.x } else { at.y + shift.y };
@@ -264,7 +260,7 @@ impl Importer<'_> {
             return None;
         }
         let r = self.r;
-        let origin = r.obj(p, "location").and_then(|l| r.point(l)).unwrap_or_default();
+        let origin = r.point_at(p, "location").unwrap_or_default();
         let default = palette::default_size_for(&element_kind);
         let width = r.num(p, "width").filter(|w| *w > 0.0).map_or(default.width, |w| w as f32);
         let height = r.num(p, "height").filter(|h| *h > 0.0).map_or(default.height, |h| h as f32);
@@ -297,10 +293,9 @@ impl Importer<'_> {
         // left edge, its baseline 13 below the label's top.
         if class == "PortPresentation" {
             style.name_offset = r.obj(p, "namePresentation").and_then(|label| {
-                let at = r.obj(label, "location").and_then(|l| r.point(l))?;
-                let by = r.obj(label, "localMovement").and_then(|l| r.point(l)).unwrap_or_default();
-                let top = at.y + by.y + 13.0 - umlcraft_notation::draw::baseline(scene::FONT_SIZE);
-                Some(Point::new(at.x + by.x - origin.x, top - origin.y))
+                let at = r.moved_location(label)?;
+                let top = at.y + 13.0 - umlcraft_notation::draw::baseline(scene::FONT_SIZE);
+                Some(Point::new(at.x - origin.x, top - origin.y))
             });
         }
         // Astah never breaks a use case's name at spaces; it widens the ellipse instead.
@@ -417,8 +412,8 @@ impl Importer<'_> {
                 Some(presentation)
             }
             "LinePresentation" => {
-                let from = r.obj(p, "location").and_then(|l| r.point(l))?.offset(shift.x, shift.y);
-                let by = r.obj(p, "localMovement").and_then(|l| r.point(l)).unwrap_or_default();
+                let from = r.point_at(p, "location")?.offset(shift.x, shift.y);
+                let by = r.point_at(p, "localMovement").unwrap_or_default();
                 let mut presentation = Presentation::line(from, from.offset(by.x, by.y));
                 if let Shape::Line { dashed, start_arrow, end_arrow, .. } = &mut presentation.shape
                 {
@@ -594,15 +589,9 @@ impl Importer<'_> {
                 (*source_anchor, *target_anchor, *labels) = self.edge_layout(p, &geometry);
             }
         }
-        let index = self.model.view(diagram).map_or(0, |v| v.presentations().len());
         // An edge that does not fit its ends is left out, like a presentation of a skipped
         // element.
-        let id = presentation.id;
-        if self.model.apply(Op::InsertPresentation { diagram, index, presentation }).is_err() {
-            self.lost_presentations += 1;
-            return None;
-        }
-        Some(id)
+        self.insert(diagram, presentation, None)
     }
 
     /// Where Astah's line aims inside its nodes, and where its labels sit. Labels are stored
@@ -649,12 +638,8 @@ impl Importer<'_> {
 
         // The top left corner of a label presentation, relative to `origin`.
         let place = |label: ObjId, origin: Point| {
-            let at = r.obj(label, "location").and_then(|l| r.point(l))?;
-            let moved = r.obj(label, "localMovement").and_then(|l| r.point(l)).unwrap_or_default();
-            Some(Point::new(
-                at.x + moved.x + g.shift.x - origin.x,
-                at.y + moved.y + g.shift.y - origin.y,
-            ))
+            let at = r.moved_location(label)?;
+            Some(Point::new(at.x + g.shift.x - origin.x, at.y + g.shift.y - origin.y))
         };
         let label = |field: &str, origin: Point| place(r.obj(p, field)?, origin);
         let (a_end, b_end) = if g.swapped { (end, start) } else { (start, end) };
@@ -705,9 +690,7 @@ impl Importer<'_> {
         let moved: Vec<Point> = r
             .list(p, "constraintPresentations")
             .iter()
-            .map(|&label| {
-                r.obj(label, "localMovement").and_then(|l| r.point(l)).unwrap_or_default()
-            })
+            .map(|&label| r.point_at(label, "localMovement").unwrap_or_default())
             .collect();
         let first = moved.first().copied().unwrap_or_default();
         let mut offsets: Vec<Option<Point>> = r
@@ -728,14 +711,14 @@ impl Importer<'_> {
     }
 
     pub(super) fn annotate(&mut self, comment: Id, annotated: Id) {
-        let Some(e) = self.model.get(comment) else { return };
-        let mut data = e.data().clone();
-        if let ElementKind::Comment(props) = &mut data.kind
-            && !props.annotated.contains(&annotated)
-        {
+        self.update_kind(comment, |kind| {
+            let ElementKind::Comment(props) = kind else { return false };
+            if props.annotated.contains(&annotated) {
+                return false;
+            }
             props.annotated.push(annotated);
-            let _ = self.model.apply(Op::UpdateElement { id: comment, data });
-        }
+            true
+        });
     }
 }
 

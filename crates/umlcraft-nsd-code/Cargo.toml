@@ -9,12 +9,12 @@ publish.workspace = true
 
 [dependencies]
 umlcraft-nsd.workspace = true
+umlcraft-model.workspace = true
 umlcraft-reverse.workspace = true
 tree-sitter.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true
-umlcraft-model.workspace = true
 
 [lints]
 workspace = true

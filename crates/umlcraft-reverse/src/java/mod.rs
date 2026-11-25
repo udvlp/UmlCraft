@@ -17,13 +17,13 @@ mod jdk;
 pub(crate) mod rules;
 
 use tree_sitter::Node;
-use umlcraft_model::{ParameterDirection, Visibility};
+use umlcraft_model::Visibility;
 
 use crate::ir::{
     Field, Import, Item, Literal, Member, Operation, Param, Relation, Scope, Supertype,
     TemplateParam, TypeDecl, TypeExpr, TypeKind, TypeName,
 };
-use crate::lang::{Frontend, Skip, Skipped};
+use crate::lang::{Frontend, Language, Skip, Skipped, children, named_children};
 
 /// Tag holding a declaration's annotations as written, one per line.
 pub const ANNOTATIONS_TAG: &str = "java.annotations";
@@ -36,15 +36,16 @@ pub struct Java;
 
 impl Frontend for Java {
     fn lower(&self, root: Node, text: &str, _module: &[String], skipped: &mut Skipped) -> Scope {
-        let mut reader = Reader { src: text, skipped };
+        let mut reader = Reader { src: text, skipped, lang: Java };
         reader.program(root)
     }
 }
 
-struct Reader<'a> {
-    src: &'a str,
-    skipped: &'a mut Skipped,
+impl Language for Java {
+    const LANGUAGE: crate::SourceLanguage = crate::SourceLanguage::Java;
 }
+
+type Reader<'a> = crate::lang::Reader<'a, Java>;
 
 /// Where a declaration sits; it decides the implicit modifiers.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -78,25 +79,7 @@ impl Modifiers {
     }
 }
 
-fn named_children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor).collect()
-}
-
-fn children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
-    let mut cursor = node.walk();
-    node.children(&mut cursor).collect()
-}
-
-impl<'a> Reader<'a> {
-    fn text(&self, node: Node) -> &'a str {
-        &self.src[node.byte_range()]
-    }
-
-    fn count(&mut self, skip: Skip) {
-        *self.skipped.entry(skip).or_default() += 1;
-    }
-
+impl Reader<'_> {
     fn program(&mut self, root: Node) -> Scope {
         let mut package: Option<Vec<String>> = None;
         let mut imports = Vec::new();
@@ -148,12 +131,6 @@ impl<'a> Reader<'a> {
             .map(|&n| self.path(n))
             .unwrap_or_default();
         Import { path, wildcard, is_static, alias: None }
-    }
-
-    /// The comment right before `node`, as Astah takes it: a Javadoc or block comment counts,
-    /// a line comment stands for none.
-    fn documentation(&self, node: Node) -> String {
-        crate::comment::documentation(crate::SourceLanguage::Java, node, self.src)
     }
 
     fn modifiers(&self, decl: Node) -> Modifiers {
@@ -251,11 +228,7 @@ impl<'a> Reader<'a> {
                     name: p.name,
                     ty: p.ty,
                     visibility: Visibility::Public,
-                    is_static: false,
-                    is_read_only: false,
-                    default: None,
-                    tags: Vec::new(),
-                    documentation: String::new(),
+                    ..Default::default()
                 }));
             }
         }
@@ -446,7 +419,7 @@ impl<'a> Reader<'a> {
                         Some(dims) => ty.with_modifier(&dimensions(self.text(dims))),
                         None => ty,
                     };
-                    Some(Param { name, ty, default: None, direction: ParameterDirection::In })
+                    Some(Param { name, ty, ..Default::default() })
                 }
                 // `String... names`: the type, then a declarator with the name.
                 "spread_parameter" => {
@@ -455,7 +428,7 @@ impl<'a> Reader<'a> {
                     let declarator = parts.iter().find(|n| n.kind() == "variable_declarator")?;
                     let name = self.text(declarator.child_by_field_name("name")?).to_owned();
                     let ty = ty.with_modifier("...");
-                    Some(Param { name, ty, default: None, direction: ParameterDirection::In })
+                    Some(Param { name, ty, ..Default::default() })
                 }
                 _ => None,
             })
@@ -562,17 +535,10 @@ fn dimensions(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SourceLanguage, dump_text};
 
     fn parse(text: &str) -> (String, Skipped) {
-        let mut skipped = Skipped::new();
-        let scope = crate::lower_scope(
-            &crate::parse_tree(crate::SourceLanguage::Java, text),
-            &[],
-            &mut skipped,
-        )
-        .unwrap();
-        let unit = crate::ir::Unit { path: Default::default(), scope };
-        (unit.dump(), skipped)
+        dump_text(SourceLanguage::Java, text, &[]).unwrap()
     }
 
     #[test]
@@ -590,13 +556,8 @@ mod tests {
 
     #[test]
     fn reports_the_first_syntax_error() {
-        let mut skipped = Skipped::new();
-        let error = crate::lower_scope(
-            &crate::parse_tree(crate::SourceLanguage::Java, "class A {\n  int x = ;\n}\n"),
-            &[],
-            &mut skipped,
-        )
-        .unwrap_err();
+        let error =
+            dump_text(SourceLanguage::Java, "class A {\n  int x = ;\n}\n", &[]).unwrap_err();
         assert_eq!((error.line, error.column, error.token.as_str()), (2, 9, "="));
     }
 }

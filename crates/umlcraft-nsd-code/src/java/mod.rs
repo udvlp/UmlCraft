@@ -4,41 +4,15 @@ mod build;
 mod methods;
 
 use tree_sitter::Node;
-use umlcraft_nsd::Element;
 
-use crate::core::{Builder, Grammar};
 use crate::pseudo::assign;
 use crate::text::{lines_at, node_text};
 
 pub use build::diagram;
 pub use methods::{find, methods};
 
+/// Java's grammar (`core::Grammar`, in `build`).
 pub struct Java;
-
-impl Grammar for Java {
-    const COMMENTS: &'static [&'static str] = &["line_comment", "block_comment"];
-    const BLOCKS: &'static [&'static str] =
-        &["block", "constructor_body", "switch_block_statement_group"];
-    const IGNORED: &'static [&'static str] = &["switch_label"];
-    const ENDS_CASE: &'static [&'static str] = &[
-        "break_statement",
-        "return_statement",
-        "throw_statement",
-        "continue_statement",
-        "yield_statement",
-    ];
-    const RUNS_ON: bool = true;
-    const BREAK_ENDS_CASE: bool = true;
-    const TRUE: &'static str = "true";
-
-    fn statement(b: &mut Builder<'_, Self>, node: Node, out: &mut Vec<Element>) {
-        build::statement(b, node, out);
-    }
-
-    fn simple(b: &Builder<'_, Self>, node: Node) -> Vec<Element> {
-        build::simple(b, node)
-    }
-}
 
 /// The diagram's title, `name(a, b)`: a method's or constructor's name and its parameters'
 /// names.

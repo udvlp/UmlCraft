@@ -3,15 +3,11 @@
 //! blocks, a 5,000-branch `else if` chain) neither overflows the stack nor takes long. Each
 //! test runs on a thread with 1 MB of stack.
 
-use umlcraft_nsd::read::MAX_DEPTH;
-use umlcraft_nsd_code::{Made, Source, SourceLanguage, Unbuilt};
+mod common;
 
-const MADE: Made = Made {
-    author: "tester",
-    date: "2026-11-18",
-    origin: "UmlCraft test",
-    keywords: umlcraft_nsd::Keywords::English,
-};
+use common::MADE;
+use umlcraft_nsd::read::MAX_DEPTH;
+use umlcraft_nsd_code::{Source, SourceLanguage, Unbuilt};
 
 /// Runs `test` on a thread with 1 MB of stack.
 fn small_stack<T: Send + 'static>(test: impl FnOnce() -> T + Send + 'static) -> T {

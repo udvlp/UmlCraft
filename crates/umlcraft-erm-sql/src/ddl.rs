@@ -45,6 +45,10 @@ use crate::translate;
 const DEFAULT_TYPE: &str = "varchar(255)";
 /// The longest name a constraint gets (PostgreSQL allows 63, MySQL 64).
 const NAME_LIMIT: usize = 60;
+/// MySQL's text types: keyed and indexed only by a prefix, without a literal as default.
+const MYSQL_TEXT: [&str; 4] = ["tinytext", "text", "mediumtext", "longtext"];
+/// MySQL's binary types, which it treats like [`MYSQL_TEXT`].
+const MYSQL_BLOB: [&str; 4] = ["tinyblob", "blob", "mediumblob", "longblob"];
 
 /// The statements and what went into them.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -83,7 +87,7 @@ struct Domain {
     used: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Column {
     name: String,
     datatype: String,
@@ -138,10 +142,7 @@ impl Table {
 
     /// `base`, or `base2`, `base3`, … if the table has that column already.
     fn free_name(&self, base: &str) -> String {
-        if !self.has(base) {
-            return base.to_owned();
-        }
-        (2..).map(|n| format!("{base}{n}")).find(|n| !self.has(n)).expect("names are unbounded")
+        numbered(base, |n| self.has(n))
     }
 }
 
@@ -281,11 +282,9 @@ impl Builder<'_> {
         let element = &self.model.get(entity).expect("shown");
         let full =
             if props.physical_name.is_empty() { element.name() } else { &props.physical_name };
-        let (schema, name) = match full.split_once('.') {
-            Some((s, n)) if self.dialect == Dialect::Postgres && !s.is_empty() && !n.is_empty() => {
-                (Some(s.to_owned()), n.to_owned())
-            }
-            _ => (None, full.to_owned()),
+        let (schema, name) = match split_schema(full, self.dialect) {
+            Some((s, n)) => (Some(s.to_owned()), n.to_owned()),
+            None => (None, full.to_owned()),
         };
         let mut table = Table::new(schema, name, element.data().documentation.clone());
         table.checks = props.checks.clone();
@@ -313,7 +312,6 @@ impl Builder<'_> {
                 datatype: datatype_of(p),
                 not_null: p.not_null || p.key.is_some(),
                 default: p.default_value.clone(),
-                default_sql: String::new(),
                 // The import keeps the expression of a generated column as its default.
                 generated: p.derived && !p.default_value.is_empty(),
                 virtual_column: p.virtual_column,
@@ -322,6 +320,7 @@ impl Builder<'_> {
                 check: p.check.clone(),
                 comment: element.data().documentation.clone(),
                 name,
+                ..Column::default()
             };
             if column.generated && self.foreign() {
                 column.generated = false;
@@ -355,12 +354,7 @@ impl Builder<'_> {
             }
             let domain = self.domains[k].props.clone();
             column.datatype = if domain.values.is_empty() {
-                let base = ErAttributeProps {
-                    datatype: domain.datatype.clone(),
-                    length_precision: domain.length_precision.clone(),
-                    ..Default::default()
-                };
-                translate::datatype(&datatype_of(&base), self.from, d)
+                self.domain_type(&domain)
             } else {
                 let values: Vec<String> = domain.values.iter().map(|v| string(v, d)).collect();
                 format!("enum({})", values.join(","))
@@ -385,13 +379,14 @@ impl Builder<'_> {
             // `order` + `status_type` and `order_status` + `type` meet in one name, and
             // PostgreSQL cuts names after 63 bytes: numbered apart where they would clash.
             let base = format!("{}_{}", snake(table), snake(&column.name));
-            let mut name = cut(&base, NAME_LIMIT);
-            let mut k = 2;
-            while self.domains.iter().any(|x| x.name == name) {
-                let suffix = format!("_{k}");
-                name = format!("{}{suffix}", cut(&base, NAME_LIMIT - suffix.len()));
-                k += 1;
-            }
+            let name = first_free(
+                cut(&base, NAME_LIMIT),
+                |n| self.domains.iter().any(|x| x.name == n),
+                |k| {
+                    let suffix = format!("_{k}");
+                    format!("{}{suffix}", cut(&base, NAME_LIMIT - suffix.len()))
+                },
+            );
             let props = ErDomainProps { values, ..Default::default() };
             self.domains.push(Domain {
                 name: name.clone(),
@@ -403,6 +398,16 @@ impl Builder<'_> {
             return;
         }
         column.datatype = translate::datatype(&column.datatype, self.from, d);
+    }
+
+    /// The type a domain (not an enumeration) is based on, for the dialect.
+    fn domain_type(&self, p: &ErDomainProps) -> String {
+        let base = ErAttributeProps {
+            datatype: p.datatype.clone(),
+            length_precision: p.length_precision.clone(),
+            ..Default::default()
+        };
+        translate::datatype(&datatype_of(&base), self.from, self.dialect)
     }
 
     /// A condition for the dialect; `None` (and noted) if it cannot be written there.
@@ -459,14 +464,11 @@ impl Builder<'_> {
             }
             for (t, keyed) in self.tables.iter_mut().zip(&keyed) {
                 for c in t.columns.iter_mut().filter(|c| keyed.contains(&c.name)) {
-                    match base_type(&c.datatype).as_str() {
-                        "tinytext" | "text" | "mediumtext" | "longtext" => {
-                            c.datatype = "varchar(255)".to_owned();
-                        }
-                        "tinyblob" | "blob" | "mediumblob" | "longblob" => {
-                            c.datatype = "varbinary(255)".to_owned();
-                        }
-                        _ => {}
+                    let base = base_type(&c.datatype);
+                    if MYSQL_TEXT.contains(&base.as_str()) {
+                        c.datatype = "varchar(255)".to_owned();
+                    } else if MYSQL_BLOB.contains(&base.as_str()) {
+                        c.datatype = "varbinary(255)".to_owned();
                     }
                 }
             }
@@ -564,15 +566,7 @@ impl Builder<'_> {
         if !d.is_mysql() {
             return Some(sql);
         }
-        const NO_LITERAL: [&str; 16] = [
-            "tinytext",
-            "text",
-            "mediumtext",
-            "longtext",
-            "tinyblob",
-            "blob",
-            "mediumblob",
-            "longblob",
+        const NO_LITERAL: [&str; 8] = [
             "json",
             "geometry",
             "point",
@@ -585,7 +579,9 @@ impl Builder<'_> {
         let lower = sql.to_ascii_lowercase();
         let call = lower.split('(').next().unwrap_or_default().trim();
         let bare = if literal {
-            !NO_LITERAL.contains(&base.as_str()) && !base.starts_with("geom")
+            !is_text_or_blob(&base)
+                && !NO_LITERAL.contains(&base.as_str())
+                && !base.starts_with("geom")
         } else {
             matches!(lower.as_str(), "null" | "true" | "false")
                 || matches!(call, "current_timestamp" | "now" | "localtime" | "localtimestamp")
@@ -639,35 +635,14 @@ impl Builder<'_> {
             let t = &mut self.tables[table];
             let base = if prefix.is_empty() { name } else { format!("{prefix}_{name}") };
             let name = t.free_name(&base);
-            t.columns.push(Column {
-                name: name.clone(),
-                datatype,
-                not_null: not_null || in_key,
-                default: String::new(),
-                default_sql: String::new(),
-                generated: false,
-                virtual_column: false,
-                auto_increment: false,
-                unique: false,
-                check: String::new(),
-                comment: String::new(),
-            });
+            let not_null = not_null || in_key;
+            t.columns.push(Column { name: name.clone(), datatype, not_null, ..Column::default() });
             if in_key {
                 t.key.push(name.clone());
             }
             columns.push(name);
         }
-        if unique {
-            self.tables[table].unique(columns.clone());
-        }
-        self.refs.push(Reference {
-            table,
-            columns,
-            target,
-            target_columns,
-            on_delete: None,
-            on_update: None,
-        });
+        self.reference(table, columns, target, target_columns, unique);
     }
 
     /// Foreign key columns the model has: they reference the columns of `target` they are
@@ -697,17 +672,24 @@ impl Builder<'_> {
         };
         // A reference needs a key or unique columns to point at.
         self.tables[target].unique(target_columns.clone());
+        self.reference(table, columns, target, target_columns, unique);
+    }
+
+    /// A foreign key from `columns` of `table` to `target_columns` of `target`; `unique` makes
+    /// its columns unique.
+    fn reference(
+        &mut self,
+        table: usize,
+        columns: Vec<String>,
+        target: usize,
+        target_columns: Vec<String>,
+        unique: bool,
+    ) {
         if unique {
             self.tables[table].unique(columns.clone());
         }
-        self.refs.push(Reference {
-            table,
-            columns,
-            target,
-            target_columns,
-            on_delete: None,
-            on_update: None,
-        });
+        let (on_delete, on_update) = (None, None);
+        self.refs.push(Reference { table, columns, target, target_columns, on_delete, on_update });
     }
 
     fn no_key(&mut self, table: usize, target: usize) {
@@ -851,6 +833,24 @@ impl Builder<'_> {
     }
 
     fn write(mut self, diagram: &str) -> Ddl {
+        let domains = self.prepare();
+        let mut sql = String::new();
+        let header = diagram.replace('\n', " ");
+        let _ = writeln!(sql, "-- UmlCraft: the ER diagram \"{header}\" for {}", self.dialect);
+        self.write_types(&mut sql, &domains);
+        self.write_tables(&mut sql);
+        self.write_indexes_and_keys(&mut sql);
+        Ddl {
+            sql,
+            tables: self.tables.len(),
+            foreign_keys: self.refs.len(),
+            left_out: self.left_out,
+        }
+    }
+
+    /// Brings the tables into the dialect's terms: conditions, counted columns, types and
+    /// defaults as it writes them. Gives the domains the columns use.
+    fn prepare(&mut self) -> Vec<Domain> {
         let d = self.dialect;
         // The conditions as the dialect writes them.
         for t in 0..self.tables.len() {
@@ -893,29 +893,19 @@ impl Builder<'_> {
                 x.props.check = self.condition(&x.name, &x.props.check).unwrap_or_default();
             }
         }
-        let mut sql = String::new();
-        let _ =
-            writeln!(sql, "-- UmlCraft: the ER diagram \"{}\" for {d}", diagram.replace('\n', " "));
+        domains
+    }
+
+    /// The schemas of the tables and `domains` other than `public`, then the domains and
+    /// enumeration types.
+    fn write_types(&self, sql: &mut String, domains: &[Domain]) {
+        let d = self.dialect;
         let mut schemas: Vec<&str> = Vec::new();
-        for t in &self.tables {
-            if let Some(s) = t.schema.as_deref()
-                && s != "public"
-                && !schemas.contains(&s)
-            {
-                schemas.push(s);
-            }
-        }
         // Domains and enumeration types are made in their schema too (`qualified`).
-        if d == Dialect::Postgres {
-            for x in &domains {
-                if let Some((s, n)) = x.name.split_once('.')
-                    && !s.is_empty()
-                    && !n.is_empty()
-                    && s != "public"
-                    && !schemas.contains(&s)
-                {
-                    schemas.push(s);
-                }
+        let of_domains = domains.iter().filter_map(|x| split_schema(&x.name, d).map(|(s, _)| s));
+        for s in self.tables.iter().filter_map(|t| t.schema.as_deref()).chain(of_domains) {
+            if s != "public" && !schemas.contains(&s) {
+                schemas.push(s);
             }
         }
         if !schemas.is_empty() {
@@ -927,16 +917,11 @@ impl Builder<'_> {
         if !domains.is_empty() {
             sql.push('\n');
         }
-        for x in &domains {
+        for x in domains {
             let name = qualified(&x.name, d);
             let p = &x.props;
             let what = if p.values.is_empty() {
-                let base = ErAttributeProps {
-                    datatype: p.datatype.clone(),
-                    length_precision: p.length_precision.clone(),
-                    ..Default::default()
-                };
-                let datatype = translate::datatype(&datatype_of(&base), self.from, d);
+                let datatype = self.domain_type(p);
                 let mut s = format!("CREATE DOMAIN {name} AS {datatype}");
                 if !p.default_value.is_empty()
                     && let Some(v) = self.default_value(&p.default_value, &datatype)
@@ -960,6 +945,11 @@ impl Builder<'_> {
                 let _ = writeln!(sql, "COMMENT ON {what} {name} IS {};", string(&x.comment, d));
             }
         }
+    }
+
+    /// `CREATE TABLE` for each table, with its comments.
+    fn write_tables(&self, sql: &mut String) {
+        let d = self.dialect;
         for t in &self.tables {
             let name = table_name(t, d);
             let _ = write!(sql, "\nCREATE TABLE {name} (");
@@ -998,6 +988,11 @@ impl Builder<'_> {
                 }
             }
         }
+    }
+
+    /// The indexes, then the foreign keys as `ALTER TABLE … ADD CONSTRAINT`.
+    fn write_indexes_and_keys(&self, sql: &mut String) {
+        let d = self.dialect;
         // Names of indexes and constraints, by schema: PostgreSQL keeps indexes in one
         // namespace with the tables, so a name from MySQL (where an index's name is the
         // table's own) must not be a table's.
@@ -1006,18 +1001,10 @@ impl Builder<'_> {
             names.extend(self.tables.iter().map(|t| (schema_of(t), t.name.clone())));
         }
         let mut name_of = |t: &Table, base: String| {
-            let mut base = base;
-            if base.len() > NAME_LIMIT {
-                let cut = (0..=NAME_LIMIT).rev().find(|&i| base.is_char_boundary(i)).unwrap_or(0);
-                base.truncate(cut);
-            }
             let schema = schema_of(t);
-            let taken = |n: &String| names.contains(&(schema.clone(), n.clone()));
-            let name = if taken(&base) {
-                (2..).map(|n| format!("{base}{n}")).find(|n| !taken(n)).expect("unbounded")
-            } else {
-                base
-            };
+            let name = numbered(&cut(&base, NAME_LIMIT), |n| {
+                names.contains(&(schema.clone(), n.to_owned()))
+            });
             names.insert((schema, name.clone()));
             name
         };
@@ -1084,12 +1071,6 @@ impl Builder<'_> {
                 table_name(target, d),
                 key.join(", "),
             );
-        }
-        Ddl {
-            sql,
-            tables: self.tables.len(),
-            foreign_keys: self.refs.len(),
-            left_out: self.left_out,
         }
     }
 }
@@ -1202,12 +1183,17 @@ fn with_value(check: &str, column: &str) -> String {
 
 /// A name that may have a schema in front: `fracht.Typ` → `fracht."Typ"` in PostgreSQL.
 fn qualified(name: &str, d: Dialect) -> String {
-    match name.split_once('.') {
-        Some((s, n)) if d == Dialect::Postgres && !s.is_empty() && !n.is_empty() => {
-            format!("{}.{}", quote(s, d), quote(n, d))
-        }
-        _ => quote(name, d),
+    match split_schema(name, d) {
+        Some((s, n)) => format!("{}.{}", quote(s, d), quote(n, d)),
+        None => quote(name, d),
     }
+}
+
+/// Schema and name of `schema.name` in PostgreSQL; none in MySQL, which has no schemas here,
+/// or where either part is empty.
+fn split_schema(name: &str, d: Dialect) -> Option<(&str, &str)> {
+    let parts = name.split_once('.');
+    parts.filter(|(s, n)| d == Dialect::Postgres && !s.is_empty() && !n.is_empty())
 }
 
 fn table_name(t: &Table, d: Dialect) -> String {
@@ -1386,24 +1372,21 @@ fn index_column(t: &Table, column: &str, d: Dialect) -> String {
     if !d.is_mysql() {
         return quote(name, d);
     }
-    let long = t.columns.iter().find(|c| c.name == name).is_some_and(|c| {
-        matches!(
-            base_type(&c.datatype).as_str(),
-            "tinytext"
-                | "text"
-                | "mediumtext"
-                | "longtext"
-                | "tinyblob"
-                | "blob"
-                | "mediumblob"
-                | "longblob"
-        )
-    });
+    let long = t
+        .columns
+        .iter()
+        .find(|c| c.name == name)
+        .is_some_and(|c| is_text_or_blob(&base_type(&c.datatype)));
     match length {
         Some(n) => format!("{}({n})", quote(name, d)),
         None if long => format!("{}(255)", quote(name, d)),
         None => quote(name, d),
     }
+}
+
+/// Whether a base type ([`base_type`]) is one of MySQL's text or binary types.
+fn is_text_or_blob(base: &str) -> bool {
+    MYSQL_TEXT.contains(&base) || MYSQL_BLOB.contains(&base)
 }
 
 /// The schema a table is in, for the names of its indexes.
@@ -1437,6 +1420,23 @@ fn quote(name: &str, d: Dialect) -> String {
     } else {
         format!("\"{}\"", name.replace('"', "\"\""))
     }
+}
+
+/// `base`, or `base2`, `base3`, …: the first that is not `taken`.
+fn numbered(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    first_free(base.to_owned(), taken, |n| format!("{base}{n}"))
+}
+
+/// `first` unless it is `taken`, else the first of `nth(2)`, `nth(3)` … that is not.
+fn first_free(
+    first: String,
+    taken: impl Fn(&str) -> bool,
+    nth: impl Fn(usize) -> String,
+) -> String {
+    if !taken(&first) {
+        return first;
+    }
+    (2..).map(nth).find(|n| !taken(n)).expect("names are unbounded")
 }
 
 /// `name` cut to at most `limit` bytes, at a character's start.

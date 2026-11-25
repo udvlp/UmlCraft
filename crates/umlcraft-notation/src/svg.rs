@@ -120,12 +120,7 @@ pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> St
             svg.text(&label.text, area, FONT_SIZE, false, false, label.align, width);
             if label.underline {
                 let x = draw::text_left(area, width, label.align);
-                let y = area.y + FONT_SIZE * draw::UNDERLINE;
-                svg.primitive(&Primitive::Polyline {
-                    points: vec![Point::new(x, y), Point::new(x + width, y)],
-                    width: 1.0,
-                    style: LineStyle::Solid,
-                });
+                svg.underline(x, x + width, area.y + FONT_SIZE * draw::UNDERLINE);
             }
         }
         svg.ink = None;
@@ -274,14 +269,10 @@ impl Svg<'_> {
     fn fill_attr(&self, paint: Paint) -> String {
         match paint {
             Paint::Fill => match self.fill {
-                Some(c) if c.a < 255 => format!(
-                    " fill=\"#{:02x}{:02x}{:02x}\" fill-opacity=\"{}\"",
-                    c.r,
-                    c.g,
-                    c.b,
-                    num(f32::from(c.a) / 255.0)
-                ),
-                Some(c) => format!(" fill=\"#{:02x}{:02x}{:02x}\"", c.r, c.g, c.b),
+                Some(c) if c.a < 255 => {
+                    format!(" fill=\"{}\" fill-opacity=\"{}\"", hex(c), num(f32::from(c.a) / 255.0))
+                }
+                Some(c) => format!(" fill=\"{}\"", hex(c)),
                 None => format!(" fill=\"{DEFAULT_FILL}\""),
             },
             Paint::Translucent => format!(" fill=\"{WHITE}\" fill-opacity=\"0.35\""),
@@ -351,13 +342,17 @@ impl Svg<'_> {
             // Astah starts the line where the text starts and makes it as long as the text.
             let x = draw::text_left(row.rect, width, row.align);
             let width = self.measure.width(&row.text, row.size, row.bold);
-            let y = row.rect.y + row.size * draw::UNDERLINE;
-            self.primitive(&Primitive::Polyline {
-                points: vec![Point::new(x, y), Point::new(x + width, y)],
-                width: 1.0,
-                style: LineStyle::Solid,
-            });
+            self.underline(x, x + width, row.rect.y + row.size * draw::UNDERLINE);
         }
+    }
+
+    /// A 1 px solid line under a text, from `left` to `right` at `y`.
+    fn underline(&mut self, left: f32, right: f32, y: f32) {
+        self.primitive(&Primitive::Polyline {
+            points: vec![Point::new(left, y), Point::new(right, y)],
+            width: 1.0,
+            style: LineStyle::Solid,
+        });
     }
 
     /// A member row, its visibility symbol centered in a column as wide as a `+`
@@ -374,12 +369,7 @@ impl Svg<'_> {
         let after = Rect::new(x, r.y, r.right() - x, r.height);
         self.text(text, after, row.size, row.bold, row.italic, LabelAlign::Left, text_w);
         if row.underline {
-            let y = r.y + row.size * draw::UNDERLINE;
-            self.primitive(&Primitive::Polyline {
-                points: vec![Point::new(r.x, y), Point::new(x + text_w, y)],
-                width: 1.0,
-                style: LineStyle::Solid,
-            });
+            self.underline(r.x, x + text_w, r.y + row.size * draw::UNDERLINE);
         }
     }
 
@@ -424,7 +414,8 @@ fn color(paint: Paint) -> &'static str {
     }
 }
 
-/// `#rrggbb`: line and text colors are opaque.
+/// `#rrggbb`, its alpha left aside: line and text colors are opaque, fills carry theirs in
+/// `fill-opacity`.
 fn hex(c: Color) -> String {
     format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b)
 }

@@ -209,13 +209,10 @@ pub fn copy(model: &Model, diagram: Id, selection: &[Id]) -> Option<Clip> {
 
 /// `name` if no sibling under `owner` has it, else `name2`, `name3`, …; empty names stay empty.
 pub fn free_name(model: &Model, owner: Id, name: &str) -> String {
-    let taken = |n: &str| {
-        model.children(owner).iter().any(|&c| model.get(c).is_some_and(|e| e.name() == n))
-    };
-    if name.is_empty() || !taken(name) {
-        return name.to_owned();
+    if name.is_empty() {
+        return String::new();
     }
-    (2..).map(|n| format!("{name}{n}")).find(|n| !taken(n)).expect("names are unbounded")
+    crate::palette::numbered_name(model, owner, name)
 }
 
 /// Copies that cannot be inserted yet, collected while pasting.

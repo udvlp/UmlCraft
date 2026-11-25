@@ -138,6 +138,14 @@ pub struct Layout {
     pub body: SeqBox,
 }
 
+/// What [`Layout::spot`] finds at a point.
+enum Spot<'a> {
+    /// An empty sequence, at its path.
+    Empty(Path),
+    /// An element, `index` in the sequence at `seq`.
+    Element { seq: Path, index: usize, element: &'a ElementBox },
+}
+
 impl Layout {
     pub fn of(diagram: &Diagram, m: &Metrics) -> Layout {
         Layouter { m, labels: Keywords::of(diagram).branch_labels() }.diagram(diagram)
@@ -146,37 +154,45 @@ impl Layout {
     /// What a click at a point selects: the innermost element, an empty branch (a try's
     /// missing `finally` in its bottom band), or the diagram itself in its frame and title.
     pub fn hit(&self, x: i32, y: i32) -> Option<Selection> {
-        fn find(seq: &SeqBox, path: Path, x: i32, y: i32) -> Option<Selection> {
-            if seq.elements.is_empty() {
-                return seq.rect.contains(x, y).then_some(Selection::Empty(path));
+        match self.spot(x, y) {
+            Some(Spot::Empty(path)) => Some(Selection::Empty(path)),
+            Some(Spot::Element { element, .. }) => Some(Selection::element(&element.path)),
+            None => {
+                (0..=self.size.0).contains(&x).then_some(())?;
+                (0..=self.size.1).contains(&y).then_some(Selection::Root)
             }
-            let e = seq.elements.iter().find(|e| e.rect.contains(x, y))?;
-            e.branches
-                .iter()
-                .enumerate()
-                .find_map(|(i, b)| find(b, branch_path(&e.path, i), x, y))
-                .or_else(|| {
-                    finally_band(e)
-                        .filter(|band| band.contains(x, y))
-                        .map(|_| Selection::Empty(branch_path(&e.path, 2)))
-                })
-                .or_else(|| Some(Selection::element(&e.path)))
         }
-        find(&self.body, Vec::new(), x, y).or_else(|| {
-            (0..=self.size.0).contains(&x).then_some(())?;
-            (0..=self.size.1).contains(&y).then_some(Selection::Root)
-        })
     }
 
     /// Where something dropped at a point goes: before an element when the point is in its
     /// upper half (outside its branches), after it in the lower half, into an empty branch,
     /// into a try's missing `finally` in its bottom band.
     pub fn slot_at(&self, x: i32, y: i32) -> Option<Slot> {
-        fn find(seq: &SeqBox, path: Path, x: i32, y: i32) -> Option<Slot> {
-            if seq.elements.is_empty() {
-                return seq.rect.contains(x, y).then_some(Slot { seq: path, index: 0 });
+        match self.spot(x, y) {
+            Some(Spot::Empty(seq)) => Some(Slot { seq, index: 0 }),
+            Some(Spot::Element { seq, index, element }) => {
+                let after = y >= element.rect.y + element.rect.h / 2;
+                Some(Slot { seq, index: index + usize::from(after) })
             }
-            let (i, e) = seq.elements.iter().enumerate().find(|(_, e)| e.rect.contains(x, y))?;
+            None => {
+                let inside = (0..=self.size.0).contains(&x) && (0..=self.size.1).contains(&y);
+                inside.then(|| {
+                    let end = if y < self.body.rect.y { 0 } else { self.body.elements.len() };
+                    Slot { seq: Vec::new(), index: end }
+                })
+            }
+        }
+    }
+
+    /// The innermost thing of the body at a point: an empty sequence (also a try's missing
+    /// `finally` in its bottom band) or an element outside its branches.
+    fn spot(&self, x: i32, y: i32) -> Option<Spot<'_>> {
+        fn find(seq: &SeqBox, path: Path, x: i32, y: i32) -> Option<Spot<'_>> {
+            if seq.elements.is_empty() {
+                return seq.rect.contains(x, y).then_some(Spot::Empty(path));
+            }
+            let (index, e) =
+                seq.elements.iter().enumerate().find(|(_, e)| e.rect.contains(x, y))?;
             e.branches
                 .iter()
                 .enumerate()
@@ -184,44 +200,27 @@ impl Layout {
                 .or_else(|| {
                     finally_band(e)
                         .filter(|band| band.contains(x, y))
-                        .map(|_| Slot { seq: branch_path(&e.path, 2), index: 0 })
+                        .map(|_| Spot::Empty(branch_path(&e.path, 2)))
                 })
-                .or_else(|| {
-                    let after = y >= e.rect.y + e.rect.h / 2;
-                    Some(Slot { seq: path, index: i + usize::from(after) })
-                })
+                .or(Some(Spot::Element { seq: path, index, element: e }))
         }
-        find(&self.body, Vec::new(), x, y).or_else(|| {
-            let inside = (0..=self.size.0).contains(&x) && (0..=self.size.1).contains(&y);
-            inside.then(|| {
-                let end = if y < self.body.rect.y { 0 } else { self.body.elements.len() };
-                Slot { seq: Vec::new(), index: end }
-            })
-        })
+        find(&self.body, Vec::new(), x, y)
     }
 
-    /// The box of the element at `path`.
+    /// The box of the element at `path` (an odd-length path).
     pub fn element(&self, path: &[usize]) -> Option<&ElementBox> {
-        let mut seq = &self.body;
-        let mut found = None;
-        for (i, &index) in path.iter().enumerate() {
-            if i % 2 == 0 {
-                let e = seq.elements.get(index)?;
-                found = Some(e);
-            } else {
-                seq = found?.branches.get(index)?;
-                found = None;
-            }
-        }
-        found
+        let (last, seq) = path.split_last()?;
+        self.sequence(seq)?.elements.get(*last)
     }
 
-    /// The box of the sequence at `seq` (the body for `[]`).
+    /// The box of the sequence at `seq` (an even-length path; the body for `[]`).
     pub fn sequence(&self, seq: &[usize]) -> Option<&SeqBox> {
-        match seq.split_last() {
-            None => Some(&self.body),
-            Some((b, e)) => self.element(e)?.branches.get(*b),
+        let mut s = &self.body;
+        for pair in seq.chunks(2) {
+            let [e, b] = pair else { return None };
+            s = s.elements.get(*e)?.branches.get(*b)?;
         }
+        Some(s)
     }
 
     /// Where the empty `finally` at `seq` (`[.., try, 2]`) would go, which is not drawn, as
@@ -279,7 +278,7 @@ fn round_div(a: i64, b: i64) -> i32 {
 }
 
 /// The case lines: discriminator, then one per branch; `%` as the last means no default.
-fn case_parts(e: &Element) -> (String, Vec<String>, bool) {
+pub(crate) fn case_parts(e: &Element) -> (String, Vec<String>, bool) {
     let mut lines = e.text();
     if lines.is_empty() {
         lines.push(String::new());
@@ -669,15 +668,8 @@ pub const INCLUDES_LABEL: &str = "Included diagrams:";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::create::lines;
+    use crate::create::{lines, test_diagram};
     use crate::model::Element;
-
-    fn diagram(elements: Vec<Element>) -> Diagram {
-        let made = crate::create::Provenance { author: "", date: "", origin: "" };
-        let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
-        d.children = Sequence::new(elements);
-        d
-    }
 
     fn first(d: &Diagram) -> ElementBox {
         Layout::of(d, Metrics::linux()).body.elements[0].clone()
@@ -687,7 +679,7 @@ mod tests {
     fn clicks_and_drops_find_their_place() {
         let mut alt = Element::alternative(&lines(&["c"]));
         alt.branches[0] = Sequence::new(vec![Element::instruction(&lines(&["x"]))]);
-        let d = diagram(vec![Element::instruction(&lines(&["a"])), alt]);
+        let d = test_diagram(vec![Element::instruction(&lines(&["a"])), alt]);
         let l = Layout::of(&d, Metrics::linux());
         let a = l.element(&[0]).unwrap().rect;
         let x = l.element(&[1, 0, 0]).unwrap().rect;
@@ -708,7 +700,7 @@ mod tests {
     fn an_empty_finally_lies_in_the_bottom_band() {
         let mut t = Element::try_block("ex");
         t.branches[0] = Sequence::new(vec![Element::instruction(&lines(&["x"]))]);
-        let l = Layout::of(&diagram(vec![t]), Metrics::linux());
+        let l = Layout::of(&test_diagram(vec![t]), Metrics::linux());
         let e = l.element(&[0]).unwrap().rect;
         let band = l.hidden_finally(&[0, 2]).unwrap();
         assert_eq!((band.x, band.right(), band.bottom()), (e.x + 20, e.right() - 20, e.bottom()));
@@ -717,7 +709,7 @@ mod tests {
         // A click into the band selects the empty finally, ready for pasting into it.
         let finally = Selection::Empty(vec![0, 2]);
         assert_eq!(l.hit(band.x + 2, band.y + 2), Some(finally.clone()));
-        assert!(finally.is_valid(&diagram(vec![Element::try_block("ex")])));
+        assert!(finally.is_valid(&test_diagram(vec![Element::try_block("ex")])));
         // Outside the band the try's own places stay.
         assert_eq!(l.slot_at(e.x + 2, e.bottom() - 2), Some(Slot { seq: vec![], index: 1 }));
         assert_eq!(l.hit(e.x + 2, e.bottom() - 2), Some(Selection::element(&[0])));
@@ -725,7 +717,7 @@ mod tests {
         // A finally with elements is drawn and has its own box.
         let mut t = Element::try_block("ex");
         t.branches[2] = Sequence::new(vec![Element::instruction(&lines(&["y"]))]);
-        let l = Layout::of(&diagram(vec![t]), Metrics::linux());
+        let l = Layout::of(&test_diagram(vec![t]), Metrics::linux());
         assert_eq!(l.hidden_finally(&[0, 2]), None);
         assert!(l.sequence(&[0, 2]).is_some());
     }
@@ -741,7 +733,7 @@ mod tests {
         case.branches[0] = Sequence::new(vec![Element::call(&lines(&["ab", "cd"]))]);
         case.branches[1] = Sequence::new(vec![Element::jump(&lines(&["leave"]))]);
         case.branches[2] = Sequence::new(vec![Element::instruction(&lines(&["w <- 6"]))]);
-        let l = Layout::of(&diagram(vec![case]), Metrics::linux());
+        let l = Layout::of(&test_diagram(vec![case]), Metrics::linux());
         let call = l.element(&[0, 0, 0]).unwrap();
         assert_eq!(call.shape, Shape::Plain { rotated: true });
         assert_eq!(call.rect.w, 66);
@@ -751,7 +743,7 @@ mod tests {
 
     #[test]
     fn instructions_are_their_text_and_padding() {
-        let d = diagram(vec![Element::instruction(&lines(&["hello world", "x"]))]);
+        let d = test_diagram(vec![Element::instruction(&lines(&["hello world", "x"]))]);
         let e = first(&d);
         assert_eq!((e.rect.w, e.rect.h), (64 + 20, 20 + 2 * 13));
     }
@@ -761,7 +753,7 @@ mod tests {
         // 120 px of condition: round((120 + 20) * 53 / 34) = 218, as Structorizer draws it.
         let mut alt = Element::alternative(&lines(&["xxxxxxxxxxxxxxxxxxxx"]));
         alt.branches[1].fit_color();
-        let e = first(&diagram(vec![alt]));
+        let e = first(&test_diagram(vec![alt]));
         assert_eq!(e.rect.w, 218);
         assert_eq!(e.shape, Shape::Alternative { head: 52, split: 20 + 218 - 40 - 1 });
     }
@@ -785,8 +777,8 @@ mod tests {
         let turned = |e: &ElementBox| {
             e.branches.iter().all(|b| b.elements[0].shape == Shape::Plain { rotated: true })
         };
-        assert!(turned(&first(&diagram(vec![wide]))));
-        assert!(!turned(&first(&diagram(vec![narrow]))));
+        assert!(turned(&first(&test_diagram(vec![wide]))));
+        assert!(!turned(&first(&test_diagram(vec![narrow]))));
     }
 
     #[test]
@@ -798,7 +790,7 @@ mod tests {
             alt.branches[1].elements.push(Element::instruction(&lines(&[t])));
         }
         alt.branches[1].fit_color();
-        let e = first(&diagram(vec![alt]));
+        let e = first(&test_diagram(vec![alt]));
         assert_eq!(e.branches[0].elements[0].rect.h, 3 * 33);
     }
 }

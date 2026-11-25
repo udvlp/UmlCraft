@@ -1,28 +1,21 @@
 //! How Java names resolve and which of its types are values.
 
 use super::jdk::JDK;
-use crate::lang::Rules;
+use crate::lang::{Rules, split_at_capital};
 
 pub static RULES: Rules = Rules {
     primitives: &["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"],
     implicit_imports: &[&["java", "lang"]],
     library: &JDK,
     value_packages: &[&["java", "lang"]],
-    split_qualified,
+    // Java's naming convention: packages are lower case, types start with a capital letter.
+    split_qualified: split_at_capital,
     enclosing_namespaces: false,
     base_list_by_target: false,
     optional_modifiers: &[],
     type_qualifiers: &[],
     reexports: false,
 };
-
-/// Java's naming convention: packages are lower case, types start with a capital letter. The
-/// package ends before the first segment that starts with a capital letter or contains a `$`.
-fn split_qualified(path: &[String]) -> usize {
-    path.iter()
-        .position(|s| s.starts_with(|c: char| c.is_uppercase()) || s.contains('$'))
-        .unwrap_or(path.len().saturating_sub(1))
-}
 
 #[cfg(test)]
 mod tests {

@@ -47,13 +47,11 @@ fn a_class_diagram_is_built_step_by_step() {
     );
     // UML forbids it, so UmlCraft refuses it and nothing changes.
     let revision = host.document().revision();
-    let refused = call(
+    refusal(
         &mut host,
-        &Access::default(),
         "connect",
-        &json!({ "diagram": d, "tool": "realization", "source": order["element"], "target": customer["element"] }),
+        json!({ "diagram": d, "tool": "realization", "source": order["element"], "target": customer["element"] }),
     );
-    assert!(refused.is_error);
     assert_eq!(host.document().revision(), revision);
 
     let arranged = run(&mut host, "arrange_diagram", json!({ "diagram": d }));
@@ -94,9 +92,7 @@ fn objects_leave_out_slots_without_a_value_on_request() {
                        "slots": { "titel": "\"Momo\"" }, "empty_slots": false });
     let a = run(&mut host, "create_element", args);
     let slots = |host: &mut Headless| -> Vec<String> {
-        let (doc, measure) = host.parts();
-        let scene = scene::build(doc.model(), o.parse().unwrap(), &Default::default(), measure);
-        scene
+        drawn(host, &o)
             .nodes
             .iter()
             .flat_map(|n| n.rows.iter())
@@ -109,7 +105,7 @@ fn objects_leave_out_slots_without_a_value_on_request() {
     assert_eq!(slots(&mut host), ["titel = \"Momo\"", "ausgeliehen"]);
     // Only objects have slots.
     let wrong = json!({ "id": buch["element"], "empty_slots": false });
-    assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+    refusal(&mut host, "update_element", wrong);
 }
 
 #[test]
@@ -142,7 +138,7 @@ fn ends_abstract_static_classifier_and_slots_are_set() {
     let ElementKind::Class(c) = kind(&host, &lager["element"]) else { panic!() };
     assert!(c.is_abstract);
     let bad = json!({ "id": line["element"], "target_end": { "multiplicity": "viele" } });
-    assert!(call(&mut host, &Access::default(), "update_element", &bad).is_error);
+    refusal(&mut host, "update_element", bad);
 
     // Static members, written so or flagged.
     let add = |host: &mut Headless, text: &str| {
@@ -171,7 +167,7 @@ fn ends_abstract_static_classifier_and_slots_are_set() {
     let slots = umlcraft_notation::object::slots(model, id(&rex["element"]).parse().unwrap());
     assert_eq!(slots.iter().map(|s| s.1.as_str()).collect::<Vec<_>>(), ["\"Rex\""]);
     let wrong = json!({ "id": rex["element"], "slots": { "alter": "3" } });
-    assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+    refusal(&mut host, "update_element", wrong);
     host.document().model().check().unwrap();
 }
 
@@ -448,9 +444,7 @@ fn links_between_objects_run_straight_after_arranging() {
     for direction in ["right", "down"] {
         let args = json!({ "diagram": d, "direction": direction });
         run(&mut host, "arrange_diagram", args);
-        let (doc, measure) = host.parts();
-        let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
-        for e in &scene.edges {
+        for e in &drawn(&mut host, &d).edges {
             assert_eq!(e.points.len(), 2, "{direction}: {:?}", e.points);
         }
     }
@@ -668,9 +662,9 @@ fn association_classes_constraints_shared_generalizations_and_robustness_icons()
     run(&mut host, "update_element", json!({ "id": screen["element"], "icon": false }));
     // Only generalizations share, only robustness classes have an icon.
     let wrong = json!({ "id": enrolment["element"], "shared_style": "vertical" });
-    assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+    refusal(&mut host, "update_element", wrong);
     let wrong = json!({ "id": student["element"], "icon": true });
-    assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+    refusal(&mut host, "update_element", wrong);
 
     let model = host.document().model();
     model.check().unwrap();
@@ -724,8 +718,8 @@ fn arranged_use_cases_stay_inside_their_boundary() {
     let at = [Some((250.0, 60.0)), Some((250.0, 140.0)), Some((450.0, 60.0))];
     let (d, made) = mensa(&mut host, at);
     run(&mut host, "arrange_diagram", json!({ "diagram": d }));
-    let (doc, measure) = host.parts();
-    let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+    let scene = drawn(&mut host, &d);
+    let measure = host.parts().1;
     let rect = |v: &Value| scene.node(id(&v["presentation"]).parse().unwrap()).unwrap().rect;
     let boundary = rect(&made[0]);
     let cases: Vec<Rect> = made[1..4].iter().map(rect).collect();
@@ -1336,7 +1330,7 @@ fn use_cases_take_extension_points_and_extends_name_them() {
         ),
         ("add_member", json!({ "owner": r[1]["element"], "text": " " })),
     ] {
-        assert!(call(&mut host, &Access::default(), tool, &args).is_error, "{tool} {args}");
+        refusal(&mut host, tool, args);
     }
     // The points stay inside the ellipse of a use case with a short name (#90).
     let (doc, measure) = host.parts();
@@ -1374,16 +1368,11 @@ fn comments_show_the_text_they_are_given() {
     );
     // The name is the note's text (#89).
     assert_eq!(r[1]["text"], "Hallo\nWelt");
-    let svg = |host: &mut Headless| {
-        let (doc, measure) = host.parts();
-        let d = id(&r[0]["diagram"]).parse().unwrap();
-        svg::render(&scene::build(doc.model(), d, &Preview::default(), measure), measure)
-    };
-    let drawn = svg(&mut host);
+    let drawn = drawn_svg(&mut host, &r[0]["diagram"]);
     assert!(drawn.contains(">Hallo<") && drawn.contains(">Welt<"), "{drawn}");
     let renamed = run(&mut host, "update_element", json!({ "id": r[1]["element"], "name": "Neu" }));
     assert_eq!(renamed["text"], "Neu");
-    assert!(svg(&mut host).contains(">Neu<"));
+    assert!(drawn_svg(&mut host, &r[0]["diagram"]).contains(">Neu<"));
     run(&mut host, "update_element", json!({ "id": r[1]["element"], "text": "Bedingung: frei" }));
     let diagram = run(&mut host, "get_diagram", json!({ "diagram": r[0]["diagram"] }));
     assert_eq!(diagram["nodes"][0]["text"], "Bedingung: frei");
@@ -1427,11 +1416,7 @@ fn a_constraint_joins_two_associations() {
         let tip = if end == 0 { line.points[0] } else { *line.points.last().unwrap() };
         assert!((tip.x - middle.x).abs() < 1.0 && (tip.y - middle.y).abs() < 1.0);
     }
-    let svg = {
-        let (doc, measure) = host.parts();
-        let d = id(&r[0]["diagram"]).parse().unwrap();
-        svg::render(&scene::build(doc.model(), d, &Preview::default(), measure), measure)
-    };
+    let svg = drawn_svg(&mut host, &r[0]["diagram"]);
     assert!(svg.contains("{xor}"), "{svg}");
 
     // Given in braces, the name loses them.
@@ -1443,7 +1428,7 @@ fn a_constraint_joins_two_associations() {
     // Only between associations; deleting one of them deletes the constraint.
     let wrong = json!({ "diagram": r[0]["diagram"], "tool": "constraint",
                         "source": r[1]["element"], "target": r[4]["element"] });
-    assert!(call(&mut host, &Access::default(), "connect", &wrong).is_error);
+    refusal(&mut host, "connect", wrong);
     run(&mut host, "delete_element", json!({ "id": r[4]["element"] }));
     let model = host.document().model();
     assert!(model.get(id(&r[6]["element"]).parse().unwrap()).is_none());

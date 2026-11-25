@@ -246,12 +246,7 @@ if __name__ == "__main__":
             .map(|(c, n, s)| ((*c).to_owned(), (*n).to_owned(), (*s).to_owned()))
             .collect();
         assert_eq!(found, expected);
-        let made = crate::Made {
-            author: "t",
-            date: "2026-10-30",
-            origin: "test",
-            keywords: umlcraft_nsd::Keywords::English,
-        };
+        let made = crate::TEST_MADE;
         let titles: Vec<Vec<String>> =
             s.methods().iter().map(|m| s.diagram(m, &made).unwrap().0.text()).collect();
         assert_eq!(

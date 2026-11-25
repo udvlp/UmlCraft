@@ -6,11 +6,14 @@
 //! Methods whose structure differs on purpose are listed with the reason in
 //! `structorizer_deviations.txt`.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use common::MADE;
 use umlcraft_nsd::{Element, Sequence, read};
-use umlcraft_nsd_code::{Made, Source, SourceLanguage};
+use umlcraft_nsd_code::{Source, SourceLanguage};
 
 /// The kinds and nesting of a sequence, one line per element.
 fn shape(seq: &Sequence, depth: usize, out: &mut String) {
@@ -44,12 +47,6 @@ fn structure_matches_structorizers_import() {
         eprintln!("UMLCRAFT_NSD_REFS not set; skipped");
         return;
     };
-    let made = Made {
-        author: "t",
-        date: "2026-10-29",
-        origin: "t",
-        keywords: umlcraft_nsd::Keywords::English,
-    };
     let expected_deviations = deviations();
     let mut compared = 0;
     let mut differing = Vec::new();
@@ -79,7 +76,7 @@ fn structure_matches_structorizers_import() {
         let Some(m) = source.methods().into_iter().find(|m| m.name == method) else {
             panic!("{qualified}: no such method in {}", file.display());
         };
-        let (ours, _) = source.diagram(&m, &made).unwrap();
+        let (ours, _) = source.diagram(&m, &MADE).unwrap();
         let theirs = read(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let (mut a, mut b) = (String::new(), String::new());
         shape(&ours.children, 0, &mut a);

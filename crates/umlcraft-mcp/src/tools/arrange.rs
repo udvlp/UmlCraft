@@ -25,11 +25,7 @@ pub(super) fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
     });
     let y = opt_num(args, "y").ok_or("`y` is missing")?;
     let bounds = presentation.bounds();
-    let slot = item.and_then(|_| {
-        let (doc, measure) = host.parts();
-        let scene = scene::build(doc.model(), diagram, &Preview::default(), measure);
-        scene.sequence.as_ref().and_then(|l| l.slot_at(y))
-    });
+    let slot = item.and_then(|_| slot_at(host, diagram, y));
     if let (Some(item), Some(slot), None) = (item, slot, bounds) {
         change(host, "move_node", |tx| palette::move_to_slot(tx, item, slot))?;
         return Ok(Reply::json(json!({ "presentation": node, "y": y })));
@@ -153,12 +149,9 @@ pub(super) fn arrange_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let scope: Option<Vec<Id>> = ids_arg(args, "nodes")?
         .map(|ids| ids.into_iter().map(|id| on_diagram(model, diagram, id)).collect())
         .transpose()?;
-    let label = host.label("arrange_diagram");
-    let (doc, measure) = host.parts();
-    let moved = edit::apply(doc, label, measure, |tx| {
+    let moved = change_measured(host, "arrange_diagram", |tx, measure| {
         layout::arrange(tx, diagram, scope.as_deref(), direction, measure)
-    })
-    .map_err(model_error)?;
+    })?;
     Ok(Reply::json(json!({ "moved": moved.len() })))
 }
 

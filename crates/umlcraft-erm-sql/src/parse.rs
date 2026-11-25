@@ -195,9 +195,8 @@ impl Parser {
                     && s.value(c + 3, b).as_deref().is_some_and(is_sequence);
                 let column = s.ident(c);
                 if let (true, Some(column)) = (identity || sequence, column)
-                    && let Some(found) = self.schema.find(&key).cloned()
                     && let Some(col) =
-                        self.schema.tables.get_mut(&found).and_then(|t| t.column_mut(&column))
+                        self.schema.table_mut(&key).and_then(|t| t.column_mut(&column))
                 {
                     col.auto_increment = true;
                     handled = true;
@@ -207,11 +206,10 @@ impl Parser {
             if !s.is(a, "ADD") {
                 continue;
             }
-            let Some(found) = self.schema.find(&key).cloned() else {
+            let Some(table) = self.schema.table_mut(&key) else {
                 self.problem(line, ProblemKind::UnknownTable, s.text(0, s.toks.len()));
                 return true;
             };
-            let table = self.schema.tables.get_mut(&found).expect("found above");
             let c = a + 1;
             let ok = if s.starts_constraint(c) {
                 constraint(s, c, b, table)
@@ -250,13 +248,11 @@ impl Parser {
             return false;
         }
         let Some(columns) = s.ident_list(i, true) else { return false };
-        let Some(found) = self.schema.find(&key).cloned() else { return false };
-        if let Some(t) = self.schema.tables.get_mut(&found) {
-            if unique {
-                t.uniques.push(columns);
-            } else {
-                t.indexes.push(Index { name, columns });
-            }
+        let Some(t) = self.schema.table_mut(&key) else { return false };
+        if unique {
+            t.uniques.push(columns);
+        } else {
+            t.indexes.push(Index { name, columns });
         }
         true
     }
@@ -346,11 +342,10 @@ impl Parser {
         if self.views.contains(&key) {
             return false;
         }
-        let Some(found) = self.schema.find(&key).cloned() else {
+        let Some(table) = self.schema.table_mut(&key) else {
             self.problem(line, ProblemKind::UnknownTable, s.text(0, s.toks.len()));
             return true;
         };
-        let table = self.schema.tables.get_mut(&found).expect("found above");
         match col {
             None => table.comment = text,
             Some(c) => {
@@ -423,22 +418,7 @@ fn column(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
             continue;
         } else if s.is(k, "REFERENCES") {
             referenced = true;
-            let mut j = k + 1;
-            if let Some(target) = s.table_name(&mut j) {
-                let target_columns = if s.punct(j, b'(') {
-                    s.ident_list(j, false).unwrap_or_default()
-                } else {
-                    vec![]
-                };
-                let (on_delete, on_update) = actions(s, j, b);
-                table.foreign_keys.push(ForeignKey {
-                    columns: vec![col.name.clone()],
-                    target,
-                    target_columns,
-                    on_delete,
-                    on_update,
-                });
-            }
+            table.foreign_keys.extend(reference(s, k + 1, b, vec![col.name.clone()]));
         } else if s.is(k, "DEFAULT") && !s.is(k.wrapping_sub(1), "BY") {
             let end = (k + 1..b).find(|&j| j > k + 1 && s.depth0_keyword(j, k + 1)).unwrap_or(b);
             col.default = s.value(k + 1, end);
@@ -476,6 +456,16 @@ fn column(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
 /// A default that takes the next value of a sequence (`nextval('kunde_id_seq'::regclass)`).
 pub(crate) fn is_sequence(default: &str) -> bool {
     default.trim_start().to_ascii_lowercase().starts_with("nextval(")
+}
+
+/// The reference of `columns` from `j`, after `REFERENCES`, in `..b`: `table [(columns)]
+/// [ON DELETE …] [ON UPDATE …]`; none without a table name.
+fn reference(s: &Stmt, mut j: usize, b: usize, columns: Vec<String>) -> Option<ForeignKey> {
+    let target = s.table_name(&mut j)?;
+    let target_columns =
+        if s.punct(j, b'(') { s.ident_list(j, false).unwrap_or_default() } else { vec![] };
+    let (on_delete, on_update) = actions(s, j, b);
+    Some(ForeignKey { columns, target, target_columns, on_delete, on_update })
 }
 
 /// `ON DELETE …` and `ON UPDATE …` of a reference, in `from..to`.
@@ -531,22 +521,12 @@ fn constraint(s: &Stmt, a: usize, b: usize, table: &mut Table) -> bool {
     if s.is(i, "FOREIGN") && s.is(i + 1, "KEY") {
         let Some(open) = first_paren(i + 2) else { return false };
         let Some(columns) = s.ident_list(open, false) else { return false };
-        let mut j = s.close(open) + 1;
+        let j = s.close(open) + 1;
         if !s.is(j, "REFERENCES") {
             return false;
         }
-        j += 1;
-        let Some(target) = s.table_name(&mut j) else { return false };
-        let target_columns =
-            if s.punct(j, b'(') { s.ident_list(j, false).unwrap_or_default() } else { vec![] };
-        let (on_delete, on_update) = actions(s, j, b);
-        table.foreign_keys.push(ForeignKey {
-            columns,
-            target,
-            target_columns,
-            on_delete,
-            on_update,
-        });
+        let Some(reference) = reference(s, j + 1, b, columns) else { return false };
+        table.foreign_keys.push(reference);
         return true;
     }
     if s.is(i, "CHECK") {

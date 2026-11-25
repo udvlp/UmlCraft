@@ -727,17 +727,6 @@ impl Model {
         Ok(())
     }
 
-    /// specific → generals, over all generalizations.
-    fn generalization_parents(&self) -> HashMap<Id, Vec<Id>> {
-        let mut parents: HashMap<Id, Vec<Id>> = HashMap::new();
-        for e in self.elements.values() {
-            if let Some(g) = e.data.kind.as_generalization() {
-                parents.entry(g.specific).or_default().push(g.general);
-            }
-        }
-        parents
-    }
-
     /// specific → generalizations, as [`Model::generalizations`] keeps it.
     fn generalization_parents_index(&self) -> HashMap<Id, IndexSet<Id>> {
         let mut index: HashMap<Id, IndexSet<Id>> = HashMap::new();
@@ -814,7 +803,11 @@ impl Model {
         if self.names != self.name_index() {
             return invalid("the name index is out of date".into());
         }
-        self.check_generalizations_acyclic()?;
+        // The index is up to date (above), so generals come from it.
+        let generals = |id: Id| self.generals_of(id);
+        if let Some(id) = find_cycle(self.generalizations.keys().copied(), generals) {
+            return invalid(format!("generalization cycle through {id}"));
+        }
 
         let diagrams: HashSet<Id> = self
             .elements
@@ -843,40 +836,6 @@ impl Model {
             };
             if let Some(id) = find_cycle(view.presentations().iter().map(|p| p.id), ends) {
                 return Err(ModelError::EdgeCycle(id));
-            }
-        }
-        Ok(())
-    }
-
-    fn check_generalizations_acyclic(&self) -> Result<()> {
-        let parents = self.generalization_parents();
-        // Iterative DFS with colors: 1 = on stack, 2 = done.
-        let mut color: HashMap<Id, u8> = HashMap::new();
-        for &start in parents.keys() {
-            if color.contains_key(&start) {
-                continue;
-            }
-            let mut stack = vec![(start, 0usize)];
-            color.insert(start, 1);
-            while let Some((node, next)) = stack.pop() {
-                let edges = parents.get(&node).map_or(&[][..], Vec::as_slice);
-                if let Some(&parent) = edges.get(next) {
-                    stack.push((node, next + 1));
-                    match color.get(&parent) {
-                        Some(1) => {
-                            return Err(ModelError::Invalid(format!(
-                                "generalization cycle through {parent}"
-                            )));
-                        }
-                        Some(_) => {}
-                        None => {
-                            color.insert(parent, 1);
-                            stack.push((parent, 0));
-                        }
-                    }
-                } else {
-                    color.insert(node, 2);
-                }
             }
         }
         Ok(())

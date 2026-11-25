@@ -58,13 +58,9 @@ fn main() {
         let options = Options { attributes, file_name, notation, ..Options::default() };
         let mut doc = Document::new(Model::new("sql"));
         let root = doc.model().root();
-        let mut result = None;
-        doc.edit("import", |tx| {
-            result = Some(import(tx, root, &schema, &options, &ApproxMeasure)?);
-            Ok(())
-        })
-        .expect("the import makes a valid model");
-        let result = result.expect("imported");
+        let result = doc
+            .edit("import", |tx| import(tx, root, &schema, &options, &ApproxMeasure))
+            .expect("the import makes a valid model");
         let total = start.elapsed();
         let model = doc.model();
         let r = &result.report;

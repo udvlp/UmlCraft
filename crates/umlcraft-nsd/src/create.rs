@@ -184,23 +184,30 @@ impl Element {
     pub fn for_loop(text: &[String], header: ForLoop) -> Element {
         let mut e = Self::with(ElementKind::For, Some(text), 1);
         match header {
-            ForLoop::Counting { var, start, end, step } => {
-                e.set_attr("counterVar", var);
-                e.set_attr("startValue", start);
-                e.set_attr("endValue", end);
-                e.set_attr("stepConst", step);
-                e.set_attr("style", "COUNTER");
-            }
-            ForLoop::Traversing { var } => {
-                e.set_attr("counterVar", var);
-                e.set_attr("startValue", "");
-                e.set_attr("stepConst", "");
-                e.set_attr("style", "TRAVERSAL");
-                e.set_attr("insep", "in");
-            }
+            ForLoop::Counting { var, start, end, step } => e.set_counting(var, start, end, step),
+            ForLoop::Traversing { var } => e.set_traversal(var, "in"),
             ForLoop::Free => e.set_attr("style", "FREETEXT"),
         }
         e
+    }
+
+    /// A for loop's attributes for counting `var` from `start` to `end` by `step`.
+    pub(crate) fn set_counting(&mut self, var: &str, start: &str, end: &str, step: &str) {
+        self.set_attr("counterVar", var);
+        self.set_attr("startValue", start);
+        self.set_attr("endValue", end);
+        self.set_attr("stepConst", step);
+        self.set_attr("style", "COUNTER");
+    }
+
+    /// A for loop's attributes for going through a collection with `var`; `insep` is the
+    /// keyword between them (`in`).
+    pub(crate) fn set_traversal(&mut self, var: &str, insep: &str) {
+        self.set_attr("counterVar", var);
+        self.set_attr("startValue", "");
+        self.set_attr("stepConst", "");
+        self.set_attr("style", "TRAVERSAL");
+        self.set_attr("insep", insep);
     }
 
     pub fn while_loop(condition: &[String]) -> Element {
@@ -230,6 +237,15 @@ impl Element {
 /// Lines from string slices, for building diagrams in code.
 pub fn lines(texts: &[&str]) -> Lines {
     texts.iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// A program `t` holding `elements`, for tests that do not look at the header.
+#[cfg(test)]
+pub(crate) fn test_diagram(elements: Vec<Element>) -> Diagram {
+    let made = Provenance { author: "", date: "", origin: "" };
+    let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
+    d.children = Sequence::new(elements);
+    d
 }
 
 #[cfg(test)]

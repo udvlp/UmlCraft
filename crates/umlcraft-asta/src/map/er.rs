@@ -111,11 +111,8 @@ impl Importer<'_> {
                 }
                 "UModelImp" | "UPackageImp" => {
                     let data = self.er_data(child, ElementKind::Package);
-                    if let Some(package) = self.create(id, data, Some(child))
-                        && self.deeper(child)
-                    {
-                        self.er_walk(child, package);
-                        self.nesting -= 1;
+                    if let Some(package) = self.create(id, data, Some(child)) {
+                        self.nested(child, |im| im.er_walk(child, package));
                     }
                 }
                 "EREntityImp" => self.er_entity(id, child),
@@ -149,11 +146,11 @@ impl Importer<'_> {
         }
         let indexes = self.er_indexes(object);
         if !indexes.is_empty() {
-            let Some(mut data) = self.model.get(entity).map(|e| e.data().clone()) else { return };
-            if let ElementKind::ErEntity(p) = &mut data.kind {
+            self.update_kind(entity, |kind| {
+                let ElementKind::ErEntity(p) = kind else { return false };
                 p.indexes = indexes;
-                let _ = self.model.apply(Op::UpdateElement { id: entity, data });
-            }
+                true
+            });
         }
     }
 
@@ -266,11 +263,11 @@ impl Importer<'_> {
     }
 
     fn set_er_attribute(&mut self, id: Id, f: impl FnOnce(&mut ErAttributeProps)) {
-        let Some(mut data) = self.model.get(id).map(|e| e.data().clone()) else { return };
-        if let ElementKind::ErAttribute(p) = &mut data.kind {
+        self.update_kind(id, |kind| {
+            let ElementKind::ErAttribute(p) = kind else { return false };
             f(p);
-            let _ = self.model.apply(Op::UpdateElement { id, data });
-        }
+            true
+        });
     }
 
     fn er_group(&self, subtype: ObjId) -> i64 {
@@ -319,11 +316,11 @@ impl Importer<'_> {
     }
 
     fn set_weak(&mut self, entity: Id) {
-        let Some(mut data) = self.model.get(entity).map(|e| e.data().clone()) else { return };
-        if let ElementKind::ErEntity(p) = &mut data.kind {
+        self.update_kind(entity, |kind| {
+            let ElementKind::ErEntity(p) = kind else { return false };
             p.weak = true;
-            let _ = self.model.apply(Op::UpdateElement { id: entity, data });
-        }
+            true
+        });
     }
 
     /// A subtype relationship: the subtype joins the IS-A of its supertype's group, which is
@@ -444,7 +441,7 @@ impl Importer<'_> {
                     let symbol = r.obj(p, "rect").and_then(|l| self.rect(l)).or_else(|| {
                         r.list(p, "servers").into_iter().find_map(|s| {
                             (r.class(s) == "GeneralizationGroupPresentation")
-                                .then(|| r.obj(s, "location").and_then(|l| r.point(l)))
+                                .then(|| r.point_at(s, "location"))
                                 .flatten()
                                 .map(|at| Rect::new(at.x - 10.0, at.y - 5.0, 20.0, 10.0))
                         })
@@ -470,14 +467,14 @@ impl Importer<'_> {
                         shape: Shape::Node { bounds, regions: None },
                         style: Style::default(),
                     };
-                    let Some(node) = self.insert(diagram, presentation, false) else { continue };
+                    let Some(node) = self.insert(diagram, presentation, None) else { continue };
                     let supertyping = self.model.children(is_a).iter().copied().find(|&c| {
                         matches!(self.model.get(c).map(|e| e.kind()),
                             Some(ElementKind::ErSubtyping(s)) if s.supertype)
                     });
                     if let Some(line) = supertyping {
                         let edge = Presentation::edge(Some(line), node, super_node, Vec::new());
-                        self.insert(diagram, edge, false);
+                        self.insert(diagram, edge, None);
                     }
                     nodes.insert(is_a, node);
                     node
@@ -499,7 +496,7 @@ impl Importer<'_> {
             if grouped {
                 edge.style.line_shape = LineShape::RightAngle;
             }
-            self.insert(diagram, edge, false);
+            self.insert(diagram, edge, None);
         }
     }
 }

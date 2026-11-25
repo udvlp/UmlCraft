@@ -176,33 +176,14 @@ fn file_stem(name: &str, fallback: &str) -> String {
     if stem.is_empty() {
         return fallback.to_owned();
     }
-    let device = stem.split('.').next().unwrap_or_default().trim_end().to_uppercase();
-    let numbered = |prefix: &str| {
-        device
-            .strip_prefix(prefix)
-            .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
-    };
-    if matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || numbered("COM")
-        || numbered("LPT")
-    {
-        format!("_{stem}")
-    } else {
-        stem.to_owned()
-    }
+    if umlcraft_mcp::host::is_device_name(stem) { format!("_{stem}") } else { stem.to_owned() }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::scratch;
     use umlcraft_mcp::Host;
-
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("umlcraft-cli-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     fn call(host: &mut Headless, name: &str, args: Value) -> Value {
         reply(umlcraft_mcp::tools::call(host, &Access::any(), name, &args)).unwrap()
@@ -244,6 +225,7 @@ mod tests {
                 { "id": "9", "name": "Com1.x" },
                 { "id": "10", "name": "Computer" },
                 { "id": "11", "name": &"ä".repeat(150) },
+                { "id": "12", "name": "CONOUT$" },
             ],
             "structograms": [{ "id": "6", "title": "total(n)" }, { "id": "7", "title": "" }],
         });
@@ -260,6 +242,7 @@ mod tests {
                 "_Com1.x.png",
                 "Computer.png",
                 format!("{}.png", "ä".repeat(100)).as_str(),
+                "_CONOUT$.png",
                 "total(n).png",
                 "structogram.png"
             ]

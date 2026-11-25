@@ -23,9 +23,10 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    CardinalityMax, DiagramKind, ElementKind, Id, Model, Point, Rect, Result, Shape, Size, Tx,
+    CardinalityMax, ElementKind, Id, Model, Point, Rect, Result, Shape, Size, Tx,
 };
 
+use crate::labels::segments_cross;
 use crate::layout::{Direction, Edge, layered};
 use crate::scene::{self, Preview, Scene, TextMeasure};
 
@@ -156,20 +157,7 @@ pub fn arrange(
     write(tx, diagram, &g)?;
     place_loops(tx, diagram, &mut g, measure)?;
     let core = scene::build(tx.model(), diagram, &Preview::default(), measure);
-    // Labels give way to the attributes where they can; where one moved onto an attribute,
-    // the attributes are placed again, clear of both its places.
-    let mut labels = label_rects(&g, &core, measure);
-    for _ in 0..3 {
-        place_attributes(&mut g, &core, &labels);
-        write(tx, diagram, &g)?;
-        let scene = scene::build(tx.model(), diagram, &Preview::default(), measure);
-        let moved = label_rects(&g, &scene, measure);
-        let mut attributes = g.nodes.iter().filter(|n| n.attribute).map(|n| n.bounds);
-        if !attributes.any(|a| moved.iter().any(|l| overlap(&a, l))) {
-            break;
-        }
-        labels.extend(moved);
-    }
+    settle_attributes(tx, diagram, &mut g, &core, measure)?;
     normalize(&mut g);
     write(tx, diagram, &g)?;
     Ok(g.nodes.iter().zip(before).filter(|(n, b)| n.bounds != *b).map(|(n, _)| n.id).collect())
@@ -183,12 +171,25 @@ pub fn arrange_attributes(tx: &mut Tx<'_>, diagram: Id, measure: &dyn TextMeasur
     if g.attributes.iter().all(Vec::is_empty) && g.parts.is_empty() {
         return Ok(());
     }
-    let mut labels = label_rects(&g, &scene, measure);
+    settle_attributes(tx, diagram, &mut g, &scene, measure)
+}
+
+/// Places the attributes around their owners clear of the labels of `scene`, and writes them.
+/// Labels give way to the attributes where they can; where one moved onto an attribute, the
+/// attributes are placed again, clear of both its places, up to three times.
+fn settle_attributes(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    g: &mut Graph,
+    scene: &Scene,
+    measure: &dyn TextMeasure,
+) -> Result<()> {
+    let mut labels = label_rects(g, scene, measure);
     for _ in 0..3 {
-        place_attributes(&mut g, &scene, &labels);
-        write(tx, diagram, &g)?;
-        let scene = scene::build(tx.model(), diagram, &Preview::default(), measure);
-        let moved = label_rects(&g, &scene, measure);
+        place_attributes(g, scene, &labels);
+        write(tx, diagram, g)?;
+        let now = scene::build(tx.model(), diagram, &Preview::default(), measure);
+        let moved = label_rects(g, &now, measure);
         let mut attributes = g.nodes.iter().filter(|n| n.attribute).map(|n| n.bounds);
         if !attributes.any(|a| moved.iter().any(|l| overlap(&a, l))) {
             break;
@@ -196,6 +197,14 @@ pub fn arrange_attributes(tx: &mut Tx<'_>, diagram: Id, measure: &dyn TextMeasur
         labels.extend(moved);
     }
     Ok(())
+}
+
+/// The bounds of the node `id` of `view`.
+fn node_bounds(view: &umlcraft_model::View, id: Id) -> Option<Rect> {
+    match view.get(id).map(|p| &p.shape) {
+        Some(&Shape::Node { bounds, .. }) => Some(bounds),
+        _ => None,
+    }
 }
 
 /// Lines just drawn between two nodes that another line already joins, such as the two
@@ -210,11 +219,9 @@ pub fn spread_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<()
         let Some(&Shape::Edge { source, target, .. }) = view.get(edge).map(|p| &p.shape) else {
             continue;
         };
-        let bounds = |id: Id| match view.get(id).map(|p| &p.shape) {
-            Some(&Shape::Node { bounds, .. }) => Some(bounds),
-            _ => None,
+        let (Some(a), Some(b)) = (node_bounds(view, source), node_bounds(view, target)) else {
+            continue;
         };
-        let (Some(a), Some(b)) = (bounds(source), bounds(target)) else { continue };
         let (ca, cb) = (a.center(), b.center());
         let (dx, dy) = (cb.x - ca.x, cb.y - ca.y);
         let len = dx.hypot(dy);
@@ -285,15 +292,12 @@ pub fn spread_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<()
 /// changed nodes had; lines between two of them keep their bends as the caller left them.
 pub fn follow_nodes(tx: &mut Tx<'_>, diagram: Id, before: &[(Id, Rect)]) -> Result<()> {
     let model = tx.model();
-    if model.diagram_kind(diagram) != Some(DiagramKind::EntityRelationship) {
+    if !crate::er::is_er(model, diagram) {
         return Ok(());
     }
     let view = model.view_of(diagram)?;
     let old: HashMap<Id, Rect> = before.iter().copied().collect();
-    let bounds = |id: Id| match view.get(id).map(|p| &p.shape) {
-        Some(&Shape::Node { bounds, .. }) => Some(bounds),
-        _ => None,
-    };
+    let bounds = |id: Id| node_bounds(view, id);
     let pair = |s: Id, t: Id| if s < t { (s, t) } else { (t, s) };
     let mut joins: HashMap<(Id, Id), usize> = HashMap::new();
     for p in view.presentations() {
@@ -637,7 +641,7 @@ fn detour(g: &mut Graph) {
                         .iter()
                         .flat_map(|o| o.windows(2))
                         .map(|v| {
-                            if crosses(w[0], w[1], v[0], v[1]) {
+                            if segments_cross(w[0], w[1], v[0], v[1]) {
                                 1
                             } else if runs_along(w[0], w[1], v[0], v[1]) {
                                 2
@@ -659,12 +663,12 @@ fn detour(g: &mut Graph) {
         };
         // Whether a segment runs through one of the other nodes, kept `by` away from them.
         let blocked = |a: Point, b: Point, by: f32| -> Option<Rect> {
-            others.iter().find(|r| segment_hits(a, b, &inflate(r, by))).copied()
+            others.iter().find(|r| segment_hits(a, b, &r.inflate(by))).copied()
         };
         // A bend that spreads parallel lines and fell into another node moves out of it,
         // sideways: to the side of the node's middle it lies on.
         for p in &mut l.waypoints {
-            if let Some(r) = others.iter().find(|r| inside(*p, &inflate(r, DETOUR_GAP / 2.0))) {
+            if let Some(r) = others.iter().find(|r| inside(*p, &r.inflate(DETOUR_GAP / 2.0))) {
                 let vertical = (to.y - from.y).abs() >= (to.x - from.x).abs();
                 let c = r.center();
                 if vertical {
@@ -747,7 +751,7 @@ fn detour(g: &mut Graph) {
                     let stretch: Vec<Point> =
                         std::iter::once(a).chain(bends.iter().copied()).chain([b]).collect();
                     let near = |w: &[Point], q: &Rect| segment_hits(w[0], w[1], q);
-                    if stretch.windows(2).any(|w| near(w, &inflate(&r, DETOUR_GAP / 2.0))) {
+                    if stretch.windows(2).any(|w| near(w, &r.inflate(DETOUR_GAP / 2.0))) {
                         return None;
                     }
                     let passed = stretch
@@ -804,7 +808,7 @@ fn place_loops(
             .core
             .iter()
             .filter(|&&i| i != node)
-            .map(|&i| inflate(&g.nodes[i].bounds, CLEARANCE))
+            .map(|&i| g.nodes[i].bounds.inflate(CLEARANCE))
             .collect();
         let (left, right, top, bottom) = (r.x, r.x + r.width, r.y, r.y + r.height);
         let corners = [
@@ -982,11 +986,11 @@ impl Obstacles {
         // segments in the cells of the tested area can fail it.
         let rects = |area: &Rect| self.rect_cells.near(area).map(move |i| &self.rects[i]);
         let segments = |area: &Rect| self.segment_cells.near(area).map(move |i| &self.segments[i]);
-        let wide = inflate(r, CLEARANCE);
+        let wide = r.inflate(CLEARANCE);
         if rects(&wide).any(|(o, _)| overlap(&wide, o)) {
             return false;
         }
-        let near = inflate(r, CLEARANCE / 2.0);
+        let near = r.inflate(CLEARANCE / 2.0);
         if segments(&near).any(|(a, b, o)| foreign(o) && segment_hits(*a, *b, &near)) {
             return false;
         }
@@ -994,9 +998,9 @@ impl Obstacles {
         let (from, to) = (r.center(), owner_box.center());
         let line = Rect::from_corners(from, to);
         let through = rects(&line).any(|(o, of)| {
-            o != owner_box && foreign(of) && segment_hits(from, to, &inflate(o, -1.0))
+            o != owner_box && foreign(of) && segment_hits(from, to, &o.inflate(-1.0))
         });
-        !through && !segments(&line).any(|(a, b, o)| foreign(o) && crosses(from, to, *a, *b))
+        !through && !segments(&line).any(|(a, b, o)| foreign(o) && segments_cross(from, to, *a, *b))
     }
 }
 
@@ -1171,10 +1175,6 @@ fn snap(v: f32) -> f32 {
     (v / GRID).round() * GRID
 }
 
-fn inflate(r: &Rect, by: f32) -> Rect {
-    Rect::new(r.x - by, r.y - by, r.width + 2.0 * by, r.height + 2.0 * by)
-}
-
 /// Whether two boxes share more than a touching edge.
 fn overlap(a: &Rect, b: &Rect) -> bool {
     const EPS: f32 = 0.5;
@@ -1202,7 +1202,7 @@ fn segment_hits(a: Point, b: Point, r: &Rect) -> bool {
         Point::new(r.x + r.width, r.y + r.height),
         Point::new(r.x, r.y + r.height),
     ];
-    (0..4).any(|k| crosses(a, b, corners[k], corners[(k + 1) % 4]))
+    (0..4).any(|k| segments_cross(a, b, corners[k], corners[(k + 1) % 4]))
 }
 
 /// Whether the segments `a`–`b` and `c`–`d` lie on top of each other for a stretch: nearly
@@ -1222,16 +1222,6 @@ fn runs_along(a: Point, b: Point, c: Point, d: Point) -> bool {
     }
     let (lo, hi) = (at(c).min(at(d)), at(c).max(at(d)));
     hi.min(len) - lo.max(0.0) > GRID
-}
-
-/// Whether the segments `a`–`b` and `c`–`d` cross (touching ends do not count).
-fn crosses(a: Point, b: Point, c: Point, d: Point) -> bool {
-    let cross =
-        |o: Point, p: Point, q: Point| (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
-    let (d1, d2) = (cross(c, d, a), cross(c, d, b));
-    let (d3, d4) = (cross(a, b, c), cross(a, b, d));
-    ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
-        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
 }
 
 /// What covers what in an ER diagram as drawn: nodes on nodes, attributes on lines other than
@@ -1258,24 +1248,16 @@ pub fn overlaps(model: &Model, diagram: Id, measure: &dyn TextMeasure) -> Vec<(I
         // An attribute's line: the attributes of the same owner may touch it.
         let line_owner =
             ends.and_then(|(s, t)| [s, t].into_iter().find(|&n| is_attribute(n)).and_then(owner));
-        for n in scene.nodes.iter().filter(|n| is_attribute(n.id)) {
-            if ends.is_some_and(|(s, t)| s == n.id || t == n.id) {
+        // No line runs through an attribute, entity, relationship or IS-A it does not join.
+        for n in &scene.nodes {
+            let attribute = is_attribute(n.id);
+            if (!attribute && element(n.id).is_none())
+                || ends.is_some_and(|(s, t)| s == n.id || t == n.id)
+                || (attribute && line_owner.is_some() && line_owner == owner(n.id))
+            {
                 continue;
             }
-            if line_owner.is_some() && line_owner == owner(n.id) {
-                continue;
-            }
-            let r = inflate(&n.rect, -1.0);
-            if e.points.windows(2).any(|w| segment_hits(w[0], w[1], &r)) {
-                out.push((n.id, e.id));
-            }
-        }
-        // No line runs through an entity, relationship or IS-A it does not join.
-        for n in scene.nodes.iter().filter(|n| !is_attribute(n.id) && element(n.id).is_some()) {
-            if ends.is_some_and(|(s, t)| s == n.id || t == n.id) {
-                continue;
-            }
-            let r = inflate(&n.rect, -1.0);
+            let r = n.rect.inflate(-1.0);
             if e.points.windows(2).any(|w| segment_hits(w[0], w[1], &r)) {
                 out.push((n.id, e.id));
             }
@@ -1425,7 +1407,7 @@ mod tests {
         assert!(!runs_along(p(0.0, 0.0), p(0.0, 100.0), p(20.0, 50.0), p(20.0, 150.0)));
         assert!(!runs_along(p(0.0, 0.0), p(0.0, 100.0), p(0.0, 105.0), p(0.0, 150.0)));
         assert!(!runs_along(p(0.0, 0.0), p(0.0, 100.0), p(-50.0, 50.0), p(50.0, 50.0)));
-        assert!(crosses(p(0.0, 0.0), p(0.0, 100.0), p(-50.0, 50.0), p(50.0, 50.0)));
+        assert!(segments_cross(p(0.0, 0.0), p(0.0, 100.0), p(-50.0, 50.0), p(50.0, 50.0)));
     }
 
     #[test]

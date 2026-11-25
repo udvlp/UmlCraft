@@ -55,11 +55,19 @@ impl Rng {
     fn pick<T: Copy>(&mut self, items: &[T]) -> Option<T> {
         (!items.is_empty()).then(|| items[self.below(items.len())])
     }
+
+    /// `min` to `min + extra - 1` picks of `items`, a pick repeated at once dropped.
+    fn several<T: Copy + PartialEq>(&mut self, items: &[T], min: usize, extra: usize) -> Vec<T> {
+        let mut picked: Vec<T> =
+            (0..min + self.below(extra)).filter_map(|_| self.pick(items)).collect();
+        picked.dedup();
+        picked
+    }
 }
 
 fn documents() -> Vec<(&'static str, Document)> {
     let mut docs = vec![
-        ("sample project", crate::demo::velo(&ApproxMeasure)),
+        ("sample project", umlcraft_mcp::sample::velo(&ApproxMeasure)),
         ("order system", umlcraft_model::sample::order_system().0),
     ];
     let home = std::env::var_os("ASTAH_HOME")
@@ -299,13 +307,7 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
         }
         16 if kind == Some(DiagramKind::Sequence) => {
             if rng.chance(50) {
-                let mut selection: Vec<Id> = Vec::new();
-                for _ in 0..1 + rng.below(3) {
-                    if let Some(m) = rng.pick(&messages) {
-                        selection.push(m);
-                    }
-                }
-                selection.dedup();
+                let selection = rng.several(&messages, 1, 3);
                 let names: Vec<String> = selection.iter().map(|&m| name(m)).collect();
                 ws.select(selection);
                 ws.wrap_selection_in_fragment();
@@ -322,13 +324,7 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
             format!("add an operand to {fragment} {where_}")
         }
         17 => {
-            let mut selection: Vec<Id> = Vec::new();
-            for _ in 0..2 + rng.below(2) {
-                if let Some((n, _, _)) = rng.pick(&nodes) {
-                    selection.push(n);
-                }
-            }
-            selection.dedup();
+            let selection: Vec<Id> = rng.several(&nodes, 2, 2).into_iter().map(|n| n.0).collect();
             let alignments = [
                 Alignment::Left,
                 Alignment::HorizontalCenter,
@@ -367,13 +363,7 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
         }
         // Copy and paste, as copies or as references, on this diagram or another.
         20 => {
-            let mut selection: Vec<Id> = Vec::new();
-            for _ in 0..1 + rng.below(3) {
-                if let Some((n, _, _)) = rng.pick(&nodes) {
-                    selection.push(n);
-                }
-            }
-            selection.dedup();
+            let selection: Vec<Id> = rng.several(&nodes, 1, 3).into_iter().map(|n| n.0).collect();
             let names: Vec<String> = selection.iter().map(|&n| name(n)).collect();
             ws.select(selection);
             let Some((_, clip)) = ws.copy_selection() else { return "nothing".into() };
@@ -526,13 +516,7 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
                 .chain(messages)
                 .chain(lines.iter().map(|l| l.id))
                 .collect();
-            let mut selection = Vec::new();
-            for _ in 0..1 + rng.below(2) {
-                if let Some(item) = rng.pick(&ids) {
-                    selection.push(item);
-                }
-            }
-            selection.dedup();
+            let selection = rng.several(&ids, 1, 2);
             let names: Vec<String> = selection.iter().map(|&n| name(n)).collect();
             ws.select(selection);
             ws.remove_selection_from_diagram();

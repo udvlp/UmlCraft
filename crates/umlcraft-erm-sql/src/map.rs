@@ -42,6 +42,17 @@ pub enum Attributes {
     None,
 }
 
+impl Attributes {
+    /// Whether a column that is the `key` it is (or none) becomes an attribute.
+    fn takes(self, key: Option<ErKey>) -> bool {
+        match self {
+            Self::All => true,
+            Self::Keys => key.is_some(),
+            Self::None => false,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Options {
     pub attributes: Attributes,
@@ -221,8 +232,7 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
         }
     }
     for ((t, fks), class) in tables.iter().zip(&fks).zip(&classes) {
-        let fk_cols: HashSet<&str> =
-            fks.iter().flat_map(|fk| fk.columns.iter().map(String::as_str)).collect();
+        let fk_cols = columns_of(fks);
         let own: Vec<&str> =
             t.columns.iter().map(|c| c.name.as_str()).filter(|c| !fk_cols.contains(c)).collect();
         if *class == Class::Junction {
@@ -243,8 +253,7 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
         m.table_rules(owner.0, t, fks)?;
         let in_pk: Vec<&ForeignKey> = if *class == Class::Weak { in_key(t, fks) } else { vec![] };
         if *class == Class::Weak {
-            let id_cols: HashSet<&str> =
-                in_pk.iter().flat_map(|fk| fk.columns.iter().map(String::as_str)).collect();
+            let id_cols = columns_of(in_pk.iter().copied());
             let partial: Vec<&str> =
                 t.primary_key.iter().map(String::as_str).filter(|c| !id_cols.contains(c)).collect();
             m.attributes(owner, t, &own, &[], &partial)?;
@@ -317,11 +326,9 @@ pub fn map(tx: &mut Tx<'_>, owner: Id, schema: &Schema, options: &Options) -> Re
 /// S3/S4/S5.
 fn classify(t: &Table, fks: &[ForeignKey], referenced: bool) -> Class {
     let pk: HashSet<&str> = t.primary_key.iter().map(String::as_str).collect();
-    let fk_cols: HashSet<&str> =
-        fks.iter().flat_map(|fk| fk.columns.iter().map(String::as_str)).collect();
+    let fk_cols = columns_of(fks);
     let in_pk = in_key(t, fks);
-    let in_pk_cols: HashSet<&str> =
-        in_pk.iter().flat_map(|fk| fk.columns.iter().map(String::as_str)).collect();
+    let in_pk_cols = columns_of(in_pk.iter().copied());
     if in_pk.len() >= 2
         && !pk.is_empty()
         && pk == in_pk_cols
@@ -333,6 +340,11 @@ fn classify(t: &Table, fks: &[ForeignKey], referenced: bool) -> Class {
     let own_key = pk.iter().any(|c| !fk_cols.contains(c));
     let loose = pk.iter().any(|c| fk_cols.contains(c) && !in_pk_cols.contains(c));
     if !in_pk.is_empty() && own_key && !loose { Class::Weak } else { Class::Entity }
+}
+
+/// The names of the columns of foreign keys `fks`.
+fn columns_of<'a>(fks: impl IntoIterator<Item = &'a ForeignKey>) -> HashSet<&'a str> {
+    fks.into_iter().flat_map(|fk| fk.columns.iter().map(String::as_str)).collect()
 }
 
 /// The foreign keys that lie wholly in the primary key.
@@ -599,14 +611,9 @@ impl Mapper<'_, '_> {
         for name in &fk.columns {
             let Some(c) = t.column(name) else { continue };
             let key = t.primary_key.contains(name).then_some(ErKey::Primary);
-            let take = match self.attributes {
-                Attributes::All => true,
-                Attributes::Keys => key.is_some(),
-                Attributes::None => false,
-            };
             // A column of two foreign keys belongs to the first.
             let taken = !self.tx.model().children_named(owner, name).is_empty();
-            if !take || taken {
+            if !self.attributes.takes(key) || taken {
                 continue;
             }
             let props =
@@ -638,12 +645,7 @@ impl Mapper<'_, '_> {
             } else {
                 None
             };
-            let take = match self.attributes {
-                Attributes::All => true,
-                Attributes::Keys => key.is_some(),
-                Attributes::None => false,
-            };
-            if !take {
+            if !self.attributes.takes(key) {
                 continue;
             }
             let props = ErAttributeProps { key, ..self.column(t, c) };
@@ -705,13 +707,8 @@ mod tests {
         let schema = parse(sql.as_bytes(), dialect);
         let mut doc = Document::new(Model::new("m"));
         let root = doc.model().root();
-        let mut result = None;
-        doc.edit("import", |tx| {
-            result = Some(map(tx, root, &schema, options)?);
-            Ok(())
-        })
-        .unwrap();
-        (doc, result.unwrap())
+        let result = doc.edit("import", |tx| map(tx, root, &schema, options)).unwrap();
+        (doc, result)
     }
 
     /// The entities and relationships of the import, as `type name`.
@@ -788,13 +785,9 @@ mod tests {
         let mut doc = Document::new(Model::new("m"));
         let root = doc.model().root();
         let options = Options { notation: ErNotation::Ie, ..Options::default() };
-        let mut result = None;
-        doc.edit("import", |tx| {
-            result = Some(import(tx, root, &schema, &options, &ApproxMeasure)?);
-            Ok(())
-        })
-        .unwrap();
-        let (model, import) = (doc.model(), result.unwrap());
+        let import =
+            doc.edit("import", |tx| import(tx, root, &schema, &options, &ApproxMeasure)).unwrap();
+        let model = doc.model();
         model.check().unwrap();
         let pq = model.children_named(import.package, "Pq")[0];
         for column in ["p_id", "q_id"] {

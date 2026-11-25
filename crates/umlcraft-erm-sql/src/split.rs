@@ -5,7 +5,7 @@
 //! MariaDB's `/*M!100616 …*/`, whose content is code. Strings, quoted names, PostgreSQL's
 //! `$tag$` bodies, `DELIMITER` and the data after `COPY … FROM stdin;` are kept whole.
 
-use crate::dialect::{Dialect, trim};
+use crate::dialect::Dialect;
 
 /// One statement without its delimiter and comments, and the line it starts on (from 1).
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -54,9 +54,9 @@ impl Splitter<'_> {
     /// meta-commands such as `\restrict` (PostgreSQL). True if the line was used up.
     fn line_command(&mut self) -> bool {
         let end = self.line_end(self.i);
-        let line = trim(&self.s[self.i..end]);
+        let line = self.s[self.i..end].trim_ascii();
         if self.mysql && line.len() > 10 && line[..10].eq_ignore_ascii_case(b"DELIMITER ") {
-            let d = trim(&line[10..]);
+            let d = line[10..].trim_ascii();
             self.delimiter = if d.is_empty() { b";".to_vec() } else { d.to_vec() };
             self.skip_line();
             return true;
@@ -175,8 +175,8 @@ impl Iterator for Splitter<'_> {
                 self.line += count_lines(body);
                 if self.mysql
                     && let Some(code) = versioned(body)
-                    && !trim(code).starts_with(b"\\")
-                    && !trim(code).is_empty()
+                    && !code.trim_ascii().starts_with(b"\\")
+                    && !code.trim_ascii().is_empty()
                 {
                     start.get_or_insert(first_line);
                     buf.push(b' ');
@@ -201,7 +201,7 @@ impl Iterator for Splitter<'_> {
             if self.s[i..].starts_with(&self.delimiter) {
                 self.i += self.delimiter.len();
                 let Some(line) = start else { continue };
-                let text = trim(&buf).to_vec();
+                let text = buf.trim_ascii().to_vec();
                 if !self.mysql && is_copy_from_stdin(&text) {
                     self.skip_copy_data();
                 }
@@ -215,7 +215,7 @@ impl Iterator for Splitter<'_> {
             }
             self.i += 1;
         }
-        start.map(|line| Statement { line, text: trim(&buf).to_vec() })
+        start.map(|line| Statement { line, text: buf.trim_ascii().to_vec() })
     }
 }
 

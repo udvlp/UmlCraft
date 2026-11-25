@@ -7,9 +7,9 @@ use std::collections::{HashMap, HashSet};
 use umlcraft_model::{
     ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd, Cardinality, CardinalityMax,
     CardinalityMin, Color, DiagramKind, DiagramProps, EdgeLabels, Element, ElementKind, ErDisplay,
-    Id, InstanceKind, LineShape, LinkEnd, MessageSort, Model, Navigability, Point, Presentation,
-    PseudostateKind, Qualifier, Rect, Regions, Shape, Size, StateProps, Style, TransitionProps,
-    View,
+    Id, InstanceKind, LineShape, LinkEnd, MessageSort, Model, Multiplicity, Navigability, Point,
+    Presentation, PseudostateKind, Qualifier, Rect, Regions, Shape, Size, StateProps, Style,
+    TransitionProps, TypeRef, View,
 };
 
 use crate::labels::{self, FreeLabel, LabelKind};
@@ -879,6 +879,33 @@ fn middle(a: Point, b: Point) -> Point {
 }
 
 impl EdgeShape {
+    /// A solid straight line `id` through `points` between nodes `ends`, without markers,
+    /// labels or anchors; it meets the nodes at its first and last point.
+    pub fn new(id: Id, points: Vec<Point>, ends: [Rect; 2]) -> Self {
+        let node_tips = [points[0], points[points.len() - 1]];
+        Self {
+            id,
+            points,
+            node_tips,
+            line: LineStyle::Solid,
+            shape: LineShape::Line,
+            source_marker: EndMarker::None,
+            target_marker: EndMarker::None,
+            labels: Vec::new(),
+            fixed: false,
+            ends,
+            anchors: [None; 2],
+            name_arrow: None,
+            qualifiers: Vec::new(),
+            free_labels: Vec::new(),
+            association: false,
+            end_labels: Vec::new(),
+            constraint_labels: Vec::new(),
+            stroke: None,
+            double: false,
+        }
+    }
+
     pub fn waypoints(&self) -> &[Point] {
         &self.points[1..self.points.len() - 1]
     }
@@ -1087,28 +1114,22 @@ pub fn loop_corner_of(r: Rect, waypoints: &[Point]) -> usize {
 /// The anchor (relative to `r`) straight across from a loop's bend `w` on the nearest side of
 /// `r`: above or below it when `w` lies within its width, else left or right of it.
 fn loop_anchor(r: Rect, w: Point) -> Point {
-    let fraction = |v: f32, from: f32, size: f32| {
-        if size > 0.0 { ((v - from) / size).clamp(0.0, 1.0) } else { 0.5 }
-    };
-    let (fx, fy) = (fraction(w.x, r.x, r.width), fraction(w.y, r.y, r.height));
+    let f = route::clamped_relative(r, w);
     if w.x >= r.x && w.x <= r.right() {
-        Point::new(fx, if w.y < r.center().y { 0.0 } else { 1.0 })
+        Point::new(f.x, if w.y < r.center().y { 0.0 } else { 1.0 })
     } else {
-        Point::new(if w.x < r.x { 0.0 } else { 1.0 }, fy)
+        Point::new(if w.x < r.x { 0.0 } else { 1.0 }, f.y)
     }
 }
 
 /// The anchors (relative to `r`) at the ends of [`self_loop_at`]'s waypoints for `slot`, on the
 /// border, so that the loop keeps to the corner however the line is drawn.
 pub fn self_loop_anchors_at(r: Rect, slot: usize) -> (Point, Point) {
-    let fraction = |v: f32, size: f32| if size > 0.0 { (v / size).clamp(0.0, 1.0) } else { 0.5 };
     let (c, sx, sy) = loop_corner(r, slot);
     let (_, inn) = loop_reach(slot);
     let side = |s: f32| if s > 0.0 { 1.0 } else { 0.0 };
-    let (beside, across) = (
-        Point::new(side(sx), fraction(c.y - sy * inn - r.y, r.height)),
-        Point::new(fraction(c.x - sx * inn - r.x, r.width), side(sy)),
-    );
+    let f = route::clamped_relative(r, Point::new(c.x - sx * inn, c.y - sy * inn));
+    let (beside, across) = (Point::new(side(sx), f.y), Point::new(f.x, side(sy)));
     // As the waypoints of `self_loop_at` run.
     if sx < 0.0 { (across, beside) } else { (beside, across) }
 }
@@ -1140,6 +1161,13 @@ pub struct EdgeLabel {
     pub keyword: bool,
     /// A text color of its own; unset, the theme's.
     pub color: Option<Color>,
+}
+
+impl EdgeLabel {
+    /// A plain label: not underlined, not a keyword, in the theme's color.
+    pub fn new(text: String, anchor: Point, align: LabelAlign) -> Self {
+        Self { text, anchor, align, underline: false, keyword: false, color: None }
+    }
 }
 
 /// An uncommitted change shown while the user drags.
@@ -1270,8 +1298,13 @@ fn stacked(lines: Vec<Line>, first: Rect, align: LabelAlign) -> Vec<Row> {
 }
 
 /// The width of the widest of `lines`.
-fn widest(lines: &[Line], measure: &dyn TextMeasure) -> f32 {
-    lines.iter().map(|l| l.width(measure)).fold(0.0, f32::max)
+fn widest<'a>(lines: impl IntoIterator<Item = &'a Line>, measure: &dyn TextMeasure) -> f32 {
+    lines.into_iter().map(|l| l.width(measure)).fold(0.0, f32::max)
+}
+
+/// `r` grown to at least `width` × `height`, its top left corner kept.
+fn at_least(r: Rect, width: f32, height: f32) -> Rect {
+    Rect::new(r.x, r.y, r.width.max(width), r.height.max(height))
 }
 
 impl Line {
@@ -1436,9 +1469,15 @@ fn build_with(
     place_labels: bool,
 ) -> Scene {
     let Some(view) = model.view(diagram) else { return Scene::empty() };
-    let kind = model.diagram_kind(diagram);
-    let listing = model.get(diagram).and_then(|d| ErListing::of(d.kind()));
-    let reading = crate::er::cardinality_reading(model, diagram);
+    let diagram_kind = model.get(diagram).map(|d| d.kind());
+    let props = match diagram_kind {
+        Some(ElementKind::Diagram(p)) => Some(p),
+        _ => None,
+    };
+    let kind = props.map(|p| p.diagram);
+    let listing = diagram_kind.and_then(ErListing::of);
+    let reading =
+        props.map_or(crate::er::CardinalityReading::LookAcross, crate::er::CardinalityReading::of);
     // IE and IDEF1X list the attributes in their owners' boxes.
     let listed = |p: &Presentation| {
         listing.is_some()
@@ -1455,8 +1494,7 @@ fn build_with(
             Some(layout_node(model, p, bounds, kind, listing, measure))
         })
         .collect();
-    if matches!(model.get(diagram).map(|d| d.kind()), Some(ElementKind::Diagram(p)) if p.simple_states)
-    {
+    if props.is_some_and(|p| p.simple_states) {
         for node in &mut nodes {
             simplify_state(model, node);
         }
@@ -1468,8 +1506,7 @@ fn build_with(
     aim_sockets(view, &mut nodes);
     let (sequence, messages) = if is_sequence {
         let (layout, messages) = sequence::arrange(model, diagram, view, &mut nodes, measure);
-        if matches!(model.get(diagram).map(|d| d.kind()), Some(ElementKind::Diagram(p)) if p.hide_frame)
-        {
+        if props.is_some_and(|p| p.hide_frame) {
             nodes.retain(|n| n.element != Some(diagram));
         }
         (Some(layout), messages)
@@ -1513,9 +1550,87 @@ fn build_with(
         // On sequence diagrams the layout draws the messages.
         .filter(|p| !(is_sequence && is_message(p)))
         .collect();
-    let edge_shape = |p: &Presentation,
-                      rects: &HashMap<Id, Rect>,
-                      outlines: &HashMap<Id, Outline>| {
+    let lines = Lines {
+        model,
+        view,
+        preview,
+        measure,
+        listing,
+        reading,
+        common_lines,
+        clips,
+        iconic_interfaces,
+        sockets,
+    };
+    let mut edges: Vec<EdgeShape> =
+        candidates.iter().filter_map(|p| lines.edge(p, &rects, &outlines)).collect();
+    // Lines that end on another line (notes anchored to a relationship) end in the middle of
+    // that line, as in Astah.
+    let built: HashSet<Id> = edges.iter().map(|e| e.id).collect();
+    for e in &edges {
+        let (a, b) = route::middle_segment(&e.points, e.shape.is_curve());
+        let c = middle(a, b);
+        rects.insert(e.id, Rect::new(c.x, c.y, 0.0, 0.0));
+        outlines.insert(e.id, Outline::Rect);
+    }
+    edges.extend(
+        candidates
+            .iter()
+            .filter(|p| !built.contains(&p.id))
+            .filter_map(|p| lines.edge(p, &rects, &outlines)),
+    );
+    keywords_away_from_notes(&candidates, &built, &mut edges, measure);
+    let anchors = association_class_anchors(model, view, &nodes, &edges);
+    edges.extend(anchors);
+    edges.extend(view.presentations().iter().filter_map(|p| free_line(p, preview)));
+    edges.extend(messages);
+    for label in edges.iter_mut().flat_map(|e| &mut e.labels) {
+        label.text = single_line(&label.text);
+    }
+    if place_labels {
+        labels::place(&nodes, &mut edges, measure);
+    }
+    Scene { nodes, edges, sequence }
+}
+
+/// What building the lines of a diagram looks up besides each line itself.
+struct Lines<'a> {
+    model: &'a Model,
+    view: &'a View,
+    preview: &'a Preview,
+    measure: &'a dyn TextMeasure,
+    listing: Option<ErListing>,
+    reading: crate::er::CardinalityReading,
+    /// Where shared generalizations run together, per general element and style.
+    common_lines: HashMap<(Id, umlcraft_model::SharedStyle), f32>,
+    /// The rectangles lines are clipped at, by node.
+    clips: HashMap<Id, Rect>,
+    /// Interfaces drawn as circles, and those of them drawn as sockets.
+    iconic_interfaces: HashSet<Id>,
+    sockets: HashSet<Id>,
+}
+
+impl Lines<'_> {
+    /// The line of presentation `p` between nodes drawn at `rects` with `outlines`, if `p` is
+    /// a line and both its ends are there.
+    fn edge(
+        &self,
+        p: &Presentation,
+        rects: &HashMap<Id, Rect>,
+        outlines: &HashMap<Id, Outline>,
+    ) -> Option<EdgeShape> {
+        let &Self {
+            model,
+            view,
+            preview,
+            measure,
+            listing,
+            reading,
+            ref common_lines,
+            ref clips,
+            ref iconic_interfaces,
+            ref sockets,
+        } = self;
         let Shape::Edge { source, target, waypoints, source_anchor, target_anchor, labels } =
             &p.shape
         else {
@@ -1636,26 +1751,28 @@ fn build_with(
             }
             _ => None,
         });
-        let mut edge = edge_for(
-            p.id,
-            element.map(|e| e.kind()),
-            &qualifiers,
-            (
+        let line = LineParts {
+            id: p.id,
+            kind: element.map(|e| e.kind()),
+            qualifiers,
+            ends: [
                 (source_rect, clip(source, source_rect), outline(source)),
                 (target_rect, clip(target, target_rect), outline(target)),
-            ),
+            ],
             anchors,
-            p.style.line_shape,
-            &points,
-            (label, element.is_some_and(|e| !name(e).is_empty()), keyword),
-            &constraints,
+            shape: p.style.line_shape,
+            waypoints: &points,
+            name: label,
+            has_name: element.is_some_and(|e| !name(e).is_empty()),
+            bind_keyword: keyword,
+            constraints,
             to_lollipop,
-            labels,
-            &p.style,
-            er.as_ref(),
+            placed: labels,
+            style: &p.style,
+            er,
             cardinality,
-            measure,
-        );
+        };
+        let mut edge = edge_for(line, measure);
         // A total IS-A has a double line to its supertype, in Chen.
         if listing.is_none()
             && let Some(ElementKind::ErSubtyping(s)) = element.map(|e| e.kind())
@@ -1667,36 +1784,7 @@ fn build_with(
             edge.double = s.supertype && total;
         }
         Some(edge)
-    };
-    let mut edges: Vec<EdgeShape> =
-        candidates.iter().filter_map(|p| edge_shape(p, &rects, &outlines)).collect();
-    // Lines that end on another line (notes anchored to a relationship) end in the middle of
-    // that line, as in Astah.
-    let built: HashSet<Id> = edges.iter().map(|e| e.id).collect();
-    for e in &edges {
-        let (a, b) = route::middle_segment(&e.points, e.shape.is_curve());
-        let c = middle(a, b);
-        rects.insert(e.id, Rect::new(c.x, c.y, 0.0, 0.0));
-        outlines.insert(e.id, Outline::Rect);
     }
-    edges.extend(
-        candidates
-            .iter()
-            .filter(|p| !built.contains(&p.id))
-            .filter_map(|p| edge_shape(p, &rects, &outlines)),
-    );
-    keywords_away_from_notes(&candidates, &built, &mut edges, measure);
-    let anchors = association_class_anchors(model, view, &nodes, &edges);
-    edges.extend(anchors);
-    edges.extend(view.presentations().iter().filter_map(|p| free_line(p, preview)));
-    edges.extend(messages);
-    for label in edges.iter_mut().flat_map(|e| &mut e.labels) {
-        label.text = single_line(&label.text);
-    }
-    if place_labels {
-        labels::place(&nodes, &mut edges, measure);
-    }
-    Scene { nodes, edges, sequence }
 }
 
 /// The dashed lines from association classes to the middle of their association's line, as
@@ -1726,26 +1814,12 @@ fn association_class_anchors(
                 continue;
             }
             let from = border_point_from(rect, rect.center(), at);
+            let ends = [node.rect, Rect::new(at.x, at.y, 0.0, 0.0)];
             anchors.push(EdgeShape {
-                id: node.id,
-                points: vec![from, at],
                 line: LineStyle::ShortDashed,
-                shape: LineShape::Line,
-                source_marker: EndMarker::None,
-                target_marker: EndMarker::None,
-                labels: Vec::new(),
                 fixed: true,
-                ends: [node.rect, Rect::new(at.x, at.y, 0.0, 0.0)],
-                anchors: [None, None],
-                name_arrow: None,
-                qualifiers: Vec::new(),
-                node_tips: [from, at],
-                free_labels: Vec::new(),
-                association: false,
-                end_labels: Vec::new(),
-                constraint_labels: Vec::new(),
                 stroke: edge.stroke,
-                double: false,
+                ..EdgeShape::new(node.id, vec![from, at], ends)
             });
         }
     }
@@ -1764,26 +1838,13 @@ fn free_line(p: &Presentation, preview: &Preview) -> Option<EdgeShape> {
         _ => {}
     }
     let marker = |on: bool| if on { EndMarker::OpenArrow } else { EndMarker::None };
+    let ends = [Rect::new(from.x, from.y, 0.0, 0.0), Rect::new(to.x, to.y, 0.0, 0.0)];
     Some(EdgeShape {
-        id: p.id,
-        points: vec![from, to],
         line: if dashed { LineStyle::ShortDashed } else { LineStyle::Solid },
-        shape: LineShape::Line,
         source_marker: marker(start_arrow),
         target_marker: marker(end_arrow),
-        labels: Vec::new(),
         fixed: true,
-        ends: [Rect::new(from.x, from.y, 0.0, 0.0), Rect::new(to.x, to.y, 0.0, 0.0)],
-        anchors: [None, None],
-        name_arrow: None,
-        qualifiers: Vec::new(),
-        node_tips: [from, to],
-        free_labels: Vec::new(),
-        association: false,
-        end_labels: Vec::new(),
-        constraint_labels: Vec::new(),
-        stroke: None,
-        double: false,
+        ..EdgeShape::new(p.id, vec![from, to], ends)
     })
 }
 
@@ -1993,14 +2054,8 @@ fn layout_element(
         ElementKind::Interface(_) if style.iconic => {
             // Astah: a circle of radius 10 in a 24 × 24 box, the bold name right below it.
             let r = Rect::new(bounds.x, bounds.y, 24.0, 24.0);
-            let lines = name_lines(12.0, true);
-            let w = widest(&lines, measure) + 8.0;
             let top = r.center().y + LOLLIPOP_RADIUS;
-            let rows = stacked(
-                lines,
-                Rect::new(r.center().x - w / 2.0, top, w, line_height(12.0)),
-                LabelAlign::Center,
-            );
+            let rows = name_below(name_lines(12.0, true), r.center().x, top, 0.0, measure);
             // A socket opens to the left until `aim_sockets` turns it away from its line.
             let figure = if style.socket {
                 Figure::Socket { open: Point::new(-1.0, 0.0) }
@@ -2014,20 +2069,9 @@ fn layout_element(
             // box, the bold name centered below it, its baseline 13 below the box.
             let icon = robustness_icon(e).unwrap_or(HeadIcon::Entity);
             let size = robustness_size(icon);
-            let r = Rect::new(
-                bounds.x,
-                bounds.y,
-                bounds.width.max(size.width),
-                bounds.height.max(size.height),
-            );
-            let lines = name_lines(FONT_SIZE, true);
-            let w = widest(&lines, measure).max(r.width) + 8.0;
+            let r = at_least(bounds, size.width, size.height);
             let top = r.bottom() + 13.0 - crate::draw::baseline(FONT_SIZE);
-            let rows = stacked(
-                lines,
-                Rect::new(r.center().x - w / 2.0, top, w, line_height(FONT_SIZE)),
-                LabelAlign::Center,
-            );
+            let rows = name_below(name_lines(FONT_SIZE, true), r.center().x, top, r.width, measure);
             (r, Figure::Robustness(icon), rows)
         }
         kind if is_boxed_classifier(kind) => {
@@ -2038,8 +2082,7 @@ fn layout_element(
             // name makes the package higher.
             let lines = name_lines(FONT_SIZE, true);
             let h = line_height(FONT_SIZE);
-            let w = bounds.width.max(widest(&lines, measure) + 20.0);
-            let r = Rect::new(bounds.x, bounds.y, w, bounds.height.max(40.0 + h * more(&lines)));
+            let r = at_least(bounds, widest(&lines, measure) + 20.0, 40.0 + h * more(&lines));
             let tab = Rect::new(r.x, r.y, (r.width * 0.4).min(80.0), 15.0);
             let rows = stacked(lines, Rect::new(r.x, r.y + 20.0, r.width, h), LabelAlign::Center);
             let subsystem = crate::palette::is_subsystem(e);
@@ -2048,21 +2091,10 @@ fn layout_element(
         ElementKind::Actor(_) => {
             // Astah: a stick figure of fixed size in the middle of the box, the bold name
             // centered below it, its baseline 13 below the feet.
-            let r = Rect::new(
-                bounds.x,
-                bounds.y,
-                bounds.width.max(ACTOR_FIGURE.width),
-                bounds.height.max(ACTOR_FIGURE.height),
-            );
+            let r = at_least(bounds, ACTOR_FIGURE.width, ACTOR_FIGURE.height);
             let feet = r.center().y + ACTOR_FIGURE.height / 2.0;
-            let lines = name_lines(FONT_SIZE, true);
-            let w = widest(&lines, measure).max(r.width) + 8.0;
             let top = feet + 13.0 - crate::draw::baseline(FONT_SIZE);
-            let rows = stacked(
-                lines,
-                Rect::new(r.center().x - w / 2.0, top, w, line_height(FONT_SIZE)),
-                LabelAlign::Center,
-            );
+            let rows = name_below(name_lines(FONT_SIZE, true), r.center().x, top, r.width, measure);
             (r, Figure::Actor, rows)
         }
         ElementKind::UseCase(_) => layout_use_case(model, e, style, bounds, measure),
@@ -2075,12 +2107,7 @@ fn layout_element(
         ElementKind::SystemBoundary => {
             let lines = name_lines(FONT_SIZE, false);
             let w = widest(&lines, measure);
-            let r = Rect::new(
-                bounds.x,
-                bounds.y,
-                bounds.width.max(w + 20.0).max(120.0),
-                bounds.height.max(80.0),
-            );
+            let r = at_least(bounds, (w + 20.0).max(120.0), 80.0);
             let rows = match style.name_offset {
                 // Astah's free text: 10 right of its box, the baseline 17 below the box's top.
                 Some(at) => {
@@ -2120,18 +2147,10 @@ fn layout_element(
             };
             layout_box(model, e, &figure, Some(p.classifier), style, bounds, measure)
         }
-        ElementKind::Port(_) => {
+        ElementKind::Port(p) => {
             // Its name goes outside the border it sits on (`place_port_names`); until then,
             // above its right side.
-            let mut text = e.name().to_owned();
-            if let ElementKind::Port(p) = e.kind() {
-                if let Some(t) = &p.type_ref {
-                    text.push_str(&format!(" : {}", crate::member::type_text(model, t)));
-                }
-                if let Some(m) = p.multiplicity {
-                    text.push_str(&format!("[{m}]"));
-                }
-            }
+            let text = format!("{}{}", e.name(), typed_suffix(model, &p.type_ref, p.multiplicity));
             let lines = Line::broken(&text, 12.0, RowRole::Name, Some(id)).split();
             let (w, h) = (widest(&lines, measure), line_height(12.0));
             let r = Rect::new(bounds.x, bounds.y, PORT_SIZE, PORT_SIZE);
@@ -2171,11 +2190,10 @@ fn layout_element(
                 // below it.
                 PseudostateKind::StubState => {
                     let lines = name_lines(FONT_SIZE, false);
-                    let r = Rect::new(
-                        bounds.x,
-                        bounds.y,
-                        bounds.width.max(widest(&lines, measure) + 2.0 * STUB_PAD_X),
-                        bounds.height.max(STUB_BAR + 2.0 * STUB_GAP + h + h * more(&lines)),
+                    let r = at_least(
+                        bounds,
+                        widest(&lines, measure) + 2.0 * STUB_PAD_X,
+                        STUB_BAR + 2.0 * STUB_GAP + h + h * more(&lines),
                     );
                     let rows = stacked(
                         lines,
@@ -2201,12 +2219,7 @@ fn layout_element(
             // The name centered in the header, which keeps its height.
             let lines = name_lines(FONT_SIZE, false);
             let h = line_height(FONT_SIZE);
-            let r = Rect::new(
-                bounds.x,
-                bounds.y,
-                bounds.width.max(widest(&lines, measure) + 20.0).max(40.0),
-                bounds.height.max(PARTITION_HEADER),
-            );
+            let r = at_least(bounds, (widest(&lines, measure) + 20.0).max(40.0), PARTITION_HEADER);
             let top = r.y + (PARTITION_HEADER - h - h * more(&lines)) / 2.0;
             let rows = stacked(lines, Rect::new(r.x, top, r.width, h), LabelAlign::Center);
             (r, Figure::Partition { header: r.y + PARTITION_HEADER }, rows)
@@ -2224,23 +2237,9 @@ fn layout_element(
             let width = bounds.width.max(word_w + 4.0);
             let lines: Vec<Line> =
                 lines.into_iter().flat_map(|l| l.wrapped(width - 4.0, measure)).collect();
-            let r = Rect::new(
-                bounds.x,
-                bounds.y,
-                width,
-                bounds.height.max(4.0 + h * lines.len() as f32),
-            );
-            let rows = lines
-                .into_iter()
-                .enumerate()
-                .map(|(i, l)| {
-                    l.place(
-                        Rect::new(r.x + 2.0, r.y + 2.0 + h * i as f32, r.width - 4.0, h),
-                        LabelAlign::Left,
-                    )
-                })
-                .collect();
-            (r, Figure::Note, rows)
+            let r = at_least(bounds, width, 4.0 + h * lines.len() as f32);
+            let first = Rect::new(r.x + 2.0, r.y + 2.0, r.width - 4.0, h);
+            (r, Figure::Note, stacked(lines, first, LabelAlign::Left))
         }
         _ => {
             let rows = stacked(
@@ -2251,6 +2250,20 @@ fn layout_element(
             (bounds, Figure::Other, rows)
         }
     }
+}
+
+/// The lines of an icon's name one below the other from `top`, centered on `x` in a box 4
+/// wider on each side than the widest of them, or than `min_width`.
+fn name_below(
+    lines: Vec<Line>,
+    x: f32,
+    top: f32,
+    min_width: f32,
+    measure: &dyn TextMeasure,
+) -> Vec<Row> {
+    let w = widest(&lines, measure).max(min_width) + 8.0;
+    let h = lines.first().map_or(0.0, |l| line_height(l.size));
+    stacked(lines, Rect::new(x - w / 2.0, top, w, h), LabelAlign::Center)
 }
 
 /// Height of a swimlane's name block; Astah's is 35 px.
@@ -2402,26 +2415,17 @@ fn layout_activity_node(
         .fold(0.0, f32::max);
     let count = keyword.iter().len() + names.len() + state.iter().len();
     let block = h * count as f32;
-    let r = Rect::new(
-        bounds.x,
-        bounds.y,
-        width.max(widest + 2.0 * pad_x),
-        bounds.height.max(block + 2.0 * PAD_Y + icon),
-    );
+    let r = at_least(bounds, min_width.max(widest + 2.0 * pad_x), block + 2.0 * PAD_Y + icon);
     // Astah puts a call behavior action's name 2.5 below the middle of what the rake leaves.
     let top = r.y + (r.height - icon - block) / 2.0 + if icon > 0.0 { 2.5 } else { 0.0 };
-    let lines = keyword
-        .map(|k| (k, RowRole::Stereotype, None))
+    let line = |text, role| Line::new(text, FONT_SIZE, role, None);
+    let lines: Vec<Line> = keyword
+        .map(|k| line(k, RowRole::Stereotype))
         .into_iter()
-        .chain(names.into_iter().map(|n| (n, RowRole::Name, Some(id))))
-        .chain(state.map(|s| (s, RowRole::Member, None)));
-    let mut rows: Vec<Row> = lines
-        .enumerate()
-        .map(|(i, (n, role, element))| {
-            Line::new(n, FONT_SIZE, role, element)
-                .place(Rect::new(r.x, top + h * i as f32, r.width, h), LabelAlign::Center)
-        })
+        .chain(names.into_iter().map(|n| Line::new(n, FONT_SIZE, RowRole::Name, Some(id))))
+        .chain(state.map(|s| line(s, RowRole::Member)))
         .collect();
+    let mut rows = stacked(lines, Rect::new(r.x, top, r.width, h), LabelAlign::Center);
     // Astah writes an object node's properties below it, the first baseline 18 below it.
     if props.node.is_object() {
         let first = r.bottom() + OBJECT_PROPERTIES_GAP;
@@ -2503,11 +2507,7 @@ pub const PIN_SIZE: f32 = 15.0;
 
 /// `name : Type` of an object node, pin or activity parameter, or its name alone.
 fn object_label(model: &Model, e: &Element, props: &ActivityNodeProps) -> String {
-    let type_name = props
-        .type_ref
-        .as_ref()
-        .and_then(|t| crate::member::type_label(model, &Some(t.clone())))
-        .filter(|t| !t.is_empty());
+    let type_name = crate::member::type_label(model, &props.type_ref).filter(|t| !t.is_empty());
     match type_name {
         Some(t) if e.name().is_empty() => format!(": {t}"),
         Some(t) => format!("{} : {t}", e.name()),
@@ -2524,8 +2524,8 @@ fn activity_borders(
     preview: &Preview,
     nodes: &mut [NodeShape],
 ) {
-    let borne = crate::composite::borne_nodes(model, diagram);
-    if borne.is_empty() {
+    let hosts = border_hosts(model, diagram, view, preview, nodes);
+    if hosts.is_empty() {
         return;
     }
     // Nodes with a flow: their pins show no arrow, as in Astah.
@@ -2535,34 +2535,18 @@ fn activity_borders(
             flowing.extend([p.source, p.target]);
         }
     }
-    let drawn: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
-    let before = |id: Id| view.get(id).and_then(|p| Some(preview.rect(id, p.bounds()?)));
     for node in nodes.iter_mut() {
-        let Some(&host) = borne.get(&node.id) else { continue };
+        let Some(&track) = hosts.get(&node.id) else { continue };
         let kind = node.element.and_then(|e| model.get(e)).map(|e| e.kind());
         let Some(ElementKind::ActivityNode(props)) = kind else { continue };
         let pin = props.node.is_pin();
         // A pin's center keeps to a line half its size outside the action; an activity
         // parameter's to the frame.
         let reach = if pin { PIN_SIZE / 2.0 } else { 0.0 };
-        let track =
-            host.and_then(|h| Some((before(h)?.inflate(reach), drawn.get(&h)?.inflate(reach))));
-        let (place, side) = match track {
-            Some((was, now)) => {
-                let place = crate::composite::border_place(was, node.rect.center());
-                let at = crate::composite::border_point(now, place);
-                (Some(at), place.0)
-            }
-            None => (None, 2),
+        let side = match track {
+            Some((was, now)) => onto_border(node, was.inflate(reach), now.inflate(reach)),
+            None => 2,
         };
-        let old = node.rect;
-        if let Some(at) = place {
-            node.rect = crate::composite::centered(at, old);
-        }
-        let (dx, dy) = (node.rect.x - old.x, node.rect.y - old.y);
-        for row in &mut node.rows {
-            row.rect = row.rect.translate(dx, dy);
-        }
         if !pin {
             continue;
         }
@@ -2601,28 +2585,49 @@ fn state_borders(
     preview: &Preview,
     nodes: &mut [NodeShape],
 ) {
-    let borne = crate::composite::borne_nodes(model, diagram);
-    if borne.is_empty() {
-        return;
-    }
-    let drawn: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
-    let before = |id: Id| view.get(id).and_then(|p| Some(preview.rect(id, p.bounds()?)));
+    let hosts = border_hosts(model, diagram, view, preview, nodes);
     for node in nodes.iter_mut() {
-        let Some(&host) = borne.get(&node.id) else { continue };
-        let track = host.and_then(|h| Some((before(h)?, *drawn.get(&h)?)));
-        let Some((was, now)) = track else { continue };
-        let place = crate::composite::border_place(was, node.rect.center());
-        let old = node.rect;
-        node.rect = crate::composite::centered(crate::composite::border_point(now, place), old);
-        let (dx, dy) = (node.rect.x - old.x, node.rect.y - old.y);
-        for row in &mut node.rows {
-            row.rect = row.rect.translate(dx, dy);
-        }
-        if place.0 == 0 {
+        let Some(&Some((was, now))) = hosts.get(&node.id) else { continue };
+        if onto_border(node, was, now) == 0 {
             let shift = -(node.rect.height + node.rows.iter().map(|r| r.rect.height).sum::<f32>());
             node.rows.iter_mut().for_each(|r| r.rect = r.rect.translate(0.0, shift));
         }
     }
+}
+
+/// For each node borne on the border of another ([`crate::composite::borne_nodes`]): where
+/// that one is stored, `preview` applied, and where it is drawn among `nodes`, if it is shown.
+fn border_hosts(
+    model: &Model,
+    diagram: Id,
+    view: &View,
+    preview: &Preview,
+    nodes: &[NodeShape],
+) -> HashMap<Id, Option<(Rect, Rect)>> {
+    let borne = crate::composite::borne_nodes(model, diagram);
+    if borne.is_empty() {
+        return HashMap::new();
+    }
+    let drawn: HashMap<Id, Rect> = nodes.iter().map(|n| (n.id, n.rect)).collect();
+    let before = |id: Id| view.get(id).and_then(|p| Some(preview.rect(id, p.bounds()?)));
+    borne
+        .into_iter()
+        .map(|(node, host)| (node, host.and_then(|h| Some((before(h)?, *drawn.get(&h)?)))))
+        .collect()
+}
+
+/// Moves `node` with its texts from the border of its host as it was (`was`) to the same place
+/// on its border as it is drawn (`now`). Returns the side it is on (0 top, 1 right, 2 bottom,
+/// 3 left).
+fn onto_border(node: &mut NodeShape, was: Rect, now: Rect) -> u8 {
+    let place = crate::composite::border_place(was, node.rect.center());
+    let old = node.rect;
+    node.rect = crate::composite::centered(crate::composite::border_point(now, place), old);
+    let (dx, dy) = (node.rect.x - old.x, node.rect.y - old.y);
+    for row in &mut node.rows {
+        row.rect = row.rect.translate(dx, dy);
+    }
+    place.0
 }
 
 /// The arrow Astah draws in a pin without flows: 11 long through its middle, into the action
@@ -2711,26 +2716,19 @@ fn layout_box(
         ElementKind::Artifact(_) => (0.0, 11.0),
         _ => (0.0, 0.0),
     };
-    let widest = lines.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+    let widest = widest(&lines, measure);
     let h = line_height(FONT_SIZE);
     let text_h = h * lines.len() as f32;
     // The bounds are a cube's front face; its top and side stick out above and to the right
     // (see `draw`).
-    let r = Rect::new(
-        bounds.x,
-        bounds.y,
-        bounds.width.max(widest + 2.0 * BOX_PAD_X + icon_room).max(BOX_MIN_WIDTH),
-        bounds.height.max(text_h + 2.0 * BOX_PAD_Y).max(BOX_MIN_HEIGHT),
+    let r = at_least(
+        bounds,
+        (widest + 2.0 * BOX_PAD_X + icon_room).max(BOX_MIN_WIDTH),
+        (text_h + 2.0 * BOX_PAD_Y).max(BOX_MIN_HEIGHT),
     );
     let front = r;
-    let rows = lines
-        .into_iter()
-        .enumerate()
-        .map(|(i, line)| {
-            let y = front.y + BOX_PAD_Y + h * i as f32;
-            line.place(Rect::new(front.x, y, front.width - icon_room, h), LabelAlign::Center)
-        })
-        .collect();
+    let first = Rect::new(front.x, front.y + BOX_PAD_Y, front.width - icon_room, h);
+    let rows = stacked(lines, first, LabelAlign::Center);
     let figure = match figure {
         // The icon 6 below the top: a component's 12 × 14 with its tabs 2 further left, an
         // artifact's 10 × 14.
@@ -2829,40 +2827,18 @@ fn layout_object(
         let width = (widest + 2.0 * PAD_X).max(BOX_MIN_WIDTH);
         Rect::new(bounds.center().x - width / 2.0, bounds.y, width, bounds.height.max(content_h))
     } else {
-        let widest = header.iter().chain(&slots).map(|l| l.width(measure)).fold(0.0, f32::max);
-        Rect::new(
-            bounds.x,
-            bounds.y,
-            bounds.width.max(widest + 2.0 * PAD_X).max(BOX_MIN_WIDTH),
-            bounds.height.max(content_h),
-        )
+        let widest = widest(header.iter().chain(&slots), measure);
+        at_least(bounds, (widest + 2.0 * PAD_X).max(BOX_MIN_WIDTH), content_h)
     };
-    let mut rows = Vec::new();
-    let mut y = r.y + PAD_Y;
-    let mut shift = shift;
-    for line in header {
-        let h = line_height(line.size);
-        // Only the name's first line starts with the colon.
-        let width = if line.role == RowRole::Name { r.width - shift } else { r.width };
-        if line.role == RowRole::Name {
-            shift = 0.0;
-        }
-        rows.push(line.place(Rect::new(r.x, y, width, h), LabelAlign::Center));
-        y += h;
-    }
-    y += PAD_Y;
-    let (separators, compartments) = if style.hide_attributes {
+    let (slots, compartments) = if style.hide_attributes {
         (Vec::new(), Vec::new())
     } else {
-        (vec![y], vec![Compartment::Slots])
+        (vec![slots], vec![Compartment::Slots])
     };
-    y += PAD_Y;
-    for line in slots {
-        let h = line_height(line.size);
-        rows.push(
-            line.place(Rect::new(r.x + PAD_X, y, r.width - 2.0 * PAD_X, h), LabelAlign::Left),
-        );
-        y += h;
+    let (mut rows, separators) = place_compartments(r, header, slots);
+    // Only the name's first line starts with the colon.
+    if let Some(name) = rows.iter_mut().find(|row| row.role == RowRole::Name) {
+        name.rect.width -= shift;
     }
     (r, Figure::Classifier { separators, compartments, template: None }, rows)
 }
@@ -2957,7 +2933,7 @@ fn layout_state(
     let own = (!style.hide_stereotypes).then_some(&e.data().stereotypes);
     let mut head = stereotype_lines(own, FONT_SIZE, id, measure);
     head.extend(name);
-    let widest = activities.iter().chain(&head).map(|l| l.width(measure)).fold(0.0, f32::max);
+    let widest = widest(activities.iter().chain(&head), measure);
     let header = h * head.len() as f32 + 2.0 * PAD_Y;
     let body = if activities.is_empty() { 0.0 } else { h * activities.len() as f32 + 2.0 * PAD_Y };
     // Every region keeps at least `MIN_REGION` across the lines, however small the state is
@@ -2967,28 +2943,16 @@ fn layout_state(
     let depth = if regions.len() >= 2 { 2.0 * MIN_REGION } else { 0.0 };
     let vertical = layout.is_some_and(|l| l.vertical);
     let (min_width, min_height) = if vertical { (across, depth) } else { (0.0, across) };
-    let r = Rect::new(
-        bounds.x,
-        bounds.y,
-        bounds.width.max(widest + 2.0 * PAD_X).max(BOX_MIN_WIDTH).max(min_width),
-        bounds.height.max(header + body + min_height).max(BOX_MIN_HEIGHT),
+    let r = at_least(
+        bounds,
+        (widest + 2.0 * PAD_X).max(BOX_MIN_WIDTH).max(min_width),
+        (header + body + min_height).max(BOX_MIN_HEIGHT),
     );
     // As in Astah, the name heads every state, above a line, with its stereotypes above it.
-    let mut rows: Vec<Row> = head
-        .into_iter()
-        .enumerate()
-        .map(|(i, line)| {
-            let y = r.y + PAD_Y + h * i as f32;
-            line.place(Rect::new(r.x, y, r.width, h), LabelAlign::Center)
-        })
-        .collect();
+    let mut rows = stacked(head, Rect::new(r.x, r.y + PAD_Y, r.width, h), LabelAlign::Center);
     let separator = Some(r.y + header);
-    for (i, line) in activities.into_iter().enumerate() {
-        let y = r.y + header + PAD_Y + h * i as f32;
-        rows.push(
-            line.place(Rect::new(r.x + PAD_X, y, r.width - 2.0 * PAD_X, h), LabelAlign::Left),
-        );
-    }
+    let first = Rect::new(r.x + PAD_X, r.y + header + PAD_Y, r.width - 2.0 * PAD_X, h);
+    rows.extend(stacked(activities, first, LabelAlign::Left));
     let default_layout = Regions::default();
     let layout = layout.unwrap_or(&default_layout);
     let regions = region_shapes(r, r.y + header + body, layout, &regions);
@@ -3009,12 +2973,7 @@ fn layout_submachine_state(
     let h = line_height(FONT_SIZE);
     let machine = props.submachine.and_then(|m| model.get(m)).map_or("", |m| m.name());
     let include = Line::new(format!("include / {machine}"), FONT_SIZE, RowRole::Stereotype, None);
-    let widest = activities
-        .iter()
-        .chain(&name)
-        .chain([&include])
-        .map(|l| l.width(measure))
-        .fold(0.0, f32::max);
+    let widest = widest(activities.iter().chain(&name).chain([&include]), measure);
     let first = SUBMACHINE_NAME_TOP + h * name.len() as f32 + SUBMACHINE_NAME_BOTTOM;
     let second = first + SUBMACHINE_NAME_TOP + h + SUBMACHINE_INCLUDE_BOTTOM;
     let body = if activities.is_empty() {
@@ -3022,11 +2981,10 @@ fn layout_submachine_state(
     } else {
         SUBMACHINE_ACTIVITY_TOP + h * activities.len() as f32 + SUBMACHINE_ICON_GAP
     };
-    let r = Rect::new(
-        bounds.x,
-        bounds.y,
-        bounds.width.max(widest + 2.0 * SUBMACHINE_PAD_X).max(SUBMACHINE_MIN_WIDTH),
-        bounds.height.max(second + body),
+    let r = at_least(
+        bounds,
+        (widest + 2.0 * SUBMACHINE_PAD_X).max(SUBMACHINE_MIN_WIDTH),
+        second + body,
     );
     let mut rows =
         stacked(name, Rect::new(r.x, r.y + SUBMACHINE_NAME_TOP, r.width, h), LabelAlign::Center);
@@ -3036,11 +2994,13 @@ fn layout_submachine_state(
             LabelAlign::Center,
         ),
     );
-    for (i, line) in activities.into_iter().enumerate() {
-        let y = r.y + second + SUBMACHINE_ACTIVITY_TOP + h * i as f32;
-        let pad = SUBMACHINE_PAD_X;
-        rows.push(line.place(Rect::new(r.x + pad, y, r.width - 2.0 * pad, h), LabelAlign::Left));
-    }
+    let pad = SUBMACHINE_PAD_X;
+    let top = r.y + second + SUBMACHINE_ACTIVITY_TOP;
+    rows.extend(stacked(
+        activities,
+        Rect::new(r.x + pad, top, r.width - 2.0 * pad, h),
+        LabelAlign::Left,
+    ));
     let figure = Figure::State {
         separator: Some(r.y + first),
         regions: Vec::new(),
@@ -3224,22 +3184,11 @@ fn layout_er(
     let widest_word = paragraphs.iter().map(|l| l.widest_word(measure)).fold(0.0, f32::max);
     let room = (bounds.width * share - pad).max(widest_word);
     let names: Vec<Line> = paragraphs.into_iter().flat_map(|l| l.wrapped(room, measure)).collect();
-    let widest = names.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+    let widest = widest(&names, measure);
     let block = h * names.len() as f32;
-    let r = Rect::new(
-        bounds.x,
-        bounds.y,
-        bounds.width.max((widest + pad) / share),
-        bounds.height.max((block + pad) / share),
-    );
+    let r = at_least(bounds, (widest + pad) / share, (block + pad) / share);
     let top = r.y + r.height * middle - block / 2.0;
-    let rows: Vec<Row> = names
-        .into_iter()
-        .enumerate()
-        .map(|(i, line)| {
-            line.place(Rect::new(r.x, top + i as f32 * h, r.width, h), LabelAlign::Center)
-        })
-        .collect();
+    let rows = stacked(names, Rect::new(r.x, top, r.width, h), LabelAlign::Center);
     let mut figure = figure;
     if let (Figure::ErAttribute { underlines, .. }, ElementKind::ErAttribute(p)) =
         (&mut figure, e.kind())
@@ -3685,21 +3634,13 @@ fn layout_use_case(
     let r = Rect::new(x, bounds.y, r_width, bounds.height.max(height));
 
     let top = r.center().y - block / 2.0;
-    let mut rows: Vec<Row> = names
-        .into_iter()
-        .enumerate()
-        .map(|(i, line)| {
-            line.place(Rect::new(r.x, top + h * i as f32, r.width, h), LabelAlign::Center)
-        })
-        .collect();
+    let mut rows = stacked(names, Rect::new(r.x, top, r.width, h), LabelAlign::Center);
     let separator = (!points.is_empty()).then_some(top + names_h - h + SEPARATOR);
     if let Some(separator) = separator {
         let inner = r.width / std::f32::consts::SQRT_2;
         let left = r.center().x - inner / 2.0;
         let first = separator + FIRST_BASELINE - crate::draw::baseline(FONT_SIZE);
-        rows.extend(points.into_iter().enumerate().map(|(i, line)| {
-            line.place(Rect::new(left, first + h * i as f32, inner, h), LabelAlign::Left)
-        }));
+        rows.extend(stacked(points, Rect::new(left, first, inner, h), LabelAlign::Left));
     }
     (r, Figure::UseCase { separator }, rows)
 }
@@ -3792,13 +3733,16 @@ pub fn fitted_box(
             format!("{}\n{}", bounds.width, element.name()),
         ));
     }
+    // The size of a box as laid out, and its texts.
+    let summary = |(r, _, rows): (Rect, Figure, Vec<Row>)| {
+        let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+        (r.size(), texts.join("\n"))
+    };
     // A state grows for its name, stereotypes and activities, so that lines and loops leave
     // the state where it is drawn; it never shrinks below the size it was given.
     if let ElementKind::State(props) = element.kind() {
-        let (r, _, rows) =
-            layout_state(model, element, props, p.regions(), &p.style, bounds, measure);
-        let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
-        return Some((r.size(), texts.join("\n")));
+        let layout = layout_state(model, element, props, p.regions(), &p.style, bounds, measure);
+        return Some(summary(layout));
     }
     // The head of a lifeline grows for its name; it never shrinks below the size it was given.
     if matches!(element.kind(), ElementKind::Lifeline(_)) {
@@ -3812,16 +3756,19 @@ pub fn fitted_box(
         && i.instance == InstanceKind::Object
         && !p.style.iconic
     {
-        let (r, _, rows) = layout_object(model, element, i.classifier, &p.style, bounds, measure);
-        let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
-        return Some((r.size(), texts.join("\n")));
+        return Some(summary(layout_object(
+            model,
+            element,
+            i.classifier,
+            &p.style,
+            bounds,
+            measure,
+        )));
     }
     if !p.style.auto_size || p.style.iconic || !is_boxed_classifier(element.kind()) {
         return None;
     }
-    let (r, _, rows) = layout_classifier(model, element, &p.style, bounds, true, measure);
-    let texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
-    Some((r.size(), texts.join("\n")))
+    Some(summary(layout_classifier(model, element, &p.style, bounds, true, measure)))
 }
 
 /// Radius of an interface drawn as a circle.
@@ -3885,23 +3832,9 @@ fn layout_structured(
     name.italic = matches!(e.kind(), ElementKind::Class(p) if p.is_abstract);
     header.extend(name.split());
     let header_h = 2.0 * BOX_PAD_Y + header.iter().map(|l| line_height(l.size)).sum::<f32>();
-    let widest = header.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
-    let r = Rect::new(
-        bounds.x,
-        bounds.y,
-        bounds.width.max(widest + 2.0 * BOX_PAD_X).max(MIN_CLASSIFIER_WIDTH),
-        bounds.height.max(header_h + 20.0),
-    );
-    let mut y = r.y + BOX_PAD_Y;
-    let rows = header
-        .into_iter()
-        .map(|line| {
-            let h = line_height(line.size);
-            let row = line.place(Rect::new(r.x, y, r.width, h), LabelAlign::Center);
-            y += h;
-            row
-        })
-        .collect();
+    let width = (widest(&header, measure) + 2.0 * BOX_PAD_X).max(MIN_CLASSIFIER_WIDTH);
+    let r = at_least(bounds, width, header_h + 20.0);
+    let (rows, _) = place_compartments(r, header, Vec::new());
     (r, Figure::Structured { separator: r.y + header_h }, rows)
 }
 
@@ -3918,26 +3851,32 @@ fn layout_part(
     // As Astah writes a part: `- rear : Wheel[2]`.
     let mut text = format!("{} {}", e.data().visibility.symbol(), e.name());
     if let ElementKind::Attribute(p) = e.kind() {
-        if let Some(t) = &p.type_ref {
-            text.push_str(&format!(" : {}", crate::member::type_text(model, t)));
-        }
-        if let Some(m) = p.multiplicity {
-            text.push_str(&format!("[{m}]"));
-        }
+        text.push_str(&typed_suffix(model, &p.type_ref, p.multiplicity));
     }
     let lines = Line::broken(&text, size, RowRole::Member, Some(e.id())).split();
     let h = line_height(size);
     let block = h * lines.len() as f32;
     // Astah's parts grow only when the text needs more than 10 beside it and 9 above and below.
-    let r = Rect::new(
-        bounds.x,
-        bounds.y,
-        bounds.width.max(widest(&lines, measure) + 20.0),
-        bounds.height.max(block + 18.0),
-    );
+    let r = at_least(bounds, widest(&lines, measure) + 20.0, block + 18.0);
     // Astah centers the text in the box both ways.
     let first = Rect::new(r.x, r.center().y - block / 2.0, r.width, h);
     (r, Figure::Part, stacked(lines, first, LabelAlign::Center))
+}
+
+/// What follows the name of a part or port: ` : Type` and `[multiplicity]`, where given.
+fn typed_suffix(
+    model: &Model,
+    type_ref: &Option<TypeRef>,
+    multiplicity: Option<Multiplicity>,
+) -> String {
+    let mut text = String::new();
+    if let Some(t) = type_ref {
+        text.push_str(&format!(" : {}", crate::member::type_text(model, t)));
+    }
+    if let Some(m) = multiplicity {
+        text.push_str(&format!("[{m}]"));
+    }
+    text
 }
 
 /// Turns each socket away from the first line that ends at it, toward the side the line does
@@ -4127,7 +4066,7 @@ fn layout_classifier(
             header.iter().chain(compartments.iter().flatten()).map(needs).fold(0.0, f32::max);
         widest + 2.0 * PAD_X
     } else {
-        let header_w = header.iter().map(|l| l.width(measure)).fold(0.0, f32::max);
+        let header_w = widest(&header, measure);
         let word_w =
             compartments.iter().flatten().map(|l| l.widest_word(measure)).fold(0.0, f32::max);
         bounds.width.max(header_w.max(word_w) + 2.0 * PAD_X)
@@ -4182,29 +4121,41 @@ fn layout_classifier(
         Rect::new(bounds.x, bounds.y, width, height)
     };
 
+    let (mut rows, separators) = place_compartments(r, header, compartments);
+    let template = template_box(model, id, r, measure, &mut rows);
+    (r, Figure::Classifier { separators, compartments: kinds, template }, rows)
+}
+
+/// Places a box's `header` and `compartments` in `r`: the header's lines centered one below the
+/// other from `BOX_PAD_Y` below the top, then per compartment a separator and its lines
+/// left-aligned `BOX_PAD_X` inside, `BOX_PAD_Y` above and below them. Returns the rows and the
+/// separators.
+fn place_compartments(
+    r: Rect,
+    header: Vec<Line>,
+    compartments: Vec<Vec<Line>>,
+) -> (Vec<Row>, Vec<f32>) {
     let mut rows = Vec::new();
-    let mut y = r.y + PAD_Y;
+    let mut y = r.y + BOX_PAD_Y;
     for line in header {
         let h = line_height(line.size);
         rows.push(line.place(Rect::new(r.x, y, r.width, h), LabelAlign::Center));
         y += h;
     }
-    y += PAD_Y;
+    y += BOX_PAD_Y;
     let mut separators = Vec::new();
     for compartment in compartments {
         separators.push(y);
-        y += PAD_Y;
+        y += BOX_PAD_Y;
         for line in compartment {
             let h = line_height(line.size);
-            rows.push(
-                line.place(Rect::new(r.x + PAD_X, y, r.width - 2.0 * PAD_X, h), LabelAlign::Left),
-            );
+            let rect = Rect::new(r.x + BOX_PAD_X, y, r.width - 2.0 * BOX_PAD_X, h);
+            rows.push(line.place(rect, LabelAlign::Left));
             y += h;
         }
-        y += PAD_Y;
+        y += BOX_PAD_Y;
     }
-    let template = template_box(model, id, r, measure, &mut rows);
-    (r, Figure::Classifier { separators, compartments: kinds, template }, rows)
+    (rows, separators)
 }
 
 /// The dashed box with a template's parameters (`T>Number, N:int=10`), as Astah draws it: 4 px
@@ -4257,33 +4208,53 @@ pub fn row_at(scene: &Scene, p: Point) -> Option<(&NodeShape, &Row)> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn edge_for(
+/// What a line shows, gathered from its presentation and element ([`Lines::edge`]).
+struct LineParts<'a> {
     id: Id,
-    kind: Option<&ElementKind>,
-    // An association's qualifiers per end, as text.
-    qualifiers: &[Vec<String>; 2],
-    // Each end's rectangle the anchors are relative to, the one the line is clipped at, and
-    // its outline.
-    ((source_anchors, source, source_outline), (target_anchors, target, target_outline)): (
-        (Rect, Rect, Outline),
-        (Rect, Rect, Outline),
-    ),
+    kind: Option<&'a ElementKind>,
+    /// An association's qualifiers per end, as text.
+    qualifiers: [Vec<String>; 2],
+    /// Each end's rectangle the anchors are relative to, the one the line is clipped at, and
+    /// its outline.
+    ends: [(Rect, Rect, Outline); 2],
     anchors: [Option<Point>; 2],
     shape: LineShape,
-    waypoints: &[Point],
-    (name_label, has_name, bind_keyword): (Option<String>, bool, Option<String>),
-    // Constraints shown below the name, without braces.
-    constraints: &[String],
+    waypoints: &'a [Point],
+    /// The name label, whether the element has a name, and a «bind» above the line.
+    name: Option<String>,
+    has_name: bool,
+    bind_keyword: Option<String>,
+    /// Constraints shown below the name, without braces.
+    constraints: Vec<String>,
     to_lollipop: bool,
-    placed: &EdgeLabels,
-    style: &Style,
-    // ER diagrams in IE and IDEF1X: what the ends show.
-    er: Option<&ErEnds>,
-    // ER diagrams in Chen: the cardinality a participation shows at its entity, as written.
+    placed: &'a EdgeLabels,
+    style: &'a Style,
+    /// ER diagrams in IE and IDEF1X: what the ends show.
+    er: Option<ErEnds>,
+    /// ER diagrams in Chen: the cardinality a participation shows at its entity, as written.
     cardinality: Option<String>,
-    measure: &dyn TextMeasure,
-) -> EdgeShape {
+}
+
+fn edge_for(line: LineParts<'_>, measure: &dyn TextMeasure) -> EdgeShape {
+    let LineParts {
+        id,
+        kind,
+        qualifiers,
+        ends: [(source_anchors, source, source_outline), (target_anchors, target, target_outline)],
+        anchors,
+        shape,
+        waypoints,
+        name: name_label,
+        has_name,
+        bind_keyword,
+        constraints,
+        to_lollipop,
+        placed,
+        style,
+        er,
+        cardinality,
+    } = line;
+    let er = er.as_ref();
     // The line runs from the source anchor through the waypoints to the target anchor; it is
     // drawn from where it leaves the source to where it enters the target. Right-angled lines
     // keep their first and last segment straight as the ends move.
@@ -4317,28 +4288,13 @@ fn edge_for(
     points.extend_from_slice(waypoints);
     points.push(target_outline.border_point(target, end, last_from));
 
-    let node_tips = [points[0], points[points.len() - 1]];
     let mut edge = EdgeShape {
-        id,
-        points,
-        node_tips,
-        line: LineStyle::Solid,
         shape,
-        source_marker: EndMarker::None,
-        target_marker: EndMarker::None,
-        labels: Vec::new(),
-        fixed: false,
-        ends: [source, target],
         anchors,
-        name_arrow: None,
-        qualifiers: Vec::new(),
-        free_labels: Vec::new(),
-        association: false,
-        end_labels: Vec::new(),
-        constraint_labels: Vec::new(),
         stroke: style.stroke,
-        double: false,
+        ..EdgeShape::new(id, points, [source, target])
     };
+    let node_tips = edge.node_tips;
     // Role, multiplicity and whether the role is underlined (static), per end.
     let mut ends: [(Option<String>, Option<String>, bool); 2] = Default::default();
     let mut label = name_label;
@@ -4517,13 +4473,8 @@ fn edge_for(
 
     let pts = &edge.points;
     let n = pts.len();
-    let at = |text: String, base: Point, offset: Point| EdgeLabel {
-        text,
-        anchor: base.offset(offset.x, offset.y),
-        align: LabelAlign::Left,
-        underline: false,
-        keyword: false,
-        color: None,
+    let at = |text: String, base: Point, offset: Point| {
+        EdgeLabel::new(text, base.offset(offset.x, offset.y), LabelAlign::Left)
     };
     let (a, b) = route::middle_segment(pts, shape.is_curve());
     let center = middle(a, b);
@@ -4597,14 +4548,7 @@ fn edge_for(
                     Point::new(center.x - width / 2.0, first_top + i as f32 * LABEL_HEIGHT);
                 let offset = style.constraint_offsets.get(i).copied().flatten();
                 let anchor = offset.map_or(default, |o| default.offset(o.x, o.y));
-                let label = EdgeLabel {
-                    text,
-                    anchor,
-                    align: LabelAlign::Left,
-                    underline: false,
-                    keyword: false,
-                    color: None,
-                };
+                let label = EdgeLabel::new(text, anchor, LabelAlign::Left);
                 (i, default, offset.is_some(), label)
             })
             .partition(|&(_, _, moved, _)| !moved)
@@ -4788,14 +4732,7 @@ fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> E
     let along = along.max(END_LABEL_GAP + half);
     let center = Point::new(tip.x + along * ux + left * lx, tip.y + along * uy + left * ly);
     let anchor = center.offset(-width / 2.0, -LABEL_HEIGHT / 2.0);
-    EdgeLabel {
-        text,
-        anchor,
-        align: LabelAlign::Left,
-        underline: false,
-        keyword: false,
-        color: None,
-    }
+    EdgeLabel::new(text, anchor, LabelAlign::Left)
 }
 
 /// Places the name of an edge as Astah does, whatever the edge (associations, dependencies,
@@ -4805,14 +4742,7 @@ fn end_label(text: String, end: End, role: bool, measure: &dyn TextMeasure) -> E
 fn association_name(text: String, middle: Point, measure: &dyn TextMeasure) -> EdgeLabel {
     let width = label_width(&text, measure);
     let anchor = middle.offset(-width / 2.0, 9.0 - LABEL_HEIGHT / 2.0);
-    EdgeLabel {
-        text,
-        anchor,
-        align: LabelAlign::Left,
-        underline: false,
-        keyword: false,
-        color: None,
-    }
+    EdgeLabel::new(text, anchor, LabelAlign::Left)
 }
 
 /// Astah's triangle that shows which way a name reads, next to the name's box (top left `at`,
@@ -4875,14 +4805,7 @@ fn keyword_label(
             center.offset(nx * distance - half_w, ny * distance - half_h)
         }
     };
-    EdgeLabel {
-        text,
-        anchor,
-        align: LabelAlign::Left,
-        underline: false,
-        keyword: true,
-        color: None,
-    }
+    EdgeLabel { keyword: true, ..EdgeLabel::new(text, anchor, LabelAlign::Left) }
 }
 
 /// Where the line from the center of `rect` toward `toward` leaves the rectangle.

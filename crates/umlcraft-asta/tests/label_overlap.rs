@@ -6,23 +6,14 @@
 //!
 //! With `UMLCRAFT_LABELS_OUT` set to a folder, the SVGs of the worst diagrams go there.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
+use common::{asta_files, astah_home};
 use umlcraft_model::{Document, EdgeLabels, ElementKind, Id, Point, Rect, Shape};
 use umlcraft_notation::layout;
 use umlcraft_notation::scene::{self, ApproxMeasure, LABEL_HEIGHT, Preview, Scene, label_width};
-
-fn asta_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            asta_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "asta") {
-            out.push(path);
-        }
-    }
-}
 
 /// What the labels of a scene cover, in pixels: of each other (area over a row's height),
 /// of lines (length inside) and of nodes (area over a row's height); and how many labels
@@ -190,9 +181,9 @@ fn labels_of_arranged_diagrams() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut files = Vec::new();
     asta_files(&repo.join("examples"), &mut files);
-    let home = PathBuf::from(r"C:\Program Files\astah-professional\Sample.asta");
-    if home.exists() {
-        files.push(home);
+    let sample = astah_home().join("Sample.asta");
+    if sample.exists() {
+        files.push(sample);
     }
     files.sort();
     let out_dir = std::env::var_os("UMLCRAFT_LABELS_OUT").map(PathBuf::from);

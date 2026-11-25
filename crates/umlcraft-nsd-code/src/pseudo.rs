@@ -19,14 +19,18 @@ pub fn question(mut text: Vec<String>) -> Vec<String> {
     text
 }
 
-/// A value handed back: `x` → `return x` (`gib x`).
-pub fn give(keywords: Keywords, mut value: Vec<String>) -> Vec<String> {
-    let keyword = keywords.word("preReturn");
+/// `head value`, the value's further lines as they are; `head` alone without a value.
+fn prefixed(head: &str, mut value: Vec<String>) -> Vec<String> {
     match value.first_mut() {
-        Some(first) => first.insert_str(0, &format!("{keyword} ")),
-        None => value.push(keyword.to_owned()),
+        Some(first) => first.insert_str(0, &format!("{head} ")),
+        None => value.push(head.to_owned()),
     }
     value
+}
+
+/// A value handed back: `x` → `return x` (`gib x`).
+pub fn give(keywords: Keywords, value: Vec<String>) -> Vec<String> {
+    prefixed(keywords.word("preReturn"), value)
 }
 
 /// The text of a counting loop: `for i := a to b by s` (`für i := a bis b Schritt s`), without
@@ -40,12 +44,8 @@ pub fn counter(keywords: Keywords, var: &str, start: &str, end: &str, step: i64)
 }
 
 /// `name := value`, the value's further lines as they are.
-pub fn assign(name: &str, mut value: Vec<String>) -> Vec<String> {
-    match value.first_mut() {
-        Some(first) => first.insert_str(0, &format!("{name} := ")),
-        None => value.push(format!("{name} :=")),
-    }
-    value
+pub fn assign(name: &str, value: Vec<String>) -> Vec<String> {
+    prefixed(&format!("{name} :="), value)
 }
 
 /// An assignment or increment as `x := value`: `x = 1` → `x := 1`, `total += a + b` →
@@ -129,6 +129,14 @@ pub fn counting(
     Some(counter(keywords, var, &start, &end, step))
 }
 
+/// The variable and start of a for loop's initialization `i = 0` (Java's, C#'s and C++'s
+/// `assignment_expression`), the counting loop's other form beside a declaration.
+pub fn counted_assignment<'t>(init: Node<'t>, src: &str) -> Option<(Node<'t>, Node<'t>)> {
+    let op = node_text(init.child_by_field_name("operator")?, src);
+    let left = init.child_by_field_name("left")?;
+    (op == "=" && left.kind() == "identifier").then_some((left, init.child_by_field_name("right")?))
+}
+
 /// Whether an expression holds a number with a fraction (`2.5`, `1e3`, `0.5f`).
 fn fraction(expr: Node, src: &str) -> bool {
     let mut open = vec![expr];
@@ -153,13 +161,9 @@ fn fraction(expr: Node, src: &str) -> bool {
 }
 
 /// `foreach v in values` (`für jedes v in values`) for `for (T v : values)`.
-pub fn traversal(keywords: Keywords, name: &str, mut value: Vec<String>) -> Vec<String> {
+pub fn traversal(keywords: Keywords, name: &str, value: Vec<String>) -> Vec<String> {
     let head = format!("{} {name} {}", keywords.word("preForIn"), keywords.word("postForIn"));
-    match value.first_mut() {
-        Some(first) => first.insert_str(0, &format!("{head} ")),
-        None => value.push(head),
-    }
-    value
+    prefixed(&head, value)
 }
 
 /// The constant a counting loop's update adds to `var`: `i++` 1, `i -= 2` -2.
@@ -276,8 +280,7 @@ mod tests {
         let source =
             Source::parse(SourceLanguage::Java, format!("class A {{ int f(int n) {{ {body} }} }}"));
         let m = &source.methods()[0];
-        let made = crate::Made { author: "t", date: "2026-10-30", origin: "test", keywords };
-        source.diagram(m, &made).unwrap().0
+        source.diagram(m, &crate::Made { keywords, ..crate::TEST_MADE }).unwrap().0
     }
 
     #[test]
@@ -352,14 +355,11 @@ mod tests {
             "class A { <T> int f(final java.util.List<T> xs, int[] a, String... rest) { return 0; }
                        void g(A this, int x) { } record P(int x) { P { } } }",
         );
-        let made = crate::Made {
-            author: "t",
-            date: "2026-10-30",
-            origin: "test",
-            keywords: umlcraft_nsd::Keywords::English,
-        };
-        let texts: Vec<Vec<String>> =
-            source.methods().iter().map(|m| source.diagram(m, &made).unwrap().0.text()).collect();
+        let texts: Vec<Vec<String>> = source
+            .methods()
+            .iter()
+            .map(|m| source.diagram(m, &crate::TEST_MADE).unwrap().0.text())
+            .collect();
         assert_eq!(texts, [vec!["f(xs, a, rest)"], vec!["g(x)"], vec!["P"]]);
     }
 }

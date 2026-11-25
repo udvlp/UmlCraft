@@ -57,21 +57,28 @@ pub fn custom_keywords(d: &Diagram) -> Vec<(&'static str, String)> {
 /// The content of `d` in its normal form. Normalizing twice changes nothing more.
 pub fn normalize(d: &Diagram) -> Diagram {
     let mut root = Diagram { attrs: Default::default(), children: Sequence::new(Vec::new()) };
-    for (name, value) in custom_keywords(d) {
-        root.set_header(name, value);
-    }
-    for name in ["includeList", "namespace"] {
-        if let Some(value) = d.header(name).filter(|v| !v.is_empty()) {
-            root.set_header(name, value);
-        }
-    }
+    copy_root(d, &mut root);
     root.set_text(&d.text());
-    root.set_comment(&d.comment());
-    root.set_header("color", root_color(d).to_hex());
     root.set_kind(d.kind());
-    root.set_style(d.style());
     root.children = normal_sequence(&root, &d.children);
     root
+}
+
+/// Gives `into` the root content of `from` beyond its text and kind: the keywords that differ
+/// from the defaults, the include list and namespace, the comment, colour and style. (Root
+/// attributes go where `ROOT_ORDER` puts them, whatever order they are set in.)
+fn copy_root(from: &Diagram, into: &mut Diagram) {
+    for (name, value) in custom_keywords(from) {
+        into.set_header(name, value);
+    }
+    for name in ["includeList", "namespace"] {
+        if let Some(value) = from.header(name).filter(|v| !v.is_empty()) {
+            into.set_header(name, value);
+        }
+    }
+    into.set_comment(&from.comment());
+    into.set_header("color", root_color(from).to_hex());
+    into.set_style(from.style());
 }
 
 fn root_color(d: &Diagram) -> Color {
@@ -116,22 +123,13 @@ fn bit(on: bool) -> &'static str {
 /// keywords that differ from the defaults.
 pub fn to_file(d: &Diagram, made: &Provenance) -> Diagram {
     let mut file = Diagram::new(d.kind(), &d.text(), made);
-    for (name, value) in custom_keywords(d) {
-        file.set_header(name, value);
-    }
-    for name in ["includeList", "namespace"] {
-        if let Some(value) = d.header(name).filter(|v| !v.is_empty()) {
-            file.set_header(name, value);
-        }
-    }
-    file.set_comment(&d.comment());
-    file.set_header("color", root_color(d).to_hex());
-    file.set_style(d.style());
+    copy_root(d, &mut file);
     file.children = d.children.clone();
     file
 }
 
 /// Whether every element has the branches its kind takes.
+#[cfg(feature = "serde")]
 fn branches_fit(kind: ElementKind, count: usize) -> bool {
     match kind.branches() {
         crate::model::Branches::Fixed(fixed) => fixed.len() == count,

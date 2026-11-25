@@ -16,8 +16,7 @@ pub(super) fn wrap_in_fragment(host: &mut dyn Host, args: &Value) -> Outcome {
         .map(|i| view.get(i).and_then(|p| p.element).unwrap_or(i))
         .collect();
     let operator = pick(args, "operator", &OPERATORS)?.unwrap_or(InteractionOperator::Opt);
-    let mut guard = ElementKind::InteractionOperand(Default::default());
-    set_properties(model, &mut guard, &json!({ "guard": opt_str(args, "guard").unwrap_or("") }))?;
+    let guard = operand(model, args)?;
     // A loop's guard goes into the tab; any other stands below it, above the first message.
     let guarded = operator != InteractionOperator::Loop
         && opt_str(args, "guard").is_some_and(|g| !g.trim().is_empty());
@@ -49,8 +48,7 @@ pub(super) fn add_operand(host: &mut dyn Host, args: &Value) -> Outcome {
     if !matches!(model.get(fragment).map(|e| e.kind()), Some(ElementKind::CombinedFragment(_))) {
         return Err(format!("{fragment} is no combined fragment"));
     }
-    let mut guard = ElementKind::InteractionOperand(Default::default());
-    set_properties(model, &mut guard, &json!({ "guard": opt_str(args, "guard").unwrap_or("") }))?;
+    let guard = operand(model, args)?;
     let operand = change(host, "add_operand", |tx| {
         let operand = palette::add_operand(tx, fragment)?;
         tx.update(operand, |data| data.kind = guard)?;
@@ -58,4 +56,12 @@ pub(super) fn add_operand(host: &mut dyn Host, args: &Value) -> Outcome {
         Ok(operand)
     })?;
     Ok(Reply::json(created(host.document().model(), operand)))
+}
+
+/// An operand with the guard of `args` ("" if none).
+fn operand(model: &Model, args: &Value) -> Result<ElementKind, String> {
+    let mut operand = ElementKind::InteractionOperand(Default::default());
+    let guard = opt_str(args, "guard").unwrap_or("");
+    set_properties(model, &mut operand, &json!({ "guard": guard }))?;
+    Ok(operand)
 }

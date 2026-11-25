@@ -2,7 +2,6 @@
 //! `- name : Type [0..*] = init` for attributes, `+ op(in p : T = 1) : R` for operations.
 
 use std::collections::HashMap;
-use std::fmt;
 
 use umlcraft_model::Refusal;
 
@@ -228,15 +227,6 @@ fn parameter_text(model: &Model, name: &str, p: &ParameterProps, style: &Style) 
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ParseError(pub Refusal);
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttributeSpec {
     pub visibility: Option<Visibility>,
     pub derived: bool,
@@ -342,6 +332,20 @@ fn split_top(s: &str, sep: char) -> (&str, Option<&str>) {
     }
 }
 
+/// The parts of `s` between its top-level commas ([`find_top`]), up to the last one that
+/// is more than blank.
+fn split_list(s: &str) -> impl Iterator<Item = &str> {
+    let mut remaining = s;
+    std::iter::from_fn(move || {
+        if remaining.trim().is_empty() {
+            return None;
+        }
+        let (part, rest) = split_top(remaining, ',');
+        remaining = rest.unwrap_or("");
+        Some(part)
+    })
+}
+
 /// Basic types to offer for an attribute, or with `void` for an operation's result: the types
 /// the model already uses as text, most used first (a C# model says `string` and `bool`), then
 /// Java's, leaving out those the model spells its own way.
@@ -413,19 +417,19 @@ fn non_empty(s: Option<&str>) -> Option<String> {
     s.map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
-fn check_name(name: &str, text: &str) -> Result<String, ParseError> {
+fn check_name(name: &str, text: &str) -> Result<String, Refusal> {
     let name = name.trim();
     let mut bare = name;
     while let Some(rest) = bare.strip_suffix("[]") {
         bare = rest.trim_end();
     }
     if bare.is_empty() || bare.contains(['(', ')', ':', '=', '[', ']']) {
-        return Err(ParseError(Refusal::MemberNoName(text.to_owned())));
+        return Err(Refusal::MemberNoName(text.to_owned()));
     }
     Ok(name.to_owned())
 }
 
-pub fn parse_attribute(text: &str) -> Result<AttributeSpec, ParseError> {
+pub fn parse_attribute(text: &str) -> Result<AttributeSpec, Refusal> {
     let (visibility, rest) = split_visibility(text);
     let (derived, rest) = match rest.strip_prefix('/') {
         Some(r) => (true, r),
@@ -443,8 +447,7 @@ pub fn parse_attribute(text: &str) -> Result<AttributeSpec, ParseError> {
         && !(find_top(head, ':').is_none() && head[open + 1..head.len() - 1].trim().is_empty())
     {
         let m = &head[open + 1..head.len() - 1];
-        multiplicity =
-            Some(m.parse().map_err(|_| ParseError(Refusal::MemberMultiplicity(m.to_owned())))?);
+        multiplicity = Some(m.parse().map_err(|_| Refusal::MemberMultiplicity(m.to_owned()))?);
         head = head[..open].trim_end();
     }
     let (name, type_text) = split_top(head, ':');
@@ -458,7 +461,7 @@ pub fn parse_attribute(text: &str) -> Result<AttributeSpec, ParseError> {
     })
 }
 
-fn parse_parameter(text: &str) -> Result<ParameterSpec, ParseError> {
+fn parse_parameter(text: &str) -> Result<ParameterSpec, Refusal> {
     let text = text.trim();
     // `in`, `out` and `inout` are a direction only when a name follows; in `in : InputStream`
     // or `out = 1` the word is the parameter's name (Java's `InputStream in`). A parameter
@@ -504,7 +507,7 @@ pub struct TemplateParameterSpec {
 }
 
 /// A template parameter as typed: `T`, `T>Number`, `T>A,B`, `N:int=10`, `D=Number`, `Ts...`.
-pub fn parse_template_parameter(text: &str) -> Result<TemplateParameterSpec, ParseError> {
+pub fn parse_template_parameter(text: &str) -> Result<TemplateParameterSpec, Refusal> {
     // The bound starts at the first `>` that closes no `<`.
     let mut depth = 0;
     let bound_at = text.char_indices().find_map(|(i, c)| {
@@ -533,17 +536,10 @@ pub fn parse_template_parameter(text: &str) -> Result<TemplateParameterSpec, Par
         Some(name) => (name, true),
         None => (name, false),
     };
-    let mut bound_list = Vec::new();
-    let mut remaining = bounds.unwrap_or("");
-    while !remaining.trim().is_empty() {
-        let (bound, rest) = split_top(remaining, ',');
-        bound_list.extend(non_empty(Some(bound)));
-        remaining = rest.unwrap_or("");
-    }
     Ok(TemplateParameterSpec {
         name: check_name(name, text)?,
         variadic,
-        bounds: bound_list,
+        bounds: split_list(bounds.unwrap_or("")).filter_map(|b| non_empty(Some(b))).collect(),
         value_type: non_empty(value_type),
         default: non_empty(default),
     })
@@ -565,10 +561,9 @@ fn operator_name_len(s: &str) -> Option<usize> {
     Some("operator".len() + skip + end)
 }
 
-pub fn parse_operation(text: &str) -> Result<OperationSpec, ParseError> {
+pub fn parse_operation(text: &str) -> Result<OperationSpec, Refusal> {
     let (visibility, rest) = split_visibility(text);
-    let missing =
-        |c: char| ParseError(Refusal::MemberMissing { missing: c, text: text.to_owned() });
+    let missing = |c: char| Refusal::MemberMissing { missing: c, text: text.to_owned() };
     let open = rest.find('(').ok_or_else(|| missing('('))?;
     if let Some(len) = operator_name_len(rest) {
         let name = rest[..len].trim_end().to_owned();
@@ -594,26 +589,19 @@ fn finish_operation(
     name: String,
     template_parameters: Vec<String>,
     rest: &str,
-) -> Result<OperationSpec, ParseError> {
-    let close = matching_paren(rest, 0).ok_or_else(|| {
-        ParseError(Refusal::MemberMissing { missing: ')', text: text.to_owned() })
-    })?;
+) -> Result<OperationSpec, Refusal> {
+    let close = matching_paren(rest, 0)
+        .ok_or_else(|| Refusal::MemberMissing { missing: ')', text: text.to_owned() })?;
     let params_text = &rest[1..close];
     let tail = rest[close + 1..].trim();
     let return_type = match tail.strip_prefix(':') {
         Some(t) => non_empty(Some(t)),
         None if tail.is_empty() => None,
         None => {
-            return Err(ParseError(Refusal::MemberUnexpected(tail.to_owned())));
+            return Err(Refusal::MemberUnexpected(tail.to_owned()));
         }
     };
-    let mut parameters = Vec::new();
-    let mut remaining = params_text;
-    while !remaining.trim().is_empty() {
-        let (param, rest) = split_top(remaining, ',');
-        parameters.push(parse_parameter(param)?);
-        remaining = rest.unwrap_or("");
-    }
+    let parameters = split_list(params_text).map(parse_parameter).collect::<Result<_, _>>()?;
     Ok(OperationSpec { visibility, name, template_parameters, parameters, return_type })
 }
 
@@ -701,14 +689,9 @@ fn parse_type_expr(model: &Model, scope: Id, text: &str, depth: usize) -> TypeRe
     let core = &rest[..end];
     let (base, arguments) = match core.find('<') {
         Some(open) if core.ends_with('>') => {
-            let inner = &core[open + 1..core.len() - 1];
-            let mut arguments = Vec::new();
-            let mut remaining = inner;
-            while !remaining.trim().is_empty() {
-                let (argument, rest) = split_top(remaining, ',');
-                arguments.push(parse_type_expr(model, scope, argument, depth + 1));
-                remaining = rest.unwrap_or("");
-            }
+            let arguments = split_list(&core[open + 1..core.len() - 1])
+                .map(|argument| parse_type_expr(model, scope, argument, depth + 1))
+                .collect();
             (&core[..open], arguments)
         }
         _ => (core, Vec::new()),
@@ -742,7 +725,7 @@ fn retype_text(
 
 /// Applies edited text to an attribute, operation or other element (which is just renamed).
 pub fn apply_member_text(tx: &mut Tx<'_>, id: Id, text: &str) -> Result<()> {
-    let invalid = |e: ParseError| ModelError::Refused(e.0);
+    let invalid = ModelError::Refused;
     let kind = tx.model().element(id)?.kind().clone();
     match kind {
         ElementKind::Attribute(p) => {

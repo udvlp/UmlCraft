@@ -5,51 +5,15 @@ mod build;
 mod methods;
 
 use tree_sitter::Node;
-use umlcraft_nsd::Element;
 
-use crate::core::{Builder, Grammar};
 use crate::pseudo::assign;
 use crate::text::{lines_at, node_text};
 
 pub use build::diagram;
 pub use methods::{members, methods};
 
+/// C#'s grammar (`core::Grammar`, in `build`).
 pub struct CSharp;
-
-impl Grammar for CSharp {
-    const COMMENTS: &'static [&'static str] = &["comment"];
-    const BLOCKS: &'static [&'static str] = &["block"];
-    const IGNORED: &'static [&'static str] = &[
-        "preproc_region",
-        "preproc_endregion",
-        "preproc_pragma",
-        "preproc_nullable",
-        "preproc_line",
-        "preproc_warning",
-        "preproc_error",
-        "preproc_define",
-        "preproc_undef",
-    ];
-    const ENDS_CASE: &'static [&'static str] = &[
-        "break_statement",
-        "return_statement",
-        "throw_statement",
-        "continue_statement",
-        "goto_statement",
-        "yield_statement",
-    ];
-    const RUNS_ON: bool = false;
-    const BREAK_ENDS_CASE: bool = true;
-    const TRUE: &'static str = "true";
-
-    fn statement(b: &mut Builder<'_, Self>, node: Node, out: &mut Vec<Element>) {
-        build::statement(b, node, out);
-    }
-
-    fn simple(b: &Builder<'_, Self>, node: Node) -> Vec<Element> {
-        build::simple(b, node)
-    }
-}
 
 /// The names of a parameter list's parameters: `(int a, params string[] rest)` → `a, rest`.
 fn parameter_names(parameters: Option<Node>, src: &str) -> Vec<String> {

@@ -276,10 +276,10 @@ mod tests {
             Refusal::ErAttributeOwned,
             Refusal::ErSecondWeak,
             Refusal::ErAssociativeInUse,
-            parse_attribute("x : int [a..b]").unwrap_err().0,
-            parse_attribute(": int").unwrap_err().0,
-            parse_operation("op(").unwrap_err().0,
-            parse_operation("op() int").unwrap_err().0,
+            parse_attribute("x : int [a..b]").unwrap_err(),
+            parse_attribute(": int").unwrap_err(),
+            parse_operation("op(").unwrap_err(),
+            parse_operation("op() int").unwrap_err(),
         ];
         // Each locale asked for by name: the locale of the process stays as it is for the
         // tests that run alongside.

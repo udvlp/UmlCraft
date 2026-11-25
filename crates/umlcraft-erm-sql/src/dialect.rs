@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::split::find;
+
 /// The SQL dialect of a dump. MySQL and MariaDB read the same; they are kept apart for the
 /// report.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -45,6 +47,7 @@ const GUESS: usize = 20_000;
 /// PostgreSQL.
 pub fn detect(bytes: &[u8]) -> Dialect {
     let head = &bytes[..bytes.len().min(HEADER)];
+    let contains = |haystack: &[u8], needle: &[u8]| find(haystack, needle).is_some();
     if contains(head, b"-- MariaDB dump") {
         return Dialect::MariaDb;
     }
@@ -57,7 +60,7 @@ pub fn detect(bytes: &[u8]) -> Dialect {
     let code = &bytes[..bytes.len().min(GUESS)];
     let mysql = code
         .split(|&b| b == b'\n')
-        .map(trim)
+        .map(<[u8]>::trim_ascii)
         .filter(|l| !l.starts_with(b"--") && !l.starts_with(b"#"))
         .any(|l| l.contains(&b'`') || contains(&l.to_ascii_uppercase(), b"ENGINE="));
     if mysql { Dialect::MySql } else { Dialect::Postgres }
@@ -73,16 +76,6 @@ pub fn header_database(bytes: &[u8]) -> Option<String> {
         let name = rest.split("Database:").nth(1)?.trim();
         (!name.is_empty()).then(|| name.to_owned())
     })
-}
-
-pub(crate) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|w| w == needle)
-}
-
-pub(crate) fn trim(s: &[u8]) -> &[u8] {
-    let start = s.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(s.len());
-    let end = s.iter().rposition(|b| !b.is_ascii_whitespace()).map_or(start, |e| e + 1);
-    &s[start..end]
 }
 
 #[cfg(test)]

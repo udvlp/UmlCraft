@@ -13,6 +13,19 @@ use umlcraft_reverse::{
     Problem, Report, SourceLanguage, collect_sources_for, import_into, parse_sources,
 };
 
+/// One test per fixture case of `language`, named after the case: [`check_ir`].
+#[allow(unused_macros)]
+macro_rules! ir_tests {
+    ($language:expr; $($case:ident),* $(,)?) => {
+        $(
+            #[test]
+            fn $case() {
+                crate::common::check_ir($language, stringify!($case));
+            }
+        )*
+    };
+}
+
 /// The fixture folder of `case`: `tests/fixtures/<language>/<case>`.
 pub fn fixture(language: SourceLanguage, case: &str) -> PathBuf {
     let folder = match language {

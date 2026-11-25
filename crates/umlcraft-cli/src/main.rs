@@ -297,14 +297,7 @@ fn claude_code(exe: &Path, server_args: &[String], dry_run: bool) -> Result<bool
 
 /// Claude Desktop's configuration file, if Claude Desktop is installed.
 fn claude_desktop_config() -> Option<PathBuf> {
-    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let dir = if cfg!(windows) {
-        var("APPDATA")?.join("Claude")
-    } else if cfg!(target_os = "macos") {
-        home_dir()?.join("Library/Application Support/Claude")
-    } else {
-        var("XDG_CONFIG_HOME").or_else(|| home_dir().map(|h| h.join(".config")))?.join("Claude")
-    };
+    let dir = umlcraft_mcp::host::config_dir()?.join("Claude");
     dir.is_dir().then(|| dir.join("claude_desktop_config.json"))
 }
 
@@ -329,14 +322,7 @@ fn add_to_json(file: &Path, path: &[&str], entry: Value, dry_run: bool) -> Resul
     }
     // Written beside it and renamed over it, so that the client's configuration is never left
     // half written.
-    let mut tmp = file.as_os_str().to_owned();
-    tmp.push(".umlcraft-tmp");
-    let tmp = PathBuf::from(tmp);
-    let written = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, file));
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("{}: {e}", file.display()));
-    }
+    umlcraft_mcp::host::write_replacing(file, text.as_bytes())?;
     println!("{}: added the server `umlcraft`.", file.display());
     Ok(true)
 }
@@ -365,8 +351,7 @@ fn merged_json(file: &Path, path: &[&str], entry: Value) -> Result<String, Strin
 }
 
 fn home_dir() -> Option<PathBuf> {
-    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-    if cfg!(windows) { var("USERPROFILE") } else { var("HOME") }
+    umlcraft_mcp::host::env_path(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
 }
 
 fn documents_dir() -> Option<PathBuf> {
@@ -377,7 +362,8 @@ fn documents_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> PathBuf {
+    /// A new, empty folder for test `name`.
+    pub(crate) fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("umlcraft-cli-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

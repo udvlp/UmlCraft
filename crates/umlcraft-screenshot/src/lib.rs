@@ -302,18 +302,27 @@ mod win {
     /// The window with its invisible resize borders, and the part one sees.
     fn bounds(hwnd: HWND) -> (RECT, RECT) {
         let mut outer = RECT::default();
-        // SAFETY: both calls write one RECT, whose size is given.
+        // SAFETY: the call writes one RECT.
         unsafe {
             let _ = GetWindowRect(hwnd, &mut outer);
-            let mut visible = outer;
-            let got = DwmGetWindowAttribute(
+        }
+        (outer, visible_part(hwnd, outer))
+    }
+
+    /// The part one sees of the window whose bounds with its resize borders are `outer`;
+    /// `outer` itself where Windows does not tell.
+    fn visible_part(hwnd: HWND, outer: RECT) -> RECT {
+        let mut visible = outer;
+        // SAFETY: the call writes one RECT, whose size is given.
+        let got = unsafe {
+            DwmGetWindowAttribute(
                 hwnd,
                 DWMWA_EXTENDED_FRAME_BOUNDS,
                 (&raw mut visible).cast(),
                 size_of::<RECT>() as u32,
-            );
-            (outer, if got.is_ok() { visible } else { outer })
-        }
+            )
+        };
+        if got.is_ok() { visible } else { outer }
     }
 
     fn frame_width(outer: RECT, visible: RECT) -> i32 {
@@ -371,22 +380,17 @@ mod win {
     // A window's normal position counts from the main screen's work area, not the screen.
     fn to_screen(r: RECT) -> RECT {
         let area = work_area();
-        RECT {
-            left: r.left + area.left,
-            top: r.top + area.top,
-            right: r.right + area.left,
-            bottom: r.bottom + area.top,
-        }
+        shifted(r, area.left, area.top)
     }
 
     fn to_workspace(r: RECT) -> RECT {
         let area = work_area();
-        RECT {
-            left: r.left - area.left,
-            top: r.top - area.top,
-            right: r.right - area.left,
-            bottom: r.bottom - area.top,
-        }
+        shifted(r, -area.left, -area.top)
+    }
+
+    /// `r` moved by `dx`, `dy`.
+    fn shifted(r: RECT, dx: i32, dy: i32) -> RECT {
+        RECT { left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy }
     }
 
     fn placement(hwnd: HWND) -> WINDOWPLACEMENT {
@@ -463,16 +467,7 @@ mod win {
         unsafe {
             let mut window = RECT::default();
             GetWindowRect(hwnd, &mut window).map_err(|err| err.to_string())?;
-            let mut visible = window;
-            let bounds = DwmGetWindowAttribute(
-                hwnd,
-                DWMWA_EXTENDED_FRAME_BOUNDS,
-                (&raw mut visible).cast(),
-                size_of::<RECT>() as u32,
-            );
-            if bounds.is_err() {
-                visible = window;
-            }
+            let visible = visible_part(hwnd, window);
             let (width, height) = (window.right - window.left, window.bottom - window.top);
             if width <= 0 || height <= 0 {
                 return Err("The UmlCraft window has no size.".into());

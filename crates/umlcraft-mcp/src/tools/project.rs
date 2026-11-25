@@ -60,13 +60,11 @@ pub(super) fn select_in_structogram(host: &mut dyn Host, id: Id, args: &Value) -
 }
 
 pub(super) fn new_project(host: &mut dyn Host, args: &Value) -> Outcome {
-    if args.get("sample").and_then(Value::as_bool) == Some(true) {
-        let doc = host.sample()?;
-        let diagram = first_diagram(doc.model());
-        host.replace(doc, None)?;
-        return Ok(Reply::json(json!({ "diagram": diagram })));
-    }
-    let doc = new_document(opt_str(args, "name").unwrap_or("Project"));
+    let doc = if args.get("sample").and_then(Value::as_bool) == Some(true) {
+        crate::sample::velo(host.parts().1)
+    } else {
+        new_document(opt_str(args, "name").unwrap_or("Project"))
+    };
     let diagram = first_diagram(doc.model());
     host.replace(doc, None)?;
     Ok(Reply::json(json!({ "diagram": diagram })))

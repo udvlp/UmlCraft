@@ -23,17 +23,16 @@ pub fn expected(name: &str) -> String {
 pub fn imported(schema: &Schema, options: &Options, arrange: bool) -> (Document, Import) {
     let mut doc = Document::new(Model::new("m"));
     let root = doc.model().root();
-    let mut result = None;
-    doc.edit("import", |tx| {
-        result = Some(if arrange {
-            umlcraft_erm_sql::import(tx, root, schema, options, &ApproxMeasure)?
-        } else {
-            umlcraft_erm_sql::map::map(tx, root, schema, options)?
-        });
-        Ok(())
-    })
-    .unwrap();
-    (doc, result.unwrap())
+    let result = doc
+        .edit("import", |tx| {
+            if arrange {
+                umlcraft_erm_sql::import(tx, root, schema, options, &ApproxMeasure)
+            } else {
+                umlcraft_erm_sql::map::map(tx, root, schema, options)
+            }
+        })
+        .unwrap();
+    (doc, result)
 }
 
 /// The entities and relationships of `package` in their order.

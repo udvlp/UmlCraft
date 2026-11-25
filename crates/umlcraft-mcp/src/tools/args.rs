@@ -10,6 +10,14 @@ pub(super) fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String>
     opt_str(args, key).ok_or_else(|| format!("`{key}` is missing"))
 }
 
+/// The boolean `key` of `args`, if given; anything else than true or false (null too) is a
+/// mistake.
+pub(crate) fn bool_arg(args: &Value, key: &str) -> Result<Option<bool>, String> {
+    args.get(key)
+        .map(|v| v.as_bool().ok_or_else(|| format!("`{key}` is true or false")))
+        .transpose()
+}
+
 pub(super) fn opt_num(args: &Value, key: &str) -> Option<f32> {
     args.get(key).and_then(Value::as_f64).map(|v| v as f32)
 }

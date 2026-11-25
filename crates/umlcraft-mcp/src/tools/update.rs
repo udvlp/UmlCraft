@@ -49,11 +49,7 @@ pub(super) fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     }
     let constraints: Option<Vec<String>> =
         args.get("constraints").and_then(Value::as_array).map(|c| {
-            c.iter()
-                .filter_map(Value::as_str)
-                .map(|c| c.trim().trim_start_matches('{').trim_end_matches('}').trim().to_owned())
-                .filter(|c| !c.is_empty())
-                .collect()
+            c.iter().filter_map(Value::as_str).map(unbraced).filter(|c| !c.is_empty()).collect()
         });
     let shared = pick(args, "shared_style", &SHARED_STYLES)?;
     if shared.is_some() && !matches!(kind, ElementKind::Generalization(_)) {
@@ -224,11 +220,10 @@ pub(super) fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
             Some(n as usize)
         }
     };
-    let side_by_side = match args.get("side_by_side") {
-        None => false,
-        Some(_) if regions.is_none() => return Err("`side_by_side` goes with `regions`".into()),
-        Some(v) => v.as_bool().ok_or("`side_by_side` is true or false")?,
-    };
+    if args.get("side_by_side").is_some() && regions.is_none() {
+        return Err("`side_by_side` goes with `regions`".into());
+    }
+    let side_by_side = bool_arg(args, "side_by_side")?.unwrap_or(false);
     // Only a changed kind is written back: a member's `text` changes the kind on its own (type,
     // multiplicity, return type), and `settings`, taken before, would undo that.
     let kind_changed = settings != kind;
@@ -383,11 +378,19 @@ pub(super) fn set_extend(
 /// The extension points of the use case `use_case`, with their ids and names.
 pub(super) fn extension_points(model: &Model, use_case: Option<Id>) -> Vec<Value> {
     let Some(use_case) = use_case else { return Vec::new() };
+    points_of(model, use_case)
+        .into_iter()
+        .map(|c| json!({ "id": c, "name": model.get(c).map_or("", |e| e.name()) }))
+        .collect()
+}
+
+/// The ids of the extension points of the use case `use_case`.
+fn points_of(model: &Model, use_case: Id) -> Vec<Id> {
     model
         .children(use_case)
         .iter()
-        .filter(|&&c| matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::ExtensionPoint)))
-        .map(|&c| json!({ "id": c, "name": model.get(c).map_or("", |e| e.name()) }))
+        .copied()
+        .filter(|&c| matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::ExtensionPoint)))
         .collect()
 }
 
@@ -399,12 +402,7 @@ pub(super) fn extension_points_arg(
     value: &Value,
 ) -> Result<Vec<Id>, String> {
     let items = value.as_array().ok_or("`extension_points` is a list of ids or names")?;
-    let points: Vec<Id> = model
-        .children(use_case)
-        .iter()
-        .copied()
-        .filter(|&c| matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::ExtensionPoint)))
-        .collect();
+    let points = points_of(model, use_case);
     items
         .iter()
         .map(|item| {
@@ -488,8 +486,7 @@ pub(super) fn set_submachine(
 /// The settings of a diagram in `args`: what a sequence diagram numbers, shows and frames;
 /// whether a state machine diagram draws simple states as UML does.
 pub(super) fn set_diagram_settings(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
-    if let Some(v) = args.get("simple_states") {
-        let on = v.as_bool().ok_or("`simple_states` is true or false")?;
+    if let Some(on) = bool_arg(args, "simple_states")? {
         match kind {
             ElementKind::Diagram(p) if p.diagram == DiagramKind::StateMachine => {
                 p.simple_states = on;
@@ -503,22 +500,16 @@ pub(super) fn set_diagram_settings(kind: &mut ElementKind, args: &Value) -> Resu
         ElementKind::Diagram(p) if p.diagram == DiagramKind::Sequence => p,
         _ => return Err(format!("only sequence diagrams take `{key}`")),
     };
-    let flag = |key: &str| -> Result<Option<bool>, String> {
-        match args.get(key) {
-            None => Ok(None),
-            Some(v) => v.as_bool().map(Some).ok_or_else(|| format!("`{key}` is true or false")),
-        }
-    };
-    if let Some(on) = flag("message_numbers")? {
+    if let Some(on) = bool_arg(args, "message_numbers")? {
         p.hide_message_numbers = !on;
     }
-    if let Some(on) = flag("flat_numbers")? {
+    if let Some(on) = bool_arg(args, "flat_numbers")? {
         p.flat_message_numbers = on;
     }
-    if let Some(on) = flag("return_values")? {
+    if let Some(on) = bool_arg(args, "return_values")? {
         p.hide_return_values = !on;
     }
-    if let Some(on) = flag("frame")? {
+    if let Some(on) = bool_arg(args, "frame")? {
         p.hide_frame = !on;
     }
     Ok(())

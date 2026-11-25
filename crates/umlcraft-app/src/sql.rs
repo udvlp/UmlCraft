@@ -15,7 +15,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::radio::RadioGroup;
-use gpui_kit::component::{ActiveTheme, Disableable, StyledExt, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, h_flex, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_erm_sql::ir::ProblemKind;
@@ -25,6 +25,7 @@ use umlcraft_erm_sql::{
 use umlcraft_model::{ErNotation, Id};
 
 use crate::main_view::MainView;
+use crate::shell::section;
 
 /// Asks for a dump, reads it in the background and offers the dialog; problems are shown over
 /// `window`.
@@ -446,11 +447,6 @@ fn file_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// A heading with what it sets below.
-fn section(title: String, body: impl IntoElement) -> impl IntoElement {
-    v_flex().gap_2().child(div().text_sm().font_semibold().child(title)).child(body)
-}
-
 #[cfg(test)]
 mod tests {
     use umlcraft_erm_sql::{Dialect, Options};
@@ -464,14 +460,11 @@ mod tests {
         let schema = umlcraft_erm_sql::read(sql, Some(Dialect::MySql)).unwrap();
         let mut doc = Document::new(Model::new("m"));
         let root = doc.model().root();
-        let mut report = None;
-        doc.edit("import", |tx| {
-            report =
-                Some(umlcraft_erm_sql::map::map(tx, root, &schema, &Options::default())?.report);
-            Ok(())
-        })
-        .unwrap();
-        let (summary, lines) = report_text(&report.unwrap(), "shop.sql");
+        let report = doc
+            .edit("import", |tx| umlcraft_erm_sql::map::map(tx, root, &schema, &Options::default()))
+            .unwrap()
+            .report;
+        let (summary, lines) = report_text(&report, "shop.sql");
         assert!(summary.contains("shop.sql"), "{summary}");
         // a and c have no key, b is a placeholder, c has a column that cannot be read.
         assert_eq!(lines.len(), 4, "{lines:?}");

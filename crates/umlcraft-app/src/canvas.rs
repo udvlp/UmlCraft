@@ -36,8 +36,8 @@ use crate::workspace::{EndChange, NewItem, Workspace};
 use crate::{
     AddAttribute, AddExtensionPoint, AddLiteral, AddOperation, Cancel, ChangeRelationship,
     ConnectAs, DeleteMember, DeleteSelection, LINE_SHAPES, MakeAssociationClass, RemoveFromDiagram,
-    ResetLabels, ResetLineEnds, ResetZoom, SelectAll, SetAssociationEnd, SetLineShape,
-    SetMemberType, SetSharedStyle, ZoomToFit,
+    ResetLabels, ResetLineEnds, SelectAll, SetAssociationEnd, SetLineShape, SetMemberType,
+    SetSharedStyle,
 };
 
 const MIN_ZOOM: f32 = 0.25;
@@ -982,19 +982,13 @@ impl DiagramCanvas {
     /// The extend the one selected line stands for.
     fn selected_extend(&self, cx: &App) -> Option<Id> {
         let ws = self.workspace.read(cx);
-        let [single] = ws.selection[..] else { return None };
-        let view = ws.doc.model().view(ws.active_diagram?)?;
-        let element = view.get(single)?.element?;
-        matches!(ws.doc.model().get(element)?.kind(), ElementKind::Extend(_)).then_some(element)
+        ws.selected_element_if(|k| matches!(k, ElementKind::Extend(_)))
     }
 
     /// The use case of the one selected node, if it shows one.
     fn selected_use_case(&self, cx: &App) -> Option<Id> {
         let ws = self.workspace.read(cx);
-        let [single] = ws.selection[..] else { return None };
-        let view = ws.doc.model().view(ws.active_diagram?)?;
-        let element = view.get(single)?.element?;
-        matches!(ws.doc.model().get(element)?.kind(), ElementKind::UseCase(_)).then_some(element)
+        ws.selected_element_if(|k| matches!(k, ElementKind::UseCase(_)))
     }
 
     /// What a line drawn with `tool` connects to at `p`: a node, or for note anchors also a
@@ -2527,19 +2521,8 @@ impl DiagramCanvas {
     /// The commands of diagrams, which the canvas handles itself.
     fn diagram_actions(&self, element: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
         element
+            // Deleting, selecting all, line shapes and zooming bubble up to the main view.
             .on_action(cx.listener(Self::cancel))
-            .on_action(cx.listener(|this, _: &DeleteSelection, _, cx| {
-                this.update_workspace(cx, Workspace::delete_selection);
-            }))
-            .on_action(cx.listener(|this, _: &RemoveFromDiagram, _, cx| {
-                this.update_workspace(cx, Workspace::remove_selection_from_diagram);
-            }))
-            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
-                this.update_workspace(cx, Workspace::select_all);
-            }))
-            .on_action(
-                cx.listener(|this, a: &SetLineShape, _, cx| this.set_line_shape(a.shape, cx)),
-            )
             .on_action(cx.listener(|this, _: &ResetLineEnds, _, cx| {
                 let edges: Vec<Id> = this.selected_edges(cx).iter().map(|e| e.id).collect();
                 this.update_workspace(cx, |ws| ws.reset_line_ends(&edges));
@@ -3110,40 +3093,29 @@ impl Painter<'_> {
         }
     }
 
-    fn edge_handles(&mut self, edge: &EdgeShape) {
-        let s = self.c.selection;
+    /// A square grip centered on `at`, as large at every zoom, filled with `fill` and framed
+    /// in the selection color `border` wide.
+    fn grip(&mut self, at: MPoint, fill: Hsla, border: f32) {
         let half = 3.5 / self.t.zoom;
+        let square = self.t.rect(Rect::new(at.x - half, at.y - half, 2.0 * half, 2.0 * half));
+        let s = self.c.selection;
+        self.window.paint_quad(quad(square, px(1.0), fill, px(border), s, BorderStyle::Solid));
+    }
+
+    fn edge_handles(&mut self, edge: &EdgeShape) {
         for (handle, p) in edge.handles() {
-            let square = Rect::new(p.x - half, p.y - half, 2.0 * half, 2.0 * half);
             let fill = match handle {
-                EdgeHandle::Waypoint(_) | EdgeHandle::Segment(_) => s,
+                EdgeHandle::Waypoint(_) | EdgeHandle::Segment(_) => self.c.selection,
                 EdgeHandle::Insert(_) => self.c.background,
             };
-            self.window.paint_quad(quad(
-                self.t.rect(square),
-                px(1.0),
-                fill,
-                px(1.0),
-                s,
-                BorderStyle::Solid,
-            ));
+            self.grip(p, fill, 1.0);
         }
     }
 
     /// Filled square grips at `points`.
     fn grips(&mut self, points: &[MPoint]) {
-        let s = self.c.selection;
-        let half = 3.5 / self.t.zoom;
-        for p in points {
-            let square = Rect::new(p.x - half, p.y - half, 2.0 * half, 2.0 * half);
-            self.window.paint_quad(quad(
-                self.t.rect(square),
-                px(1.0),
-                s,
-                px(1.0),
-                s,
-                BorderStyle::Solid,
-            ));
+        for &p in points {
+            self.grip(p, self.c.selection, 1.0);
         }
     }
 
@@ -3158,18 +3130,8 @@ impl Painter<'_> {
             BorderStyle::Solid,
         ));
         if handles {
-            let half = 3.5 / self.t.zoom;
             for handle in Handle::ALL {
-                let p = handle.position(r);
-                let square = Rect::new(p.x - half, p.y - half, 2.0 * half, 2.0 * half);
-                self.window.paint_quad(quad(
-                    self.t.rect(square),
-                    px(1.0),
-                    self.c.background,
-                    px(1.5),
-                    s,
-                    BorderStyle::Solid,
-                ));
+                self.grip(handle.position(r), self.c.background, 1.5);
             }
         }
     }
@@ -3395,9 +3357,7 @@ impl Render for DiagramCanvas {
             )
             .on_scroll(cx.listener(Self::on_scroll))
             .on_pinch(cx.listener(Self::on_pinch))
-            .on_drop(cx.listener(Self::on_drop))
-            .on_action(cx.listener(|this, _: &ResetZoom, _, cx| this.reset_zoom(cx)))
-            .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| this.zoom_to_fit(cx)));
+            .on_drop(cx.listener(Self::on_drop));
         // A structogram's commands go to its editor, a diagram's to the canvas.
         let element = match &structogram {
             Some(editor) => crate::nsd::bind_actions(element.key_context("NsdView"), editor),
@@ -3431,25 +3391,7 @@ impl Render for DiagramCanvas {
                         }
                         let t = Transform { origin: bounds.origin, pan, zoom };
                         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                            if let Some(editor) = &structogram {
-                                // A structogram is drawn by its editor, over the grid.
-                                let accent = colors.selection;
-                                Painter {
-                                    t,
-                                    c: colors,
-                                    font_family,
-                                    window,
-                                    cx,
-                                    node_fill: None,
-                                    edge_line: None,
-                                    column,
-                                }
-                                .grid(bounds, corner);
-                                let origin = t.pt(MPoint::new(0.0, 0.0));
-                                editor
-                                    .update(cx, |e, cx| e.paint(origin, zoom, accent, window, cx));
-                                return;
-                            }
+                            let accent = colors.selection;
                             let mut p = Painter {
                                 t,
                                 c: colors,
@@ -3461,6 +3403,15 @@ impl Render for DiagramCanvas {
                                 column,
                             };
                             p.grid(bounds, corner);
+                            if let Some(editor) = &structogram {
+                                // A structogram is drawn by its editor, over the grid.
+                                let origin = t.pt(MPoint::new(0.0, 0.0));
+                                let window = &mut *p.window;
+                                editor.update(p.cx, |e, cx| {
+                                    e.paint(origin, zoom, accent, window, cx)
+                                });
+                                return;
+                            }
                             for node in &scene.nodes {
                                 p.node(node, editing_element);
                             }

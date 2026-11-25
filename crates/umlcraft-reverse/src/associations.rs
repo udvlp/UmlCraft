@@ -49,6 +49,12 @@ struct Target {
     qualifier: Option<TypeRef>,
 }
 
+impl Target {
+    fn new(participant: Id, multiplicity: Option<Multiplicity>) -> Self {
+        Self { participant, multiplicity, constraints: Vec::new(), qualifier: None }
+    }
+}
+
 impl Importer<'_> {
     pub(crate) fn associations(&mut self, tx: &mut Tx<'_>) -> Result<()> {
         let fields = std::mem::take(&mut self.fields);
@@ -156,21 +162,19 @@ impl Importer<'_> {
             converted.push(attribute);
         }
         tx.delete_many(&converted)?;
-        // Ends of fields that are gone.
+        // Ends of fields that are gone: navigable ends with a role, from a type of the sources.
+        let is_stale = |end: &AssociationEnd, from: Id| {
+            end.navigability == Navigability::Navigable
+                && sources.contains(&from)
+                && !end.role.is_empty()
+        };
         let model = tx.model();
         let stale: Vec<Id> = model
             .elements()
             .filter(|e| !used.contains(&e.id()) && is_imported(e.data()))
             .filter_map(|e| match e.kind() {
-                ElementKind::Association(p) => p
-                    .ends
-                    .iter()
-                    .enumerate()
-                    .any(|(i, end)| {
-                        end.navigability == Navigability::Navigable
-                            && sources.contains(&p.ends[1 - i].participant)
-                            && !end.role.is_empty()
-                    })
+                ElementKind::Association(p) => (0..2)
+                    .any(|i| is_stale(&p.ends[i], p.ends[1 - i].participant))
                     .then_some(e.id()),
                 _ => None,
             })
@@ -181,10 +185,7 @@ impl Importer<'_> {
                 if let ElementKind::Association(p) = &mut d.kind {
                     let participants = [p.ends[0].participant, p.ends[1].participant];
                     for (i, end) in p.ends.iter_mut().enumerate() {
-                        if end.navigability == Navigability::Navigable
-                            && sources.contains(&participants[1 - i])
-                            && !end.role.is_empty()
-                        {
+                        if is_stale(end, participants[1 - i]) {
                             end.navigability = Navigability::NonNavigable;
                         }
                     }
@@ -232,12 +233,7 @@ impl Importer<'_> {
             _ => None,
         };
         match t {
-            TypeRef::Element(id) => counts(*id).then(|| Target {
-                participant: *id,
-                multiplicity: None,
-                constraints: Vec::new(),
-                qualifier: None,
-            }),
+            TypeRef::Element(id) => counts(*id).then(|| Target::new(*id, None)),
             TypeRef::Expr(e) if self.only_qualifiers(&e.prefix) => {
                 // A qualified class: `const Item`.
                 if e.arguments.is_empty() && e.modifier.is_empty() {
@@ -245,22 +241,12 @@ impl Importer<'_> {
                 }
                 // An array of a class: `Item[]`.
                 if e.arguments.is_empty() && e.modifier.starts_with('[') {
-                    return single(&e.base).map(|participant| Target {
-                        participant,
-                        multiplicity: Some(Multiplicity::MANY),
-                        constraints: Vec::new(),
-                        qualifier: None,
-                    });
+                    return single(&e.base).map(|p| Target::new(p, Some(Multiplicity::MANY)));
                 }
                 // An optional class: `Item?`. An optional container counts as the container.
                 let optional = self.rules.optional_modifiers.contains(&e.modifier.as_str());
                 if optional && e.arguments.is_empty() {
-                    return single(&e.base).map(|participant| Target {
-                        participant,
-                        multiplicity: Some(Multiplicity::OPTIONAL),
-                        constraints: Vec::new(),
-                        qualifier: None,
-                    });
+                    return single(&e.base).map(|p| Target::new(p, Some(Multiplicity::OPTIONAL)));
                 }
                 if !e.modifier.is_empty() && !optional {
                     return None;
@@ -274,32 +260,20 @@ impl Importer<'_> {
                             .filter(|(on, _)| *on)
                             .map(|(_, c)| c.to_owned())
                             .collect();
-                        single(element).map(|participant| Target {
-                            participant,
-                            multiplicity: Some(Multiplicity::MANY),
+                        single(element).map(|p| Target {
                             constraints,
-                            qualifier: None,
+                            ..Target::new(p, Some(Multiplicity::MANY))
                         })
                     }
                     // Astah gives the end only the qualifier, no multiplicity.
-                    (Container::Map, [key, value]) => single(value).map(|participant| Target {
-                        participant,
-                        multiplicity: None,
-                        constraints: Vec::new(),
-                        qualifier: Some(key.clone()),
-                    }),
-                    (Container::Optional, [element]) => single(element).map(|participant| Target {
-                        participant,
-                        multiplicity: Some(Multiplicity::OPTIONAL),
-                        constraints: Vec::new(),
-                        qualifier: None,
-                    }),
-                    (Container::Owning, [element]) => single(element).map(|participant| Target {
-                        participant,
-                        multiplicity: Some(Multiplicity::ONE),
-                        constraints: Vec::new(),
-                        qualifier: None,
-                    }),
+                    (Container::Map, [key, value]) => single(value)
+                        .map(|p| Target { qualifier: Some(key.clone()), ..Target::new(p, None) }),
+                    (Container::Optional, [element]) => {
+                        single(element).map(|p| Target::new(p, Some(Multiplicity::OPTIONAL)))
+                    }
+                    (Container::Owning, [element]) => {
+                        single(element).map(|p| Target::new(p, Some(Multiplicity::ONE)))
+                    }
                     _ => None,
                 }
             }

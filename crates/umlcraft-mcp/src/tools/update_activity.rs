@@ -30,29 +30,29 @@ pub(super) fn set_activity_node(
     let ElementKind::ActivityNode(p) = kind else {
         return Err(format!("a {type_name} has no `{key}`"));
     };
-    let object = p.node.is_object();
-    let only_objects =
-        |key: &str| format!("only object nodes, pins and activity parameters have `{key}`");
+    // All but `calls` belong to object nodes; the flags count when given at all, the texts
+    // when they are text.
+    let given = |key: &&str| match *key {
+        "calls" => false,
+        "stream" | "control" | "exception" => args.get(key).is_some(),
+        _ => opt_str(args, key).is_some(),
+    };
+    if !p.node.is_object()
+        && let Some(key) = ACTIVITY_NODE_KEYS.into_iter().find(given)
+    {
+        return Err(format!("only object nodes, pins and activity parameters have `{key}`"));
+    }
     if let Some(text) = opt_str(args, "object_type") {
-        if !object {
-            return Err(only_objects("object_type"));
-        }
         let text = text.trim();
         // Names resolve as in a declaration, from the node outward.
         p.type_ref = (!text.is_empty()).then(|| member::parse_type(model, id, text));
     }
     if let Some(state) = opt_str(args, "in_state") {
-        if !object {
-            return Err(only_objects("in_state"));
-        }
         let state = state.trim();
         let state = state.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(state);
         p.in_state = state.trim().to_owned();
     }
     if let Some(ordering) = opt_str(args, "ordering") {
-        if !object {
-            return Err(only_objects("ordering"));
-        }
         p.ordering = match ordering.trim() {
             "" => None,
             o => Some(umlcraft_model::ObjectOrdering::parse(o).ok_or_else(|| {
@@ -61,33 +61,18 @@ pub(super) fn set_activity_node(
         };
     }
     if let Some(bound) = opt_str(args, "upper_bound") {
-        if !object {
-            return Err(only_objects("upper_bound"));
-        }
         p.upper_bound = bound.trim().to_owned();
     }
-    if let Some(stream) = args.get("stream") {
-        if !object {
-            return Err(only_objects("stream"));
-        }
-        p.is_stream = stream.as_bool().ok_or("`stream` is true or false")?;
+    if let Some(stream) = bool_arg(args, "stream")? {
+        p.is_stream = stream;
     }
-    if let Some(control) = args.get("control") {
-        if !object {
-            return Err(only_objects("control"));
-        }
-        p.is_control = control.as_bool().ok_or("`control` is true or false")?;
+    if let Some(control) = bool_arg(args, "control")? {
+        p.is_control = control;
     }
-    if let Some(exception) = args.get("exception") {
-        if !object {
-            return Err(only_objects("exception"));
-        }
-        p.is_exception = exception.as_bool().ok_or("`exception` is true or false")?;
+    if let Some(exception) = bool_arg(args, "exception")? {
+        p.is_exception = exception;
     }
     if let Some(effect) = opt_str(args, "object_effect") {
-        if !object {
-            return Err(only_objects("object_effect"));
-        }
         p.effect = match effect.trim() {
             "" => None,
             e => Some(umlcraft_model::ObjectEffect::parse(e).ok_or_else(|| {

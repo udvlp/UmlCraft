@@ -2,32 +2,11 @@
 //! writes its entity store back: the bytes must come out unchanged. Skipped when Astah is not
 //! installed.
 
-use std::path::{Path, PathBuf};
+mod common;
 
-/// Astah's install folder: `ASTAH_HOME`, else where Astah Professional installs on Windows.
-fn astah_home() -> PathBuf {
-    std::env::var_os("ASTAH_HOME")
-        .map_or_else(|| PathBuf::from(r"C:\Program Files\astah-professional"), PathBuf::from)
-}
+use std::path::Path;
 
-/// Reports a test that cannot run here. With `UMLCRAFT_REQUIRE_ASTAH` set, as on a machine that
-/// has Astah, a skip fails instead, so a missing installation cannot pass for a green run.
-fn skip(reason: &str) {
-    assert!(std::env::var_os("UMLCRAFT_REQUIRE_ASTAH").is_none(), "not skipped: {reason}");
-    eprintln!("skipped: {reason}");
-}
-
-fn asta_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            asta_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "asta") {
-            out.push(path);
-        }
-    }
-}
+use common::{asta_files, astah_home, skip};
 
 #[test]
 fn entity_stores_are_written_back_unchanged() {

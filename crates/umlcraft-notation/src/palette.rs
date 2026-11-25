@@ -1093,8 +1093,10 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
     let diagram_kind =
         model.element(diagram)?.kind().as_diagram().ok_or(ModelError::NotADiagram(diagram))?;
     let kind = model.element(element)?.kind().clone();
+    let cannot_show =
+        || Err(ModelError::Refused(umlcraft_model::Refusal::CannotShow(kind.type_name())));
     if !can_show(diagram_kind, &kind) {
-        return Err(ModelError::Refused(umlcraft_model::Refusal::CannotShow(kind.type_name())));
+        return cannot_show();
     }
     // Lifelines and fragments belong to one interaction and show only on its diagram.
     let interaction = model.element(diagram)?.owner();
@@ -1121,18 +1123,12 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
         crate::er::is_er(model, diagram) && crate::er::notation(model, diagram).lists_attributes();
     if listing {
         match &kind {
-            ElementKind::ErAttribute(_) => {
-                return Err(ModelError::Refused(umlcraft_model::Refusal::CannotShow(
-                    kind.type_name(),
-                )));
-            }
+            ElementKind::ErAttribute(_) => return cannot_show(),
             ElementKind::ErRelationship(_) if crate::er::is_line(model, element) => {
                 let [parent, child] =
                     crate::er::parent_and_child(model, element).expect("a line has two ends");
                 let (Some(a), Some(b)) = (shown(parent.entity), shown(child.entity)) else {
-                    return Err(ModelError::Refused(umlcraft_model::Refusal::CannotShow(
-                        kind.type_name(),
-                    )));
+                    return cannot_show();
                 };
                 return tx.add_edge(diagram, Some(element), a, b, Vec::new());
             }
@@ -1142,17 +1138,20 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
     // Relationships connecting the element to something shown, as (relationship, source, target)
     // with `None` standing for the new node. Messages need a place in the sequence; they are
     // drawn, not shown.
-    let mut edges = Vec::new();
+    let mut edges: Vec<(Id, Option<Id>, Option<Id>)> = Vec::new();
+    let drawn = |r: Id, edges: &[(Id, Option<Id>, Option<Id>)]| {
+        shown(r).is_some() || edges.iter().any(|e| e.0 == r)
+    };
+    let end = |id: Id| -> Option<Option<Id>> {
+        if id == element { Some(None) } else { shown(id).map(Some) }
+    };
     for (r, _) in model.referrers(element) {
         let Some(e) = model.get(r).filter(|e| e.kind().is_relationship()) else { continue };
         let ends = e.kind().strong_references();
         let [a, b] = ends[..] else { continue };
-        if shown(r).is_some() || edges.iter().any(|&(e, _, _)| e == r) {
+        if drawn(r, &edges) {
             continue;
         }
-        let end = |id: Id| -> Option<Option<Id>> {
-            if id == element { Some(None) } else { shown(id).map(Some) }
-        };
         if let (Some(source), Some(target)) = (end(a), end(b)) {
             edges.push((r, source, target));
         }
@@ -1165,14 +1164,10 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
                 continue;
             };
             let r = p.relationship;
-            if !crate::er::is_line(model, r) || shown(r).is_some() || edges.iter().any(|e| e.0 == r)
-            {
+            if !crate::er::is_line(model, r) || drawn(r, &edges) {
                 continue;
             }
             let Some([parent, child]) = crate::er::parent_and_child(model, r) else { continue };
-            let end = |id: Id| -> Option<Option<Id>> {
-                if id == element { Some(None) } else { shown(id).map(Some) }
-            };
             if let (Some(source), Some(target)) = (end(parent.entity), end(child.entity)) {
                 edges.push((r, source, target));
             }
@@ -1191,18 +1186,13 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
             edges.push((child, None, Some(node)));
         }
     }
-    let node = add_node_for(
-        tx,
-        diagram,
-        element,
-        Rect::from_origin_size(origin, default_size_for(&kind)),
-    )?;
+    let bounds = Rect::from_origin_size(origin, default_size_for(&kind));
+    let node = add_node_for(tx, diagram, element, bounds)?;
     let mut loops = 0;
     for (relationship, source, target) in edges {
         let waypoints = if source == target {
             loops += 1;
-            let r = Rect::from_origin_size(origin, default_size_for(&kind));
-            crate::scene::self_loop_at(r, loops - 1)
+            crate::scene::self_loop_at(bounds, loops - 1)
         } else {
             Vec::new()
         };
@@ -1308,6 +1298,15 @@ pub fn owner_for(model: &Model, start: Id, kind: &ElementKind) -> Option<Id> {
 pub fn unique_name(model: &Model, owner: Id, base: &str) -> String {
     let taken = |name: &str| !model.children_named(owner, name).is_empty();
     (1..).map(|n| format!("{base}{n}")).find(|name| !taken(name)).expect("names are unbounded")
+}
+
+/// `base`, or `base2`, `base3` … if a sibling under `owner` is called so.
+pub(crate) fn numbered_name(model: &Model, owner: Id, base: &str) -> String {
+    let taken = |name: &str| !model.children_named(owner, name).is_empty();
+    if !taken(base) {
+        return base.to_owned();
+    }
+    (2..).map(|n| format!("{base}{n}")).find(|name| !taken(name)).expect("names are unbounded")
 }
 
 /// Creates a new element for `tool` and shows it on `diagram` at `origin`.
@@ -1434,10 +1433,7 @@ fn connect_as(
     }
     let model = tx.model();
     let view = model.view_of(diagram)?;
-    let element_of = |p: Id| -> Result<Id> {
-        view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
-    };
-    let (s, t) = (element_of(source)?, element_of(target)?);
+    let (s, t) = (element_of(view, source)?, element_of(view, target)?);
     let (sk, tk) = (model.element(s)?.kind(), model.element(t)?.kind());
     // Only associations and transitions may loop back to the same node; they get a loop of
     // waypoints.
@@ -1455,9 +1451,7 @@ fn connect_as(
 
     match tool.element_kind(s, t) {
         Some(kind) => {
-            let start = model.element(s)?.owner().unwrap_or(model.root());
-            let owner = owner_for(model, start, &kind)
-                .ok_or_else(|| ModelError::Invalid(format!("no owner for {}", kind.type_name())))?;
+            let owner = relationship_owner(model, s, &kind)?;
             let waypoints = match view.get(source).and_then(|p| p.bounds()) {
                 Some(bounds) if self_loop => {
                     let slot = crate::scene::loop_slot_on(view, source, bounds);
@@ -1574,16 +1568,9 @@ pub fn change_relationship(tx: &mut Tx<'_>, diagram: Id, edge: Id, tool: EdgeToo
     }
     let kind = tool.element_kind(s, t).filter(|_| may_become(model, s, t, tool));
     let Some(kind) = kind else {
-        return Err(ModelError::Invalid(format!(
-            "{} cannot connect {} to {}",
-            tool.key(),
-            model.element(s)?.kind().type_name(),
-            model.element(t)?.kind().type_name()
-        )));
+        return Err(cannot_connect(tool, model.element(s)?.kind(), model.element(t)?.kind()));
     };
-    let start = model.element(s)?.owner().unwrap_or(model.root());
-    let owner = owner_for(model, start, &kind)
-        .ok_or_else(|| ModelError::Invalid(format!("no owner for {}", kind.type_name())))?;
+    let owner = relationship_owner(model, s, &kind)?;
     // Name, documentation, stereotypes and tagged values stay; «bind» belongs to a dependency.
     let mut data = ElementData { kind, ..element.data().clone() };
     if tool != EdgeTool::Dependency {
@@ -1635,8 +1622,30 @@ fn relationship_ends(model: &Model, diagram: Id, edge: Id) -> Result<(Id, Id, Id
     let Shape::Edge { source, target, .. } = &presentation.shape else {
         return Err(ModelError::Invalid(format!("{edge} is no edge")));
     };
-    let element_of = |p: Id| view.get(p).and_then(|p| p.element).ok_or(ModelError::NotFound(p));
-    Ok((element, element_of(*source)?, element_of(*target)?))
+    Ok((element, element_of(view, *source)?, element_of(view, *target)?))
+}
+
+/// The element the presentation `presentation` of `view` shows.
+pub(crate) fn element_of(view: &View, presentation: Id) -> Result<Id> {
+    view.get(presentation).and_then(|p| p.element).ok_or(ModelError::NotFound(presentation))
+}
+
+/// The owner of a new relationship of `kind` from `source`: the closest one up from the
+/// source's owner (or the root) that may own it.
+fn relationship_owner(model: &Model, source: Id, kind: &ElementKind) -> Result<Id> {
+    let start = model.element(source)?.owner().unwrap_or(model.root());
+    owner_for(model, start, kind)
+        .ok_or_else(|| ModelError::Invalid(format!("no owner for {}", kind.type_name())))
+}
+
+/// The error for a line `tool` cannot draw from an element of kind `from` to one of `to`.
+fn cannot_connect(tool: EdgeTool, from: &ElementKind, to: &ElementKind) -> ModelError {
+    ModelError::Invalid(format!(
+        "{} cannot connect {} to {}",
+        tool.key(),
+        from.type_name(),
+        to.type_name()
+    ))
 }
 
 /// Whether a relationship from `source` to `target` may be one that `tool` makes; only
@@ -1675,20 +1684,12 @@ pub fn connect_message(
     let model = tx.model();
     let view = model.view_of(diagram)?;
     let (source, target) = (lifeline_of(model, view, source), lifeline_of(model, view, target));
-    let element_of = |p: Id| -> Result<Id> {
-        view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
-    };
-    let (s, t) = (element_of(source)?, element_of(target)?);
+    let (s, t) = (element_of(view, source)?, element_of(view, target)?);
     let (sk, tk) = (model.element(s)?.kind(), model.element(t)?.kind());
-    let kind =
-        tool.element_kind(s, t).filter(|_| tool.accepts(sk, tk, s == t)).ok_or_else(|| {
-            ModelError::Invalid(format!(
-                "{} cannot connect {} to {}",
-                tool.key(),
-                sk.type_name(),
-                tk.type_name()
-            ))
-        })?;
+    let kind = tool
+        .element_kind(s, t)
+        .filter(|_| tool.accepts(sk, tk, s == t))
+        .ok_or_else(|| cannot_connect(tool, sk, tk))?;
     let y = slot.map_or_else(|| sequence_edit::next_y(model, diagram), |s| s.y);
     let (owner, index) = slot_or_end(model, diagram, slot)?;
     // Added below everything: sent from the call the sender is busy with, if any.
@@ -1769,14 +1770,7 @@ pub fn add_else(tx: &mut Tx<'_>, fragment: Id) -> Result<Option<Id>> {
         model.element(fragment)?.kind(),
         ElementKind::CombinedFragment(p) if p.operator == InteractionOperator::Alt
     );
-    let operands = model
-        .children(fragment)
-        .iter()
-        .filter(|&&c| {
-            matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::InteractionOperand(_)))
-        })
-        .count();
-    if !alt || operands != 1 {
+    if !alt || operands(model, fragment).len() != 1 {
         return Ok(None);
     }
     let operand = add_operand(tx, fragment)?;
@@ -1786,6 +1780,18 @@ pub fn add_else(tx: &mut Tx<'_>, fragment: Id) -> Result<Option<Id>> {
         }
     })?;
     Ok(Some(operand))
+}
+
+/// The operands of `fragment`, in order.
+pub(crate) fn operands(model: &Model, fragment: Id) -> Vec<Id> {
+    model
+        .children(fragment)
+        .iter()
+        .copied()
+        .filter(|&c| {
+            matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::InteractionOperand(_)))
+        })
+        .collect()
 }
 
 /// Makes `class` bind the template and arguments of `binding` (`Pair<int,Holder>`), or nothing
@@ -1888,20 +1894,18 @@ pub fn wrap_in_guarded_fragment(
     let (Some(&first), Some(&last)) = (positions.iter().min(), positions.iter().max()) else {
         return Err(invalid("nothing to put into a fragment"));
     };
-    let moved: Vec<Id> = children[first..=last]
-        .iter()
-        .copied()
-        .filter(|&c| {
-            model.get(c).is_some_and(|e| {
-                matches!(
-                    e.kind(),
-                    ElementKind::Message(_)
-                        | ElementKind::CombinedFragment(_)
-                        | ElementKind::InteractionUse(_)
-                )
-            })
+    // Of the items of the sequence: not lifelines, notes and the like.
+    let in_sequence = |c: &&Id| {
+        model.get(**c).is_some_and(|e| {
+            matches!(
+                e.kind(),
+                ElementKind::Message(_)
+                    | ElementKind::CombinedFragment(_)
+                    | ElementKind::InteractionUse(_)
+            )
         })
-        .collect();
+    };
+    let moved: Vec<Id> = children[first..=last].iter().filter(in_sequence).copied().collect();
     if moved.is_empty() {
         return Err(invalid("only messages and fragments can go into a fragment"));
     }
@@ -1921,7 +1925,6 @@ pub fn wrap_in_guarded_fragment(
     let room = if guard { GUARD_ROOM } else { 0.0 };
     let label = if topmost.is_some() { sequence::LABEL_ABOVE + room } else { 0.0 };
     // ...as far as the item before it leaves room: a frame reaching into that would take it in.
-    let model = tx.model();
     let view = model.view_of(diagram)?;
     let bottom_of = |item: Id| {
         view.presentations_of(item).find_map(|p| match p.shape {
@@ -1938,31 +1941,11 @@ pub fn wrap_in_guarded_fragment(
             _ => None,
         })
     };
-    // Of the items of the sequence: not lifelines, notes and the like.
-    let in_sequence = |c: &&Id| {
-        model.get(**c).is_some_and(|e| {
-            matches!(
-                e.kind(),
-                ElementKind::Message(_)
-                    | ElementKind::CombinedFragment(_)
-                    | ElementKind::InteractionUse(_)
-            )
-        })
-    };
-    let children = model.children(owner);
     // In an operand, the first item keeps below the fragment's tab or the operand's line, as
     // a frame wrapped around another one does.
     let operand_top = || {
         let fragment = model.get(owner)?.owner()?;
-        let operands: Vec<Id> = model
-            .children(fragment)
-            .iter()
-            .copied()
-            .filter(|&o| {
-                matches!(model.get(o).map(|e| e.kind()), Some(ElementKind::InteractionOperand(_)))
-            })
-            .collect();
-        let k = operands.iter().position(|&o| o == owner)?;
+        let k = operands(model, fragment).iter().position(|&o| o == owner)?;
         view.presentations_of(fragment).find_map(|p| match &p.shape {
             Shape::Fragment { bounds, .. } if k == 0 => Some(bounds.y + sequence::TAB_HEIGHT),
             Shape::Fragment { bounds, separators, .. } => {
@@ -1982,12 +1965,12 @@ pub fn wrap_in_guarded_fragment(
     // them go down; so does what follows where the frame would reach into it.
     let (mut top, mut bottom) = (top, bottom);
     let wanted = top - sequence::TAB_HEIGHT - 10.0 - label;
+    let mut shift = 0.0;
     if let Some(floor) = floor.filter(|&f| f + 10.0 > wanted) {
-        let dy = floor + 10.0 - wanted;
-        sequence_edit::make_room(tx, diagram, top - 0.5, dy)?;
-        (top, bottom) = (top + dy, bottom + dy);
+        shift = floor + 10.0 - wanted;
+        sequence_edit::make_room(tx, diagram, top - 0.5, shift)?;
+        (top, bottom) = (top + shift, bottom + shift);
     }
-    let shift = floor.map_or(0.0, |f| (f + 10.0 - wanted).max(0.0));
     if let Some((next, room)) = ceiling {
         let (next, least) = (next + shift, bottom + 30.0 + room);
         if next < least {

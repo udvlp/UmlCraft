@@ -8,7 +8,7 @@ pub static JDK: TableLibrary = TableLibrary::new(include_str!("jdk.txt"));
 mod tests {
     use super::*;
     use crate::ir::TypeKind;
-    use crate::lang::{Container, Library};
+    use crate::lang::Container;
 
     fn s(path: &[&str]) -> Vec<String> {
         path.iter().map(|s| s.to_string()).collect()

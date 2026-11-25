@@ -32,29 +32,30 @@
 pub(crate) mod rules;
 
 use tree_sitter::Node;
-use umlcraft_model::{ParameterDirection, Visibility};
+use umlcraft_model::Visibility;
 
 use crate::ir::{
     Field, Import, Item, Literal, Member, Operation, Param, Relation, Scope, Supertype,
     TemplateParam, TypeDecl, TypeExpr, TypeKind, TypeName,
 };
-use crate::lang::{Frontend, Skip, Skipped};
+use crate::lang::{Frontend, Language, Skip, Skipped, children, named_children, squeeze};
 
 pub struct Cpp;
 
 impl Frontend for Cpp {
     fn lower(&self, root: Node, text: &str, _module: &[String], skipped: &mut Skipped) -> Scope {
-        let mut reader = Reader { src: text, skipped };
+        let mut reader = Reader { src: text, skipped, lang: Cpp };
         let mut scope = Scope::default();
         reader.scope(&named_children(root), &mut scope);
         scope
     }
 }
 
-struct Reader<'a> {
-    src: &'a str,
-    skipped: &'a mut Skipped,
+impl Language for Cpp {
+    const LANGUAGE: crate::SourceLanguage = crate::SourceLanguage::Cpp;
 }
+
+type Reader<'a> = crate::lang::Reader<'a, Cpp>;
 
 /// What a declarator declares: `*y[4]`, `&operator=(const A&) const`, `A::count = 0`.
 #[derive(Default)]
@@ -80,16 +81,6 @@ struct Specifiers {
     is_volatile: bool,
 }
 
-fn named_children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor).collect()
-}
-
-fn children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
-    let mut cursor = node.walk();
-    node.children(&mut cursor).collect()
-}
-
 /// The children of `node` with the names of their fields.
 fn fields<'t>(node: Node<'t>) -> Vec<(Option<&'t str>, Node<'t>)> {
     let mut cursor = node.walk();
@@ -101,11 +92,6 @@ fn fields<'t>(node: Node<'t>) -> Vec<(Option<&'t str>, Node<'t>)> {
 
 fn is_type_specifier(kind: &str) -> bool {
     matches!(kind, "class_specifier" | "struct_specifier" | "union_specifier" | "enum_specifier")
-}
-
-/// Text with its whitespace runs made single blanks: `unsigned  long` is `unsigned long`.
-fn squeeze(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// An operator's name as one spelling: `operator ==` and `operator ( )` as `operator==` and
@@ -140,15 +126,7 @@ fn access(text: &str) -> Option<Visibility> {
     }
 }
 
-impl<'a> Reader<'a> {
-    fn text(&self, node: Node) -> &'a str {
-        &self.src[node.byte_range()]
-    }
-
-    fn count(&mut self, skip: Skip) {
-        *self.skipped.entry(skip).or_default() += 1;
-    }
-
+impl Reader<'_> {
     /// The declarations among `nodes`, the children of a file, a namespace body or an
     /// `extern "C"` block, into `scope`.
     fn scope(&mut self, nodes: &[Node], scope: &mut Scope) {
@@ -458,13 +436,6 @@ impl<'a> Reader<'a> {
             at = name;
         }
         (owner, at)
-    }
-
-    /// The documentation right before `node`: a run of `///` or `//!` comments on the lines
-    /// just above it, or a `/** */` or `/*! */` comment. Comments after other code on their
-    /// line (`int x; ///< …`) belong to that code.
-    fn documentation(&self, node: Node) -> String {
-        crate::comment::documentation(crate::SourceLanguage::Cpp, node, self.src)
     }
 
     /// A class, struct, union or enum with its members; `None` for anonymous types and
@@ -836,14 +807,11 @@ impl<'a> Reader<'a> {
             return_type,
             visibility: Visibility::Public,
             is_static: specifiers.is_static,
-            is_abstract: false,
             is_leaf,
             is_constructor,
             is_query,
-            template_parameters: Vec::new(),
-            tags: Vec::new(),
-            documentation: String::new(),
             span: function.byte_range(),
+            ..Default::default()
         })
     }
 
@@ -864,8 +832,7 @@ impl<'a> Reader<'a> {
             is_static: specifiers.is_static,
             is_read_only: specifiers.is_constexpr || (specifiers.is_static && specifiers.is_const),
             default: default.map(|v| squeeze(self.text(v))),
-            tags: Vec::new(),
-            documentation: String::new(),
+            ..Default::default()
         })
     }
 
@@ -889,12 +856,7 @@ impl<'a> Reader<'a> {
         let mut params = Vec::new();
         for p in children(list) {
             if p.kind() == "..." {
-                params.push(Param {
-                    name: String::new(),
-                    ty: TypeExpr::builtin("..."),
-                    default: None,
-                    direction: ParameterDirection::In,
-                });
+                params.push(Param { ty: TypeExpr::builtin("..."), ..Default::default() });
                 continue;
             }
             if !matches!(
@@ -916,7 +878,7 @@ impl<'a> Reader<'a> {
                 name: d.name.map_or(String::new(), |n| self.text(n).to_owned()),
                 ty: base.with_modifier(&d.modifier),
                 default: p.child_by_field_name("default_value").map(|v| squeeze(self.text(v))),
-                direction: ParameterDirection::In,
+                ..Default::default()
             });
         }
         params
@@ -986,17 +948,10 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SourceLanguage, dump_text};
 
     fn parse(text: &str) -> (String, Skipped) {
-        let mut skipped = Skipped::new();
-        let scope = crate::lower_scope(
-            &crate::parse_tree(crate::SourceLanguage::Cpp, text),
-            &[],
-            &mut skipped,
-        )
-        .unwrap();
-        let unit = crate::ir::Unit { path: Default::default(), scope };
-        (unit.dump(), skipped)
+        dump_text(SourceLanguage::Cpp, text, &[]).unwrap()
     }
 
     #[test]
@@ -1037,13 +992,8 @@ alias PointPtr = Point*
 
     #[test]
     fn reports_the_first_syntax_error() {
-        let mut skipped = Skipped::new();
-        let error = crate::lower_scope(
-            &crate::parse_tree(crate::SourceLanguage::Cpp, "class A {\n  int x = ;\n};\n"),
-            &[],
-            &mut skipped,
-        )
-        .unwrap_err();
+        let error =
+            dump_text(SourceLanguage::Cpp, "class A {\n  int x = ;\n};\n", &[]).unwrap_err();
         assert_eq!((error.line, error.column), (2, 9));
     }
 }

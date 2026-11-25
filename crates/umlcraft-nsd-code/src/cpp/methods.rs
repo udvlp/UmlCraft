@@ -3,7 +3,6 @@
 //! operators and templates, grouped by their namespaces and classes as written (`shop::Cart`).
 
 use std::collections::BTreeSet;
-use std::ops::Range;
 
 use tree_sitter::Node;
 
@@ -22,14 +21,6 @@ pub struct Member<'t> {
     pub body: Node<'t>,
     /// A constructor's `: x_(x), Base(x)`.
     pub initializers: Option<Node<'t>>,
-    range: Range<usize>,
-}
-
-impl Member<'_> {
-    /// Where it is in the file.
-    pub fn range(&self) -> Range<usize> {
-        self.range.clone()
-    }
 }
 
 pub fn methods(root: Node, src: &str) -> Vec<MethodRef> {
@@ -169,7 +160,6 @@ fn function<'t>(node: Node<'t>, src: &str, scope: &[String]) -> Option<Member<'t
         doc: doc(node, src),
         body,
         initializers,
-        range: node.byte_range(),
     })
 }
 
@@ -301,12 +291,7 @@ static int main(void) { return 0; }
             .map(|(c, n, s)| ((*c).to_owned(), (*n).to_owned(), (*s).to_owned()))
             .collect();
         assert_eq!(found, expected);
-        let made = crate::Made {
-            author: "t",
-            date: "2026-10-30",
-            origin: "test",
-            keywords: umlcraft_nsd::Keywords::English,
-        };
+        let made = crate::TEST_MADE;
         let titles: Vec<Vec<String>> =
             s.methods().iter().map(|m| s.diagram(m, &made).unwrap().0.text()).collect();
         assert_eq!(titles[0], ["add(a, b)"]);

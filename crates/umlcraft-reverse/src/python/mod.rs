@@ -28,14 +28,14 @@
 pub(crate) mod rules;
 
 use tree_sitter::Node;
-use umlcraft_model::{ParameterDirection, Visibility};
+use umlcraft_model::Visibility;
 
 use crate::comment;
 use crate::ir::{
     Field, Import, Item, Literal, Member, Operation, Param, Relation, Scope, Supertype,
     TemplateParam, TypeDecl, TypeExpr, TypeKind, TypeName,
 };
-use crate::lang::{Frontend, Skip, Skipped};
+use crate::lang::{Frontend, Language, Skip, Skipped, named_children, squeeze};
 
 const DECORATORS_TAG: &str = "umlcraft.python.decorators";
 const ASYNC_TAG: &str = "umlcraft.python.async";
@@ -53,7 +53,7 @@ impl Frontend for Python {
             Some((_, package)) => (module, package),
             None => (module, module),
         };
-        let mut reader = Reader { src: text, package, skipped };
+        let mut reader = Reader { src: text, skipped, lang: Module { package } };
         let mut scope = Scope::default();
         reader.module(&named_children(root), &mut scope);
         if module.is_empty() {
@@ -63,22 +63,18 @@ impl Frontend for Python {
     }
 }
 
-struct Reader<'a> {
-    src: &'a str,
+/// The module a file is.
+#[derive(Clone, Copy)]
+struct Module<'a> {
     /// The package of the file, where relative imports start.
     package: &'a [String],
-    skipped: &'a mut Skipped,
 }
 
-fn named_children<'t>(node: Node<'t>) -> Vec<Node<'t>> {
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor).collect()
+impl Language for Module<'_> {
+    const LANGUAGE: crate::SourceLanguage = crate::SourceLanguage::Python;
 }
 
-/// Text with its whitespace runs made single blanks.
-fn squeeze(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
+type Reader<'a> = crate::lang::Reader<'a, Module<'a>>;
 
 /// Python's naming conventions: `__x` is private (name mangling), `_x` protected.
 fn visibility(name: &str) -> Visibility {
@@ -96,15 +92,7 @@ fn last_segment(text: &str) -> &str {
     text.rsplit('.').next().unwrap_or(text)
 }
 
-impl<'a> Reader<'a> {
-    fn text(&self, node: Node) -> &'a str {
-        &self.src[node.byte_range()]
-    }
-
-    fn count(&mut self, skip: Skip) {
-        *self.skipped.entry(skip).or_default() += 1;
-    }
-
+impl Reader<'_> {
     /// The statements of a module, into `scope`.
     fn module(&mut self, nodes: &[Node], scope: &mut Scope) {
         for (i, &node) in nodes.iter().enumerate() {
@@ -121,7 +109,7 @@ impl<'a> Reader<'a> {
                 }
                 "function_definition" => self.count(Skip::FreeMember),
                 // The module's docstring.
-                "expression_statement" if i == 0 && self.docstring_node(node).is_some() => {}
+                "expression_statement" if i == 0 && comment::docstring_node(node).is_some() => {}
                 "expression_statement" if self.assigned_name(node).is_some() => {
                     self.count(Skip::FreeMember)
                 }
@@ -194,8 +182,9 @@ impl<'a> Reader<'a> {
                     .find(|n| n.kind() == "import_prefix")
                     .map_or(0, |p| self.text(*p).trim().len());
                 // `.` is the package itself, every further dot one package up.
-                let up = dots.saturating_sub(1).min(self.package.len());
-                let mut path = self.package[..self.package.len() - up].to_vec();
+                let package = self.lang.package;
+                let up = dots.saturating_sub(1).min(package.len());
+                let mut path = package[..package.len() - up].to_vec();
                 if let Some(name) = parts.iter().find(|n| n.kind() == "dotted_name") {
                     path.extend(self.dotted(*name));
                 }
@@ -243,16 +232,6 @@ impl<'a> Reader<'a> {
         self.text(node).split('.').map(|s| s.trim().to_owned()).collect()
     }
 
-    /// The string of an expression statement that is only a string: a docstring.
-    fn docstring_node<'t>(&self, statement: Node<'t>) -> Option<Node<'t>> {
-        comment::docstring_node(statement)
-    }
-
-    /// The text of a string literal, without prefix and quotes.
-    fn string_content(&self, string: Node) -> String {
-        comment::string_content(string, self.src)
-    }
-
     /// The docstring of a block: its first statement, if that is a string.
     fn docstring(&self, block: Option<Node>) -> String {
         block.and_then(|b| comment::docstring(b, self.src)).map(|(doc, _)| doc).unwrap_or_default()
@@ -290,7 +269,8 @@ impl<'a> Reader<'a> {
         let statements = named_children(body);
         for (i, &statement) in statements.iter().enumerate() {
             match statement.kind() {
-                "expression_statement" if i == 0 && self.docstring_node(statement).is_some() => {}
+                "expression_statement"
+                    if i == 0 && comment::docstring_node(statement).is_some() => {}
                 "expression_statement" => self.class_assignment(statement, &mut t),
                 "class_definition" | "decorated_definition" | "function_definition" => {
                     let Some((definition, decorators)) = self.definition(statement) else {
@@ -399,7 +379,7 @@ impl<'a> Reader<'a> {
         let assignment = named_children(statement).into_iter().find(|n| n.kind() == "assignment");
         let Some(assignment) = assignment else {
             // A bare string after the docstring, `...`: nothing.
-            if self.docstring_node(statement).is_none() && self.text(statement) != "..." {
+            if comment::docstring_node(statement).is_none() && self.text(statement) != "..." {
                 self.count(Skip::Statement);
             }
             return;
@@ -420,13 +400,10 @@ impl<'a> Reader<'a> {
         let mut field = Field {
             visibility: visibility(&name),
             name,
-            ty: TypeExpr::unwritten(),
             // Without an annotation, an assignment in a class body is a class variable.
             is_static: annotation.is_none(),
-            is_read_only: false,
             default: value.map(|v| squeeze(self.text(v))),
-            tags: Vec::new(),
-            documentation: String::new(),
+            ..Default::default()
         };
         if let Some(annotation) = annotation {
             self.annotate(annotation, &mut field);
@@ -517,7 +494,6 @@ impl<'a> Reader<'a> {
             is_abstract: has("abstractmethod"),
             is_leaf: has("final"),
             is_constructor,
-            is_query: false,
             template_parameters: node
                 .child_by_field_name("type_parameters")
                 .map(|p| self.type_parameters(p))
@@ -525,6 +501,7 @@ impl<'a> Reader<'a> {
             tags,
             documentation: self.docstring(body),
             span: node.byte_range(),
+            ..Default::default()
         })
     }
 
@@ -532,7 +509,7 @@ impl<'a> Reader<'a> {
     fn is_stub(&self, body: Node) -> bool {
         named_children(body).into_iter().all(|s| match s.kind() {
             "pass_statement" | "comment" => true,
-            "expression_statement" => self.text(s) == "..." || self.docstring_node(s).is_some(),
+            "expression_statement" => self.text(s) == "..." || comment::docstring_node(s).is_some(),
             _ => false,
         })
     }
@@ -567,12 +544,8 @@ impl<'a> Reader<'a> {
             let mut field = Field {
                 visibility: visibility(&name),
                 name,
-                ty: TypeExpr::unwritten(),
-                is_static: false,
-                is_read_only: false,
                 default: assignment.child_by_field_name("right").map(|v| squeeze(self.text(v))),
-                tags: Vec::new(),
-                documentation: String::new(),
+                ..Default::default()
             };
             if let Some(annotation) = assignment.child_by_field_name("type") {
                 self.annotate(annotation, &mut field);
@@ -611,7 +584,7 @@ impl<'a> Reader<'a> {
                 }
                 _ => continue,
             };
-            params.push(Param { name, ty, default, direction: ParameterDirection::In });
+            params.push(Param { name, ty, default, ..Default::default() });
         }
         params
     }
@@ -665,7 +638,7 @@ impl<'a> Reader<'a> {
             }
             // `"Order"`: the annotation inside the string.
             "string" => {
-                let content = self.string_content(node);
+                let content = comment::string_content(node, self.src);
                 let tree =
                     crate::parse_tree(crate::SourceLanguage::Python, format!("_: {content}\n"));
                 let annotation = tree
@@ -673,8 +646,7 @@ impl<'a> Reader<'a> {
                     .named_child(0)
                     .and_then(|s| s.named_child(0))
                     .and_then(|a| a.child_by_field_name("type"));
-                let mut inner =
-                    Reader { src: tree.text(), package: self.package, skipped: self.skipped };
+                let mut inner = Reader { src: tree.text(), skipped: self.skipped, lang: self.lang };
                 match annotation.filter(|_| !tree.root().has_error()) {
                     Some(a) => {
                         inner.type_expr(a).unwrap_or_else(|| TypeExpr::builtin(squeeze(&content)))
@@ -699,18 +671,10 @@ fn splat(node: Node) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SourceLanguage, dump_text};
 
     fn parse(text: &str, module: &[&str]) -> (String, Skipped) {
-        let mut skipped = Skipped::new();
-        let module: Vec<String> = module.iter().map(|s| s.to_string()).collect();
-        let scope = crate::lower_scope(
-            &crate::parse_tree(crate::SourceLanguage::Python, text),
-            &module,
-            &mut skipped,
-        )
-        .unwrap();
-        let unit = crate::ir::Unit { path: Default::default(), scope };
-        (unit.dump(), skipped)
+        dump_text(SourceLanguage::Python, text, module).unwrap()
     }
 
     #[test]
@@ -728,13 +692,7 @@ mod tests {
 
     #[test]
     fn reports_the_first_syntax_error() {
-        let mut skipped = Skipped::new();
-        let error = crate::lower_scope(
-            &crate::parse_tree(crate::SourceLanguage::Python, "class A:\n    x = = 1\n"),
-            &[],
-            &mut skipped,
-        )
-        .unwrap_err();
+        let error = dump_text(SourceLanguage::Python, "class A:\n    x = = 1\n", &[]).unwrap_err();
         assert_eq!(error.line, 2);
     }
 }

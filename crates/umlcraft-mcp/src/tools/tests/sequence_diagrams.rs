@@ -51,9 +51,9 @@ fn a_sequence_diagram_gets_lifelines_and_messages() {
     );
     assert_eq!(message(&host, &reply["element"]).return_value, "ok");
     let lifeline = json!({ "id": a["element"], "guard": "x" });
-    assert!(call(&mut host, &Access::default(), "update_element", &lifeline).is_error);
+    refusal(&mut host, "update_element", lifeline);
     let bogus = json!({ "id": pay, "sort": "sometimes" });
-    assert!(call(&mut host, &Access::default(), "update_element", &bogus).is_error);
+    refusal(&mut host, "update_element", bogus);
 
     // Fragments and their operands.
     let guards = |host: &Headless, fragment: Id| -> Vec<String> {
@@ -430,8 +430,7 @@ fn a_reply_to_self_leaves_the_bar_its_call_started() {
     assert!(bottom - top >= sequence_edit::RECEIVER_BAR - 0.01, "{top} {bottom}");
     assert!((g - bottom).abs() < 0.5, "{g} {bottom}");
     // From the inner bar's side back into the outer one.
-    let (doc, measure) = host.parts();
-    let scene = scene::build(doc.model(), d.parse().unwrap(), &Preview::default(), measure);
+    let scene = drawn(&mut host, &d);
     let points = |text: &str| {
         let e = scene.edges.iter().find(|e| e.labels.iter().any(|l| l.text == text)).unwrap();
         e.points.clone()
@@ -462,7 +461,7 @@ fn sequence_diagrams_go_without_numbers_and_frame() {
     let p = props(&host);
     assert!(!p.hide_message_numbers && p.hide_frame && p.hide_return_values);
     let class = json!({ "kind": "class", "name": "C", "frame": false });
-    assert!(call(&mut host, &Access::default(), "create_diagram", &class).is_error);
+    refusal(&mut host, "create_diagram", class);
 }
 
 #[test]
@@ -517,7 +516,7 @@ fn messages_move_between_operands() {
         .collect();
     assert_eq!(gates, [umlcraft_model::MessageGate::Found, umlcraft_model::MessageGate::Lost]);
     let missing = json!({ "diagram": d, "tool": "message", "source": a["element"] });
-    assert!(call(&mut host, &Access::default(), "connect", &missing).is_error);
+    refusal(&mut host, "connect", missing);
 
     let send = |host: &mut Headless, from: &Value, to: &Value| {
         let m = json!({ "diagram": d, "tool": "message", "source": from, "target": to });
@@ -595,9 +594,9 @@ fn state_invariants_terminations_and_constraints() {
     );
     // A lifeline ends once, and off a lifeline nothing goes.
     let again = json!({ "diagram": d, "tool": "termination", "on": store["element"] });
-    assert!(call(&mut host, &Access::default(), "create_element", &again).is_error);
+    refusal(&mut host, "create_element", again);
     let nowhere = json!({ "diagram": d, "tool": "stateInvariant" });
-    assert!(call(&mut host, &Access::default(), "create_element", &nowhere).is_error);
+    refusal(&mut host, "create_element", nowhere);
     let duration = run(
         &mut host,
         "connect",
@@ -613,7 +612,7 @@ fn state_invariants_terminations_and_constraints() {
     run(&mut host, "update_element", json!({ "id": time["element"], "name": "t..t+3" }));
     // Constraints go on messages only.
     let wrong = json!({ "diagram": d, "tool": "timeConstraint", "source": shop["element"] });
-    assert!(call(&mut host, &Access::default(), "connect", &wrong).is_error);
+    refusal(&mut host, "connect", wrong);
     host.document().model().check().unwrap();
 
     let shown = run(&mut host, "get_diagram", json!({ "diagram": d }));
@@ -1051,7 +1050,7 @@ fn activation_bars_are_listed_moved_and_joined() {
         json!({ "diagram": d, "node": bar, "y": 100, "x": 5 }),
         json!({ "diagram": d, "node": bar, "y": 100, "height": 0 }),
     ] {
-        assert!(call(&mut host, &Access::default(), "move_node", &args).is_error, "{args}");
+        refusal(&mut host, "move_node", args);
     }
     assert_eq!(bars(&mut host), after);
 }
@@ -1095,7 +1094,7 @@ fn lifelines_standing_for_an_actor_are_stick_figures() {
     run(&mut host, "update_element", json!({ "id": k, "classifier": "" }));
     assert!(!iconic(&host, &r[3]["presentation"]));
     let wrong = json!({ "id": k, "icon": true });
-    assert!(call(&mut host, &Access::default(), "update_element", &wrong).is_error);
+    refusal(&mut host, "update_element", wrong);
     run(&mut host, "update_element", json!({ "id": k, "classifier": "Kunde" }));
     assert!(iconic(&host, &r[3]["presentation"]));
     run(&mut host, "update_element", json!({ "id": k, "icon": false }));

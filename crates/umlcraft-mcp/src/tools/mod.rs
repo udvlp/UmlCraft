@@ -36,6 +36,8 @@ mod fragments;
 mod lookup;
 mod project;
 mod read;
+#[cfg(test)]
+pub(crate) use read::png;
 mod schema;
 mod structograms;
 mod update;
@@ -58,6 +60,7 @@ use update::*;
 use update_activity::*;
 use update_er::*;
 
+pub(crate) use args::bool_arg;
 pub use args::screenshot_scale;
 pub use schema::list;
 
@@ -87,6 +90,11 @@ impl Reply {
 
     pub fn json(value: Value) -> Self {
         Self::text(value.to_string())
+    }
+
+    /// A PNG image.
+    pub fn image(png: Vec<u8>) -> Self {
+        Self { content: vec![Content::Image(png)], is_error: false }
     }
 
     pub fn to_json(&self) -> Value {

@@ -7,8 +7,7 @@ pub(super) fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
     let model = host.document().model();
     let mut diagrams = Vec::new();
     let mut structograms = Vec::new();
-    let mut stack = vec![model.root()];
-    while let Some(id) = stack.pop() {
+    for id in model.subtree(model.root()) {
         if let Some(p) = model.get(id).and_then(|e| e.kind().as_structogram()) {
             structograms.push(json!({
                 "id": id,
@@ -26,7 +25,6 @@ pub(super) fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
                 "owner": owner,
             }));
         }
-        stack.extend(model.children(id).iter().rev());
     }
     let root = model.root();
     let mut reply = json!({
@@ -267,7 +265,7 @@ pub(super) const MAX_PIXELS: f64 = 40_000_000.0;
 
 /// The SVG export rasterized at `scale` pixels per logical unit, or at less if that would
 /// exceed `MAX_PIXELS`.
-pub(super) fn png(svg: &str, scale: f32) -> Result<Vec<u8>, String> {
+pub(crate) fn png(svg: &str, scale: f32) -> Result<Vec<u8>, String> {
     use resvg::{tiny_skia, usvg};
     let options = usvg::Options { fontdb: fonts(), ..usvg::Options::default() };
     let tree = usvg::Tree::from_str(svg, &options).map_err(|e| e.to_string())?;
@@ -314,8 +312,8 @@ pub(super) fn set_display(host: &mut dyn Host, args: &Value) -> Outcome {
         ("read_only_constraint", &mut display.read_only_constraint),
         ("guillemets", &mut display.guillemets),
     ] {
-        if let Some(value) = args.get(key) {
-            *setting = value.as_bool().ok_or_else(|| format!("`{key}` is true or false"))?;
+        if let Some(on) = bool_arg(args, key)? {
+            *setting = on;
         }
     }
     if display != host.display() {
@@ -335,16 +333,26 @@ pub(super) fn display_json(display: Display) -> Value {
 
 pub(super) fn render_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     let scale = opt_num(args, "scale").unwrap_or(1.0).clamp(0.5, 2.0);
-    let shown =
-        opt_diagram(host.document().model(), args, "diagram", true)?.or(host.active_diagram());
-    let model = host.document().model();
-    if let Some(p) = shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram()) {
-        let svg = structogram_svg(&p.structogram);
+    let image = match shown(host, args)? {
         // Structogram images are in pixels already.
-        let image = png(&svg, scale * svg::SCALE)?;
-        return Ok(Reply { content: vec![Content::Image(image)], is_error: false });
+        Shown::Structogram(d) => png(&structogram_svg(d), scale * svg::SCALE)?,
+        Shown::Diagram(diagram) => png(&diagram_svg(host, diagram), scale)?,
+    };
+    Ok(Reply::image(image))
+}
+
+/// What `render_diagram` and `export_image` draw.
+pub(super) enum Shown<'a> {
+    Structogram(&'a umlcraft_nsd::Diagram),
+    Diagram(Id),
+}
+
+/// The structogram or diagram `args` name as `diagram`, else the one shown.
+pub(super) fn shown<'a>(host: &'a dyn Host, args: &Value) -> Result<Shown<'a>, String> {
+    let model = host.document().model();
+    let shown = opt_diagram(model, args, "diagram", true)?.or(host.active_diagram());
+    match shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram()) {
+        Some(p) => Ok(Shown::Structogram(&p.structogram)),
+        None => Ok(Shown::Diagram(diagram_arg(host, args, "diagram")?.0)),
     }
-    let (diagram, _) = diagram_arg(host, args, "diagram")?;
-    let image = png(&diagram_svg(host, diagram), scale)?;
-    Ok(Reply { content: vec![Content::Image(image)], is_error: false })
 }

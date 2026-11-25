@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use crate::ir::TypeKind;
-use crate::lang::{Container, Library, LibraryType};
+use crate::lang::{Container, LibraryType};
 
 pub struct TableLibrary {
     text: &'static str,
@@ -62,14 +62,14 @@ impl TableLibrary {
             Table { types, packages }
         })
     }
-}
 
-impl Library for TableLibrary {
-    fn get(&self, package: &[String], name: &[String]) -> Option<&LibraryType> {
+    /// The type `name` (nested types as several segments) in `package`.
+    pub fn get(&self, package: &[String], name: &[String]) -> Option<&LibraryType> {
         self.table().types.get(&package.join("."))?.get(&name.join("."))
     }
 
-    fn is_package(&self, path: &[String]) -> bool {
+    /// Whether `path` names a package of the library.
+    pub fn is_package(&self, path: &[String]) -> bool {
         self.table().packages.contains(&path.join("."))
     }
 }

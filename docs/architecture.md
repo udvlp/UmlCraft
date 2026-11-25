@@ -668,8 +668,8 @@ mapping for all languages puts the IR into the model.
 Parsing needs only the files, so the app runs it in the background (`parse_sources`, file by
 file `parse_file`, which also hands back the tree for the structograms); `apply`
 then runs on the UI thread inside one `Document::edit`, so one undo takes the import back.
-In the app one import serves classes and structograms (`umlcraft-app/src/nsd/source.rs`):
-`source::parse` reads and parses each file once and keeps its units and its methods, a file
+In the app one import serves classes and structograms (`umlcraft_nsd_code::import`, with the
+dialog in `umlcraft-app/src/nsd/source.rs`): `import::parse` reads and parses each file once and keeps its units and its methods, a file
 with a syntax error giving methods all the same; a dialog lists the methods (none ticked,
 those with a structogram from an earlier import ticked, those edited by hand ticked and
 locked); the structograms of the ticked ones are built in the background from the files read

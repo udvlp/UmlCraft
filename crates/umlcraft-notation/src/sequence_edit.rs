@@ -127,6 +127,11 @@ impl Msg {
             self.end()
         }
     }
+
+    /// Whether this message starts `bar`: the bar is on its target, starting where it ends.
+    fn starts(&self, bar: &Bar) -> bool {
+        bar.lane == self.target && (bar.top - self.end()).abs() < 0.5
+    }
 }
 
 #[derive(Clone)]
@@ -135,6 +140,19 @@ struct Frame {
     element: Id,
     rect: Rect,
     separators: Vec<f32>,
+}
+
+impl Frame {
+    /// Whether (`x`, `y`) lies inside the frame, below its top line.
+    fn contains(&self, x: f32, y: f32) -> bool {
+        let r = self.rect;
+        r.y < y && y < r.bottom() && r.x <= x && x <= r.right()
+    }
+
+    /// The operand (counted from the top) that (`x`, `y`) lies in, if inside the frame.
+    fn operand_at(&self, x: f32, y: f32) -> Option<usize> {
+        self.contains(x, y).then(|| self.separators.iter().filter(|&&s| s < y).count())
+    }
 }
 
 /// A state invariant or a termination on the lifeline presentation `lane`.
@@ -184,6 +202,7 @@ pub const TIME_TICK: f32 = 30.0;
 const CONSTRAINT_LABEL: f32 = 15.093_75;
 
 /// The stored geometry of a sequence diagram.
+#[derive(Default)]
 struct Geometry {
     lanes: Vec<Lane>,
     bars: Vec<Bar>,
@@ -202,16 +221,7 @@ struct Geometry {
 impl Geometry {
     fn read(model: &Model, diagram: Id) -> Result<Self> {
         let view = model.view_of(diagram)?;
-        let mut g = Geometry {
-            lanes: Vec::new(),
-            bars: Vec::new(),
-            messages: Vec::new(),
-            frames: Vec::new(),
-            diagram_frame: None,
-            notes: Vec::new(),
-            marks: Vec::new(),
-            constraints: Vec::new(),
-        };
+        let mut g = Geometry::default();
         for p in view.presentations() {
             match &p.shape {
                 Shape::Lifeline { head, length, destroyed } => g.lanes.push(Lane {
@@ -357,12 +367,8 @@ impl Geometry {
     fn reaches(&self, lane: Id, top: f32, y: f32) -> bool {
         let Some(x) = self.lane(lane).map(|l| l.center()) else { return true };
         self.frames.iter().all(|f| {
-            let r = f.rect;
-            let operand = |y: f32| {
-                (r.y < y && y < r.bottom() && r.x <= x && x <= r.right())
-                    .then(|| f.separators.iter().filter(|&&s| s < y).count())
-            };
-            operand(top).is_none() || operand(top) == operand(y)
+            let start = f.operand_at(x, top);
+            start.is_none() || start == f.operand_at(x, y)
         })
     }
 
@@ -381,12 +387,9 @@ impl Geometry {
 
     /// Whether `a` and `b` at `x` lie in different operands of one combined fragment.
     fn apart(&self, x: f32, a: f32, b: f32) -> bool {
-        self.frames.iter().any(|f| {
-            let r = f.rect;
-            let inside = |y: f32| r.y < y && y < r.bottom() && r.x <= x && x <= r.right();
-            let operand = |y: f32| f.separators.iter().filter(|&&s| s < y).count();
-            inside(a) && inside(b) && operand(a) != operand(b)
-        })
+        self.frames.iter().any(
+            |f| matches!((f.operand_at(x, a), f.operand_at(x, b)), (Some(p), Some(q)) if p != q),
+        )
     }
 
     /// Where `lane` ends in a cross, if a message destroys it: with the bar the destroy message
@@ -397,7 +400,7 @@ impl Geometry {
             .iter()
             .filter(|m| m.target == lane && m.sort == MessageSort::Destroy)
             .min_by(|a, b| a.end().total_cmp(&b.end()))?;
-        let bar = self.bars.iter().find(|b| b.lane == lane && (b.top - m.end()).abs() < 0.5);
+        let bar = self.bars.iter().find(|b| m.starts(b));
         Some(bar.map_or((None, m.end()), |b| (Some(b.id), b.bottom)))
     }
 
@@ -405,12 +408,9 @@ impl Geometry {
     /// the two started on `to`, unless `to` called back in between (a nested call).
     fn clear_of_calls(&self, from: Id, to: Id, mut y: f32) -> f32 {
         let started_by_from = |bar: &Bar| {
-            self.messages.iter().any(|m| {
-                m.source == from
-                    && m.target == to
-                    && m.sort != MessageSort::Reply
-                    && (bar.top - m.end()).abs() < 0.5
-            })
+            self.messages
+                .iter()
+                .any(|m| m.source == from && m.sort != MessageSort::Reply && m.starts(bar))
         };
         let called_back = |bar: &Bar, y: f32| {
             self.messages
@@ -516,7 +516,7 @@ pub fn extent(model: &Model, diagram: Id, items: &[Id]) -> (f32, f32, Vec<Id>) {
         }
     };
     for &item in items {
-        if let Some(m) = g.messages.iter().find(|m| m.element == Some(item)) {
+        if let Some(m) = g.message_of(item) {
             top = top.min(m.y);
             bottom = bottom.max(m.drawn_end());
             // The bar a call starts belongs to it. A create message brings the head of the
@@ -557,12 +557,12 @@ pub fn extent(model: &Model, diagram: Id, items: &[Id]) -> (f32, f32, Vec<Id>) {
 /// the loop and the bar it starts, which stand below its line.
 pub fn message_bottom(model: &Model, diagram: Id, item: Id) -> Option<f32> {
     let g = Geometry::read(model, diagram).ok()?;
-    let m = g.messages.iter().find(|m| m.element == Some(item))?;
+    let m = g.message_of(item)?;
     let bar = g
         .bars
         .iter()
         .filter(|_| m.source == m.target)
-        .find(|b| b.lane == m.target && (b.top - m.end()).abs() < 0.5)
+        .find(|b| m.starts(b))
         .map_or(f32::MIN, |b| b.bottom);
     Some(m.y.max(m.drawn_end()).max(bar))
 }
@@ -624,6 +624,24 @@ fn add_bar(tx: &mut Tx<'_>, diagram: Id, lane: Id, top: f32, height: f32) -> Res
     tx.add_presentation(diagram, Presentation::activation(lane, top, height))
 }
 
+/// Gives the bar presentation `bar` the height `height`.
+fn set_bar_height(tx: &mut Tx<'_>, diagram: Id, bar: Id, height: f32) -> Result<()> {
+    tx.update_presentation(diagram, bar, |p| {
+        if let Shape::Activation { height: h, .. } = &mut p.shape {
+            *h = height;
+        }
+    })
+}
+
+/// Gives the line of the lifeline presentation `lane` the length `length`.
+fn set_lifeline_length(tx: &mut Tx<'_>, diagram: Id, lane: Id, length: f32) -> Result<()> {
+    tx.update_presentation(diagram, lane, |p| {
+        if let Shape::Lifeline { length: l, .. } = &mut p.shape {
+            *l = length;
+        }
+    })
+}
+
 /// Lets the outermost bar on `lane` that no reply has ended reach down to a message sent from
 /// `lane` at `y`, however far below it: what a lifeline does after it was called belongs to
 /// that call until it answers. For messages added below everything without a place given (the
@@ -648,11 +666,7 @@ pub fn continue_open_bar(tx: &mut Tx<'_>, diagram: Id, lane: Id, y: f32) -> Resu
         .filter(|b| g.reaches(lane, b.top, y))
         .max_by(|a, b| a.bottom.total_cmp(&b.bottom));
     let Some(bar) = open.copied() else { return Ok(()) };
-    tx.update_presentation(diagram, bar.id, |p| {
-        if let Shape::Activation { height, .. } = &mut p.shape {
-            *height = y - bar.top + BAR_MARGIN;
-        }
-    })
+    set_bar_height(tx, diagram, bar.id, y - bar.top + BAR_MARGIN)
 }
 
 /// Gives a message sent from `lane` at `y` a bar there: the bar ending just above goes on to
@@ -669,11 +683,7 @@ fn sender_bar(
         return Ok(());
     }
     match g.bar_ending_above(lane, y) {
-        Some(bar) => tx.update_presentation(diagram, bar.id, |p| {
-            if let Shape::Activation { height: h, .. } = &mut p.shape {
-                *h = y - bar.top + BAR_MARGIN;
-            }
-        }),
+        Some(bar) => set_bar_height(tx, diagram, bar.id, y - bar.top + BAR_MARGIN),
         None => add_bar(tx, diagram, lane, y, height).map(|_| ()),
     }
 }
@@ -695,12 +705,10 @@ fn shorten_signal_bars(
 ) -> Result<()> {
     let end = y - MESSAGE_GAP;
     for bar in g.bars.iter().filter(|b| b.lane == to && b.top < y && y < b.bottom + MESSAGE_GAP) {
-        let signal = g.messages.iter().any(|m| {
-            m.source == from
-                && m.target == to
-                && m.sort == MessageSort::Asynchronous
-                && (bar.top - m.end()).abs() < 0.5
-        });
+        let signal = g
+            .messages
+            .iter()
+            .any(|m| m.source == from && m.sort == MessageSort::Asynchronous && m.starts(bar));
         let holds_more = g.messages.iter().any(|m| {
             (m.source == to || m.target == to) && m.y > bar.top + 0.5 && m.y < bar.bottom + 0.5
         });
@@ -709,12 +717,7 @@ fn shorten_signal_bars(
             .iter()
             .any(|b| b.lane == to && b.id != bar.id && b.top > bar.top - 0.5 && b.top < bar.bottom);
         if signal && !holds_more && !nested && end - bar.top >= MIN_SIGNAL_BAR {
-            let top = bar.top;
-            tx.update_presentation(diagram, bar.id, |p| {
-                if let Shape::Activation { height, .. } = &mut p.shape {
-                    *height = end - top;
-                }
-            })?;
+            set_bar_height(tx, diagram, bar.id, end - bar.top)?;
         }
     }
     Ok(())
@@ -864,15 +867,8 @@ pub fn add_fragment(
     let is_use = matches!(model.element(element)?.kind(), ElementKind::InteractionUse(_));
     let view = model.view_of(diagram)?;
     let g = Geometry::read(model, diagram)?;
-    let mut lanes: Vec<&Lane> =
-        covered.iter().filter_map(|&l| lane_of(view, l)).filter_map(|l| g.lane(l)).collect();
-    if lanes.is_empty() {
-        lanes = g.lanes.iter().collect();
-    }
-    let left =
-        lanes.iter().map(|l| l.head.x).reduce(f32::min).unwrap_or(EMPTY_SPAN.0) - FRAGMENT_MARGIN;
-    let right = lanes.iter().map(|l| l.head.right()).reduce(f32::max).unwrap_or(EMPTY_SPAN.1)
-        + FRAGMENT_MARGIN;
+    let (left, right) = covered_span(&g, view, covered)
+        .unwrap_or((EMPTY_SPAN.0 - FRAGMENT_MARGIN, EMPTY_SPAN.1 + FRAGMENT_MARGIN));
     let height = if is_use { USE_HEIGHT } else { FRAGMENT_HEIGHT };
     let bounds = Rect::new(left, y, right - left, height);
     let presentation = if is_use {
@@ -1083,6 +1079,19 @@ fn covered_of(model: &Model, element: Id) -> Vec<Id> {
     }
 }
 
+/// Where a frame across the lifelines `covered` (all of them when it names none shown) goes,
+/// left and right: `FRAGMENT_MARGIN` beyond their heads. None without lifelines.
+fn covered_span(g: &Geometry, view: &View, covered: &[Id]) -> Option<(f32, f32)> {
+    let mut lanes: Vec<&Lane> =
+        covered.iter().filter_map(|&l| lane_of(view, l)).filter_map(|l| g.lane(l)).collect();
+    if lanes.is_empty() {
+        lanes = g.lanes.iter().collect();
+    }
+    let left = lanes.iter().map(|l| l.head.x).reduce(f32::min)?;
+    let right = lanes.iter().map(|l| l.head.right()).reduce(f32::max)?;
+    Some((left - FRAGMENT_MARGIN, right + FRAGMENT_MARGIN))
+}
+
 /// Spans the frames of the combined fragment or interaction use `element` across the lifelines
 /// it now covers (all of them when it names none), on every diagram that shows it. Called when
 /// the user changes what it covers; imported frames otherwise keep their width.
@@ -1093,15 +1102,8 @@ pub fn cover(tx: &mut Tx<'_>, element: Id) -> Result<()> {
     for (diagram, view) in model.views() {
         let Some(p) = view.presentations_of(element).next() else { continue };
         let g = Geometry::read(model, diagram)?;
-        let mut lanes: Vec<&Lane> =
-            covered.iter().filter_map(|&l| lane_of(view, l)).filter_map(|l| g.lane(l)).collect();
-        if lanes.is_empty() {
-            lanes = g.lanes.iter().collect();
-        }
-        let left = lanes.iter().map(|l| l.head.x).reduce(f32::min);
-        let right = lanes.iter().map(|l| l.head.right()).reduce(f32::max);
-        if let (Some(left), Some(right)) = (left, right) {
-            spans.push((diagram, p.id, left - FRAGMENT_MARGIN, right + FRAGMENT_MARGIN));
+        if let Some((left, right)) = covered_span(&g, view, &covered) {
+            spans.push((diagram, p.id, left, right));
         }
     }
     for (diagram, id, left, right) in spans {
@@ -1207,14 +1209,7 @@ pub fn make_room(tx: &mut Tx<'_>, diagram: Id, at: f32, dy: f32) -> Result<()> {
 pub fn delete_operand(tx: &mut Tx<'_>, operand: Id) -> Result<()> {
     let model = tx.model();
     let Some(fragment) = model.element(operand)?.owner() else { return Ok(()) };
-    let operands: Vec<Id> = model
-        .children(fragment)
-        .iter()
-        .copied()
-        .filter(|&c| {
-            matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::InteractionOperand(_)))
-        })
-        .collect();
+    let operands = crate::palette::operands(model, fragment);
     if operands == [operand] {
         return tx.delete(fragment);
     }
@@ -1346,11 +1341,7 @@ pub fn set_lifeline_end(tx: &mut Tx<'_>, diagram: Id, presentation: Id, bottom: 
         tx.set_bounds(diagram, t.id, rect)?;
     }
     let length = (bottom - lane.line_top()).max(RECEIVER_BAR);
-    tx.update_presentation(diagram, presentation, |p| {
-        if let Shape::Lifeline { length: l, .. } = &mut p.shape {
-            *l = length;
-        }
-    })?;
+    set_lifeline_length(tx, diagram, presentation, length)?;
     tidy(tx, diagram)
 }
 
@@ -1359,7 +1350,7 @@ pub fn set_lifeline_end(tx: &mut Tx<'_>, diagram: Id, presentation: Id, bottom: 
 /// came before, not into a fragment that only its bar reaches into.
 pub fn reply_below_frames(tx: &mut Tx<'_>, diagram: Id, item: Id) -> Result<()> {
     let g = Geometry::read(tx.model(), diagram)?;
-    let Some(m) = g.messages.iter().find(|m| m.element == Some(item)) else { return Ok(()) };
+    let Some(m) = g.message_of(item) else { return Ok(()) };
     let center = |lane: Id| g.lanes.iter().find(|l| l.id == lane).map(|l| l.center());
     let (Some(a), Some(b)) = (center(m.source), center(m.target)) else { return Ok(()) };
     let (left, right) = (a.min(b), a.max(b));
@@ -1392,7 +1383,7 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
         })?;
         return tidy(tx, diagram);
     }
-    let Some(m) = g.messages.iter().find(|m| m.element == Some(element)).copied() else {
+    let Some(m) = g.message_of(element).copied() else {
         return Ok(());
     };
     // A reply leaves the bar a call started no sooner than that bar's least height, as
@@ -1400,11 +1391,7 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     let y = match g.bar_at(m.source, m.y) {
         Some(bar)
             if m.sort == MessageSort::Reply
-                && g.messages.iter().any(|c| {
-                    c.sort != MessageSort::Reply
-                        && c.target == bar.lane
-                        && (bar.top - c.end()).abs() < 0.5
-                }) =>
+                && g.messages.iter().any(|c| c.sort != MessageSort::Reply && c.starts(&bar)) =>
         {
             y.max(bar.top + RECEIVER_BAR)
         }
@@ -1434,7 +1421,7 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
         // The messages that start the bar come along, so a call into a busy lifeline keeps
         // its bar.
         for other in &g.messages {
-            if other.target == bar.lane && (bar.top - other.end()).abs() < 0.5 {
+            if other.starts(&bar) {
                 messages.insert(other.id);
             }
         }
@@ -1504,11 +1491,7 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     // Moved down beyond it, the reply makes the bar it leaves go on to it.
     match returned {
         Some(bar) if m.y + dy > bar.bottom + 0.01 => {
-            tx.update_presentation(diagram, bar.id, |p| {
-                if let Shape::Activation { height, .. } = &mut p.shape {
-                    *height = m.y + dy - bar.top;
-                }
-            })?;
+            set_bar_height(tx, diagram, bar.id, m.y + dy - bar.top)?;
         }
         Some(bar) => end_at_reply(tx, diagram, bar, m.id)?,
         None => {}
@@ -1594,18 +1577,25 @@ fn movable(g: &Geometry, bars: &HashSet<Id>, messages: &HashSet<Id>, dy: f32) ->
 /// bar gets, 20 below the last message or bar inside. A bar a reply ends keeps its end.
 fn shrink_bar(tx: &mut Tx<'_>, diagram: Id, bar: Bar) -> Result<()> {
     let g = Geometry::read(tx.model(), diagram)?;
-    let lane = bar.lane;
-    let inside = |y: f32| bar.top + 0.5 < y && y <= bar.bottom + 0.5;
     let replied = g.messages.iter().any(|m| {
-        m.sort == MessageSort::Reply && m.source == lane && (m.y - bar.bottom).abs() < 0.5
+        m.sort == MessageSort::Reply && m.source == bar.lane && (m.y - bar.bottom).abs() < 0.5
     });
     if replied {
         return Ok(());
     }
     // A bar a call starts is a receiver's; any other a sender's.
-    let called = g.messages.iter().any(|m| m.target == lane && (bar.top - m.end()).abs() < 0.5);
-    let mut need = bar.top + if called { RECEIVER_BAR } else { SENDER_BAR };
-    for m in &g.messages {
+    let called = g.messages.iter().any(|m| m.starts(&bar));
+    let least = bar.top + if called { RECEIVER_BAR } else { SENDER_BAR };
+    end_bar_at(tx, diagram, bar, needed_in(&g, bar, None, least))
+}
+
+/// How far down `bar` (as it was before an edit) must reach for what lies in it, at least to
+/// `least`: 20 below the last message (but `skip`) or bar inside.
+fn needed_in(g: &Geometry, bar: Bar, skip: Option<Id>, least: f32) -> f32 {
+    let lane = bar.lane;
+    let inside = |y: f32| bar.top + 0.5 < y && y <= bar.bottom + 0.5;
+    let mut need = least;
+    for m in g.messages.iter().filter(|m| Some(m.id) != skip) {
         if (m.source == lane && inside(m.y)) || (m.target == lane && inside(m.end())) {
             need = need.max(m.y.max(m.end()) + BAR_MARGIN);
         }
@@ -1613,14 +1603,15 @@ fn shrink_bar(tx: &mut Tx<'_>, diagram: Id, bar: Bar) -> Result<()> {
     for b in g.bars.iter().filter(|b| b.lane == lane && b.id != bar.id && inside(b.top)) {
         need = need.max(b.bottom + BAR_MARGIN);
     }
+    need
+}
+
+/// Lets `bar` end at `need`, if that is above its end.
+fn end_bar_at(tx: &mut Tx<'_>, diagram: Id, bar: Bar, need: f32) -> Result<()> {
     if need >= bar.bottom - 0.01 {
         return Ok(());
     }
-    tx.update_presentation(diagram, bar.id, |p| {
-        if let Shape::Activation { height, .. } = &mut p.shape {
-            *height = need - bar.top;
-        }
-    })
+    set_bar_height(tx, diagram, bar.id, need - bar.top)
 }
 
 /// Lets `bar` (as it was before an edit) end at the reply `reply` moved up inside it, unless
@@ -1631,25 +1622,7 @@ fn end_at_reply(tx: &mut Tx<'_>, diagram: Id, bar: Bar, reply: Id) -> Result<()>
     if r.y <= bar.top + 0.5 || r.y >= bar.bottom - 0.01 {
         return Ok(());
     }
-    let lane = bar.lane;
-    let inside = |y: f32| bar.top + 0.5 < y && y <= bar.bottom + 0.5;
-    let mut need = r.y;
-    for m in g.messages.iter().filter(|m| m.id != reply) {
-        if (m.source == lane && inside(m.y)) || (m.target == lane && inside(m.end())) {
-            need = need.max(m.y.max(m.end()) + BAR_MARGIN);
-        }
-    }
-    for b in g.bars.iter().filter(|b| b.lane == lane && b.id != bar.id && inside(b.top)) {
-        need = need.max(b.bottom + BAR_MARGIN);
-    }
-    if need >= bar.bottom - 0.01 {
-        return Ok(());
-    }
-    tx.update_presentation(diagram, bar.id, |p| {
-        if let Shape::Activation { height, .. } = &mut p.shape {
-            *height = need - bar.top;
-        }
-    })
+    end_bar_at(tx, diagram, bar, needed_in(&g, bar, Some(reply), r.y))
 }
 
 /// Grows bars, lifelines and the diagram frame around their content and puts the
@@ -1661,8 +1634,10 @@ pub fn tidy(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     fit_invariants(tx, diagram)?;
     fit_fragments(tx, diagram)?;
     fit_lifelines(tx, diagram)?;
-    place_terminations(tx, diagram)?;
-    fit_constraints(tx, diagram)?;
+    // Neither moves what the other reads.
+    let g = Geometry::read(tx.model(), diagram)?;
+    place_terminations(tx, diagram, &g)?;
+    fit_constraints(tx, diagram, &g)?;
     fit_frame(tx, diagram)?;
     sync_order(tx, diagram)
 }
@@ -1691,8 +1666,7 @@ fn fit_invariants(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
 }
 
 /// Puts the cross of every termination where its lifeline ends.
-fn place_terminations(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
-    let g = Geometry::read(tx.model(), diagram)?;
+fn place_terminations(tx: &mut Tx<'_>, diagram: Id, g: &Geometry) -> Result<()> {
     for m in g.marks.iter().filter(|m| m.termination) {
         let Some(lane) = g.lane(m.lane) else { continue };
         let wanted =
@@ -1706,8 +1680,7 @@ fn place_terminations(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
 
 /// Lets duration constraints reach from one of their messages to the other where these are
 /// now, keeping the line's x, and time constraints go on from their message's arrowhead.
-fn fit_constraints(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
-    let g = Geometry::read(tx.model(), diagram)?;
+fn fit_constraints(tx: &mut Tx<'_>, diagram: Id, g: &Geometry) -> Result<()> {
     let mut changed = Vec::new();
     for c in &g.constraints {
         let wanted = match tx.model().get(c.element).map(|e| e.kind()) {
@@ -1719,7 +1692,7 @@ fn fit_constraints(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             }
             Some(ElementKind::TimeConstraint(p)) => {
                 let Some(m) = g.message_of(p.message) else { continue };
-                time_bounds(&g, m)
+                time_bounds(g, m)
             }
             _ => continue,
         };
@@ -1733,17 +1706,20 @@ fn fit_constraints(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     Ok(())
 }
 
+/// The sequence diagrams of `model`.
+fn sequence_diagrams(model: &Model) -> Vec<Id> {
+    model
+        .elements()
+        .filter(|e| e.kind().as_diagram() == Some(umlcraft_model::DiagramKind::Sequence))
+        .map(|e| e.id())
+        .collect()
+}
+
 /// Tidies every sequence diagram, e.g. after deleting elements that may have been shown there.
 /// A diagram that cannot be tidied (a broken file, say) stays as it is rather than failing an
 /// edit elsewhere.
 pub fn tidy_all(tx: &mut Tx<'_>) -> Result<()> {
-    let diagrams: Vec<Id> = tx
-        .model()
-        .elements()
-        .filter(|e| e.kind().as_diagram() == Some(umlcraft_model::DiagramKind::Sequence))
-        .map(|e| e.id())
-        .collect();
-    for d in diagrams {
+    for d in sequence_diagrams(tx.model()) {
         // Skipped on purpose: the edit that asked for the tidy-up is not about this diagram.
         let _ = tx.attempt(|tx| tidy(tx, d));
     }
@@ -1897,11 +1873,8 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                     && m.source == bar.lane
                     && m.target != bar.lane
                     && bar_at(bar.lane, m.y) == Some(bar.id)
-                    && let Some(called) = bars_on
-                        .get(&m.target)
-                        .into_iter()
-                        .flatten()
-                        .find(|b| (b.top - m.end()).abs() < 0.5)
+                    && let Some(called) =
+                        bars_on.get(&m.target).into_iter().flatten().find(|b| m.starts(b))
                 {
                     need = need.max(called.bottom);
                 }
@@ -1922,11 +1895,7 @@ fn fit_bars(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             return Ok(());
         }
         for (id, height) in grown {
-            tx.update_presentation(diagram, id, |p| {
-                if let Shape::Activation { height: h, .. } = &mut p.shape {
-                    *h = height;
-                }
-            })?;
+            set_bar_height(tx, diagram, id, height)?;
         }
     }
     Ok(())
@@ -1950,7 +1919,7 @@ fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                 continue;
             }
             let r = f.rect;
-            let inside = |x: f32, y: f32| r.y < y && y < r.bottom() && r.x <= x && x <= r.right();
+            let inside = |x: f32, y: f32| f.contains(x, y);
             let bars = g.bars.iter().filter(|b| inside(center(b.lane), b.top)).map(|b| b.bottom);
             // As in `sync_order`: a message is inside when both of its ends are, so one that
             // crosses the frame's side does not grow the fragment it is not put into.
@@ -2049,27 +2018,24 @@ fn fit_fragments(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
 
 fn fit_lifelines(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     let g = Geometry::read(tx.model(), diagram)?;
-    // A lifeline whose destroy message is gone runs on again.
     let destroying =
         |lane: Id| g.messages.iter().any(|m| m.target == lane && m.sort == MessageSort::Destroy);
-    for lane in g.lanes.iter().filter(|l| l.destroyed && !destroying(l.id)) {
-        tx.update_presentation(diagram, lane.id, |p| {
-            if let Shape::Lifeline { destroyed, .. } = &mut p.shape {
-                *destroyed = false;
-            }
-        })?;
-    }
-    // A destroyed one ends with the bar its destroy message starts, wherever that has moved.
     for lane in g.lanes.iter().filter(|l| l.destroyed) {
-        let Some((_, end)) = g.cross(lane.id) else { continue };
-        // Above the head the lifeline keeps at least the bar's length, as `add_message` gives it.
-        let length = (end - lane.line_top()).max(RECEIVER_BAR);
-        if (lane.bottom() - lane.line_top() - length).abs() > 0.01 {
+        // A lifeline whose destroy message is gone runs on again.
+        let Some((_, end)) = g.cross(lane.id) else {
             tx.update_presentation(diagram, lane.id, |p| {
-                if let Shape::Lifeline { length: l, .. } = &mut p.shape {
-                    *l = length;
+                if let Shape::Lifeline { destroyed, .. } = &mut p.shape {
+                    *destroyed = false;
                 }
             })?;
+            continue;
+        };
+        // A destroyed one ends with the bar its destroy message starts, wherever that has
+        // moved. Above the head the lifeline keeps at least the bar's length, as `add_message`
+        // gives it.
+        let length = (end - lane.line_top()).max(RECEIVER_BAR);
+        if (lane.bottom() - lane.line_top() - length).abs() > 0.01 {
+            set_lifeline_length(tx, diagram, lane.id, length)?;
         }
     }
     let mut grown = Vec::new();
@@ -2095,11 +2061,7 @@ fn fit_lifelines(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
                 .max(lane.line_top() + MESSAGE_GAP);
             let length = end - lane.line_top();
             if (lane.length - length).abs() > 0.01 {
-                tx.update_presentation(diagram, lane.id, |p| {
-                    if let Shape::Lifeline { length: l, .. } = &mut p.shape {
-                        *l = length;
-                    }
-                })?;
+                set_lifeline_length(tx, diagram, lane.id, length)?;
             }
             continue;
         }
@@ -2113,12 +2075,7 @@ fn fit_lifelines(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     let Some(bottom) = grown.iter().map(|&(_, need)| need).reduce(f32::max) else { return Ok(()) };
     for lane in g.lanes.iter().filter(|l| !l.destroyed && g.termination(l.id).is_none()) {
         if bottom > lane.bottom() + 0.01 {
-            let length = bottom - lane.line_top();
-            tx.update_presentation(diagram, lane.id, |p| {
-                if let Shape::Lifeline { length: l, .. } = &mut p.shape {
-                    *l = length;
-                }
-            })?;
+            set_lifeline_length(tx, diagram, lane.id, bottom - lane.line_top())?;
         }
     }
     Ok(())
@@ -2226,17 +2183,7 @@ fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
             });
         let owner = match around {
             Some(f) => {
-                let operands: Vec<Id> = model
-                    .children(f.element)
-                    .iter()
-                    .copied()
-                    .filter(|&o| {
-                        matches!(
-                            model.get(o).map(|e| e.kind()),
-                            Some(ElementKind::InteractionOperand(_))
-                        )
-                    })
-                    .collect();
+                let operands = crate::palette::operands(model, f.element);
                 let k = f.separators.iter().filter(|&&s| s < y).count();
                 match operands.get(k.min(operands.len().saturating_sub(1))) {
                     Some(&operand) => operand,
@@ -2302,12 +2249,7 @@ fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
 /// Upgrades every sequence diagram of a document just opened (see [`upgrade`]). The upgrade
 /// is not an edit of the user's: it cannot be undone and leaves the document unchanged.
 pub fn upgrade_document(doc: &mut Document) {
-    let diagrams: Vec<Id> = doc
-        .model()
-        .elements()
-        .filter(|e| e.kind().as_diagram() == Some(umlcraft_model::DiagramKind::Sequence))
-        .map(|e| e.id())
-        .collect();
+    let diagrams = sequence_diagrams(doc.model());
     let changed = doc.edit("upgrade", |tx| {
         let mut changed = false;
         for &diagram in &diagrams {

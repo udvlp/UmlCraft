@@ -264,13 +264,9 @@ pub fn apply_placed(
     importer.merge(tx)?;
     importer.associations(tx)?;
     let mut placed = std::mem::take(&mut importer.placed);
-    for entry in &importer.entries {
-        let mut path = vec![entry.decl.name.clone()];
-        let mut outer = entry.outer;
-        while let Some(o) = outer {
-            path.insert(0, importer.entries[o].decl.name.clone());
-            outer = importer.entries[o].outer;
-        }
+    for (index, entry) in importer.entries.iter().enumerate() {
+        let chain = importer.chain(index).into_iter().rev();
+        let path = chain.map(|e| importer.entries[e].decl.name.clone()).collect();
         placed.types.push((entry.unit, path, entry.id, entry.namespace));
     }
     placed.by_unit();
@@ -341,6 +337,20 @@ pub(crate) fn lower_scope(
         *skipped.entry(lang::Skip::PreprocessorBranch).or_default() += branches;
     }
     Ok(source.language().frontend().lower(source.root(), source.text(), module, skipped))
+}
+
+/// The IR of `text`, the file that is `module`, as [`ir::Unit::dump`] writes it, with what was
+/// left out: for the front-ends' tests.
+#[cfg(test)]
+pub(crate) fn dump_text(
+    language: SourceLanguage,
+    text: &str,
+    module: &[&str],
+) -> Result<(String, Skipped), SyntaxError> {
+    let mut skipped = Skipped::new();
+    let module: Vec<String> = module.iter().map(|s| s.to_string()).collect();
+    let scope = lower_scope(&parse_tree(language, text), &module, &mut skipped)?;
+    Ok((ir::Unit { path: PathBuf::new(), scope }.dump(), skipped))
 }
 
 /// Reads and parses `files`. Files that cannot be read or parsed are reported in

@@ -28,7 +28,7 @@ use umlcraft_model::{
     Rect, Result, Tx,
 };
 
-use crate::palette::{EdgeTool, NodeTool};
+use crate::palette::{EdgeTool, NodeTool, element_of};
 
 /// Whether `diagram` is an ER diagram.
 pub fn is_er(model: &Model, diagram: Id) -> bool {
@@ -88,10 +88,7 @@ pub fn is_er_kind(kind: &ElementKind) -> bool {
 pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<Id> {
     let model = tx.model();
     let view = model.view_of(diagram)?;
-    let element_of = |p: Id| -> Result<Id> {
-        view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
-    };
-    let (s, t) = (element_of(source)?, element_of(target)?);
+    let (s, t) = (element_of(view, source)?, element_of(view, target)?);
     let (sk, tk) = (model.element(s)?.kind(), model.element(t)?.kind());
     let Some((join, swap)) = joins(sk, tk).filter(|_| s != t) else {
         return Err(ModelError::Refused(Refusal::ErNotJoined));
@@ -125,13 +122,8 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<I
                 return Err(ModelError::Refused(Refusal::ErNotJoined));
             }
             let supertype = !subtypings(model, first).any(|p| p.supertype);
-            let kind = ElementKind::ErSubtyping(ErSubtypingProps {
-                is_a: first,
-                entity: second,
-                supertype,
-            });
-            let line = tx.create(first, ElementData::new("", kind))?;
-            tx.add_edge(diagram, Some(line), first_node, second_node, Vec::new())
+            let ends = ((first, first_node), (second, second_node));
+            add_subtyping(tx, diagram, ends, supertype).map(|(_, edge)| edge)
         }
     }
 }
@@ -148,11 +140,7 @@ pub fn add_attribute(tx: &mut Tx<'_>, diagram: Id, owner: Id, base_name: &str) -
     let view = model.view_of(diagram)?;
     let node = view.get(owner).ok_or(ModelError::NotFound(owner))?;
     let (element, bounds) = node.element.zip(node.bounds()).ok_or(ModelError::NotFound(owner))?;
-    let count = model
-        .children(element)
-        .iter()
-        .filter(|&&c| matches!(model.get(c).map(|e| e.kind()), Some(ElementKind::ErAttribute(_))))
-        .count();
+    let count = attributes(model, element).count();
     // Named apart from the owner's attributes, not from the package it is made in.
     let name = crate::palette::unique_name(model, element, base_name);
     let origin = Point::new(bounds.x + count as f32 * ATTRIBUTE_STEP, bounds.y - ATTRIBUTE_RISE);
@@ -205,10 +193,7 @@ impl IeLine {
 pub fn relate(tx: &mut Tx<'_>, diagram: Id, line: IeLine, parent: Id, child: Id) -> Result<Id> {
     let model = tx.model();
     let view = model.view_of(diagram)?;
-    let element_of = |p: Id| -> Result<Id> {
-        view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
-    };
-    let (p, c) = (element_of(parent)?, element_of(child)?);
+    let (p, c) = (element_of(view, parent)?, element_of(view, child)?);
     let entities = [p, c]
         .iter()
         .all(|&e| matches!(model.get(e).map(|e| e.kind()), Some(ElementKind::ErEntity(_))));
@@ -280,32 +265,30 @@ fn subtype(
                 size.height,
             );
             let node = tx.add_node(diagram, Some(is_a), at)?;
-            let kind = ElementKind::ErSubtyping(ErSubtypingProps {
-                is_a,
-                entity: supertype,
-                supertype: true,
-            });
-            let line = tx.create(is_a, ElementData::new("", kind))?;
-            tx.add_edge(diagram, Some(line), node, super_node, Vec::new())?;
+            add_subtyping(tx, diagram, ((is_a, node), (supertype, super_node)), true)?;
             (is_a, node)
         }
     };
     if subtypings(tx.model(), is_a).any(|s| s.entity == sub) {
         return Err(ModelError::Refused(Refusal::ErNotJoined));
     }
-    let kind = ElementKind::ErSubtyping(ErSubtypingProps { is_a, entity: sub, supertype: false });
-    let line = tx.create(is_a, ElementData::new("", kind))?;
+    let (line, edge) = add_subtyping(tx, diagram, ((is_a, is_a_node), (sub, sub_node)), false)?;
     copy_key(tx, supertype, sub, line, true)?;
-    tx.add_edge(diagram, Some(line), is_a_node, sub_node, Vec::new())
+    Ok(edge)
 }
 
-/// `base`, or `base2`, `base3` … if one of `owner`'s children is called so.
-fn free_name(model: &Model, owner: Id, base: &str) -> String {
-    let taken = |name: &str| !model.children_named(owner, name).is_empty();
-    if !taken(base) {
-        return base.to_owned();
-    }
-    (2..).map(|n| format!("{base}{n}")).find(|name| !taken(name)).expect("names are unbounded")
+/// Makes `entity` a subtype of `is_a`, or its supertype with `supertype`, and draws the line
+/// from the IS-A's node to the entity's. Returns the subtyping and its edge.
+fn add_subtyping(
+    tx: &mut Tx<'_>,
+    diagram: Id,
+    ((is_a, is_a_node), (entity, entity_node)): ((Id, Id), (Id, Id)),
+    supertype: bool,
+) -> Result<(Id, Id)> {
+    let kind = ElementKind::ErSubtyping(ErSubtypingProps { is_a, entity, supertype });
+    let line = tx.create(is_a, ElementData::new("", kind))?;
+    let edge = tx.add_edge(diagram, Some(line), is_a_node, entity_node, Vec::new())?;
+    Ok((line, edge))
 }
 
 /// Copies the primary key of `parent` into `child` as foreign key columns of `by` (a
@@ -329,7 +312,7 @@ fn copy_key(tx: &mut Tx<'_>, parent: Id, child: Id, by: Id, into_key: bool) -> R
             foreign_key: Some(by),
             ..Default::default()
         };
-        let name = free_name(tx.model(), child, &name);
+        let name = crate::palette::numbered_name(tx.model(), child, &name);
         tx.create(child, ElementData::new(name, ElementKind::ErAttribute(props)))?;
     }
     Ok(())
@@ -632,15 +615,8 @@ fn lines_to_nodes(
             Some(relationship),
             Rect::new(at.x, at.y, size.width, size.height),
         )?;
-        let parts: Vec<(Id, Id)> = tx
-            .model()
-            .children(relationship)
-            .iter()
-            .filter_map(|&c| match tx.model().get(c)?.kind() {
-                ElementKind::ErParticipation(p) => Some((c, p.entity)),
-                _ => None,
-            })
-            .collect();
+        let parts: Vec<(Id, Id)> =
+            participations_with_ids(tx.model(), relationship).map(|(c, p)| (c, p.entity)).collect();
         let mut used = Vec::new();
         let mut drawn = Vec::new();
         for (part, entity) in parts {
@@ -713,8 +689,16 @@ pub fn participations(
     model: &Model,
     relationship: Id,
 ) -> impl Iterator<Item = &ErParticipationProps> {
+    participations_with_ids(model, relationship).map(|(_, p)| p)
+}
+
+/// The participations of a relationship (or associative entity), each with its id.
+fn participations_with_ids(
+    model: &Model,
+    relationship: Id,
+) -> impl Iterator<Item = (Id, &ErParticipationProps)> {
     model.children(relationship).iter().filter_map(move |&c| match model.get(c)?.kind() {
-        ElementKind::ErParticipation(p) if p.relationship == relationship => Some(p),
+        ElementKind::ErParticipation(p) if p.relationship == relationship => Some((c, p)),
         _ => None,
     })
 }
@@ -778,14 +762,8 @@ pub fn cardinality_reading(model: &Model, diagram: Id) -> CardinalityReading {
 /// The participations of `participation`'s relationship, by id, and which of them it is.
 fn siblings(model: &Model, participation: Id) -> Option<(Vec<(Id, &ErParticipationProps)>, usize)> {
     let ElementKind::ErParticipation(p) = model.get(participation)?.kind() else { return None };
-    let parts: Vec<(Id, &ErParticipationProps)> = model
-        .children(p.relationship)
-        .iter()
-        .filter_map(|&c| match model.get(c)?.kind() {
-            ElementKind::ErParticipation(q) if q.relationship == p.relationship => Some((c, q)),
-            _ => None,
-        })
-        .collect();
+    let parts: Vec<(Id, &ErParticipationProps)> =
+        participations_with_ids(model, p.relationship).collect();
     let at = parts.iter().position(|(c, _)| *c == participation)?;
     Some((parts, at))
 }
@@ -841,16 +819,8 @@ pub fn line_participation(model: &Model, diagram: Id, edge: Id, end: usize) -> O
     let relationship = line.element?;
     let (source, target) = line.endpoints()?;
     let entity = |node: Id| view.get(node).and_then(|n| n.element);
-    let parts: Vec<(Id, Id)> = model
-        .children(relationship)
-        .iter()
-        .filter_map(|&c| match model.get(c)?.kind() {
-            ElementKind::ErParticipation(p) if p.relationship == relationship => {
-                Some((c, p.entity))
-            }
-            _ => None,
-        })
-        .collect();
+    let parts: Vec<(Id, Id)> =
+        participations_with_ids(model, relationship).map(|(c, p)| (c, p.entity)).collect();
     let first = parts.iter().position(|p| Some(p.1) == entity(source))?;
     if end == 0 {
         return Some(parts[first].0);

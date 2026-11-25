@@ -51,11 +51,16 @@ fn kind_name(kind: ElementKind) -> &'static str {
     KINDS.iter().find(|(_, k)| *k == kind).map_or("instruction", |(name, _)| name)
 }
 
-fn root_name(kind: RootKind) -> &'static str {
+/// The keys of an element's branches in the JSON tree, by index; none for the kinds whose
+/// branches are a list of their own (case, parallel) or that have none.
+fn branch_keys(kind: ElementKind) -> &'static [&'static str] {
     match kind {
-        RootKind::Program => "program",
-        RootKind::Sub => "sub",
-        RootKind::Includable => "includable",
+        ElementKind::Alternative => &["then", "else"],
+        ElementKind::Try => &["body", "catch", "finally"],
+        ElementKind::For | ElementKind::While | ElementKind::Repeat | ElementKind::Forever => {
+            &["body"]
+        }
+        _ => &[],
     }
 }
 
@@ -63,7 +68,7 @@ fn root_name(kind: RootKind) -> &'static str {
 pub fn to_json(d: &Diagram) -> Value {
     let mut root = json!({
         "title": d.text().join("\n"),
-        "kind": root_name(d.kind()),
+        "kind": d.kind().as_str(),
         "keywords": match Keywords::of(d) {
             Keywords::English => "english",
             Keywords::German => "german",
@@ -100,20 +105,8 @@ fn element(e: &Element) -> Value {
         }
         _ => v["text"] = json!(text.join("\n")),
     }
-    match e.kind {
-        ElementKind::Alternative => {
-            v["then"] = branch(0);
-            v["else"] = branch(1);
-        }
-        ElementKind::Try => {
-            v["body"] = branch(0);
-            v["catch"] = branch(1);
-            v["finally"] = branch(2);
-        }
-        ElementKind::For | ElementKind::While | ElementKind::Repeat | ElementKind::Forever => {
-            v["body"] = branch(0);
-        }
-        _ => {}
+    for (i, key) in branch_keys(e.kind).iter().enumerate() {
+        v[*key] = branch(i);
     }
     if !e.comment().iter().all(String::is_empty) {
         v["comment"] = json!(e.comment().join("\n"));
@@ -230,13 +223,9 @@ fn element_of(d: &Diagram, v: &Value, at: &str, level: usize) -> Result<Element,
         }
         _ => new_element(d, kind, &lines(text)),
     };
-    match kind {
-        ElementKind::Alternative => e.branches = vec![part("then")?, part("else")?],
-        ElementKind::Try => e.branches = vec![part("body")?, part("catch")?, part("finally")?],
-        ElementKind::For | ElementKind::While | ElementKind::Repeat | ElementKind::Forever => {
-            e.branches = vec![part("body")?];
-        }
-        _ => {}
+    let keys = branch_keys(kind);
+    if !keys.is_empty() {
+        e.branches = keys.iter().map(|key| part(key)).collect::<Result<_, _>>()?;
     }
     if let Some(comment) = v.get("comment").and_then(Value::as_str) {
         e.set_comment(&lines(comment));
@@ -311,17 +300,6 @@ pub fn locate(d: &Diagram, path: &str) -> Result<umlcraft_nsd::path::Path, Strin
         let Some(key) = keys.next() else { return Ok(at) };
         // The branch the key names, as `element` writes them.
         let branch = match (element.kind, key) {
-            (ElementKind::Alternative, "then")
-            | (
-                ElementKind::For
-                | ElementKind::While
-                | ElementKind::Repeat
-                | ElementKind::Forever
-                | ElementKind::Try,
-                "body",
-            ) => 0,
-            (ElementKind::Alternative, "else") | (ElementKind::Try, "catch") => 1,
-            (ElementKind::Try, "finally") => 2,
             (ElementKind::Case | ElementKind::Parallel, "branches") => {
                 let b = keys.next().and_then(|k| k.parse::<usize>().ok()).ok_or_else(missing)?;
                 if element.kind == ElementKind::Case && keys.next() != Some("body") {
@@ -329,7 +307,7 @@ pub fn locate(d: &Diagram, path: &str) -> Result<umlcraft_nsd::path::Path, Strin
                 }
                 b
             }
-            _ => return Err(missing()),
+            (kind, key) => branch_keys(kind).iter().position(|k| *k == key).ok_or_else(missing)?,
         };
         seq = element.branches.get(branch).ok_or_else(missing)?;
         at.push(branch);

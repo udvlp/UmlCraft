@@ -81,6 +81,26 @@ impl Workspace {
         self.path.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned())
     }
 
+    /// The project's name: its model's.
+    pub fn project_name(&self) -> String {
+        let model = self.doc.model();
+        model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default()
+    }
+
+    /// The one node or line selected on the active diagram.
+    pub fn selected_presentation(&self) -> Option<&Presentation> {
+        match (self.active_diagram, self.selection.as_slice()) {
+            (Some(d), [p]) => self.doc.model().view(d)?.get(*p),
+            _ => None,
+        }
+    }
+
+    /// The element of [`Workspace::selected_presentation`], if its kind passes `pick`.
+    pub fn selected_element_if(&self, pick: impl Fn(&ElementKind) -> bool) -> Option<Id> {
+        let element = self.selected_presentation()?.element?;
+        self.doc.model().get(element).is_some_and(|e| pick(e.kind())).then_some(element)
+    }
+
     /// Opens `diagram` (a diagram or a structogram) as a tab (if needed) and activates it.
     pub fn open_diagram(&mut self, diagram: Id) {
         if !is_shown(self.doc.model(), diagram) {
@@ -193,6 +213,16 @@ impl Workspace {
         edit::apply(&mut self.doc, label, &*self.measure, f)
     }
 
+    /// [`Workspace::edit`] under the translated `label`, an error shown as the message.
+    fn change<R>(
+        &mut self,
+        label: &str,
+        f: impl FnOnce(&mut Tx<'_>) -> Result<R, ModelError>,
+    ) -> Option<R> {
+        let result = self.edit(t!(label).to_string(), f);
+        self.report(result)
+    }
+
     fn report<T>(&mut self, result: Result<T, ModelError>) -> Option<T> {
         match result {
             Ok(value) => {
@@ -215,9 +245,8 @@ impl Workspace {
             _ => format!("kind.{}", tool.key()),
         };
         let base = name_base(&key, keeps_words(tool));
-        let label = t!("edit.create").to_string();
-        let result = self.edit(label, |tx| palette::create_node(tx, diagram, tool, origin, &base));
-        let (element, node) = self.report(result)?;
+        let (element, node) = self
+            .change("edit.create", |tx| palette::create_node(tx, diagram, tool, origin, &base))?;
         self.selection = vec![node];
         self.selected_element = Some(element);
         Some(element)
@@ -228,10 +257,9 @@ impl Workspace {
     pub fn add_er_attribute(&mut self, owner: Id) -> Option<Id> {
         let diagram = self.active_diagram?;
         let base = name_base(&format!("kind.{}", NodeTool::ErAttribute.key()), false);
-        let label = t!("edit.create").to_string();
-        let result =
-            self.edit(label, |tx| umlcraft_notation::er::add_attribute(tx, diagram, owner, &base));
-        let (element, node) = self.report(result)?;
+        let (element, node) = self.change("edit.create", |tx| {
+            umlcraft_notation::er::add_attribute(tx, diagram, owner, &base)
+        })?;
         self.selection = vec![node];
         self.selected_element = Some(element);
         Some(node)
@@ -254,10 +282,9 @@ impl Workspace {
         let diagram = self.active_diagram?;
         let text = t!("kind.text").to_string();
         let bounds = self.free_text_bounds(origin, &text);
-        let label = t!("edit.create").to_string();
-        let result =
-            self.edit(label, |tx| tx.add_presentation(diagram, Presentation::text(bounds, text)));
-        let id = self.report(result)?;
+        let id = self.change("edit.create", |tx| {
+            tx.add_presentation(diagram, Presentation::text(bounds, text))
+        })?;
         self.select(vec![id]);
         Some(id)
     }
@@ -265,10 +292,9 @@ impl Workspace {
     /// Adds a free line from `from` to `to` to the active diagram and selects it.
     pub fn create_free_line(&mut self, from: Point, to: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.create").to_string();
-        let result =
-            self.edit(label, |tx| tx.add_presentation(diagram, Presentation::line(from, to)));
-        if let Some(id) = self.report(result) {
+        if let Some(id) = self
+            .change("edit.create", |tx| tx.add_presentation(diagram, Presentation::line(from, to)))
+        {
             self.select(vec![id]);
         }
     }
@@ -286,15 +312,13 @@ impl Workspace {
         if [from, target][end.min(1)] == to {
             return;
         }
-        let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.move", |tx| {
             tx.update_presentation(diagram, presentation, |p| {
                 if let Shape::Line { from, to: target, .. } = &mut p.shape {
                     *if end == 0 { from } else { target } = to;
                 }
             })
         });
-        self.report(result);
     }
 
     /// Changes the text of the free text `presentation`; its box fits the new text.
@@ -307,13 +331,11 @@ impl Workspace {
             return;
         };
         let bounds = self.free_text_bounds(bounds.origin(), text);
-        let label = t!("edit.text").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.text", |tx| {
             tx.update_presentation(diagram, presentation, |p| {
                 p.shape = Shape::Text { bounds, text: text.to_owned() };
             })
         });
-        self.report(result);
     }
 
     /// Changes how the free line `presentation` is drawn.
@@ -323,24 +345,21 @@ impl Workspace {
         f: impl FnOnce(&mut bool, &mut bool, &mut bool),
     ) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.properties").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.properties", |tx| {
             tx.update_presentation(diagram, presentation, |p| {
                 if let Shape::Line { dashed, start_arrow, end_arrow, .. } = &mut p.shape {
                     f(dashed, start_arrow, end_arrow);
                 }
             })
         });
-        self.report(result);
     }
 
     /// Draws a line with `tool` and selects it. Lines but note anchors are routed around the
     /// nodes and kept routed, except on use case diagrams (see [`autoroute::route_new_lines`]).
     pub fn connect(&mut self, tool: EdgeTool, source: Id, target: Id) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.connect").to_string();
         let base = name_base("tool.associationClass", false);
-        let result = self.edit(label, |tx| {
+        if let Some(edge) = self.change("edit.connect", |tx| {
             let edge = palette::connect(tx, diagram, tool, source, target)?;
             if tool != EdgeTool::NoteAnchor {
                 autoroute::route_new_lines(tx, diagram, &[edge])?;
@@ -357,8 +376,7 @@ impl Workspace {
                 tx.rename(class, name)?;
             }
             Ok(edge)
-        });
-        if let Some(edge) = self.report(result) {
+        }) {
             self.select(vec![edge]);
         }
     }
@@ -366,10 +384,9 @@ impl Workspace {
     /// Draws a message on the active sequence diagram at `slot` and selects it.
     pub fn connect_message(&mut self, tool: EdgeTool, source: Id, target: Id, slot: Option<Slot>) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.connect").to_string();
-        let result = self
-            .edit(label, |tx| palette::connect_message(tx, diagram, tool, source, target, slot));
-        if let Some(edge) = self.report(result) {
+        if let Some(edge) = self.change("edit.connect", |tx| {
+            palette::connect_message(tx, diagram, tool, source, target, slot)
+        }) {
             self.select(vec![edge]);
         }
     }
@@ -384,11 +401,9 @@ impl Workspace {
         origin: Point,
     ) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.create").to_string();
-        let result = self.edit(label, |tx| {
+        if let Some((fragment, node)) = self.change("edit.create", |tx| {
             palette::create_fragment(tx, diagram, tool, slot, covered, Some(origin))
-        });
-        if let Some((fragment, node)) = self.report(result) {
+        }) {
             self.selection = vec![node];
             self.selected_element = Some(fragment);
         }
@@ -399,9 +414,9 @@ impl Workspace {
         let Some(diagram) = self.active_diagram else { return };
         let Some(view) = self.doc.model().view(diagram) else { return };
         let items: Vec<Id> = self.selection.iter().filter_map(|&p| view.get(p)?.element).collect();
-        let label = t!("edit.wrap_in_fragment").to_string();
-        let result = self.edit(label, |tx| palette::wrap_in_fragment(tx, diagram, &items));
-        if let Some((fragment, node)) = self.report(result) {
+        if let Some((fragment, node)) = self
+            .change("edit.wrap_in_fragment", |tx| palette::wrap_in_fragment(tx, diagram, &items))
+        {
             self.selection = vec![node];
             self.selected_element = Some(fragment);
         }
@@ -409,9 +424,7 @@ impl Workspace {
 
     /// Moves a message or fragment to another place in its interaction.
     pub fn move_to_slot(&mut self, item: Id, slot: Slot) {
-        let label = t!("edit.move_element").to_string();
-        let result = self.edit(label, |tx| palette::move_to_slot(tx, item, slot));
-        self.report(result);
+        self.change("edit.move_element", |tx| palette::move_to_slot(tx, item, slot));
     }
 
     /// Shows or hides the message numbers of the open sequence diagram, or with `flat`
@@ -447,27 +460,22 @@ impl Workspace {
     /// Makes the ER relationship `relationship` identifying or not, with its foreign key
     /// columns in or out of the child's key, as one undo step.
     pub fn set_er_identifying(&mut self, relationship: Id, identifying: bool) {
-        let label = t!("edit.properties").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.properties", |tx| {
             umlcraft_notation::er::set_identifying(tx, relationship, identifying)
         });
-        self.report(result);
     }
 
     /// Makes an entity associative or a plain one; refused with a message while entities take
     /// part in it.
     pub fn set_er_associative(&mut self, entity: Id, associative: bool) {
-        let label = t!("edit.properties").to_string();
-        let result =
-            self.edit(label, |tx| umlcraft_notation::er::set_associative(tx, entity, associative));
-        self.report(result);
+        self.change("edit.properties", |tx| {
+            umlcraft_notation::er::set_associative(tx, entity, associative)
+        });
     }
 
     /// Adds an operand to a combined fragment and selects it.
     pub fn add_operand(&mut self, fragment: Id) {
-        let label = t!("edit.create").to_string();
-        let result = self.edit(label, |tx| palette::add_operand(tx, fragment));
-        if let Some(operand) = self.report(result) {
+        if let Some(operand) = self.change("edit.create", |tx| palette::add_operand(tx, fragment)) {
             self.selected_element = Some(operand);
         }
     }
@@ -475,21 +483,20 @@ impl Workspace {
     /// Divides a state into one more region (the first time into two, laid out side by side
     /// if `vertical`) and selects the new region.
     pub fn add_region(&mut self, state: Id, vertical: bool) {
-        let label = t!("edit.create").to_string();
         let diagram = self.active_diagram;
-        let result = self.edit(label, |tx| state_edit::add_region(tx, state, vertical, diagram));
-        if let Some(region) = self.report(result) {
+        if let Some(region) =
+            self.change("edit.create", |tx| state_edit::add_region(tx, state, vertical, diagram))
+        {
             self.selected_element = Some(region);
         }
     }
 
     /// Adds an internal transition to a state and selects it.
     pub fn add_internal_transition(&mut self, state: Id) {
-        let label = t!("edit.create").to_string();
         let trigger = t!("prop.new_trigger").to_string();
-        let result =
-            self.edit(label, |tx| state_edit::add_internal_transition(tx, state, &trigger));
-        if let Some(transition) = self.report(result) {
+        if let Some(transition) = self
+            .change("edit.create", |tx| state_edit::add_internal_transition(tx, state, &trigger))
+        {
             self.selected_element = Some(transition);
         }
     }
@@ -498,11 +505,9 @@ impl Workspace {
     /// from the state's edge.
     pub fn move_region_line(&mut self, presentation: Id, index: usize, offset: f32) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.move", |tx| {
             state_edit::move_region_line(tx, diagram, presentation, index, offset)
         });
-        self.report(result);
     }
 
     /// Moves the given nodes of the active diagram by (`dx`, `dy`) as one undo step.
@@ -533,14 +538,12 @@ impl Workspace {
         if (nodes.is_empty() && lines.is_empty()) || (dx == 0.0 && dy == 0.0) {
             return;
         }
-        let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.move", |tx| {
             lines.iter().try_for_each(|&l| tx.move_line(diagram, l, dx, dy))?;
             // Lines between moved nodes keep their shape; a state dropped into another one (or
             // out of it) becomes its substate.
             edit::set_node_bounds(tx, diagram, &nodes)
         });
-        self.report(result);
     }
 
     /// Moves each group of nodes sideways by its own distance, in one step: swimlanes put into
@@ -561,18 +564,15 @@ impl Workspace {
         if nodes.is_empty() {
             return;
         }
-        let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| edit::set_node_bounds(tx, diagram, &nodes));
-        self.report(result);
+        self.change("edit.move", |tx| edit::set_node_bounds(tx, diagram, &nodes));
     }
 
     /// Changes the display options of one presentation on the active diagram.
     pub fn update_style(&mut self, presentation: Id, f: impl FnOnce(&mut Style)) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.properties").to_string();
-        let result = self
-            .edit(label, |tx| tx.update_presentation(diagram, presentation, |p| f(&mut p.style)));
-        self.report(result);
+        self.change("edit.properties", |tx| {
+            tx.update_presentation(diagram, presentation, |p| f(&mut p.style))
+        });
     }
 
     /// Merges parsed source files into the model and files the structograms `built` from their
@@ -642,9 +642,8 @@ impl Workspace {
     /// Gives an edge a route drawn by hand; the router leaves it alone from then on.
     pub fn set_route(&mut self, edge: Id, route: Route) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.waypoints").to_string();
         let anchors = (route.source_anchor, route.target_anchor);
-        let result = self.edit(label, |tx| {
+        self.change("edit.waypoints", |tx| {
             let old = match tx.model().view(diagram).and_then(|v| v.get(edge)).map(|p| &p.shape) {
                 Some(Shape::Edge { waypoints, .. }) => waypoints.clone(),
                 _ => Vec::new(),
@@ -654,33 +653,29 @@ impl Workspace {
             // A shared generalization takes its whole group along.
             umlcraft_notation::shared::move_common_line(tx, diagram, edge, &old)
         });
-        self.report(result);
     }
 
     /// Gives the generalizations to the general element of `edge` Astah's shared style, or
     /// separate lines again.
     pub fn set_shared_style(&mut self, edge: Id, style: SharedStyle) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.shared_style").to_string();
-        let result =
-            self.edit(label, |tx| umlcraft_notation::shared::set_style(tx, diagram, edge, style));
-        self.report(result);
+        self.change("edit.shared_style", |tx| {
+            umlcraft_notation::shared::set_style(tx, diagram, edge, style)
+        });
     }
 
     /// Turns the association shown by `edge` into an association class and selects the class.
     pub fn make_association_class(&mut self, edge: Id) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.association_class").to_string();
         let base = name_base("tool.associationClass", false);
-        let result = self.edit(label, |tx| {
+        if let Some((class, node)) = self.change("edit.association_class", |tx| {
             let model = tx.model();
             let element = model.view(diagram).and_then(|v| v.get(edge)).and_then(|p| p.element);
             let owner = element.and_then(|e| model.get(e)).and_then(|e| e.owner());
             let name =
                 owner.map_or_else(|| base.clone(), |o| palette::unique_name(model, o, &base));
             palette::make_association_class(tx, diagram, edge, &name)
-        });
-        if let Some((class, node)) = self.report(result) {
+        }) {
             self.select(vec![node]);
             self.selected_element = Some(class);
         }
@@ -689,8 +684,7 @@ impl Workspace {
     /// Lets the given edges aim at the centers of their nodes again, without the router.
     pub fn reset_line_ends(&mut self, edges: &[Id]) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.line_ends").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.line_ends", |tx| {
             edges.iter().try_for_each(|&edge| {
                 tx.update_presentation(diagram, edge, |p| {
                     if let Shape::Edge { source_anchor, target_anchor, .. } = &mut p.shape {
@@ -700,7 +694,6 @@ impl Workspace {
                 })
             })
         });
-        self.report(result);
     }
 
     /// Routes the selected lines of the active diagram around the nodes, or without a selected
@@ -724,9 +717,7 @@ impl Workspace {
         if edges.is_empty() {
             return;
         }
-        let label = t!("edit.route_lines").to_string();
-        let result = self.edit(label, |tx| autoroute::route_lines(tx, diagram, &edges));
-        self.report(result);
+        self.change("edit.route_lines", |tx| autoroute::route_lines(tx, diagram, &edges));
     }
 
     /// Arranges the active diagram, or with a selection only that, and routes its lines.
@@ -752,8 +743,7 @@ impl Workspace {
     /// Puts the labels of the given edges and messages back where the layout puts them.
     pub fn reset_labels(&mut self, edges: &[Id]) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.labels").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.labels", |tx| {
             edges.iter().try_for_each(|&edge| {
                 tx.update_presentation(diagram, edge, |p| {
                     p.style.constraint_offsets.clear();
@@ -766,7 +756,6 @@ impl Workspace {
                 })
             })
         });
-        self.report(result);
     }
 
     /// Changes end `end` of an association, or the end of an ER participation.
@@ -827,11 +816,9 @@ impl Workspace {
         if umlcraft_notation::er::shown_cardinality(model, participation, reading) == c {
             return;
         }
-        let label = t!("edit.properties").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.properties", |tx| {
             umlcraft_notation::er::set_shown_cardinality(tx, participation, c, reading)
         });
-        self.report(result);
     }
 
     /// Reads `text` typed for what ER participation `participation` shows when read as
@@ -850,29 +837,26 @@ impl Workspace {
     /// Lets a lifeline of the active diagram end at `bottom`.
     pub fn set_lifeline_end(&mut self, presentation: Id, bottom: f32) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.resize").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.resize", |tx| {
             umlcraft_notation::sequence_edit::set_lifeline_end(tx, diagram, presentation, bottom)
         });
-        self.report(result);
     }
 
     /// Puts the open end of the found or lost message `message` of the active diagram at `x`.
     pub fn set_gate(&mut self, message: Id, x: f32) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.resize").to_string();
-        let result = self
-            .edit(label, |tx| umlcraft_notation::sequence_edit::set_gate(tx, diagram, message, x));
-        self.report(result);
+        self.change("edit.resize", |tx| {
+            umlcraft_notation::sequence_edit::set_gate(tx, diagram, message, x)
+        });
     }
 
     /// Turns the relationship the edge `edge` of the active diagram shows into one `tool`
     /// makes, as one undo step.
     pub fn change_relationship(&mut self, edge: Id, tool: EdgeTool) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.change_kind").to_string();
-        let result = self.edit(label, |tx| palette::change_relationship(tx, diagram, edge, tool));
-        if let Some(new) = self.report(result) {
+        if let Some(new) = self
+            .change("edit.change_kind", |tx| palette::change_relationship(tx, diagram, edge, tool))
+        {
             // The panel shows the new element, which the line now stands for.
             self.selected_element = Some(new);
         }
@@ -957,8 +941,7 @@ impl Workspace {
         if edges.is_empty() {
             return;
         }
-        let label = t!("edit.line_style").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.line_style", |tx| {
             edges.into_iter().try_for_each(|(edge, route)| {
                 let anchors = (route.source_anchor, route.target_anchor);
                 tx.set_route(diagram, edge, route.waypoints, anchors)?;
@@ -968,15 +951,13 @@ impl Workspace {
                 })
             })
         });
-        self.report(result);
     }
 
     /// Applies text typed in place: member declarations are parsed, note texts, guards and names
     /// set. A message takes `name(arguments)`, a reply its return value.
     pub fn apply_text(&mut self, element: Id, text: &str) {
-        let label = t!("edit.properties").to_string();
         let Some(kind) = self.doc.model().get(element).map(|e| e.kind().clone()) else { return };
-        let result = self.edit(label, |tx| match kind {
+        self.change("edit.properties", |tx| match kind {
             ElementKind::Comment(_) => tx.update(element, |d| {
                 if let ElementKind::Comment(p) = &mut d.kind {
                     p.body = text.to_owned();
@@ -1016,14 +997,11 @@ impl Workspace {
             }),
             _ => member::apply_member_text(tx, element, text),
         });
-        self.report(result);
     }
 
     /// Sets the value `instance` gives `attribute`, typed in place as `name = value`.
     pub fn set_slot(&mut self, instance: Id, attribute: Id, text: &str) {
-        let label = t!("edit.set_slots").to_string();
-        let result = self.edit(label, |tx| object::set_slot(tx, instance, attribute, text));
-        self.report(result);
+        self.change("edit.set_slots", |tx| object::set_slot(tx, instance, attribute, text));
     }
 
     /// Sets the values of an object's slots by attribute name, as one undo step. Names that are
@@ -1041,20 +1019,17 @@ impl Workspace {
         if changes.is_empty() {
             return;
         }
-        let label = t!("edit.set_slots").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.set_slots", |tx| {
             changes.iter().try_for_each(|&(attribute, value)| {
                 object::set_slot(tx, instance, attribute, value)
             })
         });
-        self.report(result);
     }
 
     /// Shows an existing element on the active diagram at `at` and selects it.
     pub fn show_element(&mut self, element: Id, at: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.show").to_string();
-        let result = self.edit(label, |tx| {
+        if let Some(node) = self.change("edit.show", |tx| {
             // Lines to what the diagram shows already come along, and are routed.
             let edges = |tx: &Tx<'_>| -> HashSet<Id> {
                 tx.model().view(diagram).map_or_else(HashSet::new, |v| {
@@ -1071,8 +1046,7 @@ impl Workspace {
             new.sort();
             autoroute::route_new_lines(tx, diagram, &new)?;
             Ok(node)
-        });
-        if let Some(node) = self.report(result) {
+        }) {
             self.select(vec![node]);
         }
     }
@@ -1084,13 +1058,11 @@ impl Workspace {
             return;
         }
         let index = model.children(owner).len();
-        let label = t!("edit.move_element").to_string();
         // A message or fragment moved into another operand has to match the drawing again.
-        let result = self.edit(label, |tx| {
+        self.change("edit.move_element", |tx| {
             tx.move_element(element, owner, index)?;
             umlcraft_notation::sequence_edit::tidy_all(tx)
         });
-        self.report(result);
     }
 
     /// Copies the selection of the active diagram.
@@ -1102,10 +1074,9 @@ impl Workspace {
     /// Pastes `clip` into the active diagram and selects the result.
     pub fn paste(&mut self, clip: &Clip, offset: Point, as_reference: bool) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.paste").to_string();
-        let result =
-            self.edit(label, |tx| clipboard::paste(tx, diagram, clip, offset, as_reference));
-        if let Some(created) = self.report(result) {
+        if let Some(created) = self
+            .change("edit.paste", |tx| clipboard::paste(tx, diagram, clip, offset, as_reference))
+        {
             self.select(created);
         }
     }
@@ -1113,59 +1084,49 @@ impl Workspace {
     /// Puts a message's label where the user dragged it.
     pub fn place_message_label(&mut self, presentation: Id, top_left: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.move", |tx| {
             umlcraft_notation::sequence_edit::place_label(tx, diagram, presentation, top_left)
         });
-        self.report(result);
     }
 
     /// Moves the label of a duration or time constraint by `by`, where the user dragged it.
     pub fn move_constraint_label(&mut self, presentation: Id, by: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.move", |tx| {
             umlcraft_notation::sequence_edit::move_constraint_label(tx, diagram, presentation, by)
         });
-        self.report(result);
     }
 
     /// Moves the constraint labels of a line by `by`, all together, as the user dragged one.
     pub fn shift_line_constraints(&mut self, presentation: Id, by: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.move", |tx| {
             umlcraft_notation::edit::shift_line_constraints(tx, diagram, presentation, by)
         });
-        self.report(result);
     }
 
     /// Puts an edge's «include» or «extend» where the user dragged it, `offset` from the middle
     /// of the line.
     pub fn place_keyword_label(&mut self, presentation: Id, offset: Point) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.move").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.move", |tx| {
             tx.update_presentation(diagram, presentation, |p| {
                 if let Shape::Edge { labels, .. } = &mut p.shape {
                     labels.keyword = Some(offset);
                 }
             })
         });
-        self.report(result);
     }
 
     pub fn set_bounds(&mut self, presentation: Id, bounds: Rect) {
         let Some(diagram) = self.active_diagram else { return };
-        let label = t!("edit.resize").to_string();
-        let result = self.edit(label, |tx| {
+        self.change("edit.resize", |tx| {
             // A box sized by hand keeps that size, as in Astah.
             tx.update_presentation(diagram, presentation, |p| p.style.auto_size = false)?;
             // A fragment grown over messages takes them in; a state resized may now lie in
             // another state, and its substates outside it.
             edit::set_node_bounds(tx, diagram, &[(presentation, bounds)])
         });
-        self.report(result);
     }
 
     pub fn align_selection(&mut self, alignment: Alignment) {
@@ -1203,9 +1164,7 @@ impl Workspace {
                 }
             }
         }
-        let label = t!("edit.align").to_string();
-        let result = self.edit(label, |tx| edit::set_node_bounds(tx, diagram, &moves));
-        self.report(result);
+        self.change("edit.align", |tx| edit::set_node_bounds(tx, diagram, &moves));
     }
 
     /// Deletes the elements behind the selection from the model; purely graphical items
@@ -1225,23 +1184,24 @@ impl Workspace {
         if elements.is_empty() && graphics.is_empty() {
             return;
         }
-        let label = t!("edit.delete").to_string();
-        let result = self.edit(label, |tx| {
-            for p in graphics {
-                if tx.model().view(diagram).and_then(|v| v.get(p)).is_some() {
-                    tx.remove_presentation(diagram, p)?;
+        if self
+            .change("edit.delete", |tx| {
+                for p in graphics {
+                    if tx.model().view(diagram).and_then(|v| v.get(p)).is_some() {
+                        tx.remove_presentation(diagram, p)?;
+                    }
                 }
-            }
-            for e in elements {
-                // An earlier delete may have cascaded to this one already.
-                if tx.model().contains(e) {
-                    tx.delete(e)?;
+                for e in elements {
+                    // An earlier delete may have cascaded to this one already.
+                    if tx.model().contains(e) {
+                        tx.delete(e)?;
+                    }
                 }
-            }
-            // Bars of deleted messages go too.
-            umlcraft_notation::sequence_edit::tidy_all(tx)
-        });
-        if self.report(result).is_some() {
+                // Bars of deleted messages go too.
+                umlcraft_notation::sequence_edit::tidy_all(tx)
+            })
+            .is_some()
+        {
             self.clear_selection();
         }
     }
@@ -1250,16 +1210,17 @@ impl Workspace {
     pub fn remove_selection_from_diagram(&mut self) {
         let Some(diagram) = self.active_diagram else { return };
         let selection = self.selection.clone();
-        let label = t!("edit.remove_from_diagram").to_string();
-        let result = self.edit(label, |tx| {
-            for p in selection {
-                if tx.model().view(diagram).and_then(|v| v.get(p)).is_some() {
-                    tx.remove_presentation(diagram, p)?;
+        if self
+            .change("edit.remove_from_diagram", |tx| {
+                for p in selection {
+                    if tx.model().view(diagram).and_then(|v| v.get(p)).is_some() {
+                        tx.remove_presentation(diagram, p)?;
+                    }
                 }
-            }
-            umlcraft_notation::sequence_edit::tidy_all(tx)
-        });
-        if self.report(result).is_some() {
+                umlcraft_notation::sequence_edit::tidy_all(tx)
+            })
+            .is_some()
+        {
             self.clear_selection();
         }
     }
@@ -1375,8 +1336,7 @@ impl Workspace {
         let literal = compartment == scene::Compartment::Literals;
         let column =
             matches!(compartment, scene::Compartment::ErKeys | scene::Compartment::ErColumns);
-        let label = t!("edit.create").to_string();
-        let result = self.edit(label, |tx| {
+        let member = self.change("edit.create", |tx| {
             let index = after
                 .and_then(|a| tx.model().children(owner).iter().position(|&c| c == a))
                 .map(|i| i + 1);
@@ -1391,8 +1351,7 @@ impl Workspace {
                 member::apply_member_text(tx, member, text)?;
             }
             Ok(member)
-        });
-        let member = self.report(result)?;
+        })?;
         self.selected_element = Some(member);
         Some(member)
     }
@@ -1403,8 +1362,7 @@ impl Workspace {
         let ElementKind::Extend(p) = self.doc.model().get(extend)?.kind() else { return None };
         let use_case = p.extended;
         let base = name_base(&NewItem::ExtensionPoint.key(), true);
-        let label = t!("edit.create").to_string();
-        let result = self.edit(label, |tx| {
+        let point = self.change("edit.create", |tx| {
             let name = palette::unique_name(tx.model(), use_case, &base);
             let point = tx.create(use_case, ElementData::new(name, ElementKind::ExtensionPoint))?;
             tx.update(extend, |data| {
@@ -1413,8 +1371,7 @@ impl Workspace {
                 }
             })?;
             Ok(point)
-        });
-        let point = self.report(result)?;
+        })?;
         self.selected_element = Some(point);
         Some(point)
     }
@@ -1430,9 +1387,8 @@ impl Workspace {
             _ => false,
         };
         let base = name_base(&item.key(), keep_words);
-        let label = t!("edit.create").to_string();
         let keywords = self.keywords;
-        let result = self.edit(label, |tx| {
+        let id = self.change("edit.create", |tx| {
             let name = palette::unique_name(tx.model(), owner, &base);
             match item {
                 NewItem::Element(tool) => {
@@ -1473,8 +1429,7 @@ impl Workspace {
                     tx.create(owner, ElementData::new("", kind))
                 }
             }
-        });
-        let id = self.report(result)?;
+        })?;
         if matches!(item, NewItem::Diagram(_) | NewItem::ObjectDiagram | NewItem::Structogram) {
             self.open_diagram(id);
         }
@@ -1489,17 +1444,17 @@ impl Workspace {
         owner: Id,
         structograms: &[umlcraft_nsd::Diagram],
     ) -> Vec<Id> {
-        let label = t!("edit.create").to_string();
-        let result = self.edit(label, |tx| {
-            structograms
-                .iter()
-                .map(|d| {
-                    let kind = ElementKind::Structogram(StructogramProps::new(d));
-                    tx.create(owner, ElementData::new("", kind))
-                })
-                .collect::<Result<Vec<_>, _>>()
-        });
-        let ids = self.report(result).unwrap_or_default();
+        let ids = self
+            .change("edit.create", |tx| {
+                structograms
+                    .iter()
+                    .map(|d| {
+                        let kind = ElementKind::Structogram(StructogramProps::new(d));
+                        tx.create(owner, ElementData::new("", kind))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
         if let Some(&last) = ids.last() {
             self.open_diagram(last);
             self.select_element(last);
@@ -1530,7 +1485,6 @@ impl Workspace {
 
     /// Changes an element's data as one undo step, e.g. from the properties panel.
     pub fn update_element(&mut self, id: Id, f: impl FnOnce(&mut ElementData)) {
-        let label = t!("edit.properties").to_string();
         let covered = |model: &umlcraft_model::Model| match model.get(id).map(|e| e.kind()) {
             Some(ElementKind::CombinedFragment(p)) => Some(p.covered.clone()),
             Some(ElementKind::InteractionUse(p)) => Some(p.covered.clone()),
@@ -1547,7 +1501,7 @@ impl Workspace {
             _ => None,
         };
         let represented = represents(self.doc.model());
-        let result = self.edit(label, |tx| {
+        self.change("edit.properties", |tx| {
             tx.update(id, f)?;
             // A lifeline that comes to stand for an actor becomes a stick figure.
             if represents(tx.model()) != represented {
@@ -1568,34 +1522,32 @@ impl Workspace {
                 tx.model().shown_on(id).into_iter().map(|(d, _)| d).filter(sequence).collect();
             diagrams.into_iter().try_for_each(|d| umlcraft_notation::sequence_edit::tidy(tx, d))
         });
-        self.report(result);
     }
 
     /// Makes a class bind a template (`Pair<int,Holder>`), or nothing, with its «bind» line on
     /// the open diagram.
     pub fn set_binding(&mut self, class: Id, binding: Option<TypeRef>) {
-        let label = t!("edit.properties").to_string();
         let diagram = self.active_diagram;
-        let result = self.edit(label, |tx| palette::set_binding(tx, diagram, class, binding));
-        self.report(result);
+        self.change("edit.properties", |tx| palette::set_binding(tx, diagram, class, binding));
     }
 
     /// Deletes one element from the model (with everything that depends on it).
     pub fn delete_element(&mut self, id: Id) {
-        let label = t!("edit.delete").to_string();
         let kind = self.doc.model().get(id).map(|e| e.kind().clone());
-        let result = self.edit(label, |tx| {
-            match kind {
-                // The neighbors of a region take its room.
-                Some(ElementKind::Region) => state_edit::delete_region(tx, id)?,
-                Some(ElementKind::InteractionOperand(_)) => {
-                    umlcraft_notation::sequence_edit::delete_operand(tx, id)?
+        if self
+            .change("edit.delete", |tx| {
+                match kind {
+                    // The neighbors of a region take its room.
+                    Some(ElementKind::Region) => state_edit::delete_region(tx, id)?,
+                    Some(ElementKind::InteractionOperand(_)) => {
+                        umlcraft_notation::sequence_edit::delete_operand(tx, id)?
+                    }
+                    _ => tx.delete(id)?,
                 }
-                _ => tx.delete(id)?,
-            }
-            umlcraft_notation::sequence_edit::tidy_all(tx)
-        });
-        if self.report(result).is_some() {
+                umlcraft_notation::sequence_edit::tidy_all(tx)
+            })
+            .is_some()
+        {
             self.validate();
             if self.selected_element.is_none() {
                 self.selection.clear();

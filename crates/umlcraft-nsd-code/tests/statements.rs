@@ -1,14 +1,10 @@
 //! Single statements and what the report says of them, where the fixtures do not show it.
 
-use umlcraft_nsd::{Diagram, ElementKind};
-use umlcraft_nsd_code::{Made, NoteKind, Report, Source, SourceLanguage, Unbuilt};
+mod common;
 
-const MADE: Made = Made {
-    author: "tester",
-    date: "2026-11-18",
-    origin: "UmlCraft test",
-    keywords: umlcraft_nsd::Keywords::English,
-};
+use common::MADE;
+use umlcraft_nsd::{Diagram, ElementKind};
+use umlcraft_nsd_code::{NoteKind, Report, Source, SourceLanguage, Unbuilt};
 
 /// The diagram of the first method in `text`.
 fn first(language: SourceLanguage, text: &str) -> (Diagram, Report) {

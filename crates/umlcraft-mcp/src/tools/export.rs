@@ -4,18 +4,14 @@ use super::*;
 
 pub(super) fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
     let path = access.check_write(Path::new(str_arg(args, "path")?), None)?;
-    let shown =
-        opt_diagram(host.document().model(), args, "diagram", true)?.or(host.active_diagram());
-    let model = host.document().model();
-    let structogram = shown.and_then(|id| model.get(id)).and_then(|e| e.kind().as_structogram());
-    let bytes = match (structogram, extension(&path).as_str()) {
-        (Some(p), "nsd") => {
+    let bytes = match (shown(host, args)?, extension(&path).as_str()) {
+        (Shown::Structogram(d), "nsd") => {
             let origin = format!("UmlCraft {}", env!("CARGO_PKG_VERSION"));
             let made = umlcraft_nsd::Provenance { author: "", date: "", origin: &origin };
-            umlcraft_nsd::write(&umlcraft_nsd::content::to_file(&p.structogram, &made)).into_bytes()
+            umlcraft_nsd::write(&umlcraft_nsd::content::to_file(d, &made)).into_bytes()
         }
-        (Some(p), extension) => {
-            let svg = structogram_svg(&p.structogram);
+        (Shown::Structogram(d), extension) => {
+            let svg = structogram_svg(d);
             match extension {
                 "svg" => svg.into_bytes(),
                 // Two pixels per pixel of the structogram, as diagrams get two per unit.
@@ -23,8 +19,7 @@ pub(super) fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -
                 _ => return Err("a structogram goes to .svg, .png or .nsd".into()),
             }
         }
-        (None, extension) => {
-            let (diagram, _) = diagram_arg(host, args, "diagram")?;
+        (Shown::Diagram(diagram), extension) => {
             let svg = diagram_svg(host, diagram);
             match extension {
                 "svg" => svg.into_bytes(),
@@ -42,10 +37,7 @@ pub(super) fn export_image(host: &mut dyn Host, access: &Access, args: &Value) -
 /// beside it that then takes its place, so that a hard link to a file elsewhere is replaced
 /// rather than written through.
 pub(super) fn write_export(path: &Path, bytes: &[u8], args: &Value) -> Result<(), String> {
-    let overwrite = match args.get("overwrite") {
-        None => false,
-        Some(v) => v.as_bool().ok_or("`overwrite` is true or false")?,
-    };
+    let overwrite = bool_arg(args, "overwrite")?.unwrap_or(false);
     if !overwrite && path.exists() {
         return Err(format!(
             "{} exists; give `\"overwrite\": true` to replace it, or another path",
@@ -55,15 +47,7 @@ pub(super) fn write_export(path: &Path, bytes: &[u8], args: &Value) -> Result<()
     if let Some(folder) = path.parent() {
         std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".umlcraft-tmp");
-    let tmp = PathBuf::from(tmp);
-    let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path));
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("{}: {e}", path.display()));
-    }
-    Ok(())
+    crate::host::write_replacing(path, bytes)
 }
 
 pub(super) const DIALECTS: [(&str, Dialect); 3] =

@@ -1,6 +1,6 @@
 //! How C++ names resolve and which of its types are values.
 
-use crate::lang::Rules;
+use crate::lang::{Rules, split_at_last};
 use crate::library::TableLibrary;
 
 /// The containers, smart pointers and value types of the standard library, kept by hand in
@@ -15,7 +15,8 @@ pub static RULES: Rules = Rules {
     implicit_imports: &[],
     library: &STD,
     value_packages: &[&["std"]],
-    split_qualified,
+    // Namespaces and types look alike.
+    split_qualified: split_at_last,
     enclosing_namespaces: true,
     base_list_by_target: false,
     // A pointer may be null; a reference may not.
@@ -24,15 +25,10 @@ pub static RULES: Rules = Rules {
     reexports: false,
 };
 
-/// Namespaces and types look alike, so the type is the last segment.
-fn split_qualified(path: &[String]) -> usize {
-    path.len().saturating_sub(1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::{Container, Library};
+    use crate::lang::Container;
 
     fn s(path: &[&str]) -> Vec<String> {
         path.iter().map(|s| s.to_string()).collect()

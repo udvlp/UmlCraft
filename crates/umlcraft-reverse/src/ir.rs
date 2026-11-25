@@ -149,7 +149,7 @@ pub enum Member {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Field {
     pub name: String,
     pub ty: TypeExpr,
@@ -162,7 +162,7 @@ pub struct Field {
     pub documentation: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Operation {
     pub name: String,
     pub parameters: Vec<Param>,
@@ -184,7 +184,7 @@ pub struct Operation {
     pub span: Range<usize>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Param {
     pub name: String,
     pub ty: TypeExpr,
@@ -254,6 +254,13 @@ impl TypeExpr {
     pub fn with_modifier(mut self, modifier: &str) -> Self {
         self.modifier.push_str(modifier);
         self
+    }
+}
+
+/// No type written.
+impl Default for TypeExpr {
+    fn default() -> Self {
+        Self::unwritten()
     }
 }
 

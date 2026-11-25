@@ -72,7 +72,7 @@ fn structograms_are_made_read_and_changed() {
     let edited = run(&mut host, "edit_structogram", edit);
     assert_eq!(edited["structogram"]["body"][1]["body"][0], element);
     let remove = json!({ "id": made["id"], "action": "remove", "path": "body.9" });
-    assert!(call(&mut host, &Access::default(), "edit_structogram", &remove).is_error);
+    refusal(&mut host, "edit_structogram", remove);
 
     // As image and as Structorizer file.
     let dir = std::env::temp_dir().join("umlcraft-mcp-structogram");
@@ -91,9 +91,9 @@ fn structograms_are_made_read_and_changed() {
     assert!(call(&mut host, &access, "export_image", &txt).is_error);
 
     let wrong = json!({ "id": class["id"], "structogram": { "body": [] } });
-    assert!(call(&mut host, &Access::default(), "update_structogram", &wrong).is_error);
+    refusal(&mut host, "update_structogram", wrong);
     let broken = json!({ "structogram": { "title": "x", "body": [{ "kind": "goto" }] } });
-    assert!(call(&mut host, &Access::default(), "create_structogram", &broken).is_error);
+    refusal(&mut host, "create_structogram", broken);
     host.document().model().check().unwrap();
 }
 

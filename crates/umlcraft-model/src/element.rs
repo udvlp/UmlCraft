@@ -69,6 +69,18 @@ pub struct TaggedValue {
     pub value: String,
 }
 
+impl TaggedValue {
+    /// A language profile's key in Astah's form (`jude.java.transient`) in UmlCraft's
+    /// (`java.transient`); `None` for other keys.
+    pub fn neutral_key(key: &str) -> Option<String> {
+        const LANGUAGES: [(&str, &str); 3] =
+            [("jude.java.", "java."), ("jude.c_sharp.", "csharp."), ("jude.c_plus.", "cpp.")];
+        LANGUAGES
+            .iter()
+            .find_map(|(astah, ours)| key.strip_prefix(astah).map(|rest| format!("{ours}{rest}")))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Visibility {
@@ -1824,6 +1836,36 @@ impl ElementKind {
         }
     }
 
+    /// Calls `f` for every type reference, the same ones as [`ElementKind::visit_type_refs`],
+    /// allowing them to be changed.
+    pub fn for_each_type_ref_mut(&mut self, f: &mut dyn FnMut(&mut TypeRef)) {
+        match self {
+            Self::Class(p)
+            | Self::Interface(p)
+            | Self::Enumeration(p)
+            | Self::DataType(p)
+            | Self::Actor(p)
+            | Self::UseCase(p)
+            | Self::Component(p)
+            | Self::Artifact(p)
+            | Self::Node(p) => p.binding.iter_mut().for_each(f),
+            Self::Attribute(p) => p.type_ref.iter_mut().for_each(f),
+            Self::Port(p) => p.type_ref.iter_mut().for_each(f),
+            Self::Operation(p) => p.return_type.iter_mut().for_each(f),
+            Self::Parameter(p) => p.type_ref.iter_mut().for_each(f),
+            Self::TemplateParameter(p) => {
+                p.type_ref.iter_mut().chain(&mut p.bounds).chain(&mut p.default).for_each(f);
+            }
+            Self::ActivityNode(p) => p.type_ref.iter_mut().for_each(f),
+            Self::Association(p) => {
+                let qualifiers = p.ends.iter_mut().flat_map(|end| &mut end.qualifiers);
+                qualifiers.filter_map(|q| q.type_ref.as_mut()).for_each(f);
+            }
+            // The kinds `visit_type_refs` lists as having none.
+            _ => {}
+        }
+    }
+
     /// Calls `f` for every reference to another element, with its role, in the order of
     /// [`ElementKind::references`], without collecting them first.
     pub fn visit_references(&self, f: &mut dyn FnMut(Id, RefRole)) {
@@ -2092,8 +2134,8 @@ impl ElementKind {
     /// target's former name, so the attribute still reads the same. Returns whether anything
     /// changed. Strong references are left alone; their owner has to be deleted instead.
     pub fn unlink(&mut self, target: Id, target_name: &str) -> bool {
-        let unlink_type =
-            |t: &mut Option<TypeRef>| t.as_mut().is_some_and(|t| t.unlink(target, target_name));
+        let mut types = false;
+        self.for_each_type_ref_mut(&mut |t| types |= t.unlink(target, target_name));
         let unlink_vec = |v: &mut Vec<Id>| {
             let len = v.len();
             v.retain(|&id| id != target);
@@ -2107,34 +2149,8 @@ impl ElementKind {
                 false
             }
         };
-        match self {
-            Self::Class(p)
-            | Self::Interface(p)
-            | Self::Enumeration(p)
-            | Self::DataType(p)
-            | Self::Actor(p)
-            | Self::UseCase(p)
-            | Self::Component(p)
-            | Self::Artifact(p)
-            | Self::Node(p) => unlink_type(&mut p.binding),
-            Self::Attribute(p) => unlink_type(&mut p.type_ref),
-            Self::Port(p) => unlink_type(&mut p.type_ref),
-            Self::Operation(p) => unlink_type(&mut p.return_type),
-            Self::Parameter(p) => unlink_type(&mut p.type_ref),
-            Self::TemplateParameter(p) => {
-                let mut changed = unlink_type(&mut p.type_ref);
-                for bound in &mut p.bounds {
-                    changed |= bound.unlink(target, target_name);
-                }
-                unlink_type(&mut p.default) || changed
-            }
-            Self::Association(p) => {
-                let mut changed = unlink_opt(&mut p.class);
-                for q in p.ends.iter_mut().flat_map(|end| &mut end.qualifiers) {
-                    changed |= unlink_type(&mut q.type_ref);
-                }
-                changed
-            }
+        let ids = match self {
+            Self::Association(p) => unlink_opt(&mut p.class),
             Self::Lifeline(p) => unlink_opt(&mut p.represents),
             Self::Instance(p) => unlink_opt(&mut p.classifier),
             Self::Link(p) => unlink_opt(&mut p.association),
@@ -2149,18 +2165,30 @@ impl ElementKind {
                 let refers = unlink_opt(&mut p.refers_to);
                 unlink_vec(&mut p.covered) || refers
             }
-            Self::ActivityNode(p) => {
-                let behavior = unlink_opt(&mut p.behavior);
-                unlink_type(&mut p.type_ref) || behavior
-            }
+            Self::ActivityNode(p) => unlink_opt(&mut p.behavior),
             Self::State(p) => unlink_opt(&mut p.submachine),
             Self::Extend(p) => unlink_vec(&mut p.extension_points),
             Self::Comment(p) => unlink_vec(&mut p.annotated),
             Self::Structogram(p) => unlink_opt(&mut p.operation),
             Self::ErAttribute(p) => unlink_opt(&mut p.foreign_key),
             Self::ErIsA(p) => unlink_opt(&mut p.discriminator),
-            // No weak references: strong ones are not unlinked, their holder goes instead.
-            Self::Model
+            // No weak references but type references: strong ones are not unlinked, their
+            // holder goes instead.
+            Self::Class(_)
+            | Self::Interface(_)
+            | Self::Enumeration(_)
+            | Self::DataType(_)
+            | Self::Actor(_)
+            | Self::UseCase(_)
+            | Self::Component(_)
+            | Self::Artifact(_)
+            | Self::Node(_)
+            | Self::Attribute(_)
+            | Self::Port(_)
+            | Self::Operation(_)
+            | Self::Parameter(_)
+            | Self::TemplateParameter(_)
+            | Self::Model
             | Self::Package
             | Self::EnumerationLiteral
             | Self::Slot(_)
@@ -2192,7 +2220,8 @@ impl ElementKind {
             | Self::ErParticipation(_)
             | Self::ErSubtyping(_)
             | Self::ErDomain(_) => false,
-        }
+        };
+        ids || types
     }
 
     pub fn as_generalization(&self) -> Option<&GeneralizationProps> {
@@ -2429,6 +2458,10 @@ mod tests {
             kind.for_each_reference_mut(|id| seen.push(*id));
             let expected: Vec<Id> = kind.references().into_iter().map(|(id, _)| id).collect();
             assert_eq!(seen, expected, "{kind:?}");
+            let (mut types, mut types_mut) = (Vec::new(), Vec::new());
+            kind.visit_type_refs(&mut |t| types.push(t.clone()));
+            kind.for_each_type_ref_mut(&mut |t| types_mut.push(t.clone()));
+            assert_eq!(types, types_mut, "{kind:?}");
             kind.remap(&map);
             assert!(kind.references().iter().all(|(id, _)| *id != a), "{kind:?}");
             assert!(kind.references().iter().any(|(id, _)| *id == c), "{kind:?}");

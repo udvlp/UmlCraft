@@ -17,6 +17,7 @@
 mod core;
 mod cpp;
 mod csharp;
+pub mod import;
 mod java;
 mod key;
 mod pseudo;
@@ -289,13 +290,6 @@ impl Source {
         made: &Made,
     ) -> Vec<Result<(Diagram, Report), Unbuilt>> {
         let (root, text) = (self.tree.root(), self.tree.text());
-        // A member found again by where it starts and its name.
-        fn index<M>(
-            members: &[M],
-            reference: impl Fn(&M) -> &MethodRef,
-        ) -> HashMap<(usize, &str), &M> {
-            members.iter().map(|m| ((reference(m).start, reference(m).name.as_str()), m)).collect()
-        }
         match self.language() {
             SourceLanguage::Java => methods
                 .iter()
@@ -305,50 +299,46 @@ impl Source {
                 .collect(),
             SourceLanguage::CSharp => {
                 let members = csharp::members(root, text);
-                let found = index(&members, |m| &m.reference);
-                methods
-                    .iter()
-                    .map(|m| {
-                        let member =
-                            found.get(&(m.start, m.name.as_str())).ok_or(Unbuilt::NotFound)?;
+                each_member(
+                    methods,
+                    &members,
+                    |m| &m.reference,
+                    |member| {
                         let (d, report) = csharp::diagram(member, text, made)?;
-                        Ok((d, self.with_left_out(report, member.range())))
-                    })
-                    .collect()
+                        Ok((d, self.with_left_out(report, &member.reference)))
+                    },
+                )
             }
             SourceLanguage::Python => {
                 let members = python::members(root, text);
-                let found = index(&members, |m| &m.reference);
                 let own = python::function_names(root, text);
-                methods
-                    .iter()
-                    .map(|m| {
-                        let member =
-                            found.get(&(m.start, m.name.as_str())).ok_or(Unbuilt::NotFound)?;
-                        python::diagram(member, &own, text, made)
-                    })
-                    .collect()
+                each_member(
+                    methods,
+                    &members,
+                    |m| &m.reference,
+                    |member| python::diagram(member, &own, text, made),
+                )
             }
             SourceLanguage::Cpp => {
                 let members = cpp::members(root, text);
-                let found = index(&members, |m| &m.reference);
                 let own = cpp::function_names(root, text);
-                methods
-                    .iter()
-                    .map(|m| {
-                        let member =
-                            found.get(&(m.start, m.name.as_str())).ok_or(Unbuilt::NotFound)?;
+                each_member(
+                    methods,
+                    &members,
+                    |m| &m.reference,
+                    |member| {
                         let (d, report) = cpp::diagram(member, &own, text, made)?;
-                        Ok((d, self.with_left_out(report, member.range())))
-                    })
-                    .collect()
+                        Ok((d, self.with_left_out(report, &member.reference)))
+                    },
+                )
             }
         }
     }
 
-    /// `report` with a note first on the first branch of a conditional in `range` that was
+    /// `report` with a note first on the first branch of a conditional in `method` that was
     /// left out (`#elif`, `#else`, `#if 0`), if any.
-    fn with_left_out(&self, mut report: Report, range: std::ops::Range<usize>) -> Report {
+    fn with_left_out(&self, mut report: Report, method: &MethodRef) -> Report {
+        let range = method.start..method.end;
         let at = self.tree.left_out_at().iter().find(|&&at| range.contains(&at));
         if let Some(&at) = at {
             let line = self.tree.written()[..at].matches('\n').count() + 1;
@@ -357,3 +347,28 @@ impl Source {
         report
     }
 }
+
+/// The diagram `build` makes of each of `methods`, found among `members` again by where it
+/// starts and its name (`reference` gives a member's).
+fn each_member<M>(
+    methods: &[MethodRef],
+    members: &[M],
+    reference: impl Fn(&M) -> &MethodRef,
+    build: impl Fn(&M) -> Result<(Diagram, Report), Unbuilt>,
+) -> Vec<Result<(Diagram, Report), Unbuilt>> {
+    let found: HashMap<(usize, &str), &M> =
+        members.iter().map(|m| ((reference(m).start, reference(m).name.as_str()), m)).collect();
+    methods
+        .iter()
+        .map(|m| build(found.get(&(m.start, m.name.as_str())).copied().ok_or(Unbuilt::NotFound)?))
+        .collect()
+}
+
+/// Who makes the diagrams of unit tests.
+#[cfg(test)]
+const TEST_MADE: Made = Made {
+    author: "t",
+    date: "2026-10-30",
+    origin: "test",
+    keywords: umlcraft_nsd::Keywords::English,
+};

@@ -96,6 +96,12 @@ impl Schema {
         })
     }
 
+    /// The table [`Schema::find`] finds, to change.
+    pub(crate) fn table_mut(&mut self, key: &TableKey) -> Option<&mut Table> {
+        let found = self.find(key)?.clone();
+        self.tables.get_mut(&found)
+    }
+
     pub fn skipped_total(&self) -> usize {
         self.skipped.values().sum()
     }

@@ -17,15 +17,16 @@ fn every_tool_is_listed_and_known() {
 #[test]
 fn a_screenshot_needs_the_app() {
     let mut host = Headless::new();
-    let reply = call(&mut host, &Access::default(), "screenshot", &json!({}));
-    assert!(reply.is_error);
+    refusal(&mut host, "screenshot", json!({}));
     assert_eq!(screenshot_scale(&json!({ "scale": 0.1 })), 0.25);
     assert_eq!(screenshot_scale(&json!({})), 1.0);
     for tool in ["set_window", "set_view"] {
-        assert!(call(&mut host, &Access::default(), tool, &json!({})).is_error, "{tool}");
+        refusal(&mut host, tool, json!({}));
     }
-    let sample = call(&mut host, &Access::default(), "new_document", &json!({ "sample": true }));
-    assert!(sample.is_error);
+    let sample = run(&mut host, "new_document", json!({ "sample": true }));
+    assert!(sample["diagram"].is_string(), "{sample}");
+    let model = host.document().model();
+    assert_eq!(model.element(model.root()).unwrap().name(), "Velo");
 }
 
 #[test]
@@ -88,9 +89,9 @@ fn a_batch_is_one_step_and_all_or_nothing() {
     assert_ne!(host.document().revision(), revision);
     assert_eq!(format!("{:?}", host.document().model().get(host.document().model().root())), model);
     let undo = json!([{ "tool": "undo" }]);
-    assert!(call(&mut host, &Access::default(), "batch", &json!({ "calls": undo })).is_error);
+    refusal(&mut host, "batch", json!({ "calls": undo }));
     let dangling = json!([{ "tool": "get_element", "arguments": { "id": "$3.element" } }]);
-    assert!(call(&mut host, &Access::default(), "batch", &json!({ "calls": dangling })).is_error);
+    refusal(&mut host, "batch", json!({ "calls": dangling }));
 }
 
 #[test]
@@ -321,11 +322,7 @@ fn clients_set_how_diagrams_are_drawn() {
               "text": "+ zahle(betrag : int) : void" } },
         ]),
     );
-    let svg = |host: &mut Headless| {
-        let (doc, measure) = host.parts();
-        let d = id(&r[0]["diagram"]).parse().unwrap();
-        svg::render(&scene::build(doc.model(), d, &Preview::default(), measure), measure)
-    };
+    let svg = |host: &mut Headless| drawn_svg(host, &r[0]["diagram"]);
     // As in Astah until a client says otherwise.
     let off = json!({ "visibility_column": false, "abstract_stereotype": false,
                       "read_only_constraint": false, "guillemets": false });
@@ -347,10 +344,7 @@ fn clients_set_how_diagrams_are_drawn() {
     assert_eq!(kept["visibility_column"], true);
     run(&mut host, "new_document", json!({}));
     assert_eq!(run(&mut host, "get_document", json!({}))["display"]["visibility_column"], true);
-    assert!(
-        call(&mut host, &Access::default(), "set_display", &json!({ "visibility_column": 1 }))
-            .is_error
-    );
+    refusal(&mut host, "set_display", json!({ "visibility_column": 1 }));
 }
 
 #[test]
@@ -382,14 +376,9 @@ fn stereotypes_and_keywords_stand_in_guillemets_when_asked() {
                 "tool": "createMessage", "source": "$9.element", "target": "$10.element" } },
         ]),
     );
-    let svg = |host: &mut Headless, d: &Value| {
-        let (doc, measure) = host.parts();
-        let d = id(d).parse().unwrap();
-        svg::render(&scene::build(doc.model(), d, &Preview::default(), measure), measure)
-    };
     let texts = ["include", "interface", "query", "create"];
     let drawn = |host: &mut Headless| {
-        [&r[0]["diagram"], &r[4]["diagram"], &r[8]["diagram"]].map(|d| svg(host, d)).join("")
+        [&r[0]["diagram"], &r[4]["diagram"], &r[8]["diagram"]].map(|d| drawn_svg(host, d)).join("")
     };
     // As in Astah by default.
     let astah = drawn(&mut host);
@@ -635,16 +624,6 @@ fn a_panicking_tool_answers_with_an_error_and_changes_nothing() {
     assert!(made.is_error && why.contains("at most 99"), "{why}");
 }
 
-/// The text of the error `name` answers `args` with.
-fn refusal(host: &mut Headless, name: &str, args: Value) -> String {
-    let reply = call(host, &Access::default(), name, &args);
-    assert!(reply.is_error, "{name} {args}");
-    match &reply.content[0] {
-        Content::Text(text) => text.clone(),
-        Content::Image(_) => unreachable!(),
-    }
-}
-
 /// Where a tool takes a `diagram`, its name works as well as its id, a structogram's title
 /// too; a name that several have is refused with their ids.
 #[test]
@@ -770,7 +749,7 @@ fn a_failed_batch_keeps_what_could_be_redone() {
         { "tool": "create_diagram", "arguments": { "kind": "class", "name": "Shop" } },
         { "tool": "connect", "arguments": { "diagram": "$0.diagram" } },
     ]);
-    assert!(call(&mut fresh, &Access::default(), "batch", &json!({ "calls": calls })).is_error);
+    refusal(&mut fresh, "batch", json!({ "calls": calls }));
     assert!(!fresh.touched());
 }
 

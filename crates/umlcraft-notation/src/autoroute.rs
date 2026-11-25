@@ -23,6 +23,7 @@ use umlcraft_model::{
 };
 
 use crate::labels::segments_cross;
+use crate::route::clamped_relative;
 
 /// Distance a route keeps from the nodes it passes.
 pub const MARGIN: f32 = 12.0;
@@ -1584,20 +1585,19 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
             after.filter(|p| *p != before).map(|p| (id, request, p))
         })
         .collect();
-    let relative = |r: Rect, p: Point| {
-        let fraction = |v: f32, start: f32, size: f32| {
-            if size > 0.0 { ((v - start) / size).clamp(0.0, 1.0) } else { 0.5 }
-        };
-        Point::new(fraction(p.x, r.x, r.width), fraction(p.y, r.y, r.height))
+    // The line through `points`, its ends anchored where they meet the boxes.
+    let set_route = |tx: &mut Tx<'_>, edge: Id, request: &Request, points: &[Point]| {
+        let n = points.len();
+        let anchors = (
+            Some(clamped_relative(boxes[request.source], points[0])),
+            Some(clamped_relative(boxes[request.target], points[n - 1])),
+        );
+        tx.set_route(diagram, edge, points[1..n - 1].to_vec(), anchors)
     };
     let mut count = 0;
     for ((edge, request), points) in routed.into_iter().zip(requests).zip(routes) {
         let Some(points) = points.filter(|p| p.len() >= 2) else { continue };
-        let anchors = (
-            Some(relative(boxes[request.source], points[0])),
-            Some(relative(boxes[request.target], points[points.len() - 1])),
-        );
-        tx.set_route(diagram, edge, points[1..points.len() - 1].to_vec(), anchors)?;
+        set_route(tx, edge, &request, &points)?;
         tx.update_presentation(diagram, edge, |p| {
             p.style.line_shape = LineShape::RightAngle;
             p.style.auto_route = true;
@@ -1605,11 +1605,7 @@ pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> 
         count += 1;
     }
     for (edge, request, points) in moved {
-        let anchors = (
-            Some(relative(boxes[request.source], points[0])),
-            Some(relative(boxes[request.target], points[points.len() - 1])),
-        );
-        tx.set_route(diagram, edge, points[1..points.len() - 1].to_vec(), anchors)?;
+        set_route(tx, edge, &request, &points)?;
     }
     Ok(count)
 }

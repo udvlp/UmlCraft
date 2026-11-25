@@ -155,7 +155,7 @@ impl MainView {
     fn info_page(&self, cx: &mut Context<Self>) -> Div {
         let ws = self.workspace.read(cx);
         let model = ws.doc.model();
-        let name = model.element(model.root()).map(|e| e.name().to_owned()).unwrap_or_default();
+        let name = ws.project_name();
         let (mut diagrams, mut structograms, mut elements) = (0, 0, 0);
         for element in model.elements() {
             match element.kind() {

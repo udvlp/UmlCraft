@@ -29,7 +29,7 @@ const ANSWER: Duration = Duration::from_secs(120);
 /// the folder has those the profile passes on, which let only the user (and administrators)
 /// read it. Elsewhere the folder and file are made readable by the user alone.
 pub fn control_dir() -> Option<PathBuf> {
-    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let var = crate::host::env_path;
     let dir = if cfg!(windows) {
         var("USERPROFILE")?.join(".umlcraft")
     } else if cfg!(target_os = "macos") {
@@ -50,9 +50,7 @@ pub fn sandboxed_app_announced() -> bool {
     if cfg!(windows) || cfg!(target_os = "macos") {
         return false;
     }
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .filter(|v| !v.is_empty())
-        .is_some_and(|runtime| announced_in_sandbox(std::path::Path::new(&runtime)))
+    crate::host::env_path("XDG_RUNTIME_DIR").is_some_and(|runtime| announced_in_sandbox(&runtime))
 }
 
 /// [`sandboxed_app_announced`] for the runtime folder `runtime`.
@@ -94,6 +92,8 @@ impl Request {
 /// The app's end: listens while it lives and removes its control file when dropped.
 pub struct LiveServer {
     file: PathBuf,
+    /// For tests, which connect to it; clients read it from the control file.
+    #[cfg(test)]
     port: u16,
 }
 
@@ -146,10 +146,15 @@ impl LiveServer {
                     .spawn(move || serve(stream, &secrets, &*handler, unknown, answer));
             }
         })?;
-        Ok(Self { file, port })
+        Ok(Self {
+            file,
+            #[cfg(test)]
+            port,
+        })
     }
 
-    pub fn port(&self) -> u16 {
+    #[cfg(test)]
+    pub(crate) fn port(&self) -> u16 {
         self.port
     }
 }
@@ -361,7 +366,8 @@ pub struct LiveClient {
 
 impl LiveClient {
     /// Connects to the app at `port` and checks the token.
-    pub fn connect(port: u16, token: &str) -> io::Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn connect(port: u16, token: &str) -> io::Result<Self> {
         Self::open(port, token, None)
     }
 

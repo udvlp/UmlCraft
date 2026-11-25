@@ -14,6 +14,7 @@ pub mod host;
 mod line;
 pub mod live;
 pub mod protocol;
+pub mod sample;
 mod structogram;
 pub mod tools;
 pub mod uml;

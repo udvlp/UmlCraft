@@ -2,8 +2,6 @@
 //! operators, the accessors of properties, indexers and events (named as .NET names them,
 //! `get_Count`), and the top-level statements as `Program.Main`.
 
-use std::ops::Range;
-
 use tree_sitter::Node;
 
 use super::parameter_names;
@@ -33,14 +31,6 @@ pub struct Member<'t> {
     pub returns: bool,
     /// A constructor's `: base(x)` or `: this(x)`.
     pub initializer: Option<Node<'t>>,
-    range: Range<usize>,
-}
-
-impl Member<'_> {
-    /// Where it is in the file.
-    pub fn range(&self) -> Range<usize> {
-        self.range.clone()
-    }
 }
 
 pub fn methods(root: Node, src: &str) -> Vec<MethodRef> {
@@ -88,7 +78,6 @@ fn top_level<'t>(root: Node<'t>, out: &mut Vec<Member<'t>>) {
         },
         title: "Main(args)".to_owned(),
         doc: None,
-        range: first.start_byte()..last.end_byte(),
         body: Body::Statements(statements),
         returns: false,
         initializer: None,
@@ -193,7 +182,6 @@ fn operation<'t>(node: Node<'t>, src: &str, class: &[String]) -> Option<Member<'
         },
         title,
         doc: doc(node, src),
-        range: node.byte_range(),
         body: body_of(body),
         returns,
         initializer,
@@ -244,7 +232,6 @@ fn accessors<'t>(node: Node<'t>, src: &str, class: &[String], out: &mut Vec<Memb
             },
             title: format!("{name}({})", names.join(", ")),
             doc: doc.clone(),
-            range: at.byte_range(),
             body,
             returns: reads,
             initializer: None,
@@ -371,12 +358,7 @@ namespace Shop
         let src = "namespace A;\nclass B {\n    /// <summary>\n    /// Adds.\n    /// </summary>\n    \
                    int Add(int a, int b) => a + b;\n    int this[int i] { set { } }\n}\n";
         let s = Source::parse(SourceLanguage::CSharp, src);
-        let made = crate::Made {
-            author: "t",
-            date: "2026-10-30",
-            origin: "test",
-            keywords: umlcraft_nsd::Keywords::English,
-        };
+        let made = crate::TEST_MADE;
         let ms = s.methods();
         let (add, _) = s.diagram(&ms[0], &made).unwrap();
         assert_eq!(add.text(), ["Add(a, b)"]);

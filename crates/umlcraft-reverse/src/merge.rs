@@ -28,7 +28,7 @@ use crate::ir::{
 };
 use crate::lang::{Rules, Skip};
 use crate::report::Report;
-use crate::resolve::{child_package, child_type, type_kind};
+use crate::resolve::{child_package, child_type, packages, type_kind};
 
 /// A type declared in the sources and the element it maps to.
 pub(crate) struct Entry<'p> {
@@ -138,15 +138,7 @@ impl<'p> Importer<'p> {
         for item in &scope.items {
             match item {
                 Item::Namespace { path, scope } => {
-                    let mut at = namespace;
-                    for name in path {
-                        at = match child_package(tx.model(), at, name) {
-                            Some(p) => p,
-                            None => {
-                                tx.create(at, ElementData::new(name.clone(), ElementKind::Package))?
-                            }
-                        };
-                    }
+                    let (at, _) = packages(tx, namespace, path)?;
                     self.namespace_imports.entry(at).or_default().extend(&scope.imports);
                     self.declare_scope(tx, scope, at, &imports)?;
                 }
@@ -433,18 +425,10 @@ impl<'p> Importer<'p> {
             tx.delete(extra)?;
         }
         for (p, id) in params.iter().zip(ids) {
-            let value_type = match &p.value_type {
-                Some(t) => Some(self.type_ref(tx, ctx, t, TypeKind::Class)?),
-                None => None,
-            };
-            let mut bounds = Vec::with_capacity(p.bounds.len());
-            for b in &p.bounds {
-                bounds.push(self.type_ref(tx, ctx, b, TypeKind::Class)?);
-            }
-            let default = match &p.default {
-                Some(t) => Some(self.type_ref(tx, ctx, t, TypeKind::Class)?),
-                None => None,
-            };
+            let mut type_ref = |t: &ir::TypeExpr| self.type_ref(tx, ctx, t, TypeKind::Class);
+            let value_type = p.value_type.as_ref().map(&mut type_ref).transpose()?;
+            let bounds = p.bounds.iter().map(&mut type_ref).collect::<Result<Vec<_>>>()?;
+            let default = p.default.as_ref().map(&mut type_ref).transpose()?;
             let props = TemplateParameterProps {
                 parameter: if value_type.is_some() {
                     TemplateParameterKind::Value
@@ -636,17 +620,8 @@ impl<'p> Importer<'p> {
         let mut order = Vec::new();
         // Literals first, as an enum declares them.
         for literal in literals {
-            let model = tx.model();
-            let found = existing_literals
-                .iter()
-                .position(|&l| model.get(l).is_some_and(|l| l.name() == literal.name));
-            let id_literal = match found {
-                Some(i) => existing_literals.remove(i),
-                None => tx.create(
-                    id,
-                    ElementData::new(literal.name.clone(), ElementKind::EnumerationLiteral),
-                )?,
-            };
+            let kind = ElementKind::EnumerationLiteral;
+            let id_literal = take_or_create(tx, &mut existing_literals, id, &literal.name, kind)?;
             tx.update(id_literal, |data| data.documentation = literal.documentation.clone())?;
             order.push(id_literal);
         }
@@ -660,20 +635,8 @@ impl<'p> Importer<'p> {
             let default = field.default.as_ref().or(definition.and_then(|d| d.default.as_ref()));
             let ctx = Ctx { entry: e, operation: None };
             let type_ref = self.written_type_ref(tx, ctx, &field.ty, TypeKind::Class)?;
-            let model = tx.model();
-            let found = attributes
-                .iter()
-                .position(|&a| model.get(a).is_some_and(|a| a.name() == field.name));
-            let attribute = match found {
-                Some(i) => attributes.remove(i),
-                None => tx.create(
-                    id,
-                    ElementData::new(
-                        field.name.clone(),
-                        ElementKind::Attribute(AttributeProps::default()),
-                    ),
-                )?,
-            };
+            let kind = ElementKind::Attribute(AttributeProps::default());
+            let attribute = take_or_create(tx, &mut attributes, id, &field.name, kind)?;
             let prefix = self.tag_prefix;
             tx.update(attribute, |data| {
                 data.visibility = field.visibility;
@@ -799,10 +762,12 @@ impl<'p> Importer<'p> {
     ) -> Result<()> {
         // Template parameters first: parameter and return types may name them.
         self.template_parameters(tx, ctx, op, &o.template_parameters)?;
-        let return_type = match &o.return_type {
-            Some(t) => self.written_type_ref(tx, ctx, t, TypeKind::Class)?,
-            None => None,
-        };
+        let return_type = o
+            .return_type
+            .as_ref()
+            .map(|t| self.written_type_ref(tx, ctx, t, TypeKind::Class))
+            .transpose()?
+            .flatten();
         let documentation = match definition {
             Some(d) if o.documentation.is_empty() => &d.documentation,
             _ => &o.documentation,
@@ -864,14 +829,22 @@ impl<'p> Importer<'p> {
 
 /// Whether `path` from the root is a package of the model.
 fn path_lookup_package(model: &Model, path: &[String]) -> bool {
-    let mut at = model.root();
-    for name in path {
-        match child_package(model, at, name) {
-            Some(p) => at = p,
-            None => return false,
-        }
+    path.iter().try_fold(model.root(), |at, name| child_package(model, at, name)).is_some()
+}
+
+/// Takes the element named `name` out of `existing`, or creates one of `kind` in `owner`.
+fn take_or_create(
+    tx: &mut Tx<'_>,
+    existing: &mut Vec<Id>,
+    owner: Id,
+    name: &str,
+    kind: ElementKind,
+) -> Result<Id> {
+    let model = tx.model();
+    match existing.iter().position(|&e| model.get(e).is_some_and(|e| e.name() == name)) {
+        Some(i) => Ok(existing.remove(i)),
+        None => tx.create(owner, ElementData::new(name.to_owned(), kind)),
     }
-    true
 }
 
 /// Replaces the tagged values of this language (`prefix…`) with `tags`, keeping all others.

@@ -15,7 +15,7 @@ use umlcraft_model::{
 };
 
 use crate::composite::{border_distance, snap};
-use crate::palette::{NodeTool, owner_for, unique_name};
+use crate::palette::{NodeTool, unique_name};
 use crate::scene::{self, MIN_REGION};
 
 /// How close to a state's border a new entry or exit point must be dropped to go on it, when
@@ -121,15 +121,13 @@ pub fn create_node(
                 state
             }
             None => {
-                let start = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
-                let machine = owner_for(model, start, &kind)
-                    .ok_or_else(|| ModelError::Invalid("no state machine for the point".into()))?;
-                let view = model.view_of(diagram)?;
-                let framed = crate::activity::frame(view, diagram).and_then(|f| f.bounds());
-                let r = match framed {
-                    Some(r) => r,
-                    None => crate::activity::add_frame(tx, diagram, at)?,
-                };
+                let (machine, r) = crate::activity::onto_frame(
+                    tx,
+                    diagram,
+                    &kind,
+                    at,
+                    "no state machine for the point",
+                )?;
                 bounds = snap(bounds, r);
                 machine
             }

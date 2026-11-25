@@ -7,7 +7,7 @@
 use crate::create::Keywords;
 use crate::layout::{
     CASE_LABELS, CATCH_LABEL, COND_BASELINE, ElementBox, FINALLY_LABEL, INCLUDES, INCLUDES_LABEL,
-    LABEL_BASELINE, Layout, PADDING, Rect, SeqBox, Shape, TRY_LABEL,
+    LABEL_BASELINE, Layout, PADDING, Rect, SeqBox, Shape, TRY_LABEL, case_parts,
 };
 use crate::metrics::Metrics;
 use crate::model::{Color, Diagram, Element, ElementKind, RootKind, RootStyle, Sequence};
@@ -230,10 +230,11 @@ impl Drawing<'_> {
     fn shape(&mut self, e: &Element, b: &ElementBox) {
         let r = b.rect;
         self.fill(rect_area(r), Ink::Fill(e.color()));
+        // Every shape has its box's outline as its first line (fills are kept apart).
+        self.outline(r);
         let text = e.text();
         match &b.shape {
             Shape::Plain { rotated } => {
-                self.outline(r);
                 let x = match e.kind {
                     ElementKind::Call | ElementKind::Jump => r.x + PADDING,
                     _ => r.x + PADDING / 2,
@@ -280,7 +281,6 @@ impl Drawing<'_> {
                         self.fill(tri, Ink::Fill(*c));
                     }
                 }
-                self.outline(r);
                 self.line(r.x, hy, r.right(), hy);
                 self.line(r.x, r.y, *split, hy);
                 self.line(*split, hy, r.right(), r.y);
@@ -300,18 +300,13 @@ impl Drawing<'_> {
                 let hy = r.y + head;
                 let dy = hy - CASE_LABELS;
                 let colors = e.branch_colors();
-                self.outline(r);
                 self.line(r.x, hy, r.right(), hy);
                 self.line(r.x, r.y, *apex, dy);
                 if *default {
                     self.line(*apex, dy, r.right(), r.y);
                     self.line(*apex, dy, *apex, hy);
                 }
-                let mut lines = text.clone();
-                if lines.is_empty() {
-                    lines.push(String::new());
-                }
-                let discriminator = lines.remove(0);
+                let (discriminator, lines, _) = case_parts(e);
                 for (k, &x) in columns.iter().enumerate() {
                     let right = columns.get(k + 1).copied().unwrap_or(r.right());
                     if k > 0 && (k + 1 < columns.len() || !*default) {
@@ -352,18 +347,15 @@ impl Drawing<'_> {
                 self.text(r.x + centre - dw / 2, r.y + 19, &discriminator, false);
             }
             Shape::Head { head } => {
-                self.outline(r);
                 self.line(r.x + 19, r.y + head, r.right(), r.y + head);
                 self.lines_at(&text, r.x + PADDING / 2, r.y + PADDING / 2 + self.m.line());
             }
             Shape::Foot { foot } => {
-                self.outline(r);
                 self.line(r.x + 19, *foot, r.right(), *foot);
                 self.lines_at(&text, r.x + PADDING / 2, foot + PADDING / 2 + self.m.line());
             }
-            Shape::Forever => self.outline(r),
+            Shape::Forever => {}
             Shape::Try { rows, .. } => {
-                self.outline(r);
                 let variable = text.first().cloned().unwrap_or_default();
                 let labels = [
                     TRY_LABEL.to_owned(),
@@ -386,7 +378,6 @@ impl Drawing<'_> {
                 }
             }
             Shape::Parallel { columns } => {
-                self.outline(r);
                 let (top, bottom) = (r.y + 20, r.bottom() - 20);
                 self.line(r.x, top, r.right(), top);
                 self.line(r.x, bottom, r.right(), bottom);
@@ -453,16 +444,14 @@ fn rounded(r: Rect, radius: i32) -> Vec<Px> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::create::{Provenance, lines};
+    use crate::create::{lines, test_diagram};
 
     /// The labels an alternative's branches are drawn with, for diagrams in `keywords`.
     fn branch_labels(keywords: Option<Keywords>) -> Vec<String> {
-        let made = Provenance { author: "", date: "", origin: "" };
-        let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
+        let mut d = test_diagram(vec![Element::alternative(&lines(&["x > 0?"]))]);
         if let Some(k) = keywords {
             d.set_keywords(k);
         }
-        d.children = Sequence::new(vec![Element::alternative(&lines(&["x > 0?"]))]);
         let m = Metrics::linux();
         let layout = Layout::of(&d, m);
         draw(&d, &layout, m)
@@ -480,11 +469,9 @@ mod tests {
     fn the_diagonals_pass_above_ja_and_nein() {
         let m = Metrics::linux();
         for condition in [vec!["x > 0?"], vec!["x > 0 und y > 0", "oder z > 0?"]] {
-            let made = Provenance { author: "", date: "", origin: "" };
-            let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
-            d.set_keywords(Keywords::German);
             // Empty branches: both columns as narrow as their labels allow.
-            d.children = Sequence::new(vec![Element::alternative(&lines(&condition))]);
+            let mut d = test_diagram(vec![Element::alternative(&lines(&condition))]);
+            d.set_keywords(Keywords::German);
             let layout = Layout::of(&d, m);
             let b = layout.element(&[0]).unwrap();
             let Shape::Alternative { head, split } = b.shape else { panic!() };
@@ -512,9 +499,7 @@ mod tests {
         let mut case =
             Element::case(&lines(&["c", "1", "2", "3", "4", "5", "6", "7", "8", "9", "%"]));
         case.branches[0] = Sequence::new(vec![e]);
-        let made = Provenance { author: "", date: "", origin: "" };
-        let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
-        d.children = Sequence::new(vec![case]);
+        let d = test_diagram(vec![case]);
         let m = Metrics::linux();
         let layout = Layout::of(&d, m);
         let b = layout.element(&[0, 0, 0]).unwrap();

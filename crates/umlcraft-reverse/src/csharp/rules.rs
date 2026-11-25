@@ -1,6 +1,6 @@
 //! How C# names resolve and which of its types are values.
 
-use crate::lang::Rules;
+use crate::lang::{Rules, split_at_last};
 use crate::library::TableLibrary;
 
 /// The containers and value types of the .NET base class library, kept by hand in `bcl.txt`.
@@ -15,7 +15,8 @@ pub static RULES: Rules = Rules {
     implicit_imports: &[&["System"], &["System", "Collections", "Generic"]],
     library: &BCL,
     value_packages: &[&["System"]],
-    split_qualified,
+    // Namespaces are capitalized like types.
+    split_qualified: split_at_last,
     enclosing_namespaces: true,
     base_list_by_target: true,
     optional_modifiers: &["?"],
@@ -23,16 +24,11 @@ pub static RULES: Rules = Rules {
     reexports: false,
 };
 
-/// Namespaces are capitalized like types, so the type is the last segment.
-fn split_qualified(path: &[String]) -> usize {
-    path.len().saturating_sub(1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::TypeKind;
-    use crate::lang::{Container, Library};
+    use crate::lang::Container;
 
     fn s(path: &[&str]) -> Vec<String> {
         path.iter().map(|s| s.to_string()).collect()

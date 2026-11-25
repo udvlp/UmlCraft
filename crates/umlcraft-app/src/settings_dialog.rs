@@ -8,12 +8,13 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::radio::RadioGroup;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, StyledExt, WindowExt, v_flex};
+use gpui_kit::component::{ActiveTheme, WindowExt, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
 
 use crate::main_view::MainView;
 use crate::settings::LANGUAGES;
+use crate::shell::section;
 
 /// Opens the dialog on the settings of `view`, unless a dialog is open already.
 pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
@@ -225,9 +226,4 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                 ),
             )
     });
-}
-
-/// A heading with what it sets below.
-fn section(title: String, body: impl IntoElement) -> impl IntoElement {
-    v_flex().gap_2().child(div().text_sm().font_semibold().child(title)).child(body)
 }

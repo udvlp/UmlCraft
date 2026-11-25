@@ -1,6 +1,6 @@
 //! How Python names resolve and which of its types are values.
 
-use crate::lang::Rules;
+use crate::lang::{Rules, split_at_capital};
 use crate::library::TableLibrary;
 
 /// The containers and value types of the standard library, kept by hand in `stdlib.txt`.
@@ -23,7 +23,9 @@ pub static RULES: Rules = Rules {
         &["pathlib"],
         &["enum"],
     ],
-    split_qualified,
+    // PEP 8: modules are lower case, classes start with a capital letter (Python names have no
+    // `$`).
+    split_qualified: split_at_capital,
     enclosing_namespaces: false,
     base_list_by_target: false,
     optional_modifiers: &[" | None"],
@@ -31,18 +33,10 @@ pub static RULES: Rules = Rules {
     reexports: true,
 };
 
-/// PEP 8: modules are lower case, classes start with a capital letter. The module ends before
-/// the first segment that starts with a capital letter.
-fn split_qualified(path: &[String]) -> usize {
-    path.iter()
-        .position(|s| s.starts_with(|c: char| c.is_uppercase()))
-        .unwrap_or(path.len().saturating_sub(1))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lang::{Container, Library};
+    use crate::lang::Container;
 
     fn s(path: &[&str]) -> Vec<String> {
         path.iter().map(|s| s.to_string()).collect()

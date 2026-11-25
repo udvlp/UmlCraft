@@ -2,23 +2,17 @@
 //! agree (`docs/plan-nsd-csharp.md`).
 
 use tree_sitter::Node;
-use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind};
+use umlcraft_nsd::{Diagram, Element, ElementKind};
 
 use super::methods::{Body, Member};
 use super::{CSharp, declaration, declarator_value};
-use crate::core::{Builder, Catch, Group, Sink, append_comment};
+use crate::core::{Builder, Catch, Grammar, Group, Sink, append_comment, assigned_switch};
 use crate::pseudo;
-use crate::text::{condition, lines, node_text, one_line, without_semicolon};
+use crate::text::{condition, lines, node_text, one_line};
 use crate::{Made, NoteKind, Report, Unbuilt};
 
 pub fn diagram(member: &Member, src: &str, made: &Made) -> Result<(Diagram, Report), Unbuilt> {
-    let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
-    let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
-    d.set_keywords(made.keywords);
-    if let Some(doc) = &member.doc {
-        d.set_comment(doc);
-    }
-    let mut b = Builder::<CSharp>::new(src, d.clone());
+    let mut b = Builder::<CSharp>::new(src, made, &member.title, member.doc.as_deref());
     let mut body = Vec::new();
     if let Some(init) = member.initializer {
         // `: base(x)` runs first, as Java's `super(x);` does.
@@ -30,97 +24,116 @@ pub fn diagram(member: &Member, src: &str, made: &Made) -> Result<(Diagram, Repo
         Body::Expression(value) => body.extend(b.arrow(*value, member.returns)),
         Body::Statements(statements) => body.extend(b.statements(statements)),
     }
-    b.finish(d, body)
+    b.finish(body)
 }
 
-pub fn statement(b: &mut Builder<CSharp>, node: Node, out: &mut Vec<Element>) {
-    let src = b.src;
-    match node.kind() {
-        "block" => out.extend(b.block(node)),
-        "empty_statement" => {}
-        _ if node.has_error() => out.push(b.syntax_error(node)),
-        "local_declaration_statement" => b.declaration_statement(node, out),
-        "expression_statement" => match node.named_child(0) {
-            Some(expr) => out.extend(b.expression(expr)),
-            None => out.push(b.instruction(node)),
-        },
-        "if_statement" => out.push(b.if_statement(node)),
-        "for_statement" => {
-            let counting = counted(node, src)
-                .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
-            b.for_loop(node, counting, out);
-        }
-        "foreach_statement" => {
-            let name = node.child_by_field_name("left").map(|n| one_line(node_text(n, src)));
-            let value = node.child_by_field_name("right");
-            out.push(b.traversal(node, &name.unwrap_or_default(), value));
-        }
-        "while_statement" => out.push(b.while_statement(node)),
-        "do_statement" => out.push(b.do_statement(node)),
-        "return_statement"
-            if node.named_child(0).is_some_and(|v| v.kind() == "switch_expression") =>
-        {
-            let switch = node.named_child(0).expect("checked above");
-            out.extend(b.switch_expression(switch, Some(Sink::Return)));
-        }
-        "return_statement" => out.push(b.returned(node)),
-        "throw_statement" | "break_statement" => out.push(b.jump(node)),
-        "continue_statement" => {
-            b.note(node, NoteKind::Continue);
-            out.push(b.stand_in(node));
-        }
-        "goto_statement" => {
-            b.note(node, NoteKind::Goto);
-            out.push(b.jump(node));
-        }
-        "yield_statement" => {
-            b.note(node, NoteKind::Yield);
-            // `yield break` leaves the method; `yield return x` hands out a value and goes on.
-            let mut words = node_text(node, src).split(|c: char| c.is_whitespace() || c == ';');
-            let ends = words.find(|w| !w.is_empty() && *w != "yield") == Some("break");
-            out.push(if ends { b.jump(node) } else { b.instruction(node) });
-        }
-        "labeled_statement" => {
-            b.note(node, NoteKind::Label);
-            let mut cursor = node.walk();
-            let inner: Vec<Node> =
-                node.named_children(&mut cursor).filter(|c| c.kind() != "identifier").collect();
-            out.extend(b.statements(&inner));
-        }
-        "switch_statement" => out.extend(b.switch_statement(node)),
-        "try_statement" => out.push(b.try_statement(node)),
-        "using_statement" => b.using_statement(node, out),
-        "lock_statement" => {
-            b.note(node, NoteKind::Lock);
-            let lock = node.named_child(0).map(|l| node_text(l, src)).unwrap_or_default();
-            let body = last_named(node).filter(|_| node.named_child_count() > 1);
-            b.framed(format!("lock ({lock})"), body, out);
-        }
-        "fixed_statement" => {
-            let mut cursor = node.walk();
-            let declared =
-                node.named_children(&mut cursor).find(|c| c.kind() == "variable_declaration");
-            let head = declared.map(|d| one_line(node_text(d, src))).unwrap_or_default();
-            b.framed(format!("fixed ({head})"), last_named(node), out);
-        }
-        "checked_statement" | "unsafe_statement" => {
-            if let Some(block) = last_named(node) {
-                out.extend(b.block(block));
+impl Grammar for CSharp {
+    const COMMENTS: &'static [&'static str] = &["comment"];
+    const BLOCKS: &'static [&'static str] = &["block"];
+    const IGNORED: &'static [&'static str] = &[
+        "preproc_region",
+        "preproc_endregion",
+        "preproc_pragma",
+        "preproc_nullable",
+        "preproc_line",
+        "preproc_warning",
+        "preproc_error",
+        "preproc_define",
+        "preproc_undef",
+    ];
+    const ENDS_CASE: &'static [&'static str] = &[
+        "break_statement",
+        "return_statement",
+        "throw_statement",
+        "continue_statement",
+        "goto_statement",
+        "yield_statement",
+    ];
+    const RUNS_ON: bool = false;
+    const BREAK_ENDS_CASE: bool = true;
+    const TRUE: &'static str = "true";
+
+    fn statement(b: &mut Builder<'_, Self>, node: Node, out: &mut Vec<Element>) {
+        let src = b.src;
+        match node.kind() {
+            "block" => out.extend(b.block(node)),
+            "empty_statement" => {}
+            _ if node.has_error() => out.push(b.syntax_error(node)),
+            "local_declaration_statement" => b.declaration_statement(node, out),
+            "expression_statement" => match node.named_child(0) {
+                Some(expr) => out.extend(b.expression(expr)),
+                None => out.push(b.instruction(node)),
+            },
+            "if_statement" => out.push(b.if_statement(node)),
+            "for_statement" => {
+                let counting = counted(node, src)
+                    .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
+                b.for_loop(node, counting, out);
             }
+            "foreach_statement" => {
+                let name = node.child_by_field_name("left").map(|n| one_line(node_text(n, src)));
+                let value = node.child_by_field_name("right");
+                out.push(b.traversal(node, &name.unwrap_or_default(), value));
+            }
+            "while_statement" => out.push(b.while_statement(node)),
+            "do_statement" => out.push(b.do_statement(node)),
+            "return_statement"
+                if node.named_child(0).is_some_and(|v| v.kind() == "switch_expression") =>
+            {
+                let switch = node.named_child(0).expect("checked above");
+                out.extend(b.switch_expression(switch, Some(Sink::Return)));
+            }
+            "return_statement" => out.push(b.returned(node)),
+            "throw_statement" | "break_statement" => out.push(b.jump(node)),
+            "continue_statement" => out.push(b.continued(node)),
+            "goto_statement" => {
+                b.note(node, NoteKind::Goto);
+                out.push(b.jump(node));
+            }
+            "yield_statement" => {
+                b.note(node, NoteKind::Yield);
+                // `yield break` leaves the method; `yield return x` hands out a value and goes
+                // on.
+                let mut words = node_text(node, src).split(|c: char| c.is_whitespace() || c == ';');
+                let ends = words.find(|w| !w.is_empty() && *w != "yield") == Some("break");
+                out.push(if ends { b.jump(node) } else { b.instruction(node) });
+            }
+            "labeled_statement" => out.extend(b.labeled(node, "identifier")),
+            "switch_statement" => out.extend(b.switch_statement(node)),
+            "try_statement" => out.push(b.try_statement(node)),
+            "using_statement" => b.using_statement(node, out),
+            "lock_statement" => {
+                b.note(node, NoteKind::Lock);
+                let lock = node.named_child(0).map(|l| node_text(l, src)).unwrap_or_default();
+                let body = last_named(node).filter(|_| node.named_child_count() > 1);
+                b.framed(format!("lock ({lock})"), body, out);
+            }
+            "fixed_statement" => {
+                let mut cursor = node.walk();
+                let declared =
+                    node.named_children(&mut cursor).find(|c| c.kind() == "variable_declaration");
+                let head = declared.map(|d| one_line(node_text(d, src))).unwrap_or_default();
+                b.framed(format!("fixed ({head})"), last_named(node), out);
+            }
+            "checked_statement" | "unsafe_statement" => {
+                if let Some(block) = last_named(node) {
+                    out.extend(b.block(block));
+                }
+            }
+            "local_function_statement" => b.note(node, NoteKind::LocalFunction),
+            _ => out.push(b.instruction(node)),
         }
-        "local_function_statement" => b.note(node, NoteKind::LocalFunction),
-        _ => out.push(b.instruction(node)),
     }
-}
 
-/// A declaration or expression without its statement: one instruction per assignment
-/// (`x := 1`, none for `int x;`), other expressions as written.
-pub fn simple(b: &Builder<CSharp>, node: Node) -> Vec<Element> {
-    let texts = match node.kind() {
-        "variable_declaration" => declaration(node, b.src),
-        _ => vec![pseudo::assignment(node, b.src).unwrap_or_else(|| lines(node, b.src))],
-    };
-    texts.iter().map(|text| b.element(ElementKind::Instruction, text)).collect()
+    /// A declaration or expression without its statement: one instruction per assignment
+    /// (`x := 1`, none for `int x;`), other expressions as written.
+    fn simple(b: &Builder<'_, Self>, node: Node) -> Vec<Element> {
+        let texts = match node.kind() {
+            "variable_declaration" => declaration(node, b.src),
+            _ => vec![pseudo::assignment(node, b.src).unwrap_or_else(|| lines(node, b.src))],
+        };
+        texts.iter().map(|text| b.element(ElementKind::Instruction, text)).collect()
+    }
 }
 
 /// The variable a for loop counts and its start: `int i = 0` or `i = 0` as its only
@@ -139,12 +152,7 @@ fn counted<'t>(node: Node<'t>, src: &str) -> Option<(Node<'t>, Node<'t>)> {
             let [d] = declarators.as_slice() else { return None };
             Some((d.child_by_field_name("name")?, declarator_value(*d)?))
         }
-        [init] if init.kind() == "assignment_expression" => {
-            let op = node_text(init.child_by_field_name("operator")?, src);
-            let left = init.child_by_field_name("left")?;
-            (op == "=" && left.kind() == "identifier")
-                .then_some((left, init.child_by_field_name("right")?))
-        }
+        [init] if init.kind() == "assignment_expression" => pseudo::counted_assignment(*init, src),
         _ => None,
     }
 }
@@ -154,11 +162,6 @@ fn last_named(node: Node) -> Option<Node> {
 }
 
 impl Builder<'_, CSharp> {
-    /// A statement as a jump, without its `;`: `return x`, `throw`, `goto case 2`.
-    fn jump(&self, node: Node) -> Element {
-        self.element(ElementKind::Jump, &without_semicolon(lines(node, self.src)))
-    }
-
     /// An expression body `=> value`: the value returned, or the expression as a statement.
     fn arrow(&mut self, value: Node, returns: bool) -> Vec<Element> {
         match value.kind() {
@@ -194,18 +197,13 @@ impl Builder<'_, CSharp> {
                 }
             }
             "assignment_expression" => {
-                let op = expr.child_by_field_name("operator").map(|o| node_text(o, src));
-                if let (Some("="), Some(left), Some(right)) =
-                    (op, expr.child_by_field_name("left"), expr.child_by_field_name("right"))
-                    && right.kind() == "switch_expression"
-                {
-                    let sink = Sink::Assign(node_text(left, src).to_owned());
-                    return self.switch_expression(right, Some(sink));
+                if let Some((sink, switch)) = assigned_switch(expr, src) {
+                    return self.switch_expression(switch, Some(sink));
                 }
             }
             _ => {}
         }
-        simple(self, expr)
+        CSharp::simple(self, expr)
     }
 
     /// `int a = 1, b;` as its assignments; `var x = v switch { … };` as a case element;
@@ -233,7 +231,7 @@ impl Builder<'_, CSharp> {
             return;
         }
         let before = out.len();
-        out.extend(simple(self, declared));
+        out.extend(CSharp::simple(self, declared));
         let first_word = node_text(node, src).split_whitespace().take(2).collect::<Vec<_>>();
         if first_word.contains(&"using") {
             self.note(node, NoteKind::Using);
@@ -251,7 +249,7 @@ impl Builder<'_, CSharp> {
         let mut cursor = node.walk();
         let resource = node.named_children(&mut cursor).find(|c| Some(*c) != body);
         let mut resources = match resource {
-            Some(r) if r.kind() == "variable_declaration" => simple(self, r),
+            Some(r) if r.kind() == "variable_declaration" => CSharp::simple(self, r),
             Some(r) => vec![self.element(ElementKind::Instruction, &lines(r, self.src))],
             None => Vec::new(),
         };

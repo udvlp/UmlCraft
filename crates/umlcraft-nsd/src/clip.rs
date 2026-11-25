@@ -34,12 +34,12 @@ pub fn paste(text: &str) -> Vec<Element> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Provenance, RootKind, lines};
+    use crate::create::test_diagram;
+    use crate::lines;
 
     #[test]
     fn elements_come_back_as_they_went() {
-        let made = Provenance { author: "t", date: "2026-10-29", origin: "test" };
-        let d = Diagram::new(RootKind::Program, &lines(&["demo"]), &made);
+        let d = test_diagram(Vec::new());
         let mut alt = Element::alternative(&lines(&["a > b"]));
         alt.branches[0] = Sequence::new(vec![Element::call(&lines(&["f(x)"]))]);
         let elements = vec![Element::instruction(&lines(&["a", "b"])), alt];

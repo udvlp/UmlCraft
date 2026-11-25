@@ -74,6 +74,11 @@ impl Attrs {
         self.0.retain(|a| a.name != name);
     }
 
+    /// The lines of a text attribute (`text`, `comment`); none when it is missing.
+    pub(crate) fn lines(&self, name: &str) -> Lines {
+        self.get(name).map(text::decode_lines_lossy).unwrap_or_default()
+    }
+
     /// Attributes from name/value pairs, in the given order.
     pub fn from_pairs(pairs: &[(&str, &str)]) -> Attrs {
         Attrs(pairs.iter().map(|(n, v)| Attr { name: (*n).into(), value: (*v).into() }).collect())
@@ -259,7 +264,7 @@ pub struct Element {
 
 impl Element {
     pub fn text(&self) -> Lines {
-        self.attrs.get("text").map(text::decode_lines_lossy).unwrap_or_default()
+        self.attrs.lines("text")
     }
 
     /// Forever loops have no text; setting one there is ignored.
@@ -270,17 +275,11 @@ impl Element {
     }
 
     pub fn comment(&self) -> Lines {
-        self.attrs.get("comment").map(text::decode_lines_lossy).unwrap_or_default()
+        self.attrs.lines("comment")
     }
 
-    /// An empty comment is written as `comment=""`, as Structorizer does.
     pub fn set_comment(&mut self, lines: &[String]) {
-        let value = if lines.iter().all(String::is_empty) {
-            String::new()
-        } else {
-            text::encode_lines(lines)
-        };
-        self.attrs.set("comment", value, self.kind.order());
+        self.attrs.set("comment", comment_value(lines), self.kind.order());
     }
 
     pub fn color(&self) -> Color {
@@ -323,6 +322,12 @@ pub(crate) fn text_value(lines: &[String]) -> String {
         [line] if line.is_empty() => String::new(),
         _ => text::encode_lines(lines),
     }
+}
+
+/// A `comment` attribute (of an element or the root): an empty comment is written as
+/// `comment=""`, as Structorizer does.
+fn comment_value(lines: &[String]) -> String {
+    if lines.iter().all(String::is_empty) { String::new() } else { text::encode_lines(lines) }
 }
 
 /// What a diagram is: Structorizer draws the three with different frames.
@@ -397,7 +402,7 @@ impl Diagram {
     }
 
     pub fn text(&self) -> Lines {
-        self.attrs.get("text").map(text::decode_lines_lossy).unwrap_or_default()
+        self.attrs.lines("text")
     }
 
     pub fn set_text(&mut self, lines: &[String]) {
@@ -405,16 +410,11 @@ impl Diagram {
     }
 
     pub fn comment(&self) -> Lines {
-        self.attrs.get("comment").map(text::decode_lines_lossy).unwrap_or_default()
+        self.attrs.lines("comment")
     }
 
     pub fn set_comment(&mut self, lines: &[String]) {
-        let value = if lines.iter().all(String::is_empty) {
-            String::new()
-        } else {
-            text::encode_lines(lines)
-        };
-        self.attrs.set("comment", value, ROOT_ORDER);
+        self.attrs.set("comment", comment_value(lines), ROOT_ORDER);
     }
 
     pub fn kind(&self) -> RootKind {

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use umlcraft_model::{Document, ElementKind, Id, Model};
-use umlcraft_notation::scene::{ApproxMeasure, TextMeasure};
+use umlcraft_notation::scene::ApproxMeasure;
 
 /// The Java tool, written to a temporary folder for each run.
 const TOOL_SOURCE: &str = include_str!("../../../tools/asta-export/AstaExport.java");
@@ -137,12 +137,8 @@ pub struct Export {
 impl Export {
     /// Prepares the export, measuring text with an estimate.
     pub fn new(model: &Model) -> Self {
-        Self::with_measure(model, &ApproxMeasure)
-    }
-
-    pub fn with_measure(model: &Model, measure: &dyn TextMeasure) -> Self {
         let (model, structograms) = without_structograms(model);
-        let layout = serde_json::to_string(&layout::layout(&model, measure))
+        let layout = serde_json::to_string(&layout::layout(&model, &ApproxMeasure))
             .expect("layout serialization cannot fail");
         Self { project: umlcraft_format::to_string(&model), layout, structograms }
     }
@@ -277,17 +273,8 @@ fn wait_with_deadline(
     timeout: Duration,
     cancel: &AtomicBool,
 ) -> Result<Output, ExportError> {
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                pipe.read_to_end(&mut bytes).ok();
-            }
-            bytes
-        })
-    };
-    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
     let start = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -308,6 +295,17 @@ fn wait_with_deadline(
     let stdout = stdout.join().unwrap_or_default();
     let stderr = stderr.join().unwrap_or_default();
     Ok(Output { status, stdout, stderr })
+}
+
+/// Reads all of `pipe` on a thread of its own.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            pipe.read_to_end(&mut bytes).ok();
+        }
+        bytes
+    })
 }
 
 /// The last lines of the tool's output, enough to see what went wrong.

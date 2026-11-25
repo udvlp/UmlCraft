@@ -520,16 +520,7 @@ fn rect_segment_distance(r: Rect, a: Point, b: Point) -> f32 {
         let dy = (r.y - p.y).max(p.y - r.bottom()).max(0.0);
         (dx * dx + dy * dy).sqrt()
     };
-    let point_segment = |p: Point| {
-        let (dx, dy) = (b.x - a.x, b.y - a.y);
-        let length = dx * dx + dy * dy;
-        let t = if length > 0.0 {
-            (((p.x - a.x) * dx + (p.y - a.y) * dy) / length).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        p.distance(Point::new(a.x + t * dx, a.y + t * dy))
-    };
+    let point_segment = |p: Point| p.distance(closest_on_segment(p, a, b));
     if inside_length(r, a, b) > 0.0 {
         return 0.0;
     }
@@ -859,15 +850,15 @@ pub fn label_rect(label: &EdgeLabel, measure: &dyn TextMeasure) -> Rect {
 
 /// How much of `rects` `r` covers, in pixels of a row's height.
 fn overlaps(r: Rect, rects: &[Rect]) -> f32 {
-    let area: f32 = rects
-        .iter()
-        .map(|o| {
-            let w = r.right().min(o.right()) - r.x.max(o.x);
-            let h = r.bottom().min(o.bottom()) - r.y.max(o.y);
-            w.max(0.0) * h.max(0.0)
-        })
-        .sum();
+    let area: f32 = rects.iter().map(|&o| overlap_area(r, o)).sum();
     area / LABEL_HEIGHT
+}
+
+/// The area `a` and `b` have in common.
+pub(crate) fn overlap_area(a: Rect, b: Rect) -> f32 {
+    let w = a.right().min(b.right()) - a.x.max(b.x);
+    let h = a.bottom().min(b.bottom()) - a.y.max(b.y);
+    w.max(0.0) * h.max(0.0)
 }
 
 /// How long the part of the segment `a`–`b` inside `r` is.

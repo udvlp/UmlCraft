@@ -228,15 +228,22 @@ pub fn set_disabled(d: &mut Diagram, span: &Span, disabled: bool) -> Result<Sele
     each(d, span, |e| e.set_disabled(disabled))
 }
 
+/// The branches of a case (without its default) or parallel element, which can be added to
+/// and removed; none for other kinds. A new branch goes before index `cases` at the latest,
+/// and branches `0..cases` can be removed.
+pub fn cases(e: &Element) -> Option<usize> {
+    match e.kind {
+        ElementKind::Case => Some(e.branches.len() - 1),
+        ElementKind::Parallel => Some(e.branches.len()),
+        _ => None,
+    }
+}
+
 /// Adds an empty branch before branch `index` of a case (a new case line `?`; not after the
 /// default) or parallel element.
 pub fn add_branch(d: &mut Diagram, at: &[usize], index: usize) -> Result<Selection> {
     let e = path::element_mut(d, at).ok_or(EditError::NoSuchPlace)?;
-    let last = match e.kind {
-        ElementKind::Case => e.branches.len() - 1,
-        ElementKind::Parallel => e.branches.len(),
-        _ => return Err(EditError::NoBranches),
-    };
+    let last = cases(e).ok_or(EditError::NoBranches)?;
     if index > last {
         return Err(EditError::NoSuchPlace);
     }
@@ -247,15 +254,11 @@ pub fn add_branch(d: &mut Diagram, at: &[usize], index: usize) -> Result<Selecti
 /// Removes branch `index` of a case (not its default) or parallel element.
 pub fn remove_branch(d: &mut Diagram, at: &[usize], index: usize) -> Result<Selection> {
     let e = path::element_mut(d, at).ok_or(EditError::NoSuchPlace)?;
-    let (cases, least) = match e.kind {
-        ElementKind::Case => (e.branches.len() - 1, 1),
-        ElementKind::Parallel => (e.branches.len(), 1),
-        _ => return Err(EditError::NoBranches),
-    };
+    let cases = cases(e).ok_or(EditError::NoBranches)?;
     if index >= cases {
         return Err(EditError::NoSuchPlace);
     }
-    if cases <= least {
+    if cases <= 1 {
         return Err(EditError::LastBranch);
     }
     remove_branch_at(e, index);
@@ -335,11 +338,7 @@ pub fn fit_for(d: &Diagram, e: &mut Element) {
     if let Some(rest) = after_keyword(text, &pre_for_in, ignore_case)
         && let Some((var, _)) = split_word(rest, &post_for_in, ignore_case)
     {
-        e.set_attr("counterVar", var.trim());
-        e.set_attr("startValue", "");
-        e.set_attr("stepConst", "");
-        e.set_attr("style", "TRAVERSAL");
-        e.set_attr("insep", post_for_in);
+        e.set_traversal(var.trim(), &post_for_in);
         return;
     }
     let rest = after_keyword(text, &pre_for, ignore_case);
@@ -353,13 +352,7 @@ pub fn fit_for(d: &Diagram, e: &mut Element) {
         Some((var.trim(), start.trim(), end.trim(), step))
     });
     match counting {
-        Some((var, start, end, step)) if !var.is_empty() => {
-            e.set_attr("counterVar", var);
-            e.set_attr("startValue", start);
-            e.set_attr("endValue", end);
-            e.set_attr("stepConst", step);
-            e.set_attr("style", "COUNTER");
-        }
+        Some((var, start, end, step)) if !var.is_empty() => e.set_counting(var, start, end, step),
         _ => {
             e.set_attr("counterVar", "dummy_counter");
             e.set_attr("startValue", rest.unwrap_or(text).trim());
@@ -420,19 +413,17 @@ fn encoded(lines: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Provenance, Sequence, lines, read, write};
+    use crate::create::test_diagram;
+    use crate::{Sequence, lines, read, write};
 
     fn sample() -> Diagram {
-        let made = Provenance { author: "t", date: "2026-10-29", origin: "test" };
-        let mut d = Diagram::new(RootKind::Program, &lines(&["demo"]), &made);
         let mut alt = Element::alternative(&lines(&["a > b"]));
         alt.branches[0] = Sequence::new(vec![Element::instruction(&lines(&["x"]))]);
-        d.children = Sequence::new(vec![
+        test_diagram(vec![
             Element::instruction(&lines(&["a"])),
             alt,
             Element::instruction(&lines(&["b"])),
-        ]);
-        d
+        ])
     }
 
     fn texts(d: &Diagram, seq: &[usize]) -> Vec<String> {
@@ -676,8 +667,7 @@ mod tests {
 
     #[test]
     fn german_keywords_count_in_german() {
-        let made = crate::Provenance { author: "", date: "", origin: "" };
-        let mut d = Diagram::new(RootKind::Program, &lines(&["demo"]), &made);
+        let mut d = test_diagram(Vec::new());
         assert_eq!(Keywords::of(&d), Keywords::English);
         d.set_keywords(Keywords::German);
         assert_eq!(Keywords::of(&d), Keywords::German);

@@ -16,8 +16,8 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    ElementKind, Id, InteractionOperator, LineShape, MessageGate, MessageSort, Model,
-    ParameterDirection, Point, Rect, Shape, Style, View,
+    ElementKind, Id, InteractionOperator, MessageGate, MessageSort, Model, ParameterDirection,
+    Point, Rect, Shape, Style, View,
 };
 
 use crate::scene::{
@@ -356,9 +356,11 @@ pub(crate) fn arrange(
 ) -> (SequenceLayout, Vec<EdgeShape>) {
     let mut layout = SequenceLayout::default();
     let mut lanes: HashMap<Id, LaneState> = HashMap::new();
-    let (hide_numbers, flat_numbers) = match model.get(diagram).map(|d| d.kind()) {
-        Some(ElementKind::Diagram(p)) => (p.hide_message_numbers, p.flat_message_numbers),
-        _ => (false, false),
+    let (hide_numbers, flat_numbers, hide_returns) = match model.get(diagram).map(|d| d.kind()) {
+        Some(ElementKind::Diagram(p)) => {
+            (p.hide_message_numbers, p.flat_message_numbers, p.hide_return_values)
+        }
+        _ => (false, false, false),
     };
 
     // The guards that stand where the fragment puts them, by node and row: not moved by hand.
@@ -639,10 +641,6 @@ pub(crate) fn arrange(
         .collect();
     let numbers =
         if hide_numbers { HashMap::new() } else { numbers(&messages, &lanes, flat_numbers) };
-    let hide_returns = matches!(
-        model.get(diagram).map(|d| d.kind()),
-        Some(ElementKind::Diagram(p)) if p.hide_return_values
-    );
     let returns = if hide_returns { HashMap::new() } else { returns(model, &messages, &lanes) };
     let edges: Vec<EdgeShape> = messages
         .iter()
@@ -1159,22 +1157,29 @@ struct Label<'a> {
 /// Where a message label `width` wide goes centered on its line from `span.0` to `span.1`:
 /// at `center`, or, where it would lie on a bar of a lifeline the line crosses (`bars`, from
 /// left to right side), in the middle of the widest stretch of the line those bars leave free.
-fn clear_of_bars(center: f32, width: f32, span: (f32, f32), mut bars: Vec<(f32, f32)>) -> f32 {
+fn clear_of_bars(center: f32, width: f32, span: (f32, f32), bars: Vec<(f32, f32)>) -> f32 {
     let half = width / 2.0;
     if bars.iter().all(|&(l, r)| r <= center - half || l >= center + half) {
         return center;
     }
-    bars.sort_by(|a, b| a.0.total_cmp(&b.0));
+    free_stretches(span, bars)
+        .into_iter()
+        .max_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0)))
+        .map_or(center, |(l, r)| (l + r) / 2.0)
+}
+
+/// The stretches of `span` between `taken` ones, from left to right, some maybe empty or
+/// reversed where taken ones overlap.
+fn free_stretches(span: (f32, f32), mut taken: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    taken.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut free = Vec::new();
     let mut from = span.0;
-    for (l, r) in bars {
+    for (l, r) in taken {
         free.push((from, l));
         from = from.max(r);
     }
     free.push((from, span.1));
-    free.into_iter()
-        .max_by(|a, b| (a.1 - a.0).total_cmp(&(b.1 - b.0)))
-        .map_or(center, |(l, r)| (l + r) / 2.0)
+    free
 }
 
 /// Where a message label `width` wide goes on its line from `span.0` to `span.1` to keep off
@@ -1186,21 +1191,14 @@ fn between(
     width: f32,
     span: (f32, f32),
     source: f32,
-    mut taken: Vec<(f32, f32)>,
+    taken: Vec<(f32, f32)>,
 ) -> Option<f32> {
     let half = width / 2.0;
     if taken.iter().all(|&(l, r)| r <= center - half || l >= center + half) {
         return Some(center);
     }
-    taken.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut free = Vec::new();
-    let mut from = span.0;
-    for (l, r) in taken {
-        free.push((from, l));
-        from = from.max(r);
-    }
-    free.push((from, span.1));
-    free.into_iter()
+    free_stretches(span, taken)
+        .into_iter()
         .filter(|&(l, r)| r - l >= width)
         .map(|(l, r)| (center.clamp(l + half, r - half), (l + r) / 2.0))
         .min_by(|(a, _), (b, _)| {
@@ -1353,25 +1351,12 @@ fn message_edge(
     };
     let left_at = m.label.map(|offset| from.center() + offset.x);
     if !text.trim().is_empty() {
-        labels.push(match (center, left_at) {
-            (Some(x), _) => EdgeLabel {
-                text: text.clone(),
-                anchor: Point::new(x, label_top),
-                align: LabelAlign::Center,
-                underline: false,
-                keyword: false,
-                color: None,
-            },
-            (None, Some(x)) => EdgeLabel {
-                text: text.clone(),
-                anchor: Point::new(x, label_top),
-                align: LabelAlign::Left,
-                underline: false,
-                keyword: false,
-                color: None,
-            },
+        let (x, align) = match (center, left_at) {
+            (Some(x), _) => (x, LabelAlign::Center),
+            (None, Some(x)) => (x, LabelAlign::Left),
             (None, None) => unreachable!("one of them is set"),
-        });
+        };
+        labels.push(EdgeLabel::new(text.clone(), Point::new(x, label_top), align));
     }
     // A text on several lines, and the label of a found message, which Astah breaks at spaces
     // where it would run past the lifeline it calls: the last line stays where the whole label
@@ -1408,14 +1393,8 @@ fn message_edge(
             (None, None) => (center.unwrap_or_default(), 0.0),
             _ => (center.unwrap_or_default(), STEREOTYPE_ABOVE),
         };
-        labels.push(EdgeLabel {
-            text: stereotype,
-            anchor: Point::new(x, label_top - above - raised),
-            align: LabelAlign::Center,
-            underline: false,
-            keyword: false,
-            color: None,
-        });
+        let anchor = Point::new(x, label_top - above - raised);
+        labels.push(EdgeLabel::new(stereotype, anchor, LabelAlign::Center));
     }
     // Astah centers a label's text by Java's whole-pixel width, mostly a little wider than the
     // exact one. (Labels placed by hand carry that from the import.)
@@ -1424,27 +1403,12 @@ fn message_edge(
         let rounded = measure.rounded_width(&label.text, FONT_SIZE, false);
         label.anchor.x -= (rounded - exact).max(0.0) / 2.0;
     }
-    let node_tips = [points[0], points[points.len() - 1]];
     EdgeShape {
-        id: m.presentation,
-        points,
-        node_tips,
         line,
-        shape: LineShape::Line,
-        source_marker: EndMarker::None,
         target_marker,
         labels,
         fixed: true,
-        ends: [Rect::default(); 2],
-        anchors: [None; 2],
-        name_arrow: None,
-        qualifiers: Vec::new(),
-        free_labels: Vec::new(),
-        association: false,
-        end_labels: Vec::new(),
-        constraint_labels: Vec::new(),
-        stroke: None,
-        double: false,
+        ..EdgeShape::new(m.presentation, points, [Rect::default(); 2])
     }
 }
 

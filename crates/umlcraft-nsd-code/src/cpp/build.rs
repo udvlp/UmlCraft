@@ -4,13 +4,13 @@
 use std::collections::BTreeSet;
 
 use tree_sitter::Node;
-use umlcraft_nsd::{Diagram, Element, ElementKind, Provenance, RootKind};
+use umlcraft_nsd::{Diagram, Element, ElementKind};
 
 use super::methods::Member;
 use super::{Cpp, declaration};
-use crate::core::{Builder, Catch, Group};
+use crate::core::{Builder, Catch, Grammar, Group};
 use crate::pseudo;
-use crate::text::{condition, declared_name, lines, node_text, one_line, without_semicolon};
+use crate::text::{condition, declared_name, lines, node_text, one_line};
 use crate::{Made, NoteKind, Report, Unbuilt};
 
 /// The diagram of `member`; `own` are the names of the functions the file declares
@@ -21,13 +21,7 @@ pub fn diagram(
     src: &str,
     made: &Made,
 ) -> Result<(Diagram, Report), Unbuilt> {
-    let provenance = Provenance { author: made.author, date: made.date, origin: made.origin };
-    let mut d = Diagram::new(RootKind::Sub, std::slice::from_ref(&member.title), &provenance);
-    d.set_keywords(made.keywords);
-    if let Some(doc) = &member.doc {
-        d.set_comment(doc);
-    }
-    let mut b = Builder::<Cpp>::new(src, d.clone());
+    let mut b = Builder::<Cpp>::new(src, made, &member.title, member.doc.as_deref());
     b.own_functions = own;
     let mut body = Vec::new();
     if let Some(list) = member.initializers {
@@ -38,124 +32,129 @@ pub fn diagram(
         }
     }
     body.extend(b.block(member.body));
-    b.finish(d, body)
+    b.finish(body)
 }
 
-pub fn statement(b: &mut Builder<Cpp>, node: Node, out: &mut Vec<Element>) {
-    let src = b.src;
-    match node.kind() {
-        "compound_statement" => out.extend(b.block(node)),
-        _ if node.has_error() => out.push(b.syntax_error(node)),
-        "expression_statement" => {
-            if let Some(expr) = node.named_child(0) {
-                out.extend(b.expression(expr));
-            }
-        }
-        "declaration" => out.extend(simple(b, node)),
-        "if_statement" => {
-            b.clause(node, out);
-            out.push(b.if_statement(node));
-        }
-        "else_clause" | "attributed_statement" => {
-            let mut cursor = node.walk();
-            let inner: Vec<Node> = node
-                .named_children(&mut cursor)
-                .filter(|c| c.kind() != "attribute_declaration")
-                .collect();
-            // `else` only wraps the statement of an alternative's branch, so an `else if`
-            // chain nests one level per `if`, as in the other languages.
-            match node.kind() {
-                "else_clause" => out.extend(b.statements_in_place(&inner)),
-                _ => out.extend(b.statements(&inner)),
-            }
-        }
-        "while_statement" => {
-            b.clause(node, out);
-            out.push(b.while_statement(node));
-        }
-        "do_statement" => out.push(b.do_statement(node)),
-        "for_statement" => {
-            let counting = counted(node, src)
-                .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
-            b.for_loop(node, counting, out);
-        }
-        "for_range_loop" => {
-            if let Some(init) = node.child_by_field_name("initializer") {
-                out.extend(b.block(init));
-            }
-            let name = node
-                .child_by_field_name("declarator")
-                .and_then(declared_name)
-                .map(|n| one_line(node_text(n, src)))
-                .unwrap_or_default();
-            out.push(b.traversal(node, &name, node.child_by_field_name("right")));
-        }
-        "switch_statement" => {
-            b.clause(node, out);
-            out.extend(b.switch_statement(node));
-        }
-        "return_statement" | "co_return_statement" => out.push(b.returned(node)),
-        "throw_statement" | "break_statement" => {
-            out.push(b.element(ElementKind::Jump, &without_semicolon(lines(node, src))));
-        }
-        "continue_statement" => {
-            b.note(node, NoteKind::Continue);
-            out.push(b.stand_in(node));
-        }
-        "goto_statement" => {
-            b.note(node, NoteKind::Goto);
-            out.push(b.element(ElementKind::Jump, &without_semicolon(lines(node, src))));
-        }
-        "labeled_statement" => {
-            b.note(node, NoteKind::Label);
-            let mut cursor = node.walk();
-            let inner: Vec<Node> = node
-                .named_children(&mut cursor)
-                .filter(|c| c.kind() != "statement_identifier")
-                .collect();
-            out.extend(b.statements(&inner));
-        }
-        "try_statement" => out.push(b.try_statement(node)),
-        "co_yield_statement" => {
-            b.note(node, NoteKind::Yield);
-            out.push(b.instruction(node));
-        }
-        "init_statement" => {
-            let mut cursor = node.walk();
-            let inner: Vec<Node> = node.named_children(&mut cursor).collect();
-            out.extend(b.statements(&inner));
-        }
-        kind if kind.ends_with("_specifier") && kind != "type_specifier" => {
-            b.note(node, NoteKind::LocalClass);
-        }
-        _ => out.push(b.instruction(node)),
-    }
-}
+impl Grammar for Cpp {
+    const COMMENTS: &'static [&'static str] = &["comment"];
+    const BLOCKS: &'static [&'static str] = &["compound_statement"];
+    const IGNORED: &'static [&'static str] =
+        &["preproc_include", "preproc_def", "preproc_function_def", "preproc_call"];
+    const ENDS_CASE: &'static [&'static str] = &[
+        "break_statement",
+        "return_statement",
+        "throw_statement",
+        "continue_statement",
+        "goto_statement",
+        "co_return_statement",
+    ];
+    const RUNS_ON: bool = true;
+    const BREAK_ENDS_CASE: bool = true;
+    const TRUE: &'static str = "true";
 
-/// A declaration or expression without its statement: one instruction per assignment
-/// (`x := 1`, none for `int x;`), other expressions as written.
-pub fn simple(b: &Builder<Cpp>, node: Node) -> Vec<Element> {
-    // `i++, j--` (in a for loop's update): each part on its own; `a, b, c` nests as
-    // `a, (b, c)`.
-    if node.kind() == "comma_expression" {
-        let mut parts = Vec::new();
-        let mut open = vec![node];
-        while let Some(n) = open.pop() {
-            if n.kind() == "comma_expression" {
-                let mut cursor = n.walk();
-                let children: Vec<Node> = n.named_children(&mut cursor).collect();
-                open.extend(children.into_iter().rev());
-            } else {
-                parts.push(n);
+    fn statement(b: &mut Builder<'_, Self>, node: Node, out: &mut Vec<Element>) {
+        let src = b.src;
+        match node.kind() {
+            "compound_statement" => out.extend(b.block(node)),
+            _ if node.has_error() => out.push(b.syntax_error(node)),
+            "expression_statement" => {
+                if let Some(expr) = node.named_child(0) {
+                    out.extend(b.expression(expr));
+                }
             }
+            "declaration" => out.extend(Self::simple(b, node)),
+            "if_statement" => {
+                b.clause(node, out);
+                out.push(b.if_statement(node));
+            }
+            "else_clause" | "attributed_statement" => {
+                let mut cursor = node.walk();
+                let inner: Vec<Node> = node
+                    .named_children(&mut cursor)
+                    .filter(|c| c.kind() != "attribute_declaration")
+                    .collect();
+                // `else` only wraps the statement of an alternative's branch, so an `else if`
+                // chain nests one level per `if`, as in the other languages.
+                match node.kind() {
+                    "else_clause" => out.extend(b.statements_in_place(&inner)),
+                    _ => out.extend(b.statements(&inner)),
+                }
+            }
+            "while_statement" => {
+                b.clause(node, out);
+                out.push(b.while_statement(node));
+            }
+            "do_statement" => out.push(b.do_statement(node)),
+            "for_statement" => {
+                let counting = counted(node, src)
+                    .and_then(|(var, start)| pseudo::counting(b.keywords(), node, var, start, src));
+                b.for_loop(node, counting, out);
+            }
+            "for_range_loop" => {
+                if let Some(init) = node.child_by_field_name("initializer") {
+                    out.extend(b.block(init));
+                }
+                let name = node
+                    .child_by_field_name("declarator")
+                    .and_then(declared_name)
+                    .map(|n| one_line(node_text(n, src)))
+                    .unwrap_or_default();
+                out.push(b.traversal(node, &name, node.child_by_field_name("right")));
+            }
+            "switch_statement" => {
+                b.clause(node, out);
+                out.extend(b.switch_statement(node));
+            }
+            "return_statement" | "co_return_statement" => out.push(b.returned(node)),
+            "throw_statement" | "break_statement" => out.push(b.jump(node)),
+            "continue_statement" => out.push(b.continued(node)),
+            "goto_statement" => {
+                b.note(node, NoteKind::Goto);
+                out.push(b.jump(node));
+            }
+            "labeled_statement" => out.extend(b.labeled(node, "statement_identifier")),
+            "try_statement" => out.push(b.try_statement(node)),
+            "co_yield_statement" => {
+                b.note(node, NoteKind::Yield);
+                out.push(b.instruction(node));
+            }
+            "init_statement" => {
+                let mut cursor = node.walk();
+                let inner: Vec<Node> = node.named_children(&mut cursor).collect();
+                out.extend(b.statements(&inner));
+            }
+            kind if kind.ends_with("_specifier") && kind != "type_specifier" => {
+                b.note(node, NoteKind::LocalClass);
+            }
+            _ => out.push(b.instruction(node)),
         }
-        return parts.into_iter().flat_map(|p| simple(b, p)).collect();
     }
-    let texts = match node.kind() {
-        "declaration" => declaration(node, b.src),
-        _ => vec![pseudo::assignment(node, b.src).unwrap_or_else(|| lines(node, b.src))],
-    };
-    texts.iter().map(|text| b.element(ElementKind::Instruction, text)).collect()
+
+    /// A declaration or expression without its statement: one instruction per assignment
+    /// (`x := 1`, none for `int x;`), other expressions as written.
+    fn simple(b: &Builder<'_, Self>, node: Node) -> Vec<Element> {
+        // `i++, j--` (in a for loop's update): each part on its own; `a, b, c` nests as
+        // `a, (b, c)`.
+        if node.kind() == "comma_expression" {
+            let mut parts = Vec::new();
+            let mut open = vec![node];
+            while let Some(n) = open.pop() {
+                if n.kind() == "comma_expression" {
+                    let mut cursor = n.walk();
+                    let children: Vec<Node> = n.named_children(&mut cursor).collect();
+                    open.extend(children.into_iter().rev());
+                } else {
+                    parts.push(n);
+                }
+            }
+            return parts.into_iter().flat_map(|p| Self::simple(b, p)).collect();
+        }
+        let texts = match node.kind() {
+            "declaration" => declaration(node, b.src),
+            _ => vec![pseudo::assignment(node, b.src).unwrap_or_else(|| lines(node, b.src))],
+        };
+        texts.iter().map(|text| b.element(ElementKind::Instruction, text)).collect()
+    }
 }
 
 /// The variable a for loop counts and its start: `int i = 0` or `i = 0` as its only
@@ -176,12 +175,7 @@ fn counted<'t>(node: Node<'t>, src: &str) -> Option<(Node<'t>, Node<'t>)> {
             (name.kind() == "identifier" && !value.kind().ends_with("_list"))
                 .then_some((name, value))
         }
-        "assignment_expression" => {
-            let op = node_text(init.child_by_field_name("operator")?, src);
-            let left = init.child_by_field_name("left")?;
-            (op == "=" && left.kind() == "identifier")
-                .then_some((left, init.child_by_field_name("right")?))
-        }
+        "assignment_expression" => pseudo::counted_assignment(init, src),
         _ => None,
     }
 }
@@ -198,7 +192,7 @@ impl Builder<'_, Cpp> {
             let mut cursor = init.walk();
             for part in init.named_children(&mut cursor) {
                 out.extend(match part.kind() {
-                    "declaration" => simple(self, part),
+                    "declaration" => Cpp::simple(self, part),
                     _ => self.expression(part),
                 });
             }
@@ -206,7 +200,7 @@ impl Builder<'_, Cpp> {
         if let Some(value) = clause.child_by_field_name("value")
             && value.kind() == "declaration"
         {
-            out.extend(simple(self, value));
+            out.extend(Cpp::simple(self, value));
         }
     }
 
@@ -226,7 +220,7 @@ impl Builder<'_, Cpp> {
             let kind = if own { ElementKind::Call } else { ElementKind::Instruction };
             return vec![self.element(kind, &lines(expr, src))];
         }
-        simple(self, expr)
+        Cpp::simple(self, expr)
     }
 
     /// A switch statement as a case element (see [`Builder::cases`]); each `case` holds its

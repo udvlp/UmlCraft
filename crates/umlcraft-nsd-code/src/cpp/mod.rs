@@ -5,42 +5,15 @@ mod build;
 mod methods;
 
 use tree_sitter::Node;
-use umlcraft_nsd::Element;
 
-use crate::core::{Builder, Grammar};
 use crate::pseudo::assign;
 use crate::text::{declared_name, lines_at, node_text, one_line};
 
 pub use build::diagram;
 pub use methods::{function_names, members, methods};
 
+/// C++'s grammar (`core::Grammar`, in `build`).
 pub struct Cpp;
-
-impl Grammar for Cpp {
-    const COMMENTS: &'static [&'static str] = &["comment"];
-    const BLOCKS: &'static [&'static str] = &["compound_statement"];
-    const IGNORED: &'static [&'static str] =
-        &["preproc_include", "preproc_def", "preproc_function_def", "preproc_call"];
-    const ENDS_CASE: &'static [&'static str] = &[
-        "break_statement",
-        "return_statement",
-        "throw_statement",
-        "continue_statement",
-        "goto_statement",
-        "co_return_statement",
-    ];
-    const RUNS_ON: bool = true;
-    const BREAK_ENDS_CASE: bool = true;
-    const TRUE: &'static str = "true";
-
-    fn statement(b: &mut Builder<'_, Self>, node: Node, out: &mut Vec<Element>) {
-        build::statement(b, node, out);
-    }
-
-    fn simple(b: &Builder<'_, Self>, node: Node) -> Vec<Element> {
-        build::simple(b, node)
-    }
-}
 
 /// The names of a parameter list's parameters: `(int a, const T& b = 1, ...)` → `a, b, ...`;
 /// unnamed parameters have none.

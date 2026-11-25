@@ -131,6 +131,18 @@ impl<'g> Reader<'g> {
         Some(Point::new(self.num(id, "x")? as f32, self.num(id, "y")? as f32))
     }
 
+    /// The point a field refers to, such as a presentation's `location`.
+    fn point_at(&self, id: ObjId, field: &str) -> Option<Point> {
+        self.obj(id, field).and_then(|p| self.point(p))
+    }
+
+    /// Where Astah draws a label: its `location` moved by its `localMovement`, if any.
+    fn moved_location(&self, label: ObjId) -> Option<Point> {
+        let at = self.point_at(label, "location")?;
+        let moved = self.point_at(label, "localMovement").unwrap_or_default();
+        Some(Point::new(at.x + moved.x, at.y + moved.y))
+    }
+
     fn points(&self, id: ObjId, field: &str) -> Vec<Point> {
         self.list(id, field).into_iter().filter_map(|p| self.point(p)).collect()
     }
@@ -206,17 +218,10 @@ fn action_type(r: Reader<'_>, message: ObjId) -> Option<i64> {
     r.g.field(r.obj(message, "action")?, "actionType").and_then(Value::as_i64)
 }
 
-/// Astah's prefixes of its language profiles' tagged values and UmlCraft's names for them.
-const LANGUAGE_TAGS: [(&str, &str); 3] =
-    [("jude.java.", "java."), ("jude.c_sharp.", "csharp."), ("jude.c_plus.", "cpp.")];
-
 /// A language profile's tagged value under UmlCraft's name: `jude.java.transient` becomes
 /// `java.transient`. Other keys stay as they are.
 fn neutral_tag(key: &str) -> String {
-    LANGUAGE_TAGS
-        .iter()
-        .find_map(|(astah, ours)| key.strip_prefix(astah).map(|rest| format!("{ours}{rest}")))
-        .unwrap_or_else(|| key.to_owned())
+    TaggedValue::neutral_key(key).unwrap_or_else(|| key.to_owned())
 }
 
 /// Tagged values Astah uses for itself. Those of its language profiles stay: they hold
@@ -231,7 +236,7 @@ const ACTIVITY_NODE_STEREOTYPES: &[&str] =
     &[SEND_SIGNAL, ACCEPT_EVENT, ACCEPT_TIME_EVENT, CONNECTOR];
 
 fn is_internal_tag(key: &str) -> bool {
-    let profile = LANGUAGE_TAGS.iter().any(|(astah, _)| key.starts_with(astah));
+    let profile = TaggedValue::neutral_key(key).is_some();
     (key.starts_with("jude.") && !profile)
         || matches!(key, "hiddenDependency" | "matrix_access_type")
 }
@@ -266,14 +271,9 @@ fn is_language_marker(stereotype: &str) -> bool {
     })
 }
 
-/// Astah marks elements of its ER, data flow and requirement notations with tagged values on
-/// otherwise plain UML elements.
-fn is_foreign_notation(tags: &[(String, String)]) -> bool {
-    foreign_notation(tags).is_some()
-}
-
-/// The notation that tagged values mark, as reported among the skipped kinds. Data flow
-/// diagrams and flowcharts are activity diagrams with such tags.
+/// The notation that tagged values mark, as reported among the skipped kinds: Astah marks
+/// elements of its ER, data flow and requirement notations with tagged values on otherwise
+/// plain UML elements. Data flow diagrams and flowcharts are activity diagrams with such tags.
 fn foreign_notation(tags: &[(String, String)]) -> Option<&'static str> {
     tags.iter().find_map(|(key, value)| {
         if key.starts_with("jude.er.") || (key == "jude.type" && value.starts_with("er_")) {
@@ -474,16 +474,16 @@ impl Importer<'_> {
         *self.skipped.entry(self.r.class(object).to_owned()).or_default() += 1;
     }
 
-    /// Whether the walks may go one level deeper to `object`, counted in `nesting` (the
-    /// caller takes the level back): a crafted file can chain objects deeper than any stack.
-    /// Deeper than [`MAX_NESTING`], `object` is skipped.
-    fn deeper(&mut self, object: ObjId) -> bool {
+    /// Runs `walk` one level deeper, into `object`, counted in `nesting`: a crafted file can
+    /// chain objects deeper than any stack. Deeper than [`MAX_NESTING`], `object` is skipped.
+    fn nested(&mut self, object: ObjId, walk: impl FnOnce(&mut Self)) {
         if self.nesting >= MAX_NESTING {
             self.skip(object);
-            return false;
+            return;
         }
         self.nesting += 1;
-        true
+        walk(self);
+        self.nesting -= 1;
     }
 
     /// Name, visibility, stereotypes, tagged values and documentation of an Astah element.
@@ -564,6 +564,15 @@ impl Importer<'_> {
         }
     }
 
+    /// Lets `change` alter the kind of element `id`; the element is updated if it says it did.
+    fn update_kind(&mut self, id: Id, change: impl FnOnce(&mut ElementKind) -> bool) {
+        let Some(e) = self.model.get(id) else { return };
+        let mut data = e.data().clone();
+        if change(&mut data.kind) {
+            let _ = self.model.apply(Op::UpdateElement { id, data });
+        }
+    }
+
     /// Whether a classifier of Astah's stands for a template parameter. Some classes declare
     /// `templateParameter` as a (usually empty) list.
     fn is_template_parameter(&self, classifier: ObjId) -> bool {
@@ -596,15 +605,12 @@ impl Importer<'_> {
             let tags = self.r.tagged_values(child);
             if er::is_er_model(&tags) {
                 let data = self.data(child, ElementKind::Package, &[]);
-                if let Some(package) = self.create(id, data, Some(child))
-                    && self.deeper(child)
-                {
-                    self.er_walk(child, package);
-                    self.nesting -= 1;
+                if let Some(package) = self.create(id, data, Some(child)) {
+                    self.nested(child, |im| im.er_walk(child, package));
                 }
                 continue;
             }
-            if is_foreign_notation(&tags) {
+            if foreign_notation(&tags).is_some() {
                 self.skip(child);
                 continue;
             }
@@ -617,11 +623,8 @@ impl Importer<'_> {
                     {
                         data.stereotypes.insert(0, palette::SUBSYSTEM.to_owned());
                     }
-                    if let Some(package) = self.create(id, data, Some(child))
-                        && self.deeper(child)
-                    {
-                        self.walk(child, package);
-                        self.nesting -= 1;
+                    if let Some(package) = self.create(id, data, Some(child)) {
+                        self.nested(child, |im| im.walk(child, package));
                     }
                 }
                 "UClassifierImp"
@@ -679,10 +682,7 @@ impl Importer<'_> {
                                 }
                             }
                         }
-                        if self.deeper(child) {
-                            self.walk(child, classifier);
-                            self.nesting -= 1;
-                        }
+                        self.nested(child, |im| im.walk(child, classifier));
                     }
                 }
                 "UExtensionPointImp" => {
@@ -789,21 +789,21 @@ impl Importer<'_> {
             let Some(target_kind) = self.model.get(behavior).map(|e| e.kind().clone()) else {
                 continue;
             };
-            let Some(e) = self.model.get(id) else { continue };
-            let mut data = e.data().clone();
-            match (&mut data.kind, target_kind) {
-                (ElementKind::InteractionUse(p), ElementKind::Interaction) => {
-                    p.refers_to = Some(behavior);
+            self.update_kind(id, |kind| {
+                match (kind, target_kind) {
+                    (ElementKind::InteractionUse(p), ElementKind::Interaction) => {
+                        p.refers_to = Some(behavior);
+                    }
+                    (ElementKind::ActivityNode(p), ElementKind::Activity) => {
+                        p.behavior = Some(behavior);
+                    }
+                    (ElementKind::State(p), ElementKind::StateMachine) => {
+                        p.submachine = Some(behavior);
+                    }
+                    _ => return false,
                 }
-                (ElementKind::ActivityNode(p), ElementKind::Activity) => {
-                    p.behavior = Some(behavior);
-                }
-                (ElementKind::State(p), ElementKind::StateMachine) => {
-                    p.submachine = Some(behavior);
-                }
-                _ => continue,
-            }
-            let _ = self.model.apply(Op::UpdateElement { id, data });
+                true
+            });
         }
     }
 
@@ -959,12 +959,11 @@ impl Importer<'_> {
     fn bindings(&mut self) {
         for (id, object) in std::mem::take(&mut self.bound) {
             let binding = self.bound_type(object, 0);
-            let Some(e) = self.model.get(id) else { continue };
-            let mut data = e.data().clone();
-            if let ElementKind::Class(p) = &mut data.kind {
+            self.update_kind(id, |kind| {
+                let ElementKind::Class(p) = kind else { return false };
                 p.binding = binding;
-                let _ = self.model.apply(Op::UpdateElement { id, data });
-            }
+                true
+            });
         }
     }
 
@@ -1481,11 +1480,8 @@ impl Importer<'_> {
                 if is_default_region_name(&data.name) {
                     data.name.clear();
                 }
-                if let Some(region) = self.create(owner, data, Some(vertex))
-                    && self.deeper(vertex)
-                {
-                    self.vertices(region, vertex);
-                    self.nesting -= 1;
+                if let Some(region) = self.create(owner, data, Some(vertex)) {
+                    self.nested(vertex, |im| im.vertices(region, vertex));
                 }
                 continue;
             }
@@ -1550,10 +1546,7 @@ impl Importer<'_> {
                 data.name.clear();
                 self.create(id, data, Some(transition));
             }
-            if self.deeper(vertex) {
-                self.vertices(id, vertex);
-                self.nesting -= 1;
-            }
+            self.nested(vertex, |im| im.vertices(id, vertex));
         }
     }
 
@@ -1569,20 +1562,14 @@ impl Importer<'_> {
                 && is_default_dimension_name(&self.r.name(partition));
         if is_dimension {
             for sub in self.r.list(partition, "subGroup") {
-                if self.deeper(sub) {
-                    self.partition(owner, sub);
-                    self.nesting -= 1;
-                }
+                self.nested(sub, |im| im.partition(owner, sub));
             }
             return;
         }
         let data = self.data(partition, ElementKind::Partition, &[]);
         let Some(id) = self.create(owner, data, Some(partition)) else { return };
         for sub in self.r.list(partition, "subGroup") {
-            if self.deeper(sub) {
-                self.partition(id, sub);
-                self.nesting -= 1;
-            }
+            self.nested(sub, |im| im.partition(id, sub));
         }
     }
 

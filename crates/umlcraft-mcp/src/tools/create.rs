@@ -17,25 +17,15 @@ pub(super) fn create_diagram(host: &mut dyn Host, args: &Value) -> Outcome {
     if notation.is_some() && kind != DiagramKind::EntityRelationship {
         return Err("only ER diagrams take `notation`".into());
     }
-    let mut settings = ElementKind::diagram(kind);
-    set_diagram_settings(&mut settings, args)?;
+    set_diagram_settings(&mut ElementKind::diagram(kind), args)?;
     let diagram = change_measured(host, "create_diagram", |tx, measure| {
         let diagram = if objects {
             edit::create_object_diagram(tx, owner, &name)?
         } else {
             edit::create_diagram(tx, owner, kind, &name)?
         };
-        if let ElementKind::Diagram(wanted) = &settings {
-            tx.update(diagram, |d| {
-                if let ElementKind::Diagram(p) = &mut d.kind {
-                    p.hide_message_numbers = wanted.hide_message_numbers;
-                    p.flat_message_numbers = wanted.flat_message_numbers;
-                    p.hide_return_values = wanted.hide_return_values;
-                    p.hide_frame = wanted.hide_frame;
-                    p.simple_states = wanted.simple_states;
-                }
-            })?;
-        }
+        // Checked above.
+        tx.update(diagram, |d| drop(set_diagram_settings(&mut d.kind, args)))?;
         if let Some(notation) = notation {
             er::set_notation(tx, diagram, notation, measure)?;
         }
@@ -193,34 +183,29 @@ pub(super) fn create_model_element(host: &mut dyn Host, args: &Value) -> Outcome
     let owner = id_arg(args, "owner")?;
     let key = str_arg(args, "tool")?;
     let name = str_arg(args, "name")?.to_owned();
-    let own_kind = match key {
-        "erDomain" => Some(ElementKind::ErDomain(Default::default())),
-        "extensionPoint" => Some(ElementKind::ExtensionPoint),
-        _ => None,
-    };
-    if let Some(kind) = own_kind {
-        let model = host.document().model();
-        let owner_kind = model.get(owner).ok_or_else(|| format!("no element {owner}"))?.kind();
-        let data = ElementData::new(name, kind);
-        if !owner_kind.can_own(&data.kind) {
-            return Err(format!("a {} cannot own an {key}", owner_kind.type_name()));
+    // Kinds without a diagram tool, named by their key.
+    let own_kind = matches!(key, "erDomain" | "extensionPoint");
+    let data = match key {
+        "erDomain" => ElementData::new(name, ElementKind::ErDomain(Default::default())),
+        "extensionPoint" => ElementData::new(name, ElementKind::ExtensionPoint),
+        _ => {
+            let tool = DIAGRAM_KINDS
+                .iter()
+                .flat_map(|(_, kind)| palette::palette(*kind))
+                .find_map(|t| match t {
+                    Tool::Node(tool) if tool.key() == key => Some(tool),
+                    _ => None,
+                })
+                .ok_or_else(|| format!("no element tool `{key}`"))?;
+            tool.element_data(if tool.is_named() { name } else { String::new() })
         }
-        let element = change(host, "create_model_element", |tx| tx.create(owner, data))?;
-        return Ok(Reply::json(created(host.document().model(), element)));
-    }
-    let tool = DIAGRAM_KINDS
-        .iter()
-        .flat_map(|(_, kind)| palette::palette(*kind))
-        .find_map(|t| match t {
-            Tool::Node(tool) if tool.key() == key => Some(tool),
-            _ => None,
-        })
-        .ok_or_else(|| format!("no element tool `{key}`"))?;
+    };
     let model = host.document().model();
     let owner_kind = model.get(owner).ok_or_else(|| format!("no element {owner}"))?.kind();
-    let data = tool.element_data(if tool.is_named() { name } else { String::new() });
     if !owner_kind.can_own(&data.kind) {
-        return Err(format!("a {} cannot own a {}", owner_kind.type_name(), data.kind.type_name()));
+        let what =
+            if own_kind { format!("an {key}") } else { format!("a {}", data.kind.type_name()) };
+        return Err(format!("a {} cannot own {what}", owner_kind.type_name()));
     }
     let element = change(host, "create_model_element", |tx| tx.create(owner, data))?;
     Ok(Reply::json(created(host.document().model(), element)))
@@ -294,11 +279,7 @@ pub(super) fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
         (_, None) => return Err("`target` is missing".into()),
     };
     let slot = match opt_num(args, "y") {
-        Some(y) if tool.message_sort().is_some() => {
-            let (doc, measure) = host.parts();
-            let scene = scene::build(doc.model(), diagram, &Preview::default(), measure);
-            scene.sequence.as_ref().and_then(|l| l.slot_at(y))
-        }
+        Some(y) if tool.message_sort().is_some() => slot_at(host, diagram, y),
         _ => None,
     };
     let edge = change(host, "connect", |tx| {
@@ -415,12 +396,7 @@ pub(super) fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
         }
         let data = ElementData::new(text.clone(), ElementKind::ExtensionPoint);
         let point = change(host, "add_member", |tx| tx.create(owner, data))?;
-        return Ok(Reply::json(json!({
-            "id": point,
-            "element": point,
-            "kind": "extensionPoint",
-            "text": text,
-        })));
+        return member_reply(point, "extensionPoint", &text);
     }
     let is_class_member = !matches!(
         owner_kind,
@@ -466,12 +442,13 @@ pub(super) fn add_member(host: &mut dyn Host, args: &Value) -> Outcome {
     })?;
     let model = host.document().model();
     let shown = if literal || column { text } else { member::member_text(model, member) };
-    Ok(Reply::json(json!({
-        "id": member,
-        "element": member,
-        "kind": kind_name(model, member),
-        "text": shown,
-    })))
+    member_reply(member, kind_name(model, member), &shown)
+}
+
+/// What `add_member` replies: the member (or the state whose activity it set), its kind and
+/// its text.
+fn member_reply(member: Id, kind: &str, text: &str) -> Outcome {
+    Ok(Reply::json(json!({ "id": member, "element": member, "kind": kind, "text": text })))
 }
 
 /// `entry / …`, `do / …` or `exit / …` sets that activity of `state`; any other text adds an
@@ -490,9 +467,7 @@ pub(super) fn add_state_member(
             _ => props.exit = activity,
         }
         change(host, "add_member", |tx| tx.update(state, |d| d.kind = ElementKind::State(props)))?;
-        return Ok(Reply::json(
-            json!({ "id": state, "element": state, "kind": "state", "text": text }),
-        ));
+        return member_reply(state, "state", text);
     }
     if text.is_empty() {
         return Err("an internal transition needs a trigger, a guard or an effect".into());
@@ -506,12 +481,7 @@ pub(super) fn add_state_member(
         Some(ElementKind::InternalTransition(t)) => t.label(),
         _ => String::new(),
     };
-    Ok(Reply::json(json!({
-        "id": member,
-        "element": member,
-        "kind": kind_name(model, member),
-        "text": shown,
-    })))
+    member_reply(member, kind_name(model, member), &shown)
 }
 
 /// `entry / light on` as (`entry`, `light on`); likewise `do` and `exit`, in any case.
