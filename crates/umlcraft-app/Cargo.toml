@@ -28,7 +28,6 @@ gpui-kit.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
 chrono.workspace = true
-image.workspace = true
 minisign-verify.workspace = true
 resvg.workspace = true
 rust-embed.workspace = true

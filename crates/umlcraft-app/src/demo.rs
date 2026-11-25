@@ -221,7 +221,7 @@ impl Builder<'_, '_> {
         source: Option<(f32, f32)>,
         target: Option<(f32, f32)>,
     ) -> Result<()> {
-        let view = self.tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = self.tx.model().view_of(diagram)?;
         let bounds = |id: Id| view.get(id).and_then(|p| p.bounds()).ok_or(ModelError::NotFound(id));
         let (from, to) =
             view.get(edge).and_then(|p| p.endpoints()).ok_or(ModelError::NotFound(edge))?;
@@ -929,7 +929,7 @@ impl Builder<'_, '_> {
             }
         }
         // All lifelines run down to the same height.
-        let view = self.tx.model().view(d).ok_or(ModelError::NotADiagram(d))?;
+        let view = self.tx.model().view_of(d)?;
         let ends: Vec<(Id, f32)> = lanes
             .iter()
             .filter_map(|&lane| match view.get(lane)?.shape {
@@ -950,7 +950,7 @@ impl Builder<'_, '_> {
 
     /// Lets the bar on `lane` that starts at `top` run down to `bottom`.
     fn lengthen_bar(&mut self, d: Id, lane: Id, top: f32, bottom: f32) -> Result<()> {
-        let view = self.tx.model().view(d).ok_or(ModelError::NotADiagram(d))?;
+        let view = self.tx.model().view_of(d)?;
         let bar = view.presentations().iter().find_map(|p| match p.shape {
             Shape::Activation { lifeline, top: t, .. }
                 if lifeline == lane && (t - top).abs() < 0.5 =>
@@ -1416,17 +1416,7 @@ mod tests {
         model.check().unwrap();
         let kinds: Vec<DiagramKind> =
             model.elements().filter_map(|e| e.kind().as_diagram()).collect();
-        for kind in [
-            DiagramKind::Class,
-            DiagramKind::UseCase,
-            DiagramKind::Sequence,
-            DiagramKind::Activity,
-            DiagramKind::StateMachine,
-            DiagramKind::Component,
-            DiagramKind::Deployment,
-            DiagramKind::CompositeStructure,
-            DiagramKind::EntityRelationship,
-        ] {
+        for kind in DiagramKind::ALL {
             assert!(kinds.contains(&kind), "no {kind:?} diagram");
         }
         let structograms = model

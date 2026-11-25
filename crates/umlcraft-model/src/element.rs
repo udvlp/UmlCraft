@@ -1739,6 +1739,17 @@ impl ElementKind {
         refs
     }
 
+    /// The elements this one refers to strongly (a relationship's ends), in reference order.
+    pub fn strong_references(&self) -> Vec<Id> {
+        let mut refs = Vec::new();
+        self.visit_references(&mut |id, role| {
+            if role.is_strong() {
+                refs.push(id);
+            }
+        });
+        refs
+    }
+
     /// Calls `f` for every type reference: of attributes, parameters, return types, template
     /// parameters, bindings, object nodes and qualifiers.
     pub fn visit_type_refs(&self, f: &mut dyn FnMut(&TypeRef)) {
@@ -2075,11 +2086,6 @@ impl ElementKind {
                 *id = new;
             }
         });
-    }
-
-    /// Whether this element holds a strong reference to `target`.
-    pub fn refers_strongly_to(&self, target: Id) -> bool {
-        self.references().iter().any(|&(id, role)| id == target && role.is_strong())
     }
 
     /// Removes every weak reference to `target`. Type references become free text with the
@@ -2509,12 +2515,7 @@ mod tests {
         assert!(RefRole::ConnectorEnd.accepts(&port));
         assert!(RefRole::ConnectorEnd.accepts(&ElementKind::attribute(None)));
         assert!(!RefRole::PartWithPort.accepts(&port));
-        let strong: Vec<Id> = connector
-            .references()
-            .into_iter()
-            .filter(|(_, role)| role.is_strong())
-            .map(|(id, _)| id)
-            .collect();
+        let strong = connector.strong_references();
         assert_eq!(strong, [a, b], "the two roles, and only they, are strong");
         let mut unlinked = connector.clone();
         assert!(unlinked.unlink(a, "a") && unlinked.references().len() == 2);

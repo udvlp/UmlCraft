@@ -132,7 +132,7 @@ pub fn to_file(d: &Diagram, made: &Provenance) -> Diagram {
 }
 
 /// Whether every element has the branches its kind takes.
-pub fn branches_fit(kind: ElementKind, count: usize) -> bool {
+fn branches_fit(kind: ElementKind, count: usize) -> bool {
     match kind.branches() {
         crate::model::Branches::Fixed(fixed) => fixed.len() == count,
         crate::model::Branches::Repeated(_) => count >= 1,

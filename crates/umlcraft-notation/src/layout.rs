@@ -635,7 +635,7 @@ fn arrange_grown(
         crate::activity::spread_pins(tx, diagram, scope, measure)?;
     }
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
 
     // The nodes, their sizes and what holds them.
     struct Node {
@@ -1294,7 +1294,7 @@ fn arrange_grown(
         })?;
     }
     // The frame goes around what was arranged; arranging a selection only widens it.
-    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = tx.model().view_of(diagram)?;
     let frame = view.presentations().iter().find(|p| p.element == Some(diagram));
     if let Some((frame, old_frame)) = frame.and_then(|f| Some((f.id, f.bounds()?))) {
         // With the texts outside the nodes, which Astah's frame also holds.
@@ -1343,7 +1343,7 @@ fn arrange_grown(
     }
 
     // Loops follow their node; the lines of what moved are routed.
-    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = tx.model().view_of(diagram)?;
     let mut loops = Vec::new();
     let mut lines = Vec::new();
     // The loops of a node go to its corners in turn, first to those whose sides the lines to
@@ -1374,7 +1374,7 @@ fn arrange_grown(
     // Lines of actors beside the system boundary run straight, as textbooks draw them.
     if straight {
         let model = tx.model();
-        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = model.view_of(diagram)?;
         let actor = |id: &Id| {
             let element = view.get(*id).and_then(|p| p.element).and_then(|e| model.get(e));
             element.is_some_and(|e| matches!(e.kind(), ElementKind::Actor(_)))
@@ -1405,7 +1405,7 @@ fn arrange_grown(
     share_generalization_trees(tx, diagram, &lines, direction)?;
     // The other lines at the nodes of a shared tree are routed again, now that the tree runs
     // over its common line: the way a generalization took on its own is free again.
-    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = tx.model().view_of(diagram)?;
     let in_trees: HashSet<Id> = view
         .presentations()
         .iter()
@@ -1795,7 +1795,7 @@ fn actors_beside_boundary(
 /// place on their action's border.
 fn carry_pins(tx: &mut Tx<'_>, diagram: Id, old: &HashMap<Id, Rect>) -> Result<()> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let borne = crate::composite::borne_nodes(model, diagram);
     let reach = scene::PIN_SIZE / 2.0;
     let mut moves: Vec<(Id, Rect)> = Vec::new();
@@ -1828,7 +1828,7 @@ fn carry_pins(tx: &mut Tx<'_>, diagram: Id, old: &HashMap<Id, Rect>) -> Result<(
 /// action rather than over its border. Only the actions in `hosts` (presentations), or all.
 fn pins_to_bottom(tx: &mut Tx<'_>, diagram: Id, hosts: Option<&[Id]>) -> Result<()> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let borne = crate::composite::borne_nodes(model, diagram);
     // The pins on each side of each action: the pin, its bounds and the action's.
     type Placed = (Id, Rect, Rect);
@@ -2003,7 +2003,7 @@ fn share_generalization_trees(
     direction: Direction,
 ) -> Result<()> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let bounds = |id: Id| view.get(id).and_then(|p| p.bounds());
     let mut groups: HashMap<Id, Vec<Id>> = HashMap::new();
     // Lines chosen separate stay so, and so do the others to the same element.
@@ -2048,7 +2048,7 @@ fn share_generalization_trees(
         Direction::Right => SharedStyle::Horizontal,
     };
     for general in shared {
-        let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = tx.model().view_of(diagram)?;
         let edge = view
             .presentations()
             .iter()
@@ -2116,7 +2116,7 @@ fn shared_lines_clear(view: &View, general: Id, specifics: &[Id], direction: Dir
 
 /// Lines between a fork or join bar and a node above or below it run straight up or down.
 fn straighten_at_bars(tx: &mut Tx<'_>, diagram: Id, bars: &[Id], lines: &[Id]) -> Result<()> {
-    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = tx.model().view_of(diagram)?;
     let bounds = |id: Id| view.get(id).and_then(|p| p.bounds());
     let mut straight = Vec::new();
     for &line in lines {

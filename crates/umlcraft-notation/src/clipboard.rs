@@ -184,11 +184,7 @@ pub fn copy(model: &Model, diagram: Id, selection: &[Id]) -> Option<Clip> {
                 }
                 kind => {
                     kind.is_relationship()
-                        && kind
-                            .references()
-                            .iter()
-                            .filter(|(_, role)| role.is_strong())
-                            .all(|(id, _)| copied.contains(id))
+                        && kind.strong_references().iter().all(|id| copied.contains(id))
                 }
             };
             if !comes_along {
@@ -475,11 +471,7 @@ fn relationship_ends(relationship: &ClipElement, map: &HashMap<Id, Id>) -> Vec<I
     let strong = |kind: &ElementKind| -> Vec<Id> {
         let mut kind = kind.clone();
         kind.remap(map);
-        kind.references()
-            .into_iter()
-            .filter(|(_, role)| role.is_strong())
-            .map(|(id, _)| id)
-            .collect()
+        kind.strong_references()
     };
     let own = strong(&relationship.data.kind);
     if !own.is_empty() {

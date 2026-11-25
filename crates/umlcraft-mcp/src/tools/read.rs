@@ -17,7 +17,7 @@ pub(super) fn get_document(host: &mut dyn Host, access: &Access) -> Outcome {
                 "operation": p.operation,
             }));
         }
-        if model.get(id).and_then(|e| e.kind().as_diagram()).is_some() {
+        if model.diagram_kind(id).is_some() {
             let owner = model.get(id).and_then(|e| e.owner());
             diagrams.push(json!({
                 "id": id,

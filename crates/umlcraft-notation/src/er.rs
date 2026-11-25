@@ -32,7 +32,7 @@ use crate::palette::{EdgeTool, NodeTool};
 
 /// Whether `diagram` is an ER diagram.
 pub fn is_er(model: &Model, diagram: Id) -> bool {
-    model.get(diagram).and_then(|d| d.kind().as_diagram()) == Some(DiagramKind::EntityRelationship)
+    model.diagram_kind(diagram) == Some(DiagramKind::EntityRelationship)
 }
 
 /// What a line joins.
@@ -87,7 +87,7 @@ pub fn is_er_kind(kind: &ElementKind) -> bool {
 /// the new edge.
 pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<Id> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let element_of = |p: Id| -> Result<Id> {
         view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
     };
@@ -145,7 +145,7 @@ const ATTRIBUTE_STEP: f32 = 90.0;
 /// and its node.
 pub fn add_attribute(tx: &mut Tx<'_>, diagram: Id, owner: Id, base_name: &str) -> Result<(Id, Id)> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let node = view.get(owner).ok_or(ModelError::NotFound(owner))?;
     let (element, bounds) = node.element.zip(node.bounds()).ok_or(ModelError::NotFound(owner))?;
     let count = model
@@ -204,7 +204,7 @@ impl IeLine {
 ///   none on the diagram), the subtype keyed by the supertype's key.
 pub fn relate(tx: &mut Tx<'_>, diagram: Id, line: IeLine, parent: Id, child: Id) -> Result<Id> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let element_of = |p: Id| -> Result<Id> {
         view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
     };
@@ -256,7 +256,7 @@ fn subtype(
     owner: Id,
 ) -> Result<Id> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     // The IS-A of the supertype that this diagram shows.
     let shown = model.elements().find_map(|e| {
         let ElementKind::ErIsA(_) = e.kind() else { return None };
@@ -509,7 +509,7 @@ pub fn fit_pasted(
     } else {
         let mut added = lines_to_nodes(tx, diagram, Some(&scope))?;
         let model = tx.model();
-        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = model.view_of(diagram)?;
         let owners: Vec<(Id, Id)> = created
             .iter()
             .chain(&added)
@@ -526,7 +526,7 @@ pub fn fit_pasted(
         added.extend(attribute_nodes(tx, diagram, owners, true)?);
         added
     };
-    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = tx.model().view_of(diagram)?;
     let kept: Vec<Id> = created.into_iter().filter(|&p| view.get(p).is_some()).collect();
     Ok(kept.into_iter().chain(added).collect())
 }
@@ -539,7 +539,7 @@ fn to_listing(
     scope: Option<&std::collections::HashSet<Id>>,
 ) -> Result<Vec<Id>> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let kind_of =
         |p: &umlcraft_model::Presentation| p.element.and_then(|e| model.get(e)).map(|e| e.kind());
     let within = |p: &umlcraft_model::Presentation| scope.is_none_or(|s| s.contains(&p.id));
@@ -577,7 +577,7 @@ fn to_chen(tx: &mut Tx<'_>, diagram: Id, measure: &dyn crate::scene::TextMeasure
     lines_to_nodes(tx, diagram, None)?;
     // Attribute nodes around what shows them.
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let mut owners: Vec<(Id, Id)> = Vec::new();
     for p in view.presentations().iter().filter(|p| p.bounds().is_some()) {
         let Some(e) = p.element.and_then(|e| model.get(e)) else { continue };
@@ -598,7 +598,7 @@ fn lines_to_nodes(
     scope: Option<&std::collections::HashSet<Id>>,
 ) -> Result<Vec<Id>> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     // Relationship lines: (edge, relationship, parent node, child node).
     let lines: Vec<(Id, Id, Id, Id)> = view
         .presentations()
@@ -614,7 +614,7 @@ fn lines_to_nodes(
     let mut added = Vec::new();
     let mut spread = Vec::new();
     for &(edge, relationship, s, t) in &lines {
-        let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = tx.model().view_of(diagram)?;
         let (a, b) = (view.get(s).and_then(|p| p.bounds()), view.get(t).and_then(|p| p.bounds()));
         let (Some(a), Some(b)) = (a, b) else { continue };
         tx.remove_presentation(diagram, edge)?;
@@ -859,7 +859,7 @@ pub fn line_participation(model: &Model, diagram: Id, edge: Id, end: usize) -> O
 }
 
 /// The subtypings of an IS-A.
-pub fn subtypings(model: &Model, is_a: Id) -> impl Iterator<Item = &ErSubtypingProps> {
+fn subtypings(model: &Model, is_a: Id) -> impl Iterator<Item = &ErSubtypingProps> {
     model.children(is_a).iter().filter_map(move |&c| match model.get(c)?.kind() {
         ElementKind::ErSubtyping(p) if p.is_a == is_a => Some(p),
         _ => None,

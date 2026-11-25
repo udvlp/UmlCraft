@@ -76,7 +76,6 @@ actions!(
         AlignTop,
         AlignMiddle,
         AlignBottom,
-        ToggleTheme,
         ToggleLanguage,
         OpenSettings,
         OpenSample,

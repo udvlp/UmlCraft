@@ -43,8 +43,6 @@ rust-i18n = "4"
 sys-locale = "0.3"
 # Structograms record the local date they are saved on (GPUI pulls chrono in anyway).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-# Structograms in the app hand rasterized images to GPUI as image frames.
-image = { version = "0.25", default-features = false }
 # PNG export rasterizes the SVG export; diagrams contain no raster images.
 resvg = { version = "0.50", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 # The app's own icons (assets/icons), embedded in umlcraft.exe.

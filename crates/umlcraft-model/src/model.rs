@@ -4,7 +4,7 @@ use std::mem::discriminant;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 
-use crate::diagram::{Presentation, Shape, View};
+use crate::diagram::{DiagramKind, Presentation, Shape, View};
 use crate::element::{ElementData, ElementKind, RefRole};
 use crate::error::{ModelError, Result};
 use crate::id::Id;
@@ -171,6 +171,11 @@ impl Model {
 
     pub fn get(&self, id: Id) -> Option<&Element> {
         self.elements.get(&id)
+    }
+
+    /// The kind of diagram `id` is, `None` if it is no diagram.
+    pub fn diagram_kind(&self, id: Id) -> Option<DiagramKind> {
+        self.get(id)?.kind().as_diagram()
     }
 
     pub fn element(&self, id: Id) -> Result<&Element> {
@@ -501,7 +506,9 @@ impl Model {
         Ok(Op::MoveElement { id, owner: old_owner, index: old_index })
     }
 
-    fn view_of(&self, diagram: Id) -> Result<&View> {
+    /// The view of `diagram`: `NotFound` if there is no such element, `NotADiagram` if it is
+    /// one of another kind.
+    pub fn view_of(&self, diagram: Id) -> Result<&View> {
         match self.views.get(&diagram) {
             Some(view) => Ok(view),
             None if self.contains(diagram) => Err(ModelError::NotADiagram(diagram)),
@@ -705,10 +712,7 @@ impl Model {
     /// Strong references (a relationship's ends) must not lead back to `id`, as a dependency
     /// naming itself or two naming each other: deleting one would need the other gone first.
     fn check_strong_cycle(&self, id: Id, kind: &ElementKind) -> Result<()> {
-        let strong = |k: &ElementKind| -> Vec<Id> {
-            k.references().into_iter().filter(|(_, r)| r.is_strong()).map(|(t, _)| t).collect()
-        };
-        let mut stack = strong(kind);
+        let mut stack = kind.strong_references();
         let mut seen = HashSet::new();
         while let Some(current) = stack.pop() {
             if current == id {
@@ -717,7 +721,7 @@ impl Model {
             if seen.insert(current)
                 && let Some(e) = self.get(current)
             {
-                stack.extend(strong(&e.data.kind));
+                stack.extend(e.data.kind.strong_references());
             }
         }
         Ok(())
@@ -799,11 +803,8 @@ impl Model {
             }
         }
         // What `check_strong_cycle` refuses for one element, for all at once.
-        let strong = |id: Id| -> Vec<Id> {
-            let Some(e) = self.get(id) else { return Vec::new() };
-            let refs = e.data.kind.references().into_iter();
-            refs.filter(|(_, r)| r.is_strong()).map(|(t, _)| t).collect()
-        };
+        let strong =
+            |id: Id| self.get(id).map(|e| e.data.kind.strong_references()).unwrap_or_default();
         if let Some(id) = find_cycle(self.elements.keys().copied(), strong) {
             return Err(ModelError::ReferenceCycle(id));
         }

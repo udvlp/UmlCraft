@@ -1719,16 +1719,15 @@ mod tests {
 
     impl Builder {
         fn class(&mut self, name: &str) -> crate::jser::ClassId {
-            if let Some(i) = self.0.classes.iter().position(|c| *c.name == *name) {
-                return crate::jser::ClassId(i);
+            if let Some(id) = self.0.class_named(name) {
+                return id;
             }
             self.0.classes.push(ClassDesc::new(name.to_owned(), 0, 0));
             crate::jser::ClassId(self.0.classes.len() - 1)
         }
 
         fn push(&mut self, object: Object) -> ObjId {
-            self.0.objects.push(object);
-            ObjId(self.0.objects.len() - 1)
+            self.0.add(object)
         }
 
         fn string(&mut self, s: &str) -> Value {

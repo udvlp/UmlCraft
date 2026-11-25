@@ -11,15 +11,15 @@
 //!    ("nudging"); where a shared stretch ends at a node, the lines get ports of their own along
 //!    that side.
 //!
-//! [`route`] works on rectangles alone; [`route_lines`] reads a diagram and writes the routes
+//! [`route_around`] works on rectangles alone; [`route_lines`] reads a diagram and writes the routes
 //! back as the waypoints and anchors of right-angled lines.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use umlcraft_model::{
-    DiagramKind, ElementKind, Id, LineShape, Model, ModelError, Point, Rect, Result, Shape,
-    SharedStyle, Tx, View,
+    DiagramKind, ElementKind, Id, LineShape, Model, Point, Rect, Result, Shape, SharedStyle, Tx,
+    View,
 };
 
 use crate::labels::segments_cross;
@@ -66,7 +66,7 @@ const DIVIDER_ROOM: f32 = 6.0;
 /// boxes clear of each other above and below (or side by side) are joined through the sides
 /// they turn to each other, where those are free, as generalization trees are drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Request {
+struct Request {
     pub source: usize,
     pub target: usize,
     pub facing: bool,
@@ -491,16 +491,9 @@ impl PartialOrd for Entry {
     }
 }
 
-/// Routes `requests` around `boxes`. A route runs from the border of its source through its
-/// corners to the border of its target; consecutive points differ in x or in y only. `None`
-/// where there is no route: a box contains the other end, or the ends are shut in.
-pub fn route(boxes: &[Rect], requests: &[Request]) -> Vec<Option<Vec<Point>>> {
-    route_around(boxes, &Around::default(), requests, &[])
-}
-
 /// What routes keep off besides the boxes, for [`route_around`].
 #[derive(Default)]
-pub struct Around<'a> {
+pub(crate) struct Around<'a> {
     /// Texts drawn outside nodes.
     pub texts: &'a [Rect],
     /// Stretches of lines that stay as they are.
@@ -514,13 +507,16 @@ pub struct Around<'a> {
     pub dividers: &'a [(usize, f32)],
 }
 
-/// Routes `requests` around `boxes` as [`route`] does, keeping off the texts and the loops of
-/// `around` where a way around them is not much longer, and off its lines where a way around
+/// Routes `requests` around `boxes`. A route runs from the border of its source through its
+/// corners to the border of its target; consecutive points differ in x or in y only. `None`
+/// where there is no route: a box contains the other end, or the ends are shut in.
+///
+/// Routes keep off the texts and the loops of `around` where a way around them is not much longer, and off its lines where a way around
 /// them is not far longer. The ends of the loops count as ports already taken, as do its
 /// taken points; no line leaves or enters a box at the height of one of its dividers. `rooms`
 /// gives for each request the room its name label takes across its middle stretch (none where
 /// missing): lines spread apart at a port leave that much between them.
-pub fn route_around(
+fn route_around(
     boxes: &[Rect],
     around: &Around<'_>,
     requests: &[Request],
@@ -1423,7 +1419,7 @@ pub fn route_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usi
 /// as they are, as does everything on sequence diagrams. Returns how many were routed.
 pub fn route_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<usize> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     if model.element(diagram)?.kind().as_diagram() == Some(DiagramKind::Sequence) {
         return Ok(0);
     }
@@ -1872,6 +1868,10 @@ pub fn snapshot(model: &umlcraft_model::Model, diagram: Id) -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn route(boxes: &[Rect], requests: &[Request]) -> Vec<Option<Vec<Point>>> {
+        route_around(boxes, &Around::default(), requests, &[])
+    }
 
     #[test]
     fn grid_lines_half_a_unit_apart_are_told_apart() {

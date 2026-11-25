@@ -39,7 +39,6 @@ toolbar:
   redo: Wiederholen
   undo_named: "Rückgängig: %{what}"
   redo_named: "Wiederholen: %{what}"
-  theme: Hell/Dunkel
   language: English
   settings: Einstellungen
   about: Über UmlCraft
@@ -978,7 +977,6 @@ nsd:
   note_yield: yield hat kein Element; wie geschrieben behalten
   note_goto: goto hat kein Element; als Sprung mit seinem Text behalten
   note_local_function: eine in der Methode deklarierte Funktion ist weggelassen
-  note_conditional: "#if: nur der erste Zweig ist gelesen, die anderen sind weggelassen"
   note_with: with – der Kontext wird zugewiesen, der Rumpf steht an seiner Stelle
   note_loop_else: das else der Schleife folgt ihr; dort läuft es auch nach einem break
   note_try_else: das else von try steht am Ende des try-Blocks
@@ -1037,7 +1035,6 @@ file_page:
   about: Info
   quit: Beenden
   project: Projekt
-  file: Datei
   not_saved_yet: Noch nicht gespeichert
   saved: Alle Änderungen sind gespeichert.
   unsaved: Es gibt ungespeicherte Änderungen.

@@ -994,7 +994,7 @@ impl EdgeShape {
 }
 
 /// Waypoints after dragging `handle` to `to`.
-pub fn drag_waypoint(waypoints: &[Point], handle: EdgeHandle, to: Point) -> Vec<Point> {
+fn drag_waypoint(waypoints: &[Point], handle: EdgeHandle, to: Point) -> Vec<Point> {
     let mut result = waypoints.to_vec();
     match handle {
         EdgeHandle::Waypoint(i) if i < result.len() => result[i] = to,
@@ -1158,13 +1158,8 @@ fn loop_anchor(r: Rect, w: Point) -> Point {
     }
 }
 
-/// The anchors (relative to `r`) at the ends of [`self_loop`]'s waypoints, on the border, so
-/// that the loop keeps to the corner however the line is drawn.
-pub fn self_loop_anchors(r: Rect) -> (Point, Point) {
-    self_loop_anchors_at(r, 0)
-}
-
-/// The anchors (relative to `r`) at the ends of [`self_loop_at`]'s waypoints for `slot`.
+/// The anchors (relative to `r`) at the ends of [`self_loop_at`]'s waypoints for `slot`, on the
+/// border, so that the loop keeps to the corner however the line is drawn.
 pub fn self_loop_anchors_at(r: Rect, slot: usize) -> (Point, Point) {
     let fraction = |v: f32, size: f32| if size > 0.0 { (v / size).clamp(0.0, 1.0) } else { 0.5 };
     let (c, sx, sy) = loop_corner(r, slot);
@@ -1303,7 +1298,7 @@ struct Line {
 /// `text` as one line: line breaks and tabs become spaces, other control characters are
 /// dropped. Rows and labels are drawn as single lines; texts that may have several (notes, free
 /// texts, names, edge labels, a state's activities) are split before ([`text_lines`]).
-pub fn single_line(text: &str) -> String {
+fn single_line(text: &str) -> String {
     if !text.chars().any(char::is_control) {
         return text.to_owned();
     }
@@ -1500,7 +1495,7 @@ fn build_with(
     place_labels: bool,
 ) -> Scene {
     let Some(view) = model.view(diagram) else { return Scene::empty() };
-    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let kind = model.diagram_kind(diagram);
     let listing = model.get(diagram).and_then(|d| ErListing::of(d.kind()));
     let reading = crate::er::cardinality_reading(model, diagram);
     // IE and IDEF1X list the attributes in their owners' boxes.
@@ -1903,8 +1898,7 @@ fn keywords_away_from_notes(
 fn package_frame(model: &Model, diagram: Id, nodes: &mut [NodeShape], measure: &dyn TextMeasure) {
     const MARGIN: f32 = 15.0;
     let Some(index) = nodes.iter().position(|n| n.element == Some(diagram)) else { return };
-    let activity =
-        model.get(diagram).and_then(|d| d.kind().as_diagram()) == Some(DiagramKind::Activity);
+    let activity = model.diagram_kind(diagram) == Some(DiagramKind::Activity);
     // Activity parameter nodes and the entry and exit points of a state machine sit on the
     // frame, wherever it ends.
     let on_frame = |n: &NodeShape| {
@@ -3143,7 +3137,7 @@ pub const MIN_REGION: f32 = 20.0;
 /// The areas of `regions` in a state drawn at `r` whose regions start below `top`. The lines
 /// between them follow `layout`; lines it lacks divide the space after the last one evenly.
 /// One region or none has no lines.
-pub fn region_shapes(r: Rect, top: f32, layout: &Regions, regions: &[Id]) -> Vec<RegionShape> {
+fn region_shapes(r: Rect, top: f32, layout: &Regions, regions: &[Id]) -> Vec<RegionShape> {
     if regions.len() < 2 {
         return Vec::new();
     }
@@ -3382,7 +3376,7 @@ pub const ER_FOREIGN_KEY: &str = "(FK)";
 
 /// The name an ER element shows: its physical name where the diagram asks for those and it has
 /// one, else its own.
-pub fn er_name(e: &Element, physical: bool) -> &str {
+fn er_name(e: &Element, physical: bool) -> &str {
     let physical_name = match e.kind() {
         ElementKind::ErEntity(p) => p.physical_name.as_str(),
         ElementKind::ErAttribute(p) => p.physical_name.as_str(),
@@ -4956,7 +4950,7 @@ pub fn border_point(rect: Rect, toward: Point) -> Point {
 
 /// Where the line from `inside` (a point in `rect`) toward `toward` leaves the rectangle; `toward`
 /// itself if it lies inside too.
-pub fn border_point_from(rect: Rect, inside: Point, toward: Point) -> Point {
+fn border_point_from(rect: Rect, inside: Point, toward: Point) -> Point {
     let (dx, dy) = (toward.x - inside.x, toward.y - inside.y);
     let exit = |d: f32, pos: f32, low: f32, high: f32| {
         if d > 0.0 {

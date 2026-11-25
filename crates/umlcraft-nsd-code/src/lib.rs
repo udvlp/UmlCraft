@@ -207,12 +207,6 @@ pub struct Report {
     pub notes: Vec<Note>,
 }
 
-impl Report {
-    pub fn is_empty(&self) -> bool {
-        self.notes.is_empty()
-    }
-}
-
 /// The stack of the thread structograms are built on: about 10 KB per level of nesting in a
 /// debug build, a fraction of it in a release build, for up to 400 levels, with room to spare.
 /// Only what is used is taken from memory.

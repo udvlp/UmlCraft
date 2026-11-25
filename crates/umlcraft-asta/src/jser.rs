@@ -11,7 +11,6 @@
 //! bytes again: class descriptions with their serial version UIDs and field type names, the
 //! chunks of block data, the identity of objects and stream resets.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -339,133 +338,9 @@ impl Graph {
         ObjId(self.objects.len() - 1)
     }
 
-    pub fn add_string(&mut self, s: impl Into<String>) -> ObjId {
-        self.add(Object::String(s.into()))
-    }
-
     /// The first class description called `name`.
     pub fn class_named(&self, name: &str) -> Option<ClassId> {
         self.classes.iter().position(|c| *c.name == *name).map(ClassId)
-    }
-
-    /// A field of an instance for changing, looked up like [`Graph::field`].
-    pub fn field_mut(&mut self, id: ObjId, name: &str) -> Option<&mut Value> {
-        match &mut self.objects[id.0] {
-            Object::Instance { data, .. } => data
-                .iter_mut()
-                .rev()
-                .flat_map(|d| d.fields.iter_mut())
-                .find(|(n, _)| **n == *name)
-                .map(|(_, v)| v),
-            _ => None,
-        }
-    }
-
-    /// Sets a field of an instance; `false` if it has no such field.
-    pub fn set_field(&mut self, id: ObjId, name: &str, value: Value) -> bool {
-        self.field_mut(id, name).map(|v| *v = value).is_some()
-    }
-
-    /// Sets the field of this name that the topmost class declares, where a subclass declares
-    /// an unused one of the same name too; `false` if there is none.
-    pub fn set_top_field(&mut self, id: ObjId, name: &str, value: Value) -> bool {
-        let Object::Instance { data, .. } = &mut self.objects[id.0] else { return false };
-        let field = data.iter_mut().flat_map(|d| d.fields.iter_mut()).find(|(n, _)| **n == *name);
-        field.map(|(_, v)| *v = value).is_some()
-    }
-
-    /// The annotation written by `class`'s own `writeObject`, for changing.
-    pub fn annotation_mut(&mut self, id: ObjId, class: &str) -> Option<&mut Vec<Content>> {
-        match &mut self.objects[id.0] {
-            Object::Instance { data, .. } => {
-                data.iter_mut().find(|d| *d.class == *class).map(|d| &mut d.annotation)
-            }
-            _ => None,
-        }
-    }
-
-    /// Copies the class description `class` of `from`, with its superclasses, unless this graph
-    /// has one of the same name already.
-    pub fn copy_class(&mut self, from: &Graph, class: ClassId) -> ClassId {
-        let desc = from.class(class);
-        if let Some(id) = self.class_named(&desc.name) {
-            return id;
-        }
-        let super_class = desc.super_class.map(|c| self.copy_class(from, c));
-        let mut copy = desc.clone();
-        copy.super_class = super_class;
-        let mut memo = HashMap::new();
-        for field in &mut copy.fields {
-            if let Some(type_name) = &field.type_name {
-                field.type_name = Some(self.copy_value(from, type_name, &mut memo));
-            }
-        }
-        copy.annotation = self.copy_contents(from, &desc.annotation, &mut memo);
-        self.classes.push(copy);
-        ClassId(self.classes.len() - 1)
-    }
-
-    /// Copies a value of `from` and every object it reaches into this graph. Objects met twice
-    /// are copied once; `memo` maps the objects of `from` to their copies.
-    pub fn copy_value(
-        &mut self,
-        from: &Graph,
-        value: &Value,
-        memo: &mut HashMap<ObjId, ObjId>,
-    ) -> Value {
-        let Value::Object(id) = *value else { return value.clone() };
-        if let Some(&copy) = memo.get(&id) {
-            return Value::Object(copy);
-        }
-        // Reserve the copy first, so cycles end at it.
-        let copy = self.add(Object::String(String::new()));
-        memo.insert(id, copy);
-        let object = match from.object(id) {
-            Object::String(s) => Object::String(s.clone()),
-            Object::Instance { class, data } => {
-                let class = self.copy_class(from, *class);
-                let data = data
-                    .iter()
-                    .map(|d| ClassData {
-                        class: d.class.clone(),
-                        fields: d
-                            .fields
-                            .iter()
-                            .map(|(n, v)| (n.clone(), self.copy_value(from, v, memo)))
-                            .collect(),
-                        annotation: self.copy_contents(from, &d.annotation, memo),
-                    })
-                    .collect();
-                Object::Instance { class, data }
-            }
-            Object::Array { class, items } => Object::Array {
-                class: self.copy_class(from, *class),
-                items: items.iter().map(|v| self.copy_value(from, v, memo)).collect(),
-            },
-            Object::Enum { class, constant, name } => Object::Enum {
-                class: self.copy_class(from, *class),
-                constant: constant.clone(),
-                name: self.copy_value(from, name, memo),
-            },
-            Object::Class(class) => Object::Class(self.copy_class(from, *class)),
-        };
-        self.objects[copy.0] = object;
-        Value::Object(copy)
-    }
-
-    fn copy_contents(
-        &mut self,
-        from: &Graph,
-        items: &[Content],
-        memo: &mut HashMap<ObjId, ObjId>,
-    ) -> Vec<Content> {
-        items
-            .iter()
-            .map(|c| match c {
-                Content::Value(v) => Content::Value(self.copy_value(from, v, memo)),
-                other => other.clone(),
-            })
-            .collect()
     }
 
     /// The elements of an array or a standard Java collection. Maps yield key, value, key,

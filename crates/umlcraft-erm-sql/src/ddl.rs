@@ -158,7 +158,7 @@ struct Reference {
 
 /// The tables of the entities on `diagram` (an ER diagram) as SQL for `dialect`.
 pub fn ddl(model: &Model, diagram: Id, dialect: Dialect) -> Result<Ddl, ModelError> {
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let mut shown: Vec<Id> = Vec::new();
     for p in view.presentations() {
         if let Some(e) = p.element

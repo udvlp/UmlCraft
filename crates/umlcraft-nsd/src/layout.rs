@@ -143,15 +143,6 @@ impl Layout {
         Layouter { m, labels: Keywords::of(diagram).branch_labels() }.diagram(diagram)
     }
 
-    /// The innermost element at a point, with its path.
-    pub fn element_at(&self, x: i32, y: i32) -> Option<&ElementBox> {
-        fn find(seq: &SeqBox, x: i32, y: i32) -> Option<&ElementBox> {
-            let e = seq.elements.iter().find(|e| e.rect.contains(x, y))?;
-            e.branches.iter().find_map(|b| find(b, x, y)).or(Some(e))
-        }
-        find(&self.body, x, y)
-    }
-
     /// What a click at a point selects: the innermost element, an empty branch (a try's
     /// missing `finally` in its bottom band), or the diagram itself in its frame and title.
     pub fn hit(&self, x: i32, y: i32) -> Option<Selection> {
@@ -809,16 +800,5 @@ mod tests {
         alt.branches[1].fit_color();
         let e = first(&diagram(vec![alt]));
         assert_eq!(e.branches[0].elements[0].rect.h, 3 * 33);
-    }
-
-    #[test]
-    fn points_find_the_innermost_element() {
-        let mut w = Element::while_loop(&lines(&["c"]));
-        w.branches[0].elements.push(Element::instruction(&lines(&["a"])));
-        w.branches[0].fit_color();
-        let layout = Layout::of(&diagram(vec![w]), Metrics::linux());
-        assert_eq!(layout.element_at(25, 60).map(|e| e.path.clone()), Some(vec![0]));
-        assert_eq!(layout.element_at(60, 100).map(|e| e.path.clone()), Some(vec![0, 0, 0]));
-        assert!(layout.element_at(5, 5).is_none());
     }
 }

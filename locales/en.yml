@@ -39,7 +39,6 @@ toolbar:
   redo: Redo
   undo_named: "Undo: %{what}"
   redo_named: "Redo: %{what}"
-  theme: Light/Dark
   language: Deutsch
   settings: Settings
   about: About UmlCraft
@@ -978,7 +977,6 @@ nsd:
   note_yield: yield has no element; kept as written
   note_goto: goto has no element; kept as a jump with its text
   note_local_function: a function declared in the method is left out
-  note_conditional: "#if: only the first branch is read, the others are left out"
   note_with: with – the context is assigned, the body stands in its place
   note_loop_else: the else of the loop follows it; it also runs there after a break
   note_try_else: the else of try ends the try block
@@ -1037,7 +1035,6 @@ file_page:
   about: About
   quit: Exit
   project: Project
-  file: File
   not_saved_yet: Not saved yet
   saved: All changes are saved.
   unsaved: There are unsaved changes.

@@ -22,7 +22,7 @@ pub fn baseline(size: f32) -> f32 {
 pub const UNDERLINE: f32 = 14.34 / 12.0;
 /// Edge labels sit about 1 px lower than rows: Astah puts their baseline 13 px below the
 /// label's top.
-pub const LABEL_SHIFT: f32 = 0.94;
+const LABEL_SHIFT: f32 = 0.94;
 
 /// A color role; the canvas maps it to its theme, export to black on white.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -906,7 +906,7 @@ fn ellipse_points(c: Point, rx: f32, ry: f32) -> Vec<Point> {
 }
 
 /// Half the distance between the two lines of a double line.
-pub const DOUBLE_GAP: f32 = 2.0;
+const DOUBLE_GAP: f32 = 2.0;
 /// How far, in gaps, the corner of a double line may lie from its path's corner.
 const MITER_LIMIT: f32 = 3.0;
 

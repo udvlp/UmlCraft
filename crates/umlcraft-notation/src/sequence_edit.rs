@@ -201,7 +201,7 @@ struct Geometry {
 
 impl Geometry {
     fn read(model: &Model, diagram: Id) -> Result<Self> {
-        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = model.view_of(diagram)?;
         let mut g = Geometry {
             lanes: Vec::new(),
             bars: Vec::new(),
@@ -862,7 +862,7 @@ pub fn add_fragment(
 ) -> Result<Id> {
     let model = tx.model();
     let is_use = matches!(model.element(element)?.kind(), ElementKind::InteractionUse(_));
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let g = Geometry::read(model, diagram)?;
     let mut lanes: Vec<&Lane> =
         covered.iter().filter_map(|&l| lane_of(view, l)).filter_map(|l| g.lane(l)).collect();
@@ -897,7 +897,7 @@ pub fn create_on_lifeline(
     name: &str,
 ) -> Result<(Id, Id)> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let g = Geometry::read(model, diagram)?;
     let lane = g.lane_at(at.x).ok_or(ModelError::Refused(Refusal::NotOnLifeline))?;
     let lifeline =
@@ -932,7 +932,7 @@ pub fn spot_on_lifeline(
 /// there, though not above what happens on it. A lifeline ends once ([`Refusal::LifelineEnded`]).
 pub fn add_mark(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<Id> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let e = model.element(element)?;
     let (lifeline, termination) = match e.kind() {
         ElementKind::StateInvariant(p) => (p.lifeline, false),
@@ -965,7 +965,7 @@ pub fn add_mark(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<Id>
 /// the new presentation.
 pub fn constrain(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<Id> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let message = |p: Id| {
         view.get(p)
             .filter(|p| matches!(p.shape, Shape::Message { .. }))
@@ -1145,7 +1145,7 @@ pub fn add_operand_space(tx: &mut Tx<'_>, fragment: Id) -> Result<()> {
 /// the operand lines of such a frame below `at` go down with the rest.
 pub fn make_room(tx: &mut Tx<'_>, diagram: Id, at: f32, dy: f32) -> Result<()> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let below = |y: f32| y >= at - 0.01;
     // Create messages that move take the heads they made along.
     let made: HashSet<Id> = view
@@ -1262,7 +1262,7 @@ pub fn place_label(
 /// Puts the open end of the found or lost message `message` at `x`: farther from its lifeline
 /// or closer, on either side, though not closer than `MIN_GATE_DISTANCE`.
 pub fn set_gate(tx: &mut Tx<'_>, diagram: Id, message: Id, x: f32) -> Result<()> {
-    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = tx.model().view_of(diagram)?;
     let (lane, old) = match view.get(message).map(|p| &p.shape) {
         Some(Shape::Message { source, gate_x: Some(old), .. }) => (*source, *old),
         _ => return Ok(()),
@@ -2168,7 +2168,7 @@ fn fit_frame(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
 
 /// Puts the messages, fragments and interaction uses shown on `diagram` into the operand of the
 /// innermost fragment drawn around them, in the order they are drawn.
-pub fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
+fn sync_order(tx: &mut Tx<'_>, diagram: Id) -> Result<()> {
     let model = tx.model();
     let Some(interaction) = model.element(diagram)?.owner() else { return Ok(()) };
     if !matches!(model.element(interaction)?.kind(), ElementKind::Interaction) {
@@ -2325,7 +2325,7 @@ pub fn upgrade_document(doc: &mut Document) {
 /// nodes become lifelines, message edges messages placed one after the other in the
 /// interaction's order, fragment nodes frames around their content. Returns whether anything
 /// changed.
-pub fn upgrade(tx: &mut Tx<'_>, diagram: Id) -> Result<bool> {
+fn upgrade(tx: &mut Tx<'_>, diagram: Id) -> Result<bool> {
     let model = tx.model();
     let Some(view) = model.view(diagram) else { return Ok(false) };
     let is_lifeline = |p: &Presentation| {

@@ -85,7 +85,7 @@ fn check_diagram(
             found.push(format!("{} has a slanted segment though it runs at right angles", what()));
         }
     }
-    match model.get(diagram).and_then(|d| d.kind().as_diagram()) {
+    match model.diagram_kind(diagram) {
         Some(DiagramKind::Sequence) => found.extend(sequence_edit::violations(model, diagram)),
         Some(DiagramKind::StateMachine) => found.extend(state_violations(model, view)),
         _ => {}

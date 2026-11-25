@@ -125,7 +125,7 @@ fn apply_style(
     chosen: bool,
 ) -> Result<()> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(umlcraft_model::ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let presentation = view.get(edge).ok_or(umlcraft_model::ModelError::NotFound(edge))?;
     let Some((general, _)) = ends(model, view, presentation) else {
         return Err(umlcraft_model::ModelError::Invalid(format!("{edge} is no generalization")));

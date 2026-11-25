@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 
 use umlcraft_model::{
-    DiagramKind, Document, ElementData, ElementKind, Id, Model, ModelError, Point, Presentation,
-    Rect, Result, Shape, Size, Tx,
+    DiagramKind, Document, ElementData, ElementKind, Id, Model, Point, Presentation, Rect, Result,
+    Shape, Size, Tx,
 };
 
 use crate::scene::{self, TextMeasure};
@@ -108,7 +108,7 @@ pub fn apply<R>(
                     if lifeline { b.bounds.center().x - b.size.width / 2.0 } else { b.bounds.x };
                 let rect = Rect::from_origin_size(Point::new(x, b.bounds.y), b.size);
                 tx.set_bounds(b.diagram, b.presentation, rect)?;
-                let kind = tx.model().get(b.diagram).and_then(|d| d.kind().as_diagram());
+                let kind = tx.model().diagram_kind(b.diagram);
                 if kind == Some(DiagramKind::Sequence) && !sequences.contains(&b.diagram) {
                     sequences.push(b.diagram);
                 }
@@ -163,7 +163,7 @@ pub fn apply<R>(
 pub fn set_node_bounds(tx: &mut Tx<'_>, diagram: Id, nodes: &[(Id, Rect)]) -> Result<()> {
     let model = tx.model();
     let Some(view) = model.view(diagram) else { return Ok(()) };
-    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let kind = model.diagram_kind(diagram);
     let before: Vec<(Id, Rect)> =
         nodes.iter().filter_map(|&(p, _)| Some((p, view.get(p)?.bounds()?))).collect();
     let old: HashMap<Id, Rect> = before.iter().copied().collect();
@@ -260,7 +260,7 @@ pub fn shift_line_constraints(
     by: Point,
 ) -> Result<()> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let element = view.get(presentation).and_then(|p| p.element);
     let count = element.and_then(|e| model.get(e)).map_or(0, |e| e.data().constraints.len());
     tx.update_presentation(diagram, presentation, |p| {

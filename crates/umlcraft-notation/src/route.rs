@@ -157,7 +157,7 @@ pub fn fit_corners(
 
 /// `corners` without those that do not turn the line: repeated points and points in the middle
 /// of a straight horizontal or vertical stretch.
-pub fn simplify(from: Point, corners: &[Point], to: Point) -> Vec<Point> {
+fn simplify(from: Point, corners: &[Point], to: Point) -> Vec<Point> {
     let mut points = Vec::with_capacity(corners.len() + 2);
     points.push(from);
     points.extend_from_slice(corners);

@@ -23,8 +23,7 @@
 use std::collections::{HashMap, HashSet};
 
 use umlcraft_model::{
-    CardinalityMax, DiagramKind, ElementKind, Id, Model, ModelError, Point, Rect, Result, Shape,
-    Size, Tx,
+    CardinalityMax, DiagramKind, ElementKind, Id, Model, Point, Rect, Result, Shape, Size, Tx,
 };
 
 use crate::layout::{Direction, Edge, layered};
@@ -207,7 +206,7 @@ pub fn arrange_attributes(tx: &mut Tx<'_>, diagram: Id, measure: &dyn TextMeasur
 pub fn spread_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<()> {
     for &edge in edges {
         let model = tx.model();
-        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = model.view_of(diagram)?;
         let Some(&Shape::Edge { source, target, .. }) = view.get(edge).map(|p| &p.shape) else {
             continue;
         };
@@ -286,12 +285,10 @@ pub fn spread_new_lines(tx: &mut Tx<'_>, diagram: Id, edges: &[Id]) -> Result<()
 /// changed nodes had; lines between two of them keep their bends as the caller left them.
 pub fn follow_nodes(tx: &mut Tx<'_>, diagram: Id, before: &[(Id, Rect)]) -> Result<()> {
     let model = tx.model();
-    if model.get(diagram).and_then(|d| d.kind().as_diagram())
-        != Some(DiagramKind::EntityRelationship)
-    {
+    if model.diagram_kind(diagram) != Some(DiagramKind::EntityRelationship) {
         return Ok(());
     }
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let old: HashMap<Id, Rect> = before.iter().copied().collect();
     let bounds = |id: Id| match view.get(id).map(|p| &p.shape) {
         Some(&Shape::Node { bounds, .. }) => Some(bounds),
@@ -365,7 +362,7 @@ fn is_hub_line(kind: &ElementKind) -> bool {
 impl Graph {
     /// `None` when the diagram shows nothing of an ER diagram.
     fn of(model: &Model, diagram: Id, scene: &Scene) -> Result<Option<Self>> {
-        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = model.view_of(diagram)?;
         let mut nodes = Vec::new();
         let mut node_of: HashMap<Id, usize> = HashMap::new();
         // The node that shows an element, for its attributes.

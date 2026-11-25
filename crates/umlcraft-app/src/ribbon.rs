@@ -76,7 +76,6 @@ pub enum MenuEntry {
         checked: bool,
         action: Box<dyn Action>,
     },
-    Separator,
 }
 
 impl Clone for MenuEntry {
@@ -92,7 +91,6 @@ impl Clone for MenuEntry {
                 checked: *checked,
                 action: action.boxed_clone(),
             },
-            Self::Separator => Self::Separator,
         }
     }
 }
@@ -215,18 +213,6 @@ pub fn diagram_key(kind: DiagramKind) -> String {
     crate::workspace::NewItem::Diagram(kind).key()
 }
 
-pub const DIAGRAM_KINDS: [DiagramKind; 9] = [
-    DiagramKind::Class,
-    DiagramKind::UseCase,
-    DiagramKind::Sequence,
-    DiagramKind::Activity,
-    DiagramKind::StateMachine,
-    DiagramKind::Component,
-    DiagramKind::Deployment,
-    DiagramKind::CompositeStructure,
-    DiagramKind::EntityRelationship,
-];
-
 pub fn groups(tab: RibbonTab, state: &State) -> Vec<Group> {
     match tab {
         RibbonTab::Home => home(state),
@@ -339,7 +325,7 @@ fn home(state: &State) -> Vec<Group> {
 /// alphabetical order of their names in the language shown.
 fn new_diagram() -> Item {
     let mut entries: Vec<(String, SharedString, Box<dyn Action>)> = Vec::new();
-    for kind in DIAGRAM_KINDS {
+    for kind in DiagramKind::ALL {
         let action = NewDiagram { kind, objects: false };
         entries.push((t!(diagram_key(kind)).into(), icons::diagram_icon(kind), Box::new(action)));
         if kind == DiagramKind::Class {
@@ -429,6 +415,7 @@ fn diagram(
                 match tool {
                     Tool::Edge(
                         EdgeTool::AssociationClass
+                        | EdgeTool::Constraint
                         | EdgeTool::FoundMessage
                         | EdgeTool::LostMessage
                         | EdgeTool::DurationConstraint
@@ -753,7 +740,6 @@ fn entries_menu(
                 MenuEntry::Check { label, checked, action } => {
                     menu.menu_with_check(label.clone(), *checked, action.boxed_clone())
                 }
-                MenuEntry::Separator => menu.separator(),
             };
         }
         menu.action_context(focus.clone())
@@ -988,9 +974,7 @@ pub fn render(groups: &[Group], compact: bool, focus: &FocusHandle, cx: &App) ->
 #[cfg(test)]
 mod tests {
     // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
-    use super::{
-        DIAGRAM_KINDS, RibbonTab, State, diagram, diagram_key, label_lines, sort_key, tabs,
-    };
+    use super::{RibbonTab, State, diagram, diagram_key, label_lines, sort_key, tabs};
     use umlcraft_model::{DiagramKind, DiagramProps, ElementKind, ErNotation};
     use umlcraft_notation::palette::{self, Tool};
 
@@ -1004,7 +988,7 @@ mod tests {
     #[test]
     fn new_diagram_lists_its_kinds_by_the_alphabet() {
         let sorted = |locale: &str| {
-            let mut keys: Vec<String> = DIAGRAM_KINDS.into_iter().map(diagram_key).collect();
+            let mut keys: Vec<String> = DiagramKind::ALL.into_iter().map(diagram_key).collect();
             keys.extend(["diagram.object".to_owned(), "kind.structogram".to_owned()]);
             let mut labels: Vec<String> =
                 keys.iter().map(|k| rust_i18n::t!(k.as_str(), locale = locale).into()).collect();
@@ -1047,10 +1031,9 @@ mod tests {
 
     #[test]
     fn every_tool_of_every_diagram_kind_is_in_one_group() {
-        let notations = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
-        let every = DIAGRAM_KINDS
-            .into_iter()
-            .flat_map(|kind| notations.map(|notation| DiagramProps { notation, ..props(kind) }));
+        let every = DiagramKind::ALL.into_iter().flat_map(|kind| {
+            ErNotation::ALL.map(|notation| DiagramProps { notation, ..props(kind) })
+        });
         for p in every {
             let tools = palette::diagram_palette(&p);
             let groups = diagram(&tools, Tool::Select, None, Some(p.notation));

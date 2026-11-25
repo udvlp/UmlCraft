@@ -381,7 +381,7 @@ pub fn connections(
 }
 
 /// Tools offered for an object diagram: a class diagram's, with Object and Link first.
-pub fn object_palette() -> Vec<Tool> {
+fn object_palette() -> Vec<Tool> {
     let mut tools = palette(DiagramKind::Class);
     let first = |t: &Tool| matches!(t, Tool::Node(NodeTool::Object) | Tool::Edge(EdgeTool::Link));
     tools.sort_by_key(|t| (*t != Tool::Select, !first(t)));
@@ -643,7 +643,7 @@ impl NodeTool {
     }
 
     /// The stereotype of a robustness tool, drawn as its icon.
-    pub fn robustness_stereotype(self) -> Option<&'static str> {
+    fn robustness_stereotype(self) -> Option<&'static str> {
         match self {
             Self::Boundary => Some("boundary"),
             Self::Control => Some("control"),
@@ -1104,7 +1104,7 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
     {
         return Err(ModelError::Refused(umlcraft_model::Refusal::OtherInteraction));
     }
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     // The first presentation of each element the diagram shows.
     let mut first: std::collections::HashMap<Id, Id> = std::collections::HashMap::new();
     for p in view.presentations() {
@@ -1145,13 +1145,7 @@ pub fn show_element(tx: &mut Tx<'_>, diagram: Id, element: Id, origin: Point) ->
     let mut edges = Vec::new();
     for (r, _) in model.referrers(element) {
         let Some(e) = model.get(r).filter(|e| e.kind().is_relationship()) else { continue };
-        let ends: Vec<Id> = e
-            .kind()
-            .references()
-            .iter()
-            .filter(|(_, r)| r.is_strong())
-            .map(|(id, _)| *id)
-            .collect();
+        let ends = e.kind().strong_references();
         let [a, b] = ends[..] else { continue };
         if shown(r).is_some() || edges.iter().any(|&(e, _, _)| e == r) {
             continue;
@@ -1295,7 +1289,7 @@ fn behind_contents(model: &Model, diagram: Id, bounds: Rect) -> usize {
 }
 
 /// Size of a new class or component on a composite structure diagram, with room for parts.
-pub const STRUCTURED_SIZE: Size = Size { width: 320.0, height: 200.0 };
+const STRUCTURED_SIZE: Size = Size { width: 320.0, height: 200.0 };
 
 /// The closest element, starting at `start` and walking up the owners, that may own `kind`.
 pub fn owner_for(model: &Model, start: Id, kind: &ElementKind) -> Option<Id> {
@@ -1390,7 +1384,7 @@ pub fn create_node(
 }
 
 fn is_sequence(model: &Model, diagram: Id) -> bool {
-    model.get(diagram).and_then(|d| d.kind().as_diagram()) == Some(DiagramKind::Sequence)
+    model.diagram_kind(diagram) == Some(DiagramKind::Sequence)
 }
 
 /// Connects two presentations of `diagram` with `tool`. Creates the relationship element in the
@@ -1439,7 +1433,7 @@ fn connect_as(
         return sequence_edit::constrain(tx, diagram, source, target);
     }
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let element_of = |p: Id| -> Result<Id> {
         view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
     };
@@ -1498,10 +1492,10 @@ fn connect_as(
 }
 
 /// The constraint a new constraint between associations states.
-pub const CONSTRAINT_NAME: &str = "xor";
+const CONSTRAINT_NAME: &str = "xor";
 
 /// The name a new association class gets before a number, as in Astah ("AssociationClass0").
-pub const ASSOCIATION_CLASS_NAME: &str = "AssociationClass";
+const ASSOCIATION_CLASS_NAME: &str = "AssociationClass";
 
 /// Turns the association that the edge `edge` of `diagram` shows into an association class
 /// (Astah's "Convert to association class"): a new class named `name` beside the association,
@@ -1514,7 +1508,7 @@ pub fn make_association_class(
     name: &str,
 ) -> Result<(Id, Id)> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let presentation = view.get(edge).ok_or(ModelError::NotFound(edge))?;
     let association = presentation.element.ok_or(ModelError::NotFound(edge))?;
     let ElementKind::Association(a) = model.element(association)?.kind() else {
@@ -1552,11 +1546,11 @@ pub fn make_association_class(
 }
 
 /// The relationships "Change kind" turns into each other.
-pub const RELATIONSHIP_TOOLS: [EdgeTool; 4] =
+const RELATIONSHIP_TOOLS: [EdgeTool; 4] =
     [EdgeTool::Association, EdgeTool::Generalization, EdgeTool::Realization, EdgeTool::Dependency];
 
 /// Which of [`RELATIONSHIP_TOOLS`] makes an element of `kind`.
-pub fn relationship_tool(kind: &ElementKind) -> Option<EdgeTool> {
+fn relationship_tool(kind: &ElementKind) -> Option<EdgeTool> {
     match kind {
         ElementKind::Association(_) => Some(EdgeTool::Association),
         ElementKind::Generalization(_) => Some(EdgeTool::Generalization),
@@ -1635,7 +1629,7 @@ pub fn relationship_kinds(
 
 /// The element an edge shows, with the elements at its source and its target.
 fn relationship_ends(model: &Model, diagram: Id, edge: Id) -> Result<(Id, Id, Id)> {
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let presentation = view.get(edge).ok_or(ModelError::NotFound(edge))?;
     let element = presentation.element.ok_or(ModelError::NotFound(edge))?;
     let Shape::Edge { source, target, .. } = &presentation.shape else {
@@ -1679,7 +1673,7 @@ pub fn connect_message(
     slot: Option<Slot>,
 ) -> Result<Id> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let (source, target) = (lifeline_of(model, view, source), lifeline_of(model, view, target));
     let element_of = |p: Id| -> Result<Id> {
         view.get(p).ok_or(ModelError::NotFound(p))?.element.ok_or(ModelError::NotFound(p))
@@ -1928,7 +1922,7 @@ pub fn wrap_in_guarded_fragment(
     let label = if topmost.is_some() { sequence::LABEL_ABOVE + room } else { 0.0 };
     // ...as far as the item before it leaves room: a frame reaching into that would take it in.
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let bottom_of = |item: Id| {
         view.presentations_of(item).find_map(|p| match p.shape {
             Shape::Message { .. } => sequence_edit::message_bottom(model, diagram, item),

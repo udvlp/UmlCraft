@@ -108,7 +108,7 @@ pub fn create_node(
             .filter(|&s| is_submachine(model, s))
             .ok_or(ModelError::Refused(Refusal::StubOutside))?;
         // Within the state, below its texts.
-        let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+        let view = model.view_of(diagram)?;
         if let Some(r) = view.presentations_of(state).next().and_then(|p| p.bounds()) {
             bounds.x = bounds.x.clamp(r.x, (r.right() - bounds.width).max(r.x));
             bounds.y = bounds.y.clamp(r.y, (r.bottom() - bounds.height).max(r.y));
@@ -124,7 +124,7 @@ pub fn create_node(
                 let start = model.element(diagram)?.owner().ok_or(ModelError::Root)?;
                 let machine = owner_for(model, start, &kind)
                     .ok_or_else(|| ModelError::Invalid("no state machine for the point".into()))?;
-                let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+                let view = model.view_of(diagram)?;
                 let framed = crate::activity::frame(view, diagram).and_then(|f| f.bounds());
                 let r = match framed {
                     Some(r) => r,
@@ -416,7 +416,7 @@ pub fn add_region(tx: &mut Tx<'_>, state: Id, vertical: bool, diagram: Option<Id
 }
 
 /// How deep and wide a state just divided makes its regions at least: room for a substate.
-pub const NEW_REGION: f32 = 60.0;
+const NEW_REGION: f32 = 60.0;
 
 /// Makes the state shown by each of `shown` (just divided into regions) large enough that
 /// every region gets [`NEW_REGION`] below its name and activities, so that a small state does

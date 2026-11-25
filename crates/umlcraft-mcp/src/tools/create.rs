@@ -309,7 +309,7 @@ pub(super) fn connect(host: &mut dyn Host, args: &Value) -> Outcome {
             let sends = !matches!(tool, EdgeTool::Reply | EdgeTool::FoundMessage);
             if let Some(slot) = slot.filter(|_| sends) {
                 let model = tx.model();
-                let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+                let view = model.view_of(diagram)?;
                 let lane = palette::lifeline_of(model, view, source);
                 sequence_edit::continue_open_bar(tx, diagram, lane, slot.y)?;
             }

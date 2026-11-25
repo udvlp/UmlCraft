@@ -629,7 +629,7 @@ pub fn resolve_type(model: &Model, text: &str) -> TypeRef {
 /// A type name as seen from `scope` (the member that uses it): a template parameter of the
 /// scope or of an element owning it, else a classifier by its qualified name (`java.util.List`,
 /// `std::vector`), else [`resolve_type`].
-pub fn resolve_type_in(model: &Model, scope: Id, name: &str) -> TypeRef {
+fn resolve_type_in(model: &Model, scope: Id, name: &str) -> TypeRef {
     let name = name.trim();
     for owner in std::iter::once(scope).chain(model.ancestors(scope)) {
         if let Some(t) = template_parameters(model, owner)

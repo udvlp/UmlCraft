@@ -26,6 +26,20 @@ pub enum DiagramKind {
     EntityRelationship,
 }
 
+impl DiagramKind {
+    pub const ALL: [Self; 9] = [
+        Self::Class,
+        Self::UseCase,
+        Self::Sequence,
+        Self::Activity,
+        Self::StateMachine,
+        Self::Component,
+        Self::Deployment,
+        Self::CompositeStructure,
+        Self::EntityRelationship,
+    ];
+}
+
 /// One visible item on a diagram. Presentations of a diagram are kept in z-order (back to front).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

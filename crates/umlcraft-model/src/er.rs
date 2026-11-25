@@ -143,6 +143,8 @@ pub enum ErNotation {
 }
 
 impl ErNotation {
+    pub const ALL: [Self; 3] = [Self::Chen, Self::Ie, Self::Idef1x];
+
     /// IE and IDEF1X: entities list their attributes, binary relationships are lines.
     pub fn lists_attributes(self) -> bool {
         self != Self::Chen

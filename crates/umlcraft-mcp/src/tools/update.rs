@@ -345,9 +345,7 @@ pub(super) fn sequences_near(model: &Model, id: Id) -> Vec<Id> {
     near.extend(model.referrers(id).into_iter().map(|(r, _)| r));
     model
         .views()
-        .filter(|&(d, _)| {
-            model.get(d).and_then(|e| e.kind().as_diagram()) == Some(DiagramKind::Sequence)
-        })
+        .filter(|&(d, _)| model.diagram_kind(d) == Some(DiagramKind::Sequence))
         .filter(|&(d, view)| {
             d == id
                 || view.presentations().iter().any(|p| p.element.is_some_and(|e| near.contains(&e)))
@@ -487,8 +485,6 @@ pub(super) fn set_submachine(
     Ok(())
 }
 
-/// Writes the settings of `args` that belong to the element's kind into `kind`: a guard, a
-/// message's sort, arguments, return value and operation, a fragment's operator.
 /// The settings of a diagram in `args`: what a sequence diagram numbers, shows and frames;
 /// whether a state machine diagram draws simple states as UML does.
 pub(super) fn set_diagram_settings(kind: &mut ElementKind, args: &Value) -> Result<(), String> {
@@ -528,6 +524,8 @@ pub(super) fn set_diagram_settings(kind: &mut ElementKind, args: &Value) -> Resu
     Ok(())
 }
 
+/// Writes the settings of `args` that belong to the element's kind into `kind`: a guard, a
+/// message's sort, arguments, return value and operation, a fragment's operator.
 pub(super) fn set_properties(
     model: &Model,
     kind: &mut ElementKind,

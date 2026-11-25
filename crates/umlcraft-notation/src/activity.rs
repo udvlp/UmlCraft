@@ -63,7 +63,7 @@ pub(crate) fn frame_around(content: Rect) -> Rect {
 /// Adds a frame to `diagram` around everything drawn on it and `at`, behind the rest, and
 /// returns its bounds.
 pub(crate) fn add_frame(tx: &mut Tx<'_>, diagram: Id, at: Point) -> Result<Rect> {
-    let view = tx.model().view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = tx.model().view_of(diagram)?;
     let content = view
         .presentations()
         .iter()
@@ -88,7 +88,7 @@ pub fn create_node(
     base_name: &str,
 ) -> Result<(Id, Id)> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let mut bounds = Rect::from_origin_size(origin, tool.default_size());
     let at = bounds.center();
     let kind = tool.element_kind();
@@ -399,7 +399,7 @@ pub(crate) fn spread_pins(
     let model = tx.model();
     // Only nodes are read: where line labels end up does not matter here.
     let scene = scene::build_geometry(model, diagram, measure);
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let bounds = |id: Id| view.get(id).and_then(|p| p.bounds());
     let mut actions = Vec::new();
     let mut pins = Vec::new();

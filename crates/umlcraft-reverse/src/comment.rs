@@ -67,7 +67,7 @@ pub fn documentation(language: SourceLanguage, node: Node, text: &str) -> String
 
 /// The run of siblings right before `node` for which `is_line` holds, each on the line just
 /// above the next one, first first: the line comments that document `node`.
-pub fn line_run<'t>(node: Node<'t>, is_line: impl Fn(Node<'t>) -> bool) -> Vec<Node<'t>> {
+fn line_run<'t>(node: Node<'t>, is_line: impl Fn(Node<'t>) -> bool) -> Vec<Node<'t>> {
     let mut run = Vec::new();
     let mut next = node;
     while let Some(p) = next.prev_sibling() {
@@ -102,7 +102,7 @@ pub(crate) fn string_content(string: Node, text: &str) -> String {
 }
 
 /// The string of a Python expression statement that is only a string: a docstring.
-pub fn docstring_node(statement: Node) -> Option<Node> {
+pub(crate) fn docstring_node(statement: Node) -> Option<Node> {
     if statement.kind() != "expression_statement" || statement.named_child_count() != 1 {
         return None;
     }
@@ -111,7 +111,7 @@ pub fn docstring_node(statement: Node) -> Option<Node> {
 
 /// A docstring as `inspect.cleandoc` cleans it: the first line without its indentation, the
 /// others without the indentation they share, blank lines at the start and end dropped.
-pub fn cleandoc(doc: &str) -> String {
+pub(crate) fn cleandoc(doc: &str) -> String {
     let lines: Vec<&str> = doc.lines().collect();
     let indent = lines
         .iter()
@@ -146,7 +146,7 @@ pub fn clean(comment: &str) -> String {
 /// The text of consecutive `///` or `//!` comments, one per line: without the slashes (and the
 /// `!`) and the blanks after them, the rest (XML tags included) as written. Blank lines at the
 /// start and end are dropped.
-pub fn clean_lines<'a>(comments: impl IntoIterator<Item = &'a str>) -> String {
+fn clean_lines<'a>(comments: impl IntoIterator<Item = &'a str>) -> String {
     let lines = comments.into_iter().map(|line| {
         let line = line.trim_start();
         let text = line.strip_prefix("///").or(line.strip_prefix("//!")).unwrap_or(line);

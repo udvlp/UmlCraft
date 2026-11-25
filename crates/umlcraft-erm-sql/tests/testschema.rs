@@ -83,9 +83,8 @@ fn every_dump_gives_the_expected_model() {
 
 #[test]
 fn the_imported_diagram_is_valid_and_readable() {
-    let notations = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
     for ((system, _, _, [(name, _), ..]), notation) in
-        SYSTEMS.into_iter().flat_map(|s| notations.map(|n| (s, n)))
+        SYSTEMS.into_iter().flat_map(|s| ErNotation::ALL.map(|n| (s, n)))
     {
         let options = Options { notation, ..Options::default() };
         let (doc, result) = imported(&read(&dump(system, name), None).unwrap(), &options, true);

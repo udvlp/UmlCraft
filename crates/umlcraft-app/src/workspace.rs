@@ -733,7 +733,7 @@ impl Workspace {
     /// Nodes in the way of the arranged selection move aside.
     pub fn arrange(&mut self, direction: Option<layout::Direction>) {
         let Some(diagram) = self.active_diagram else { return };
-        let kind = self.doc.model().get(diagram).and_then(|d| d.kind().as_diagram());
+        let kind = self.doc.model().diagram_kind(diagram);
         let Some(direction) = direction.or_else(|| kind.map(layout::default_direction)) else {
             return;
         };
@@ -1562,10 +1562,8 @@ impl Workspace {
                 umlcraft_notation::sequence_edit::cover(tx, id)?;
             }
             // A message's sort decides how bars are fitted around it.
-            let sequence = |d: &Id| {
-                tx.model().get(*d).and_then(|e| e.kind().as_diagram())
-                    == Some(umlcraft_model::DiagramKind::Sequence)
-            };
+            let sequence =
+                |d: &Id| tx.model().diagram_kind(*d) == Some(umlcraft_model::DiagramKind::Sequence);
             let diagrams: Vec<Id> =
                 tx.model().shown_on(id).into_iter().map(|(d, _)| d).filter(sequence).collect();
             diagrams.into_iter().try_for_each(|d| umlcraft_notation::sequence_edit::tidy(tx, d))

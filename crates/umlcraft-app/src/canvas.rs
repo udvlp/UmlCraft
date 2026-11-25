@@ -956,7 +956,6 @@ impl DiagramCanvas {
             .map(|n| n.id)
     }
 
-    /// The use case of the one selected node, if it shows one.
     /// The compartments that take members in the one selected box, with the box.
     fn selected_compartments(&self, cx: &App) -> Option<(Id, Vec<Compartment>)> {
         let ws = self.workspace.read(cx);
@@ -1023,6 +1022,7 @@ impl DiagramCanvas {
         matches!(ws.doc.model().get(element)?.kind(), ElementKind::Extend(_)).then_some(element)
     }
 
+    /// The use case of the one selected node, if it shows one.
     fn selected_use_case(&self, cx: &App) -> Option<Id> {
         let ws = self.workspace.read(cx);
         let [single] = ws.selection[..] else { return None };

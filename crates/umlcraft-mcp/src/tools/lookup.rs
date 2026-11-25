@@ -53,8 +53,7 @@ pub(super) fn created(model: &Model, id: Id) -> Value {
 /// `id` if it names a diagram, else an error.
 pub(super) fn diagram_of(model: &Model, id: Id) -> Result<DiagramKind, String> {
     model
-        .get(id)
-        .and_then(|e| e.kind().as_diagram())
+        .diagram_kind(id)
         .filter(|_| model.view(id).is_some())
         .ok_or_else(|| format!("{id} is not a diagram"))
 }
@@ -243,7 +242,7 @@ pub(super) fn spot_in_boundary(
 }
 
 pub(super) fn is_sequence(model: &Model, diagram: Id) -> bool {
-    model.get(diagram).and_then(|e| e.kind().as_diagram()) == Some(DiagramKind::Sequence)
+    model.diagram_kind(diagram) == Some(DiagramKind::Sequence)
 }
 
 /// One undo step on the host's document.

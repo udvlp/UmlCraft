@@ -67,7 +67,6 @@ struct Choice {
 }
 
 const ATTRIBUTES: [Attributes; 3] = [Attributes::All, Attributes::Keys, Attributes::None];
-const NOTATIONS: [ErNotation; 3] = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
 
 fn choose(
     view: WeakEntity<MainView>,
@@ -114,9 +113,9 @@ fn choose(
             .children(
                 ["chen", "ie", "idef1x"].map(|k| t!(format!("ribbon.notation.{k}")).to_string()),
             )
-            .selected_index(NOTATIONS.iter().position(|&n| n == current.notation))
+            .selected_index(ErNotation::ALL.iter().position(|&n| n == current.notation))
             .on_change(move |&ix, window, _| {
-                c3.borrow_mut().notation = NOTATIONS[ix];
+                c3.borrow_mut().notation = ErNotation::ALL[ix];
                 window.refresh();
             });
         let c2 = choice.clone();

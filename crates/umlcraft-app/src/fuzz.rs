@@ -72,11 +72,8 @@ fn documents() -> Vec<(&'static str, Document)> {
 }
 
 fn diagrams(model: &Model) -> Vec<Id> {
-    let mut ids: Vec<Id> = model
-        .views()
-        .filter(|(d, _)| model.get(*d).and_then(|e| e.kind().as_diagram()).is_some())
-        .map(|(d, _)| d)
-        .collect();
+    let mut ids: Vec<Id> =
+        model.views().filter(|(d, _)| model.diagram_kind(*d).is_some()).map(|(d, _)| d).collect();
     // Views come out of a map; the order must not depend on it.
     ids.sort();
     ids
@@ -88,7 +85,7 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
     let Some(diagram) = rng.pick(&diagrams(model)) else { return "nothing".into() };
     ws.open_diagram(diagram);
     let model = ws.doc.model();
-    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let kind = model.diagram_kind(diagram);
     let props = match model.get(diagram).map(|d| d.kind()) {
         Some(ElementKind::Diagram(p)) => Some(p),
         _ => None,
@@ -503,8 +500,7 @@ fn edit(ws: &mut Workspace, rng: &mut Rng) -> String {
         // ER diagrams: another notation, or a relationship made identifying or not.
         25 if kind == Some(DiagramKind::EntityRelationship) => {
             if rng.chance(40) {
-                let notations = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
-                let notation = rng.pick(&notations).expect("notations");
+                let notation = rng.pick(&ErNotation::ALL).expect("notations");
                 ws.set_er_notation(diagram, notation);
                 return format!("draw {where_} in {notation:?}");
             }

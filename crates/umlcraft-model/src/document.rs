@@ -460,14 +460,8 @@ impl Tx<'_> {
         })
     }
 
-    /// The view of `diagram`: `NotFound` if there is no such element, `NotADiagram` if it is
-    /// one of another kind.
     fn view_of(&self, diagram: Id) -> Result<&crate::View> {
-        match self.model.view(diagram) {
-            Some(view) => Ok(view),
-            None if self.model.contains(diagram) => Err(ModelError::NotADiagram(diagram)),
-            None => Err(ModelError::NotFound(diagram)),
-        }
+        self.model.view_of(diagram)
     }
 
     /// Adds a node presentation on top of `diagram`.

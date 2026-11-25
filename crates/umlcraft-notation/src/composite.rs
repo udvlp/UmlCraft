@@ -28,7 +28,7 @@ pub const PORT_SIZE: f32 = 14.0;
 
 /// Whether `diagram` is a composite structure diagram.
 pub fn is_composite(model: &Model, diagram: Id) -> bool {
-    model.get(diagram).and_then(|d| d.kind().as_diagram()) == Some(DiagramKind::CompositeStructure)
+    model.diagram_kind(diagram) == Some(DiagramKind::CompositeStructure)
 }
 
 /// Classes and components: drawn as structured classes, with their parts inside.
@@ -270,7 +270,7 @@ pub fn create_node(
     base_name: &str,
 ) -> Result<(Id, Id)> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let mut bounds = Rect::from_origin_size(origin, tool.default_size());
     let at = bounds.center();
     let mut grow = None;
@@ -337,7 +337,7 @@ fn connector_end(model: &Model, view: &View, p: &Presentation) -> Result<Connect
 /// the class that holds the parts. Returns the new edge.
 pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<Id> {
     let model = tx.model();
-    let view = model.view(diagram).ok_or(ModelError::NotADiagram(diagram))?;
+    let view = model.view_of(diagram)?;
     let node = |id: Id| view.get(id).ok_or(ModelError::NotFound(id));
     let ends =
         [connector_end(model, view, node(source)?)?, connector_end(model, view, node(target)?)?];
@@ -441,7 +441,7 @@ fn nodes_of(view: &View) -> Nodes {
 /// exit points of the state machine diagram `diagram`, each with the node it keeps to (its
 /// action's or state's, or the frame), if that is shown.
 pub fn borne_nodes(model: &Model, diagram: Id) -> std::collections::HashMap<Id, Option<Id>> {
-    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let kind = model.diagram_kind(diagram);
     let bordered = matches!(kind, Some(DiagramKind::Activity | DiagramKind::StateMachine));
     let Some(view) = model.view(diagram).filter(|_| bordered) else {
         return Default::default();
@@ -500,7 +500,7 @@ fn expected_host(
 /// border; pins, activity parameter nodes and entry and exit points away from their action,
 /// frame or state.
 pub(crate) fn border_violations(model: &Model, diagram: Id, view: &View) -> Vec<String> {
-    let kind = model.get(diagram).and_then(|d| d.kind().as_diagram());
+    let kind = model.diagram_kind(diagram);
     let nodes = nodes_of(view);
     let mut found = Vec::new();
     for p in view.presentations() {
@@ -559,7 +559,7 @@ fn is_part(model: &Model, p: &Presentation) -> bool {
 /// Composite structure, activity and state machine diagrams, with their kind.
 fn bordered_views(model: &Model) -> impl Iterator<Item = (Id, &View, Option<DiagramKind>)> {
     model.views().filter_map(|(d, view)| {
-        let kind = model.get(d).and_then(|d| d.kind().as_diagram());
+        let kind = model.diagram_kind(d);
         matches!(
             kind,
             Some(

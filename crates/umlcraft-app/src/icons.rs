@@ -203,21 +203,9 @@ pub fn kind_icon(kind: &ElementKind) -> Option<SharedString> {
 mod tests {
     use super::*;
 
-    const KINDS: [DiagramKind; 9] = [
-        DiagramKind::Class,
-        DiagramKind::UseCase,
-        DiagramKind::Sequence,
-        DiagramKind::Activity,
-        DiagramKind::StateMachine,
-        DiagramKind::Component,
-        DiagramKind::Deployment,
-        DiagramKind::CompositeStructure,
-        DiagramKind::EntityRelationship,
-    ];
-
     #[test]
     fn every_tool_and_diagram_kind_has_an_embedded_icon() {
-        for kind in KINDS {
+        for kind in DiagramKind::ALL {
             let icon = diagram_icon(kind);
             assert!(Embedded::get(&icon).is_some(), "{icon}");
             for tool in umlcraft_notation::palette::palette(kind) {

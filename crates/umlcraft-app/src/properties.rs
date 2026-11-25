@@ -269,7 +269,6 @@ fn er_key_items() -> Vec<SharedString> {
         .to_vec()
 }
 
-const ER_NOTATIONS: [ErNotation; 3] = [ErNotation::Chen, ErNotation::Ie, ErNotation::Idef1x];
 const ER_DISPLAYS: [ErDisplay; 3] = [ErDisplay::Attributes, ErDisplay::Keys, ErDisplay::Name];
 
 fn er_notation_items() -> Vec<SharedString> {
@@ -771,7 +770,7 @@ impl PropertiesPanel {
             &er_notation,
             window,
             |this, state, _: &SelectEvent<Vec<SharedString>>, _, cx| {
-                let Some(n) = selected(state, cx).and_then(|ix| ER_NOTATIONS.get(ix).copied())
+                let Some(n) = selected(state, cx).and_then(|ix| ErNotation::ALL.get(ix).copied())
                 else {
                     return;
                 };
@@ -1751,7 +1750,7 @@ impl PropertiesPanel {
                 choose(&self.er_key, k, locale_changed.then(er_key_items), window, cx);
             }
             ElementKind::Diagram(p) if p.diagram == DiagramKind::EntityRelationship => {
-                let n = ER_NOTATIONS.iter().position(|&n| n == p.notation);
+                let n = ErNotation::ALL.iter().position(|&n| n == p.notation);
                 choose(&self.er_notation, n, locale_changed.then(er_notation_items), window, cx);
                 let d = ER_DISPLAYS.iter().position(|&d| d == p.er_display);
                 choose(&self.er_display, d, locale_changed.then(er_display_items), window, cx);
@@ -1864,7 +1863,6 @@ fn delete_button(
     })
 }
 
-/// A checkbox that flips one boolean of the element via `set`.
 /// An index as the panel lists it: `UNIQUE name (a, b)`.
 fn index_text(i: &ErIndex) -> String {
     let unique = if i.unique { "UNIQUE " } else { "" };
@@ -1896,6 +1894,7 @@ fn parse_index(line: &str) -> Option<ErIndex> {
     Some(ErIndex { name: head.to_owned(), columns, unique })
 }
 
+/// A checkbox that flips one boolean of the element via `set`.
 fn flag(
     id: &'static str,
     label: String,

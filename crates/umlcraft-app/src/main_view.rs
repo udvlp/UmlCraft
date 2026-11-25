@@ -1691,10 +1691,6 @@ impl MainView {
         self.with_workspace(cx, |ws| ws.paste(&clip, offset, as_reference));
     }
 
-    fn toggle_theme(&mut self, _: &ToggleTheme, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_dark(Some(!cx.theme().is_dark()), window, cx);
-    }
-
     fn set_theme(&mut self, theme: &SetTheme, window: &mut Window, cx: &mut Context<Self>) {
         self.set_dark(theme.dark, window, cx);
     }
@@ -2482,7 +2478,7 @@ fn tree_menu(meta: &TreeMeta, menu: PopupMenu) -> PopupMenu {
         menu = menu.separator();
     }
     let mut any = false;
-    for kind in crate::ribbon::DIAGRAM_KINDS {
+    for kind in DiagramKind::ALL {
         let mut items = vec![NewItem::Diagram(kind)];
         if kind == DiagramKind::Class {
             items.push(NewItem::ObjectDiagram);
@@ -2781,7 +2777,6 @@ impl Render for MainView {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::paste_as_reference))
-            .on_action(cx.listener(Self::toggle_theme))
             .on_action(cx.listener(Self::set_theme))
             .on_action(cx.listener(Self::toggle_language))
             .on_action(cx.listener(Self::open_settings))
