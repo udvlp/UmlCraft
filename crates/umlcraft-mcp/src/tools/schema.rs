@@ -1,9 +1,29 @@
 //! The tools' descriptions and input schemas, and the arguments each one takes.
 
+use umlcraft_nsd::Keywords;
+
 use super::*;
 
 /// The description of `create_structogram`, with the tree it takes.
-pub(super) const STRUCTOGRAM_FORMAT: &str = "Creates a structogram (Nassi-Shneiderman diagram) from a \
+pub(super) fn structogram_format() -> String {
+    let languages: Vec<String> = Keywords::all()
+        .map(|k| {
+            let default = if k == Keywords::english() { ", the default" } else { "" };
+            format!(
+                "{}{default} (`{}`, `{}`, `{}`, `{}`)",
+                k.code(),
+                k.word("preFor"),
+                k.word("preWhile"),
+                k.word("preRepeat"),
+                k.word("preReturn")
+            )
+        })
+        .collect();
+    format!("{FORMAT} {}; english and german are accepted too.", languages.join(", "))
+}
+
+/// The description up to the `keywords` list, which [`structogram_format`] appends.
+const FORMAT: &str = "Creates a structogram (Nassi-Shneiderman diagram) from a \
 tree: {\"title\": \"total(a, n)\", \"kind\": \"sub\", \"body\": [{\"kind\": \"instruction\", \
 \"text\": \"s := 0\"}, {\"kind\": \"for\", \"text\": \"for i := 1 to n\", \"body\": [...]}, \
 {\"kind\": \"if\", \"text\": \"s > 100?\", \"then\": [...], \"else\": [...]}, {\"kind\": \
@@ -16,8 +36,7 @@ tree: {\"title\": \"total(a, n)\", \"kind\": \"sub\", \"body\": [{\"kind\": \"in
 [...]]}]}. Texts are written as structograms write them: no types, `x := value`, no `;`, \
 conditions as questions; several lines are joined with \\n. A case's last branch is its \
 default (label `%` for none); a parallel element has at most 99 branches. Elements may have `comment`, `disabled` and `color` (six hex \
-digits). `kind` of the root: program (default), sub for a method, includable; `keywords`: \
-english (default) or german (`für`, `solange`, `bis`, `gib`).";
+digits). `kind` of the root: program (default), sub for a method, includable; `keywords`:";
 
 /// The tools with their descriptions and JSON schemas, as `tools/list` returns them.
 pub fn list() -> Vec<Value> {
@@ -244,8 +263,9 @@ pub fn list() -> Vec<Value> {
     let structogram_schema = json!({
         "type": "object",
         "description": format!(
-            "title (string), kind (program, sub, includable), keywords (english, german), \
+            "title (string), kind (program, sub, includable), keywords (a language code: {}), \
              comment, body (list of elements, each with `kind`: {})",
+            Keywords::all().map(Keywords::code).collect::<Vec<_>>().join(", "),
             structogram::kind_names().join(", ")
         ),
     });
@@ -336,7 +356,10 @@ pub fn list() -> Vec<Value> {
              diagram or structogram shown. Only while the app runs.",
             json!({
                 "theme": { "type": "string", "enum": ["light", "dark", "system"] },
-                "language": { "type": "string", "enum": ["en", "de", "system"] },
+                "language": {
+                    "type": "string",
+                    "description": "A language code of the user interface such as en or de, or system.",
+                },
                 "zoom": {
                     "description": "\"fit\" for the whole diagram, or a percentage such as 100.",
                     "oneOf": [{ "type": "string", "enum": ["fit"] }, { "type": "number" }],
@@ -560,7 +583,7 @@ pub fn list() -> Vec<Value> {
         ),
         tool(
             "create_structogram",
-            STRUCTOGRAM_FORMAT,
+            &structogram_format(),
             json!({
                 "structogram": structogram_schema.clone(),
                 "owner": id("Package or class to put it in; the operation's class, else the \

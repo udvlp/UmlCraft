@@ -2,7 +2,7 @@
 //! Structorizer's XML.
 //!
 //! ```json
-//! { "title": "total(a, n)", "kind": "sub", "keywords": "english",
+//! { "title": "total(a, n)", "kind": "sub", "keywords": "en",
 //!   "body": [
 //!     { "kind": "instruction", "text": "s := 0" },
 //!     { "kind": "for", "text": "for i := 1 to n",
@@ -64,10 +64,7 @@ pub fn to_json(d: &Diagram) -> Value {
     let mut root = json!({
         "title": d.text().join("\n"),
         "kind": root_name(d.kind()),
-        "keywords": match Keywords::of(d).code() {
-            "de" => "german",
-            _ => "english",
-        },
+        "keywords": Keywords::of(d).code(),
         "body": sequence(&d.children),
     });
     if !d.comment().iter().all(String::is_empty) {
@@ -148,11 +145,18 @@ pub fn from_json(v: &Value, base: Option<&Diagram>) -> Result<Diagram, String> {
         None if base.is_none() => d.set_kind(RootKind::Program),
         None => {}
     }
-    match v.get("keywords").and_then(Value::as_str) {
-        Some("english") => d.set_keywords(Keywords::english()),
-        Some("german") => d.set_keywords(Keywords::by_code("de").unwrap()),
-        Some(other) => return Err(format!("`keywords` is english or german, not `{other}`")),
-        None => {}
+    if let Some(name) = v.get("keywords").and_then(Value::as_str) {
+        // `english` and `german` are what the tools named them before language codes.
+        let code = match name {
+            "english" => "en",
+            "german" => "de",
+            other => other,
+        };
+        let keywords = Keywords::by_code(code).ok_or_else(|| {
+            let codes: Vec<_> = Keywords::all().map(Keywords::code).collect();
+            format!("`keywords` is one of {}, not `{name}`", codes.join(", "))
+        })?;
+        d.set_keywords(keywords);
     }
     if let Some(comment) = v.get("comment").and_then(Value::as_str) {
         d.set_comment(&lines(comment));
@@ -397,10 +401,33 @@ mod tests {
         let d = umlcraft_nsd::content::normalize(&from_json(&tree, None).unwrap());
         assert_eq!(d.kind(), RootKind::Sub);
         assert_eq!(Keywords::of(&d), Keywords::by_code("de").unwrap());
-        assert_eq!(to_json(&d), tree);
+        // Written back, the keywords are named by their language code.
+        let mut coded = tree.clone();
+        coded["keywords"] = json!("de");
+        assert_eq!(to_json(&d), coded);
         // Through Structorizer's file and back.
         let file = umlcraft_nsd::read(&umlcraft_nsd::write(&d)).unwrap();
-        assert_eq!(to_json(&umlcraft_nsd::content::normalize(&file)), tree);
+        assert_eq!(to_json(&umlcraft_nsd::content::normalize(&file)), coded);
+    }
+
+    #[test]
+    fn keywords_are_named_by_language_code() {
+        let german = Keywords::by_code("de").unwrap();
+        let with = |keywords: &str| {
+            from_json(&json!({ "title": "t", "keywords": keywords, "body": [] }), None)
+        };
+        let keywords_of = |keywords: &str| Keywords::of(&with(keywords).unwrap());
+        assert_eq!(to_json(&with("de").unwrap())["keywords"], "de");
+        assert_eq!(to_json(&with("en").unwrap())["keywords"], "en");
+        assert_eq!(to_json(&from_json(&json!({ "title": "t" }), None).unwrap())["keywords"], "en");
+        assert_eq!(keywords_of("de"), german);
+        assert_eq!(keywords_of("german"), german);
+        assert_eq!(keywords_of("en"), Keywords::english());
+        assert_eq!(keywords_of("english"), Keywords::english());
+        let codes: Vec<_> = Keywords::all().map(Keywords::code).collect();
+        let err = with("klingon").unwrap_err();
+        assert_eq!(err, format!("`keywords` is one of {}, not `klingon`", codes.join(", ")));
+        assert!(err.contains("de") && err.contains("en"), "{err}");
     }
 
     #[test]
