@@ -367,10 +367,9 @@ pub fn fit_for(d: &Diagram, e: &mut Element) {
 
 /// The text after a leading keyword followed by a space.
 fn after_keyword<'a>(text: &'a str, keyword: &str, ignore_case: bool) -> Option<&'a str> {
-    let head = text.get(..keyword.len())?;
-    let same = if ignore_case { head.eq_ignore_ascii_case(keyword) } else { head == keyword };
-    let rest = &text[keyword.len()..];
-    (same && rest.starts_with(char::is_whitespace)).then_some(rest)
+    let end = keyword_end(text, keyword, ignore_case)?;
+    let rest = &text[end..];
+    rest.starts_with(char::is_whitespace).then_some(rest)
 }
 
 /// `text` split around the first `keyword` standing as a word between spaces.
@@ -378,7 +377,7 @@ fn split_word<'a>(text: &'a str, keyword: &str, ignore_case: bool) -> Option<(&'
     let mut from = 0;
     while let Some(found) = find(&text[from..], keyword, ignore_case) {
         let at = from + found;
-        let end = at + keyword.len();
+        let end = keyword_end(&text[at..], keyword, ignore_case).map(|n| at + n)?;
         let before = text[..at].ends_with(char::is_whitespace);
         let after = text[end..].starts_with(char::is_whitespace);
         if before && after {
@@ -389,12 +388,40 @@ fn split_word<'a>(text: &'a str, keyword: &str, ignore_case: bool) -> Option<(&'
     None
 }
 
+/// The byte index in `text` where the first match of `keyword` starts.
 fn find(text: &str, keyword: &str, ignore_case: bool) -> Option<usize> {
     if ignore_case {
-        text.to_ascii_lowercase().find(&keyword.to_ascii_lowercase())
+        text.char_indices()
+            .map(|(at, _)| at)
+            .find(|&at| keyword_end(&text[at..], keyword, true).is_some())
     } else {
         text.find(keyword)
     }
+}
+
+/// The byte length of the leading part of `text` that spells `keyword`.
+///
+/// With `ignore_case`, letters are compared by their Unicode lowercase, so the
+/// matched part can be longer or shorter in bytes than `keyword`. It always
+/// ends on a character boundary of `text`.
+fn keyword_end(text: &str, keyword: &str, ignore_case: bool) -> Option<usize> {
+    if !ignore_case {
+        return text.starts_with(keyword).then_some(keyword.len());
+    }
+    let mut wanted = keyword.chars().flat_map(char::to_lowercase).peekable();
+    let mut end = 0;
+    for (at, c) in text.char_indices() {
+        if wanted.peek().is_none() {
+            break;
+        }
+        for lower in c.to_lowercase() {
+            if wanted.next() != Some(lower) {
+                return None;
+            }
+        }
+        end = at + c.len_utf8();
+    }
+    wanted.peek().is_none().then_some(end)
 }
 
 /// The path of the element that holds the sequence `seq`, if it is a branch.
@@ -459,6 +486,18 @@ mod tests {
 
     fn span(seq: &[usize], start: usize, end: usize) -> Span {
         Span { seq: seq.to_vec(), start, end }
+    }
+
+    #[test]
+    fn keywords_ignore_case_beyond_ascii() {
+        assert_eq!(after_keyword("POUR i", "pour", true), Some(" i"));
+        assert_eq!(split_word("1 À 10", "à", true), Some(("1 ", " 10")));
+        assert_eq!(find("x JUSQU'À y", "jusqu'à", true), Some(2));
+        assert_eq!(after_keyword("für i", "FÜR", true), Some(" i"));
+        assert_eq!(after_keyword("Für i", "für", false), None);
+        // No panic on a character boundary.
+        assert_eq!(after_keyword("é", "e", true), None);
+        assert_eq!(split_word("1 àà 2", "à", true), None);
     }
 
     #[test]
