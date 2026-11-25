@@ -19,9 +19,11 @@ licenses and sources, `deny.toml`). On Debian and Ubuntu,
 ## Rules
 
 - Identifiers, code comments, commit messages and all project docs are in English.
-- UI texts go only through `locales/de.yml` and `locales/en.yml` (`t!("…")`), never hard-coded.
-  Every new key goes into both files. rust-i18n reads the locales at compile time: after
-  changing them, touch `crates/umlcraft-app/src/main.rs`.
+- UI texts go only through the files in `locales/` (`t!("…")`), never hard-coded. Every new
+  key goes into `en.yml` and `de.yml`; the other languages may lag behind and show the
+  English text until someone translates it. A test fails when `de.yml` or `en.yml` lacks a
+  key of the other, or when any file has a key `en.yml` has not. rust-i18n reads the locales
+  at compile time: after changing them, touch `crates/umlcraft-app/src/main.rs`.
 - The model changes only through `Document::edit` / `Tx`, never around it. Edits of sequence
   diagrams end with `sequence_edit::tidy` (or `tidy_all`), so that bars, lifelines, fragments,
   frames and the order of the interaction match the drawing.
@@ -30,6 +32,16 @@ licenses and sources, `deny.toml`). On Debian and Ubuntu,
   repository.
 - LF line endings, no BOM. Code that touches paths, file names or line endings must not assume
   one platform.
+
+## Adding a language
+
+The languages are the files in `locales/`. Copy `locales/en.yml` to `locales/<code>.yml` and
+translate it. Set `language.name` to the language's own name; the app lists it in the settings
+and in the language menu of the View tab. Texts left out show in English. The `structogram:`
+section holds the keywords of structograms (`while`, `for`, `return` …). Translate it too, or
+leave it out to use the English keywords. A counting loop must keep `<-` or `:=` after its
+variable, because Structorizer recognises only those. Run `cargo test --workspace`; it checks
+that the new file has no key `en.yml` has not.
 
 ## Tests
 
