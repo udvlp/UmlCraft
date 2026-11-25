@@ -12,7 +12,7 @@ use gpui_kit::component::{ActiveTheme, Sizable, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
 use umlcraft_model::Id;
-use umlcraft_nsd::{ElementKind, Keywords, RootKind, edit};
+use umlcraft_nsd::{ElementKind, RootKind, edit};
 
 use super::kind_name;
 use super::view::{EditText, NsdView, Shown, Target};
@@ -252,9 +252,9 @@ impl Render for NsdProperties {
             Some(ElementKind::Parallel) => (t!("nsd.branches"), None),
             Some(ElementKind::Try) => (t!("nsd.exception"), None),
             Some(ElementKind::For) => {
-                let hint = match shown.keywords {
-                    Keywords::German => t!("nsd.for_hint_german"),
-                    Keywords::English => t!("nsd.for_hint"),
+                let hint = match shown.keywords.code() {
+                    "de" => t!("nsd.for_hint_german"),
+                    _ => t!("nsd.for_hint"),
                 };
                 (t!("nsd.text"), Some(hint))
             }

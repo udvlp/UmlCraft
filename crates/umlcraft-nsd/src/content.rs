@@ -8,7 +8,7 @@
 //! again for writing a `.nsd` file. With the `serde` feature a diagram serializes as that
 //! content, element by element, so that a project file shows changes line by line.
 
-use crate::create::{DEFAULT_KEYWORDS, Provenance};
+use crate::create::{Keywords, Provenance};
 use crate::edit::fit_for;
 use crate::model::{Color, Diagram, Element, ElementKind, Sequence};
 
@@ -40,7 +40,7 @@ pub const KEYWORDS: &[&str] = &[
 /// The keyword a fresh Structorizer installation has for `name`; the ones it does not write
 /// are empty.
 fn default_keyword(name: &str) -> &'static str {
-    DEFAULT_KEYWORDS.iter().find(|(n, _)| *n == name).map_or("", |(_, v)| v)
+    Keywords::english().header().iter().find(|(n, _)| *n == name).map_or("", |(_, v)| v)
 }
 
 /// The keywords of `d` that differ from the defaults, in the order Structorizer writes them.

@@ -159,8 +159,8 @@ impl Settings {
     pub fn keywords(&self) -> umlcraft_nsd::Keywords {
         let language = self.structogram_keywords.clone().unwrap_or_else(|| self.ui_language());
         match language.starts_with("de") {
-            true => umlcraft_nsd::Keywords::German,
-            false => umlcraft_nsd::Keywords::English,
+            true => umlcraft_nsd::Keywords::by_code("de").unwrap(),
+            false => umlcraft_nsd::Keywords::english(),
         }
     }
 
@@ -275,14 +275,14 @@ mod tests {
     fn structogram_keywords_follow_the_interface_unless_chosen() {
         use umlcraft_nsd::Keywords;
         let mut s = Settings { language: Some("de".into()), ..Settings::default() };
-        assert_eq!(s.keywords(), Keywords::German);
+        assert_eq!(s.keywords(), Keywords::by_code("de").unwrap());
         s.structogram_keywords = Some("en".into());
-        assert_eq!(s.keywords(), Keywords::English);
+        assert_eq!(s.keywords(), Keywords::english());
         s.language = Some("en".into());
         s.structogram_keywords = None;
-        assert_eq!(s.keywords(), Keywords::English);
+        assert_eq!(s.keywords(), Keywords::english());
         let s = Settings::from_json(r#"{"language": "en", "structogramKeywords": "de"}"#);
-        assert_eq!(s.keywords(), Keywords::German);
+        assert_eq!(s.keywords(), Keywords::by_code("de").unwrap());
     }
 
     #[test]

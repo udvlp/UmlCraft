@@ -470,7 +470,7 @@ mod tests {
         author: "tester",
         date: "2026-10-30",
         origin: "test",
-        keywords: umlcraft_nsd::Keywords::English,
+        keywords: umlcraft_nsd::Keywords::english(),
     };
 
     /// A folder of its own for `name`'s files, emptied first.

@@ -1,3 +1,5 @@
+language:
+  name: English
 about:
   title: About UmlCraft
   version: "Version %{version}"
@@ -1073,3 +1075,31 @@ file_page:
   source_note: Take classes from source code into the model
   files: Files …
   folder: Folder …
+structogram:
+  # The header holds Structorizer's defaults of a fresh install. They must not change: the
+  # .nsd format relies on them.
+  header:
+    preRepeat: "until "
+    postFor: "to"
+    preReturn: "return"
+    postForIn: "in"
+    preWhile: "while "
+    output: "OUTPUT"
+    input: "INPUT"
+    preFor: "for"
+    preExit: "exit"
+    preLeave: "leave"
+    ignoreCase: "true"
+    preThrow: "throw"
+    preForIn: "foreach"
+    stepFor: "by"
+  branches:
+    "true": "T"
+    "false": "F"
+  new:
+    for: "for ? <- ? to ?"
+    while: "while ?"
+    repeat: "until ?"
+  examples:
+    counting: "for i <- 1 to 10 by 2"
+    traversing: "foreach x in list"

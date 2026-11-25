@@ -7,7 +7,7 @@ const MADE: Made = Made {
     author: "tester",
     date: "2026-11-18",
     origin: "UmlCraft test",
-    keywords: umlcraft_nsd::Keywords::English,
+    keywords: umlcraft_nsd::Keywords::english(),
 };
 
 /// The diagram of the first method in `text`.

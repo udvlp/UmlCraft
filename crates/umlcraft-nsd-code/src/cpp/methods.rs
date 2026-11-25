@@ -305,7 +305,7 @@ static int main(void) { return 0; }
             author: "t",
             date: "2026-10-30",
             origin: "test",
-            keywords: umlcraft_nsd::Keywords::English,
+            keywords: umlcraft_nsd::Keywords::english(),
         };
         let titles: Vec<Vec<String>> =
             s.methods().iter().map(|m| s.diagram(m, &made).unwrap().0.text()).collect();

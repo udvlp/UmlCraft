@@ -17,6 +17,11 @@ thiserror.workspace = true
 serde = { workspace = true, optional = true }
 indexmap = { workspace = true, optional = true }
 
+# build.rs reads the structogram keywords of every language from `locales/`.
+[build-dependencies]
+serde-saphyr.workspace = true
+serde_json.workspace = true
+
 [dev-dependencies]
 pretty_assertions.workspace = true
 serde_json.workspace = true

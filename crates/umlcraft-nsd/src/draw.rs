@@ -482,7 +482,7 @@ mod tests {
         for condition in [vec!["x > 0?"], vec!["x > 0 und y > 0", "oder z > 0?"]] {
             let made = Provenance { author: "", date: "", origin: "" };
             let mut d = Diagram::new(RootKind::Program, &lines(&["t"]), &made);
-            d.set_keywords(Keywords::German);
+            d.set_keywords(Keywords::by_code("de").unwrap());
             // Empty branches: both columns as narrow as their labels allow.
             d.children = Sequence::new(vec![Element::alternative(&lines(&condition))]);
             let layout = Layout::of(&d, m);
@@ -503,8 +503,8 @@ mod tests {
     #[test]
     fn german_diagrams_label_their_branches_ja_and_nein() {
         assert_eq!(branch_labels(None), ["T", "F"]);
-        assert_eq!(branch_labels(Some(Keywords::English)), ["T", "F"]);
-        assert_eq!(branch_labels(Some(Keywords::German)), ["ja", "nein"]);
+        assert_eq!(branch_labels(Some(Keywords::english())), ["T", "F"]);
+        assert_eq!(branch_labels(Some(Keywords::by_code("de").unwrap())), ["ja", "nein"]);
     }
 
     /// A case with so many branches that its plain elements are turned.

@@ -148,7 +148,7 @@ public class Outer {
             author: "t",
             date: "2026-10-29",
             origin: "test",
-            keywords: umlcraft_nsd::Keywords::English,
+            keywords: umlcraft_nsd::Keywords::english(),
         };
         let (d, _) = s.diagram(&ms[1], &made).unwrap();
         assert_eq!(d.text(), ["g()"]);
@@ -162,7 +162,7 @@ public class Outer {
             author: "t",
             date: "2026-10-30",
             origin: "test",
-            keywords: umlcraft_nsd::Keywords::English,
+            keywords: umlcraft_nsd::Keywords::english(),
         };
         let comments: Vec<Vec<String>> =
             s.methods().iter().map(|m| s.diagram(m, &made).unwrap().0.comment().to_vec()).collect();

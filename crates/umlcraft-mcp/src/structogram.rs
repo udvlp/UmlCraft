@@ -64,9 +64,9 @@ pub fn to_json(d: &Diagram) -> Value {
     let mut root = json!({
         "title": d.text().join("\n"),
         "kind": root_name(d.kind()),
-        "keywords": match Keywords::of(d) {
-            Keywords::English => "english",
-            Keywords::German => "german",
+        "keywords": match Keywords::of(d).code() {
+            "de" => "german",
+            _ => "english",
         },
         "body": sequence(&d.children),
     });
@@ -149,8 +149,8 @@ pub fn from_json(v: &Value, base: Option<&Diagram>) -> Result<Diagram, String> {
         None => {}
     }
     match v.get("keywords").and_then(Value::as_str) {
-        Some("english") => d.set_keywords(Keywords::English),
-        Some("german") => d.set_keywords(Keywords::German),
+        Some("english") => d.set_keywords(Keywords::english()),
+        Some("german") => d.set_keywords(Keywords::by_code("de").unwrap()),
         Some(other) => return Err(format!("`keywords` is english or german, not `{other}`")),
         None => {}
     }
@@ -396,7 +396,7 @@ mod tests {
         });
         let d = umlcraft_nsd::content::normalize(&from_json(&tree, None).unwrap());
         assert_eq!(d.kind(), RootKind::Sub);
-        assert_eq!(Keywords::of(&d), Keywords::German);
+        assert_eq!(Keywords::of(&d), Keywords::by_code("de").unwrap());
         assert_eq!(to_json(&d), tree);
         // Through Structorizer's file and back.
         let file = umlcraft_nsd::read(&umlcraft_nsd::write(&d)).unwrap();

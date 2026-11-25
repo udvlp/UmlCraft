@@ -1,7 +1,6 @@
 //! New diagrams and elements in the form Structorizer 3.32-35 gives them, so that the editor
 //! and the code import only make what Structorizer would write itself.
 
-use crate::layout::{FALSE_LABEL, TRUE_LABEL};
 use crate::model::{
     Attrs, Color, Diagram, Element, ElementKind, Lines, ROOT_ORDER, RootKind, Sequence,
 };
@@ -10,69 +9,78 @@ use crate::text::encode_lines;
 /// The version whose format this crate writes.
 pub const STRUCTORIZER_VERSION: &str = "3.32-35";
 
-/// The parser keywords of a fresh Structorizer installation as its GUI saves them (two with
-/// a trailing space).
-pub(crate) const DEFAULT_KEYWORDS: &[(&str, &str)] = &[
-    ("preRepeat", "until "),
-    ("postFor", "to"),
-    ("preReturn", "return"),
-    ("postForIn", "in"),
-    ("preWhile", "while "),
-    ("output", "OUTPUT"),
-    ("input", "INPUT"),
-    ("preFor", "for"),
-    ("preExit", "exit"),
-    ("preLeave", "leave"),
-    ("ignoreCase", "true"),
-    ("preThrow", "throw"),
-    ("preForIn", "foreach"),
-    ("stepFor", "by"),
-];
-
-/// The same keywords in German, as taught in German schools: `solange ?`, `bis ?`,
-/// `für i := 1 bis 10 Schritt 2`, `für jedes x in liste`, `gib x`.
-const GERMAN_KEYWORDS: &[(&str, &str)] = &[
-    ("preRepeat", "bis "),
-    ("postFor", "bis"),
-    ("preReturn", "gib"),
-    ("postForIn", "in"),
-    ("preWhile", "solange "),
-    ("output", "AUSGABE"),
-    ("input", "EINGABE"),
-    ("preFor", "für"),
-    ("preExit", "verlasse"),
-    ("preLeave", "leave"),
-    ("ignoreCase", "true"),
-    ("preThrow", "throw"),
-    ("preForIn", "für jedes"),
-    ("stepFor", "Schritt"),
-];
-
-/// The language of the keywords a diagram is written with: those of its loops and of `return`
-/// in its header, and the texts new elements start with.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Keywords {
-    /// Structorizer's own, as a fresh installation has them.
-    #[default]
-    English,
-    German,
+/// What a language's `structogram:` section in `locales/` says, as `build.rs` reads it. Only
+/// the generated table makes these.
+#[derive(Debug)]
+pub struct KeywordSet {
+    code: &'static str,
+    name: &'static str,
+    header: &'static [(&'static str, &'static str)],
+    branches: (&'static str, &'static str),
+    new: [&'static str; 3],
+    examples: [&'static str; 2],
 }
 
+include!(concat!(env!("OUT_DIR"), "/keywords.rs"));
+
+/// The language of the keywords a diagram is written with: those of its loops and of `return`
+/// in its header, and the texts new elements start with. One per `locales/*.yml` with a
+/// `structogram:` section; English is the default.
+#[derive(Clone, Copy, Debug)]
+pub struct Keywords(&'static KeywordSet);
+
+impl Default for Keywords {
+    fn default() -> Self {
+        Self::english()
+    }
+}
+
+impl PartialEq for Keywords {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.code == other.0.code
+    }
+}
+
+impl Eq for Keywords {}
+
 impl Keywords {
-    /// The parser keywords of the header, as Structorizer saves them.
-    pub fn header(self) -> &'static [(&'static str, &'static str)] {
-        match self {
-            Self::English => DEFAULT_KEYWORDS,
-            Self::German => GERMAN_KEYWORDS,
-        }
+    /// Every language, ordered by code.
+    pub fn all() -> impl Iterator<Item = Keywords> + Clone {
+        SETS.iter().map(Keywords)
     }
 
-    /// The language `d` is written in, told by its keyword for while loops.
-    pub fn of(d: &Diagram) -> Self {
-        match d.header("preWhile").map(str::trim) {
-            Some(k) if k.eq_ignore_ascii_case("solange") => Self::German,
-            _ => Self::English,
-        }
+    /// Structorizer's own keywords, as a fresh installation has them.
+    pub const fn english() -> Keywords {
+        Keywords(&SETS[ENGLISH])
+    }
+
+    /// The language with exactly this code (`de`, not `de-AT`).
+    pub fn by_code(code: &str) -> Option<Keywords> {
+        Self::all().find(|k| k.code() == code)
+    }
+
+    /// The code of the language, which is the name of its locale file (`de`, `en`).
+    pub fn code(self) -> &'static str {
+        self.0.code
+    }
+
+    /// The name of the language in itself (`Deutsch`, `English`).
+    pub fn name(self) -> &'static str {
+        self.0.name
+    }
+
+    /// The parser keywords of the header, as Structorizer saves them (two of English's end in
+    /// a space).
+    pub fn header(self) -> &'static [(&'static str, &'static str)] {
+        self.0.header
+    }
+
+    /// The language `d` is written in, told by its keyword for while loops; English when no
+    /// language has that keyword.
+    pub fn of(d: &Diagram) -> Keywords {
+        let Some(keyword) = d.header("preWhile") else { return Self::english() };
+        let keyword = keyword.trim().to_lowercase();
+        Self::all().find(|k| k.word("preWhile").to_lowercase() == keyword).unwrap_or_default()
     }
 
     /// The keyword `name` (`preFor`, `postFor`, …) without the space some end in.
@@ -83,10 +91,32 @@ impl Keywords {
     /// The labels of an alternative's two branches: Structorizer's `T` and `F`, or `ja` and
     /// `nein` as German schoolbooks write them.
     pub fn branch_labels(self) -> (&'static str, &'static str) {
-        match self {
-            Self::English => (TRUE_LABEL, FALSE_LABEL),
-            Self::German => ("ja", "nein"),
-        }
+        self.0.branches
+    }
+
+    /// The text a new for loop starts with.
+    pub fn new_for(self) -> &'static str {
+        self.0.new[0]
+    }
+
+    /// The text a new while loop starts with.
+    pub fn new_while(self) -> &'static str {
+        self.0.new[1]
+    }
+
+    /// The text a new repeat loop starts with.
+    pub fn new_repeat(self) -> &'static str {
+        self.0.new[2]
+    }
+
+    /// A counting loop as the language writes it, for the hint of the properties.
+    pub fn example_counting(self) -> &'static str {
+        self.0.examples[0]
+    }
+
+    /// A traversing loop as the language writes it, for the hint of the properties.
+    pub fn example_traversing(self) -> &'static str {
+        self.0.examples[1]
     }
 }
 
@@ -103,7 +133,7 @@ impl Diagram {
         let mut attrs = Attrs(Vec::new());
         attrs.set("xmlns:nsd", "https://structorizer.fisch.lu", ROOT_ORDER);
         attrs.set("version", STRUCTORIZER_VERSION, ROOT_ORDER);
-        for (name, value) in DEFAULT_KEYWORDS {
+        for (name, value) in Keywords::english().header() {
             attrs.set(name, *value, ROOT_ORDER);
         }
         attrs.set("author", made.author, ROOT_ORDER);
@@ -300,5 +330,97 @@ mod tests {
         assert_eq!(par.branches.len(), 4);
         assert_eq!(Element::forever_loop().attr("text"), None);
         assert!(Element::alternative(&[]).branches.iter().all(|b| b.attrs.get("color").is_some()));
+    }
+
+    const ENGLISH_HEADER: &[(&str, &str)] = &[
+        ("preRepeat", "until "),
+        ("postFor", "to"),
+        ("preReturn", "return"),
+        ("postForIn", "in"),
+        ("preWhile", "while "),
+        ("output", "OUTPUT"),
+        ("input", "INPUT"),
+        ("preFor", "for"),
+        ("preExit", "exit"),
+        ("preLeave", "leave"),
+        ("ignoreCase", "true"),
+        ("preThrow", "throw"),
+        ("preForIn", "foreach"),
+        ("stepFor", "by"),
+    ];
+
+    const GERMAN_HEADER: &[(&str, &str)] = &[
+        ("preRepeat", "bis "),
+        ("postFor", "bis"),
+        ("preReturn", "gib"),
+        ("postForIn", "in"),
+        ("preWhile", "solange "),
+        ("output", "AUSGABE"),
+        ("input", "EINGABE"),
+        ("preFor", "für"),
+        ("preExit", "verlasse"),
+        ("preLeave", "leave"),
+        ("ignoreCase", "true"),
+        ("preThrow", "throw"),
+        ("preForIn", "für jedes"),
+        ("stepFor", "Schritt"),
+    ];
+
+    #[test]
+    fn english_keywords_are_structorizers_defaults() {
+        let en = Keywords::english();
+        assert_eq!(en.header(), ENGLISH_HEADER);
+        assert_eq!(en.code(), "en");
+        assert_eq!(en.name(), "English");
+        assert_eq!(en.branch_labels(), ("T", "F"));
+        assert_eq!(en.new_for(), "for ? <- ? to ?");
+        assert_eq!(en.new_while(), "while ?");
+        assert_eq!(en.new_repeat(), "until ?");
+        assert_eq!(en.example_counting(), "for i <- 1 to 10 by 2");
+        assert_eq!(en.example_traversing(), "foreach x in list");
+        assert_eq!(Keywords::default(), en);
+    }
+
+    #[test]
+    fn german_keywords_are_as_before() {
+        let de = Keywords::by_code("de").unwrap();
+        assert_eq!(de.header(), GERMAN_HEADER);
+        assert_eq!(de.name(), "Deutsch");
+        assert_eq!(de.branch_labels(), ("ja", "nein"));
+        assert_eq!(de.new_for(), "für ? := ? bis ?");
+        assert_eq!(de.new_while(), "solange ?");
+        assert_eq!(de.new_repeat(), "bis ?");
+        assert_eq!(de.example_counting(), "für i := 1 bis 10 Schritt 2");
+        assert_eq!(de.example_traversing(), "für jedes x in liste");
+        assert_ne!(de, Keywords::english());
+    }
+
+    #[test]
+    fn languages_are_listed_by_code() {
+        let codes: Vec<_> = Keywords::all().map(Keywords::code).collect();
+        assert!(codes.is_sorted());
+        assert!(codes.contains(&"de") && codes.contains(&"en"));
+        assert_eq!(Keywords::by_code("xx"), None);
+        assert_eq!(Keywords::by_code("xx-YY"), None);
+    }
+
+    #[test]
+    fn unknown_keywords_read_as_english() {
+        let made = Provenance { author: "tester", date: "2026-10-29", origin: "UmlCraft test" };
+        let mut d = Diagram::new(RootKind::Program, &lines(&["x"]), &made);
+        d.set_header("preWhile", "mientras ");
+        assert_eq!(Keywords::of(&d), Keywords::english());
+        assert_eq!(d.header("preWhile"), Some("mientras "));
+    }
+
+    #[test]
+    fn the_language_is_told_by_the_while_keyword() {
+        let made = Provenance { author: "tester", date: "2026-10-29", origin: "UmlCraft test" };
+        let mut d = Diagram::new(RootKind::Program, &lines(&["x"]), &made);
+        assert_eq!(Keywords::of(&d), Keywords::english());
+        d.set_keywords(Keywords::by_code("de").unwrap());
+        assert_eq!(Keywords::of(&d).code(), "de");
+        d.set_header("preWhile", " SOLANGE");
+        assert_eq!(Keywords::of(&d).code(), "de");
     }
 }

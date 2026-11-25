@@ -375,7 +375,7 @@ namespace Shop
             author: "t",
             date: "2026-10-30",
             origin: "test",
-            keywords: umlcraft_nsd::Keywords::English,
+            keywords: umlcraft_nsd::Keywords::english(),
         };
         let ms = s.methods();
         let (add, _) = s.diagram(&ms[0], &made).unwrap();

@@ -10,7 +10,7 @@ const MADE: Made = Made {
     author: "tester",
     date: "2026-11-18",
     origin: "UmlCraft test",
-    keywords: umlcraft_nsd::Keywords::English,
+    keywords: umlcraft_nsd::Keywords::english(),
 };
 
 /// Runs `test` on a thread with 1 MB of stack.

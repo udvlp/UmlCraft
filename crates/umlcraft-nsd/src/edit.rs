@@ -28,16 +28,12 @@ type Result<T> = std::result::Result<T, EditError>;
 /// installed), but conditions without the parentheses it puts around them, which a
 /// structogram does not need. Case lines: selector, two cases, default.
 pub fn default_text(kind: ElementKind, keywords: Keywords) -> Vec<String> {
-    let german = keywords == Keywords::German;
     let text: &[&str] = match kind {
         ElementKind::Alternative => &["?"],
         ElementKind::Case => &["?", "!", "!", "default"],
-        ElementKind::For if german => &["für ? := ? bis ?"],
-        ElementKind::For => &["for ? <- ? to ?"],
-        ElementKind::While if german => &["solange ?"],
-        ElementKind::While => &["while ?"],
-        ElementKind::Repeat if german => &["bis ?"],
-        ElementKind::Repeat => &["until ?"],
+        ElementKind::For => &[keywords.new_for()],
+        ElementKind::While => &[keywords.new_while()],
+        ElementKind::Repeat => &[keywords.new_repeat()],
         ElementKind::Parallel => &["2"],
         _ => &[""],
     };
@@ -555,8 +551,11 @@ mod tests {
     #[test]
     fn case_text_brings_its_branches() {
         let mut d = sample();
-        let case =
-            new_element(&d, ElementKind::Case, &default_text(ElementKind::Case, Keywords::English));
+        let case = new_element(
+            &d,
+            ElementKind::Case,
+            &default_text(ElementKind::Case, Keywords::english()),
+        );
         assert_eq!(case.branches.len(), 3);
         insert(&mut d, &Slot { seq: vec![], index: 0 }, vec![case]).unwrap();
         let x = Element::instruction(&lines(&["in default"]));
@@ -655,7 +654,7 @@ mod tests {
     fn new_elements_are_what_structorizer_starts_with() {
         let d = sample();
         for kind in ElementKind::ALL {
-            let e = new_element(&d, kind, &default_text(kind, Keywords::English));
+            let e = new_element(&d, kind, &default_text(kind, Keywords::english()));
             assert_eq!(e.kind, kind);
             if has_text(kind) {
                 assert!(e.attr("text").is_some());
@@ -665,11 +664,11 @@ mod tests {
         let empty = new_element(
             &d,
             ElementKind::Instruction,
-            &default_text(ElementKind::Instruction, Keywords::English),
+            &default_text(ElementKind::Instruction, Keywords::english()),
         );
         assert_eq!(empty.attr("text"), Some(""));
         let f =
-            new_element(&d, ElementKind::For, &default_text(ElementKind::For, Keywords::English));
+            new_element(&d, ElementKind::For, &default_text(ElementKind::For, Keywords::english()));
         assert_eq!(f.attr("style"), Some("COUNTER"));
         assert_eq!(f.attr("counterVar"), Some("?"));
     }
@@ -678,11 +677,11 @@ mod tests {
     fn german_keywords_count_in_german() {
         let made = crate::Provenance { author: "", date: "", origin: "" };
         let mut d = Diagram::new(RootKind::Program, &lines(&["demo"]), &made);
-        assert_eq!(Keywords::of(&d), Keywords::English);
-        d.set_keywords(Keywords::German);
-        assert_eq!(Keywords::of(&d), Keywords::German);
+        assert_eq!(Keywords::of(&d), Keywords::english());
+        d.set_keywords(Keywords::by_code("de").unwrap());
+        assert_eq!(Keywords::of(&d), Keywords::by_code("de").unwrap());
         assert_eq!(d.header("preWhile"), Some("solange "));
-        let german = |kind| default_text(kind, Keywords::German);
+        let german = |kind| default_text(kind, Keywords::by_code("de").unwrap());
         assert_eq!(german(ElementKind::While), ["solange ?"]);
         assert_eq!(german(ElementKind::Repeat), ["bis ?"]);
         let f = new_element(&d, ElementKind::For, &german(ElementKind::For));
@@ -694,6 +693,6 @@ mod tests {
         assert_eq!((each.attr("style"), each.attr("counterVar")), (Some("TRAVERSAL"), Some("x")));
         // The German keywords stay in the normal form of a project.
         let normal = crate::content::normalize(&d);
-        assert_eq!(Keywords::of(&normal), Keywords::German);
+        assert_eq!(Keywords::of(&normal), Keywords::by_code("de").unwrap());
     }
 }

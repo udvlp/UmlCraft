@@ -1,3 +1,5 @@
+language:
+  name: Deutsch
 about:
   title: Über UmlCraft
   version: "Version %{version}"
@@ -1073,3 +1075,29 @@ file_page:
   source_note: Klassen aus Quelltext ins Modell übernehmen
   files: Dateien …
   folder: Ordner …
+structogram:
+  header:
+    preRepeat: "bis "
+    postFor: "bis"
+    preReturn: "gib"
+    postForIn: "in"
+    preWhile: "solange "
+    output: "AUSGABE"
+    input: "EINGABE"
+    preFor: "für"
+    preExit: "verlasse"
+    preLeave: "leave"
+    ignoreCase: "true"
+    preThrow: "throw"
+    preForIn: "für jedes"
+    stepFor: "Schritt"
+  branches:
+    "true": "ja"
+    "false": "nein"
+  new:
+    for: "für ? := ? bis ?"
+    while: "solange ?"
+    repeat: "bis ?"
+  examples:
+    counting: "für i := 1 bis 10 Schritt 2"
+    traversing: "für jedes x in liste"

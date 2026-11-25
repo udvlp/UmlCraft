@@ -48,7 +48,7 @@ fn structure_matches_structorizers_import() {
         author: "t",
         date: "2026-10-29",
         origin: "t",
-        keywords: umlcraft_nsd::Keywords::English,
+        keywords: umlcraft_nsd::Keywords::english(),
     };
     let expected_deviations = deviations();
     let mut compared = 0;
