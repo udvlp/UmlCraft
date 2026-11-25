@@ -42,7 +42,6 @@ toolbar:
   undo_named: "Rückgängig: %{what}"
   redo_named: "Wiederholen: %{what}"
   theme: Hell/Dunkel
-  language: English
   settings: Einstellungen
   about: Über UmlCraft
   update: "Update %{version}"
@@ -663,8 +662,7 @@ settings:
   structograms: Struktogramme
   keywords: Schlüsselwörter neuer Struktogramme
   keywords_ui: Wie die Oberfläche
-  keywords_de: "Deutsch (solange, für, gib)"
-  keywords_en: "Englisch (while, for, return)"
+  keywords_in: "%{name} (%{words})"
   updates: Updates
   update_check: Beim Start bei GitHub nach neuen Versionen suchen
   update_check_detail: "Höchstens einmal am Tag. GitHub erfährt dabei deine IP-Adresse und die Version von UmlCraft, sonst nichts."
@@ -926,8 +924,7 @@ nsd:
   branches: Anzahl der Zweige
   exception: Name der gefangenen Ausnahme
   case_hint: "Erste Zeile: was geprüft wird; dann je Fall eine Zeile; letzte Zeile: der Sonst-Fall (% für keinen)."
-  for_hint: "for i <- 1 to 10 by 2 zählt, foreach x in liste geht eine Liste durch; alles andere bleibt freier Text."
-  for_hint_german: "für i := 1 bis 10 Schritt 2 zählt, für jedes x in liste geht eine Liste durch; alles andere bleibt freier Text."
+  for_hint: "%{counting} zählt, %{traversing} geht eine Liste durch; alles andere bleibt freier Text."
   root_program: Programm
   root_sub: Unterprogramm
   root_includable: Includable

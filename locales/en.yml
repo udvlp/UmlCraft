@@ -42,7 +42,6 @@ toolbar:
   undo_named: "Undo: %{what}"
   redo_named: "Redo: %{what}"
   theme: Light/Dark
-  language: Deutsch
   settings: Settings
   about: About UmlCraft
   update: "Update %{version}"
@@ -663,8 +662,7 @@ settings:
   structograms: Structograms
   keywords: Keywords of new structograms
   keywords_ui: As the user interface
-  keywords_de: "German (solange, für, gib)"
-  keywords_en: "English (while, for, return)"
+  keywords_in: "%{name} (%{words})"
   updates: Updates
   update_check: Look for new versions on GitHub at start
   update_check_detail: "At most once a day. GitHub learns your IP address and UmlCraft's version, nothing else."
@@ -926,8 +924,7 @@ nsd:
   branches: Number of branches
   exception: Name of the caught exception
   case_hint: "First line: what is examined; then one line per case; last line: the default (% for none)."
-  for_hint: "for i <- 1 to 10 by 2 counts, foreach x in list goes through a list; anything else stays free text."
-  for_hint_german: "für i := 1 bis 10 Schritt 2 counts, für jedes x in liste goes through a list; anything else stays free text."
+  for_hint: "%{counting} counts, %{traversing} goes through a list; anything else stays free text."
   root_program: Program
   root_sub: Subroutine
   root_includable: Includable

@@ -6905,6 +6905,7 @@ dependencies = [
  "rustls",
  "semver",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sha2 0.11.1",
  "sys-locale",

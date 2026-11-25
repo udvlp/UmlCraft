@@ -11,6 +11,8 @@ mod fuzz;
 mod icons;
 mod labels;
 mod live;
+#[cfg(test)]
+mod locales_test;
 mod main_view;
 mod nsd;
 mod png;
@@ -77,7 +79,6 @@ actions!(
         AlignMiddle,
         AlignBottom,
         ToggleTheme,
-        ToggleLanguage,
         OpenSettings,
         OpenSample,
         OpenAbout,
@@ -191,6 +192,13 @@ pub struct SetLineShape {
 #[action(namespace = umlcraft, no_json)]
 pub struct SetTheme {
     pub dark: Option<bool>,
+}
+
+/// Chooses the language of the user interface, or with `None` the system's.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = umlcraft, no_json)]
+pub struct SetLanguage {
+    pub code: Option<String>,
 }
 
 /// Arranges the active diagram, or the selection on it, in layers.

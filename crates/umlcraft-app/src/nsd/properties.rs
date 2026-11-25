@@ -252,10 +252,12 @@ impl Render for NsdProperties {
             Some(ElementKind::Parallel) => (t!("nsd.branches"), None),
             Some(ElementKind::Try) => (t!("nsd.exception"), None),
             Some(ElementKind::For) => {
-                let hint = match shown.keywords.code() {
-                    "de" => t!("nsd.for_hint_german"),
-                    _ => t!("nsd.for_hint"),
-                };
+                let k = shown.keywords;
+                let hint = t!(
+                    "nsd.for_hint",
+                    counting = k.example_counting(),
+                    traversing = k.example_traversing()
+                );
                 (t!("nsd.text"), Some(hint))
             }
             Some(_) => (t!("nsd.text"), None),

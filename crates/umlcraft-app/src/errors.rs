@@ -284,8 +284,8 @@ mod tests {
         // Each locale asked for by name: the locale of the process stays as it is for the
         // tests that run alongside.
         for r in &refusals {
-            for locale in ["de", "en"] {
-                let text = refusal(r, locale);
+            for locale in crate::_rust_i18n_available_locales() {
+                let text = refusal(r, &locale);
                 assert!(!text.contains("error.") && !text.contains("kind."), "{r:?}: {text}");
             }
         }

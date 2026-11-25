@@ -149,15 +149,16 @@ fn one_line(text: &str) -> String {
 }
 
 /// Locale keys the app builds at runtime (`kind.{tool}`, `export_dropped.{key}`, …), which a
-/// comparison of the literal `t!("…")` keys cannot see. Each must have a text in both
-/// languages, or the UI shows (and a new element is named) "en.kind.boundary".
+/// comparison of the literal `t!("…")` keys cannot see. Each must have a text in German and
+/// English, or the UI shows (and a new element is named) "en.kind.boundary"; another language
+/// falls back to English.
 #[cfg(test)]
 mod runtime_keys {
     use std::collections::BTreeSet;
 
     use super::export_dropped_in;
+    use crate::locales_test::COMPLETE;
 
-    const LOCALES: [&str; 2] = ["de", "en"];
     const PALETTE: &str = include_str!("../../umlcraft-notation/src/palette.rs");
     const ELEMENT: &str = include_str!("../../umlcraft-model/src/element.rs");
     const REVERSE: &str = include_str!("../../umlcraft-reverse/src/lang.rs");
@@ -168,10 +169,10 @@ mod runtime_keys {
         crate::_rust_i18n_backend().translate(locale, key).is_some()
     }
 
-    /// The keys of `keys` that some language has no text for, with the language.
+    /// The keys of `keys` that German or English has no text for, with the language.
     fn missing(keys: impl IntoIterator<Item = String>) -> Vec<String> {
         let keys: Vec<String> = keys.into_iter().collect();
-        LOCALES
+        COMPLETE
             .iter()
             .flat_map(|l| keys.iter().filter(|k| !has(l, k)).map(move |k| format!("{l}.{k}")))
             .collect()
@@ -255,7 +256,7 @@ mod runtime_keys {
         }
         // `drop(type)`: any element kind.
         keys.extend(type_names());
-        let unlabeled: Vec<String> = LOCALES
+        let unlabeled: Vec<String> = COMPLETE
             .iter()
             .flat_map(|l| {
                 keys.iter()

@@ -41,6 +41,10 @@ sha2.workspace = true
 sys-locale.workspace = true
 ureq.workspace = true
 
+# The parity test of the locale files reads them.
+[dev-dependencies]
+serde-saphyr.workspace = true
+
 [build-dependencies]
 embed-resource.workspace = true
 
