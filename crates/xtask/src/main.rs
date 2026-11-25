@@ -33,7 +33,8 @@ const TOOLS: &[&str] = &["xtask"];
 const UI_CRATES: &[&str] = &["umlcraft-app"];
 
 /// Platform APIs and the only crates that may use them.
-const PLATFORM: &[&str] = &["windows", "raw-window-handle"];
+const PLATFORM: &[&str] =
+    &["windows", "windows-sys", "windows-core", "winapi", "raw-window-handle"];
 const PLATFORM_CRATES: &[&str] = &["umlcraft-screenshot"];
 
 fn main() -> ExitCode {
@@ -134,6 +135,9 @@ fn check(metadata: &Value) -> Vec<String> {
                     "{name} (layer {own}) depends on {dep} (layer {theirs}), which is not below it"
                 )),
                 (None, _) => problems.push(format!("{name} is a tool and depends on {dep}")),
+                (Some(_), None) => {
+                    problems.push(format!("{name} depends on the tool {dep}"));
+                }
                 _ => {}
             }
         }
@@ -176,16 +180,21 @@ mod tests {
                 ("umlcraft-notation", None),
                 ("gpui-kit", Some("dev")),
                 ("windows", None),
+                ("windows-sys", None),
+                ("xtask", None),
                 ("umlcraft-app", Some("dev")),
             ],
         ));
         packages.push(package("umlcraft-mcp", &[("umlcraft-model", None), ("serde_json", None)]));
         packages.push(package("umlcraft-new", &[]));
+        packages.push(package("xtask", &[]));
         let problems = check(&json!({ "packages": packages }));
         let expected = [
             "umlcraft-model (layer 1) depends on umlcraft-notation (layer 2)",
             "umlcraft-model depends on gpui-kit (dev)",
-            "umlcraft-model depends on windows",
+            "umlcraft-model depends on windows:",
+            "umlcraft-model depends on windows-sys",
+            "umlcraft-model depends on the tool xtask",
             "umlcraft-new is in no layer",
         ];
         for text in expected {

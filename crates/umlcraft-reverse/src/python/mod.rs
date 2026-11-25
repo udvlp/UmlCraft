@@ -362,14 +362,34 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// PEP 695: `class Box[T, *Ts]:`.
-    fn type_parameters(&self, node: Node) -> Vec<TemplateParam> {
+    /// PEP 695: `class Box[T, *Ts]:`, `class Box[T: Comparable]:`. Each parameter is a `type`
+    /// around its name, or around a `constrained_type` of the name and its bound.
+    fn type_parameters(&mut self, node: Node) -> Vec<TemplateParam> {
         named_children(node)
             .into_iter()
-            .map(|p| TemplateParam {
-                name: self.text(p).trim_start_matches('*').to_owned(),
-                is_variadic: self.text(p).starts_with('*'),
-                ..Default::default()
+            .map(|p| {
+                let inner = named_children(p).into_iter().next().unwrap_or(p);
+                let (name, bound) = match inner.kind() {
+                    "constrained_type" => {
+                        let parts = named_children(inner);
+                        (parts.first().copied().unwrap_or(inner), parts.get(1).copied())
+                    }
+                    _ => (inner, None),
+                };
+                let text = self.text(name);
+                let bounds = bound
+                    .map(|b| {
+                        self.type_expr(b)
+                            .unwrap_or_else(|| TypeExpr::builtin(squeeze(self.text(b))))
+                    })
+                    .into_iter()
+                    .collect();
+                TemplateParam {
+                    name: text.trim_start_matches('*').to_owned(),
+                    is_variadic: text.starts_with('*'),
+                    bounds,
+                    ..Default::default()
+                }
             })
             .collect()
     }
@@ -410,6 +430,16 @@ impl<'a> Reader<'a> {
         };
         if let Some(annotation) = annotation {
             self.annotate(annotation, &mut field);
+        }
+        // Declared again, or after `__init__` assigned it (`self.total = 0`): one attribute,
+        // as the class body says, with the value assigned first if the body gives none.
+        let same = |m: &&mut Member| matches!(m, Member::Field(f) if f.name == field.name);
+        if let Some(Member::Field(earlier)) = t.members.iter_mut().find(same) {
+            if field.default.is_none() {
+                field.default = earlier.default.take();
+            }
+            *earlier = field;
+            return;
         }
         t.members.push(Member::Field(field));
     }

@@ -16,3 +16,13 @@ package generics
     attribute + item : T
     operation + first<U>(u : U) : U
       template U
+  interface Comparable Public
+    operation + compare(other : object) : int
+  class Sorted Public
+    template T>Comparable
+    attribute + items : list<T>
+    operation + pick<V>(v : V) : V
+      template V>Comparable
+package builtins
+  class list Public
+    template T

@@ -96,18 +96,24 @@ fn parse(args: &[&str], setup: bool) -> Result<Options, String> {
             }
             continue;
         }
+        // Absolute, as the server may run in another folder (started by an AI client) and
+        // the app checks paths in its own. The folder need not exist yet.
+        if flag == "--allow-path" {
+            let folder = root_value(flag, inline, &mut args)?;
+            options.access.write.push(existing_folder(flag, &folder, false)?);
+            continue;
+        }
         match arg {
-            // Absolute, as the server may run in another folder (started by an AI client) and
-            // the app checks paths in its own.
-            "--allow-path" => {
-                let folder = PathBuf::from(value(&mut args, arg)?);
-                let folder = std::path::absolute(&folder)
-                    .map_err(|e| format!("--allow-path {}: {e}", folder.display()))?;
-                options.access.write.push(folder);
-            }
             "--allow-any-path" => options.access.any = true,
             "--headless" if !setup => options.headless = true,
-            "--in" if !setup => options.input = Some(PathBuf::from(value(&mut args, arg)?)),
+            // Absolute too: the project's own path is where `save_file` without a path writes,
+            // and a relative one would be taken from the first write folder.
+            "--in" if !setup => {
+                let path = PathBuf::from(value(&mut args, arg)?);
+                let path = std::path::absolute(&path)
+                    .map_err(|e| format!("--in {}: {e}", path.display()))?;
+                options.input = Some(path);
+            }
             "--connect" if !setup => {
                 let text = value(&mut args, arg)?;
                 let port = text.rsplit(':').next().unwrap_or(&text);
@@ -445,6 +451,14 @@ mod tests {
         assert!(options.access.write[0].is_absolute(), "{:?}", options.access.write);
         assert!(options.access.write[0].ends_with("diagrams"));
         assert!(options.access.read.is_empty());
+        // Also as `--allow-path=DIR`, and a forgotten folder does not swallow the next flag.
+        let options = parse(&["--allow-path=diagrams"], true).unwrap();
+        assert!(options.access.write[0].ends_with("diagrams"));
+        assert!(parse(&["--allow-path", "--headless"], false).is_err());
+        // The project of `--in` too, so that saving it goes back to it.
+        let options = parse(&["--in", "shop.ucraft"], false).unwrap();
+        let input = options.input.unwrap();
+        assert!(input.is_absolute() && input.ends_with("shop.ucraft"), "{input:?}");
     }
 
     #[test]

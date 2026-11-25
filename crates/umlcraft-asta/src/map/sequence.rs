@@ -263,7 +263,10 @@ impl Importer<'_> {
             let Some(id) = self.create(fragment, data, Some(operand)) else { continue };
             let messages = self.r.list(operand, "messages");
             let fragments = self.r.list(operand, "fragments");
-            self.interaction_items(id, messages, fragments);
+            if self.deeper(operand) {
+                self.interaction_items(id, messages, fragments);
+                self.nesting -= 1;
+            }
         }
     }
 
@@ -417,9 +420,13 @@ impl Importer<'_> {
 
         for &p in &sources {
             if class(p) == "MessagePresentation" {
-                self.message_presentation(diagram, p, shift, |this, s| {
+                let id = self.message_presentation(diagram, p, shift, |this, s| {
                     lane_of(this, s, &presentation_of)
                 });
+                // Notes may be anchored to a message.
+                if let Some(id) = id {
+                    presentation_of.insert(p, id);
+                }
             }
         }
         // State invariants, terminations and constraints lie in front of the messages.
@@ -552,13 +559,11 @@ impl Importer<'_> {
         p: ObjId,
         shift: Point,
         lane: impl Fn(&Self, ObjId) -> Option<Id>,
-    ) {
+    ) -> Option<Id> {
         let r = self.r;
-        let Some(element) = r.obj(p, "model").and_then(|m| self.ids.get(&m)).copied() else {
-            return;
-        };
+        let element = r.obj(p, "model").and_then(|m| self.ids.get(&m)).copied()?;
         let Some(ElementKind::Message(props)) = self.model.get(element).map(|e| e.kind()) else {
-            return;
+            return None;
         };
         let (gate, props_sort) = (props.gate, props.sort);
         let points: Vec<Point> =
@@ -566,7 +571,7 @@ impl Importer<'_> {
         // The message came in; a line without its points or lifelines is lost.
         let (Some(&first), Some(&last)) = (points.first(), points.last()) else {
             self.lost_presentations += 1;
-            return;
+            return None;
         };
         let servers = r.list(p, "servers");
         let ends: Vec<Option<Id>> = servers.iter().map(|&s| lane(self, s)).collect();
@@ -577,7 +582,7 @@ impl Importer<'_> {
                 (MessageGate::Lost, Some(s), _) => (s, s, Some(last.x)),
                 _ => {
                     self.lost_presentations += 1;
-                    return;
+                    return None;
                 }
             };
         let center = self
@@ -631,6 +636,6 @@ impl Importer<'_> {
         presentation.style.hide_parameter_types =
             call && flag("parameterTypeVisibility") == Some(false);
         presentation.style.show_return_type = call && flag("returnValueVisibility") == Some(true);
-        self.insert(diagram, presentation, false);
+        self.insert(diagram, presentation, false)
     }
 }

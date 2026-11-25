@@ -461,7 +461,9 @@ pub fn parse_attribute(text: &str) -> Result<AttributeSpec, ParseError> {
 fn parse_parameter(text: &str) -> Result<ParameterSpec, ParseError> {
     let text = text.trim();
     // `in`, `out` and `inout` are a direction only when a name follows; in `in : InputStream`
-    // or `out = 1` the word is the parameter's name (Java's `InputStream in`).
+    // or `out = 1` the word is the parameter's name (Java's `InputStream in`). A parameter
+    // without a name is written with two spaces before its type (`out  : int`,
+    // `parameter_text`), which keeps the word a direction.
     let (direction, rest) = [
         ("inout ", ParameterDirection::InOut),
         ("out ", ParameterDirection::Out),
@@ -471,7 +473,8 @@ fn parse_parameter(text: &str) -> Result<ParameterSpec, ParseError> {
     .find_map(|(prefix, d)| {
         let rest = text.strip_prefix(prefix)?;
         let next = rest.trim_start();
-        (!next.is_empty() && !next.starts_with([':', '='])).then_some((d, rest))
+        let unnamed = rest.starts_with(char::is_whitespace) && next.starts_with(':');
+        (unnamed || !next.is_empty() && !next.starts_with([':', '='])).then_some((d, rest))
     })
     .unwrap_or((ParameterDirection::In, text));
     let (head, default) = split_top(rest, '=');
@@ -1350,8 +1353,11 @@ mod tests {
         assert_eq!(p("out out : int"), (Out, "out".into(), ty("int"), None));
         assert_eq!(p("inout in"), (InOut, "in".into(), None, None));
         assert_eq!(p(" in  out : int"), (In, "out".into(), ty("int"), None));
-        // The C++ form without a name stays.
+        // The C++ form without a name stays, with a direction too (as `parameter_text`
+        // writes it).
         assert_eq!(p(": int"), (In, String::new(), ty("int"), None));
+        assert_eq!(p("out  : int"), (Out, String::new(), ty("int"), None));
+        assert_eq!(p("inout  : int"), (InOut, String::new(), ty("int"), None));
 
         let mut doc = Document::new(Model::new("m"));
         let root = doc.model().root();

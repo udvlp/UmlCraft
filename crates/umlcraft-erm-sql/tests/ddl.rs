@@ -215,3 +215,33 @@ fn the_sql_for_the_other_dialect_gives_the_same_model() {
         );
     }
 }
+
+#[test]
+fn moved_to_the_other_dialect_names_types_and_numbers_stay_apart() {
+    // MySQL enumerations become PostgreSQL types named after table and column, which may meet.
+    let sql = "CREATE TABLE `order` (id int NOT NULL, status_type enum('a','b'), \
+               PRIMARY KEY (id));\n\
+               CREATE TABLE order_status (id int NOT NULL, type enum('x','y'), \
+               PRIMARY KEY (id));";
+    let schema = read(sql.as_bytes(), Some(Dialect::MySql)).unwrap();
+    let (doc, result) = imported(&schema, &Options::default(), false);
+    let out = ddl(doc.model(), result.diagram, Dialect::Postgres).unwrap();
+    assert!(out.sql.contains("CREATE TYPE order_status_type AS ENUM ('a', 'b');"), "{}", out.sql);
+    assert!(out.sql.contains("CREATE TYPE order_status_type_2 AS ENUM ('x', 'y');"), "{}", out.sql);
+    let again = read(out.sql.as_bytes(), Some(Dialect::Postgres)).unwrap();
+    assert_eq!(again.problems, [], "{}", out.sql);
+
+    // PostgreSQL: a domain in a schema of its own, and a numeric without precision.
+    let sql = "CREATE SCHEMA common;\n\
+               CREATE DOMAIN common.email AS text;\n\
+               CREATE TABLE public.person (id integer NOT NULL, mail common.email, \
+               balance numeric, CONSTRAINT person_pkey PRIMARY KEY (id));";
+    let schema = read(sql.as_bytes(), Some(Dialect::Postgres)).unwrap();
+    let (doc, result) = imported(&schema, &Options::default(), false);
+    let out = ddl(doc.model(), result.diagram, Dialect::Postgres).unwrap();
+    let schema_at = out.sql.find("CREATE SCHEMA IF NOT EXISTS common;");
+    let domain_at = out.sql.find("CREATE DOMAIN common.email");
+    assert!(schema_at.is_some() && schema_at < domain_at, "{}", out.sql);
+    let out = ddl(doc.model(), result.diagram, Dialect::MySql).unwrap();
+    assert!(out.sql.contains("balance decimal(65,30)"), "{}", out.sql);
+}

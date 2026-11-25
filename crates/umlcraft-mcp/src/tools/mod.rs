@@ -131,8 +131,9 @@ the result (`screenshot` shows the app's whole window while it runs). `get_diagr
 its kind offers. In a sequence diagram, `connect` draws a message between lifelines below the others \
 unless `y` says where, `wrap_in_fragment` puts messages into an `alt`, `loop`, … and `add_operand` adds a \
 case. Structograms (Nassi-Shneiderman diagrams) are JSON trees: `create_structogram`, \
-`get_structogram`, `update_structogram`. `batch` runs several calls as one undo step; a string `$0.id` in a later call's \
-arguments takes the `id` from the first call's reply. Ids are UUID strings returned by the \
+`get_structogram`, `update_structogram`. `batch` runs several calls as one undo step; a string `$0.element` in a later call's \
+arguments takes the field `element` from the first call's reply (`create_diagram` replies \
+with `diagram`, `create_element` and `connect` with `element`). Ids are UUID strings returned by the \
 tools; a `diagram` may also be given by its name (a structogram by its title).";
 
 type Outcome = Result<Reply, String>;
@@ -198,14 +199,14 @@ pub fn call(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> R
 /// taken back the edit that panicked; the steps the call made before it (a batch's earlier
 /// calls) are taken back here.
 pub fn call_guarded(host: &mut dyn Host, access: &Access, name: &str, args: &Value) -> Reply {
-    let depth = host.document().undo_depth();
+    let mark = host.document().mark();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         call(&mut *host, access, name, args)
     }));
     match outcome {
         Ok(reply) => reply,
         Err(panic) => {
-            host.parts().0.roll_back_to(depth);
+            host.parts().0.roll_back(mark);
             let why = panic
                 .downcast_ref::<String>()
                 .map(String::as_str)

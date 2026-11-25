@@ -13,4 +13,9 @@ namespace generics
   public class Modern<T, Ts...> (line 20)
     public field item : T
     public operation first<U>(u : U) : U
+  public interface Comparable (line 26)
+    public operation compare(other : object) : int
+  public class Sorted<T extends Comparable> (line 30)
+    public field items : list<T>
+    public operation pick<V extends Comparable>(v : V) : V
 skipped free_member × 2

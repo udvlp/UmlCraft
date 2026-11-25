@@ -358,6 +358,7 @@ prop:
   documentation: Documentation
   text: Text
   bounds: Position and size
+  bounds_value: "x %{x}, y %{y}, %{width} × %{height}"
   nothing_selected: Nothing selected
   message_sort: Kind of message
   arguments: Arguments

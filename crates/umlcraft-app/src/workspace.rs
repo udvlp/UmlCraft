@@ -1085,7 +1085,11 @@ impl Workspace {
         }
         let index = model.children(owner).len();
         let label = t!("edit.move_element").to_string();
-        let result = self.edit(label, |tx| tx.move_element(element, owner, index));
+        // A message or fragment moved into another operand has to match the drawing again.
+        let result = self.edit(label, |tx| {
+            tx.move_element(element, owner, index)?;
+            umlcraft_notation::sequence_edit::tidy_all(tx)
+        });
         self.report(result);
     }
 
@@ -1512,8 +1516,13 @@ impl Workspace {
     pub fn edit_structogram(&mut self, id: Id, structogram: &umlcraft_nsd::Diagram) {
         let label = t!("edit.structogram").to_string();
         let before = self.doc.revision();
+        // The tree names a structogram by its root's text, so a new one is no content edit.
+        let renamed = match self.doc.model().get(id).map(|e| e.kind()) {
+            Some(ElementKind::Structogram(p)) => p.structogram.text() != structogram.text(),
+            _ => true,
+        };
         let result = self.doc.edit(label, |tx| tx.set_structogram(id, structogram));
-        if result.is_ok() {
+        if result.is_ok() && !renamed {
             self.content_edit = Some((before, self.doc.revision()));
         }
         self.report(result);
@@ -2145,7 +2154,7 @@ mod tests {
         let view = format!("{:?}", ws.doc.model().view(d).unwrap().presentations());
         let start = std::time::Instant::now();
         for i in 0..200 {
-            content.set_text(&[format!("x = {i}")]);
+            content.set_comment(&[format!("x = {i}")]);
             let before = ws.doc.revision();
             ws.edit_structogram(id, &content);
             assert_eq!(ws.content_edit, Some((before, ws.doc.revision())));
@@ -2153,6 +2162,11 @@ mod tests {
         // Through `edit::apply` this took about 14 s in a debug build, without it 6 ms.
         let elapsed = start.elapsed();
         assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+        // The root's text names the structogram in the tree: that is no content edit.
+        content.set_text(&["sort(list)".to_owned()]);
+        let before = ws.doc.revision();
+        ws.edit_structogram(id, &content);
+        assert_ne!(ws.content_edit, Some((before, ws.doc.revision())));
         assert_eq!(format!("{:?}", ws.doc.model().view(d).unwrap().presentations()), view);
         assert!(ws.doc.undo());
     }

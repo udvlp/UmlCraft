@@ -119,3 +119,14 @@ fn every_method_of_a_large_file_is_built_quickly() {
         assert!(start.elapsed().as_secs() < 10, "{language:?}: {:?}", start.elapsed());
     }
 }
+
+#[test]
+fn the_break_that_ends_a_case_goes_with_a_comment_after_it() {
+    let java = "class A {\n  void f(int x) {\n    switch (x) {\n      case 1: {\n        g();\n        break; // done\n      }\n      default:\n        h();\n    }\n  }\n}\n";
+    let (d, report) = first(SourceLanguage::Java, java);
+    let case = &d.children.elements[0];
+    assert_eq!(case.kind, ElementKind::Case);
+    let jumps = case.branches[0].elements.iter().filter(|e| e.kind == ElementKind::Jump).count();
+    assert_eq!(jumps, 0, "{:?}", case.branches[0].elements);
+    assert_eq!(kinds(&report), []);
+}

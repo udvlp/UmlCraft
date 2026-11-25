@@ -750,3 +750,51 @@ fn line_breaks_in_names_reach_the_svg() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn a_failed_batch_keeps_what_could_be_redone() {
+    let mut host = Headless::new();
+    run(&mut host, "create_diagram", json!({ "kind": "class", "name": "Kept" }));
+    run(&mut host, "undo", json!({}));
+    assert!(host.document().can_redo());
+    let calls = json!([
+        { "tool": "create_diagram", "arguments": { "kind": "class", "name": "Shop" } },
+        { "tool": "connect", "arguments": { "diagram": "$0.diagram" } },
+    ]);
+    let reply = call(&mut host, &Access::default(), "batch", &json!({ "calls": calls }));
+    assert!(reply.is_error);
+    assert!(host.document().can_redo(), "the user's undone step can still be redone");
+    // Nor does the headless project count as used now.
+    let mut fresh = Headless::new();
+    let calls = json!([
+        { "tool": "create_diagram", "arguments": { "kind": "class", "name": "Shop" } },
+        { "tool": "connect", "arguments": { "diagram": "$0.diagram" } },
+    ]);
+    assert!(call(&mut fresh, &Access::default(), "batch", &json!({ "calls": calls })).is_error);
+    assert!(!fresh.touched());
+}
+
+#[test]
+fn a_guard_beside_a_transitions_text_wins() {
+    let mut host = Headless::new();
+    let d = run(&mut host, "create_diagram", json!({ "kind": "state_machine", "name": "S" }));
+    let make = |host: &mut Headless, name: &str| {
+        run(
+            host,
+            "create_element",
+            json!({ "diagram": d["diagram"], "tool": "state", "name": name }),
+        )
+    };
+    let (a, b) = (make(&mut host, "A"), make(&mut host, "B"));
+    let t = run(
+        &mut host,
+        "connect",
+        json!({ "diagram": d["diagram"], "tool": "transition",
+        "source": a["element"], "target": b["element"] }),
+    );
+    let args = json!({ "id": t["element"], "text": "tick / n++", "guard": "n < 10" });
+    run(&mut host, "update_element", args);
+    let got = run(&mut host, "get_element", json!({ "id": t["element"] }));
+    let text = got.to_string();
+    assert!(text.contains("n < 10") && text.contains("tick"), "{text}");
+}

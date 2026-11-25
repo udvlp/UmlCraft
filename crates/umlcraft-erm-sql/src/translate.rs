@@ -77,6 +77,9 @@ pub fn datatype(datatype: &str, from: Option<Dialect>, to: Dialect) -> String {
             "macaddr" | "macaddr8" => "varchar(23)".to_owned(),
             "interval" => "varchar(64)".to_owned(),
             "xml" | "citext" | "name" | "tsvector" => "text".to_owned(),
+            // MySQL reads a bare `decimal` as `decimal(10,0)`, which rounds 12.50 to 13: an
+            // unconstrained `numeric` gets MySQL's widest instead.
+            "numeric" if args.is_none() => "decimal(65,30)".to_owned(),
             "numeric" => arg("decimal"),
             _ => t.to_owned(),
         };
@@ -128,7 +131,8 @@ pub fn enum_values(datatype: &str) -> Option<Vec<String>> {
         return None;
     }
     let open = t.find('(')?;
-    let close = t.rfind(')')?;
+    // Typed text: `enum)x(` has its parentheses the wrong way round.
+    let close = t.rfind(')').filter(|&c| c > open)?;
     let mut values = Vec::new();
     let inner: Vec<char> = t[open + 1..close].chars().collect();
     let mut k = 0;
@@ -174,7 +178,7 @@ pub fn default_expression(
 ) -> Option<String> {
     let mut e = expr.trim().to_owned();
     if !to.is_mysql() {
-        e = condition(&e, to)?;
+        e = condition(&e, from, to)?;
     }
     while e.starts_with('(') && matching(&e, 0) == Some(e.len() - 1) {
         e = e[1..e.len() - 1].trim().to_owned();
@@ -218,15 +222,22 @@ pub fn default_expression(
     Some(out)
 }
 
-/// A condition (`CHECK`) for `to`, or `None` if it holds what `to` cannot read.
-pub fn condition(text: &str, to: Dialect) -> Option<String> {
+/// A condition (`CHECK`) of `from` (`None`: drawn) for `to`, or `None` if it holds what `to`
+/// cannot read. A backslash in a string is a character in PostgreSQL and starts an escape in
+/// MySQL, so strings that come from the other dialect are written anew.
+pub fn condition(text: &str, from: Option<Dialect>, to: Dialect) -> Option<String> {
+    let from_postgres = from.is_some_and(|f| !f.is_mysql());
+    let from_mysql = from.is_some_and(Dialect::is_mysql);
     if to.is_mysql() {
         let s = outside_strings(&any_array(text), |s| {
             let s = without_casts(s);
             let s = s.replace("!~~*", "NOT LIKE").replace("~~*", "LIKE");
             s.replace("!~~", "NOT LIKE").replace("~~", "LIKE")
         });
-        (!foreign_to_mysql(&s)).then_some(s)
+        if foreign_to_mysql(&s) {
+            return None;
+        }
+        Some(if from_postgres { backslashes_doubled(&s) } else { s })
     } else {
         // MySQL quotes names with backticks and marks strings with their character set.
         let mut s = String::new();
@@ -234,6 +245,22 @@ pub fn condition(text: &str, to: Dialect) -> Option<String> {
         let mut in_string = false;
         while let Some(c) = chars.next() {
             match c {
+                // MySQL's escapes, read as MySQL reads them.
+                '\\' if in_string && from_mysql => match chars.next() {
+                    Some('\'') => s.push_str("''"),
+                    Some('n') => s.push('\n'),
+                    Some('r') => s.push('\r'),
+                    Some('t') => s.push('\t'),
+                    Some('b') => s.push('\u{8}'),
+                    Some('Z') => s.push('\u{1a}'),
+                    // Kept for `LIKE`, whose escape character is the backslash in both.
+                    Some(e @ ('%' | '_')) => {
+                        s.push('\\');
+                        s.push(e);
+                    }
+                    Some(e) => s.push(e),
+                    None => {}
+                },
                 '\'' => {
                     in_string = !in_string;
                     s.push(c);
@@ -264,8 +291,23 @@ pub fn condition(text: &str, to: Dialect) -> Option<String> {
                 _ => s.push(c),
             }
         }
-        Some(s.replace("\\'", "''"))
+        Some(if from_mysql { s } else { s.replace("\\'", "''") })
     }
+}
+
+/// `text` with each backslash inside its strings doubled, as MySQL writes one.
+fn backslashes_doubled(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    for c in text.chars() {
+        match c {
+            '\'' => in_string = !in_string,
+            '\\' if in_string => out.push('\\'),
+            _ => {}
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// `text` with `f` applied to each part outside its strings (`'…'`, quotes doubled inside).
@@ -442,7 +484,7 @@ mod tests {
 
     #[test]
     fn conditions_move_between_the_dialects() {
-        let my = |c: &str| condition(c, Dialect::MySql);
+        let my = |c: &str| condition(c, Some(Dialect::Postgres), Dialect::MySql);
         assert_eq!(my("sitze > 0").as_deref(), Some("sitze > 0"));
         assert_eq!(my("(VALUE)::text ~~ '%@%'::text").as_deref(), Some("(VALUE) LIKE '%@%'"));
         let any = "(klasse)::text = ANY ((ARRAY['economy'::character varying, \
@@ -456,10 +498,17 @@ mod tests {
         assert_eq!(my(gender).as_deref(), Some("(gender) IN ('MALE', 'FEMALE')"));
         assert_eq!(my("(m)::text <> 'a::b~c'::text").as_deref(), Some("(m) <> 'a::b~c'"));
         assert_eq!(my("x ~~ 'it''s ~~'").as_deref(), Some("x LIKE 'it''s ~~'"));
-        let pg = |c: &str| condition(c, Dialect::Postgres);
+        let pg = |c: &str| condition(c, Some(Dialect::MySql), Dialect::Postgres);
         assert_eq!(pg("`a` > `b`").as_deref(), Some("a > b"));
         assert_eq!(pg("`Preis` >= 0").as_deref(), Some("\"Preis\" >= 0"));
         assert_eq!(pg("`k` in (_utf8mb4'x',_utf8mb4'y')").as_deref(), Some("k in ('x','y')"));
         assert_eq!(pg("v_x = 1").as_deref(), Some("v_x = 1"));
+        // Backslashes: an escape in MySQL, a character in PostgreSQL.
+        assert_eq!(pg(r"`p` <> _utf8mb4'\\'").as_deref(), Some(r"p <> '\'"));
+        assert_eq!(pg(r"p <> 'it\'s'").as_deref(), Some("p <> 'it''s'"));
+        assert_eq!(pg(r"p like '%\\_%'").as_deref(), Some(r"p like '%\_%'"));
+        assert_eq!(my(r"path <> 'C:\'").as_deref(), Some(r"path <> 'C:\\'"));
+        // Drawn: written for the target already.
+        assert_eq!(condition(r"p <> 'C:\'", None, Dialect::MySql).as_deref(), Some(r"p <> 'C:\'"));
     }
 }

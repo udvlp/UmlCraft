@@ -111,8 +111,11 @@ impl Importer<'_> {
                 }
                 "UModelImp" | "UPackageImp" => {
                     let data = self.er_data(child, ElementKind::Package);
-                    if let Some(package) = self.create(id, data, Some(child)) {
+                    if let Some(package) = self.create(id, data, Some(child))
+                        && self.deeper(child)
+                    {
                         self.er_walk(child, package);
+                        self.nesting -= 1;
                     }
                 }
                 "EREntityImp" => self.er_entity(id, child),

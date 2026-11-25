@@ -378,7 +378,10 @@ pub fn paste(
         insert_postponed(tx, &copies, &mut pending)?;
         for relationship in &clip.relationships {
             let ends = relationship_ends(relationship, &copies.map);
-            if ends.is_empty() || !ends.iter().all(|&id| tx.model().contains(id)) {
+            // Only between copies: an end the diagram could not take keeps its original id,
+            // and a relationship to the original would be pasted undrawn.
+            let pasted = |id: &Id| copies.new.contains(id) && tx.model().contains(*id);
+            if ends.is_empty() || !ends.iter().all(pasted) {
                 copies.map.remove(&relationship.id);
                 continue;
             }
@@ -666,6 +669,14 @@ mod tests {
         let clip = copy(doc.model(), ids.class_diagram, &[customer]).unwrap();
         let created = doc.edit("paste", |tx| paste(tx, d, &clip, Point::default(), true)).unwrap();
         assert!(created.is_empty());
+        // Nor as copies: the generalization between them must not join the originals.
+        let premium = doc.model().shown_on(ids.premium)[0].1;
+        let clip = copy(doc.model(), ids.class_diagram, &[customer, premium]).unwrap();
+        assert_eq!(clip.relationships.len(), 1);
+        let before = doc.model().clone();
+        let created = doc.edit("paste", |tx| paste(tx, d, &clip, Point::default(), false)).unwrap();
+        assert!(created.is_empty());
+        assert_eq!(*doc.model(), before);
     }
 
     #[test]

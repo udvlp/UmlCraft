@@ -644,7 +644,7 @@ pub fn list() -> Vec<Value> {
                     "entry": text("States: the entry activity, without `entry /`; \"\" for none."),
                     "do": text("States: the do activity, without `do /`; \"\" for none."),
                     "exit": text("States: the exit activity, without `exit /`; \"\" for none."),
-                    "regions": { "type": "integer", "minimum": 2,
+                    "regions": { "type": "integer", "minimum": 2, "maximum": 99,
                                  "description": "States: divide into this many orthogonal \
                                                  regions (more than it has; `delete_element` \
                                                  removes one). Its substates go into the region \

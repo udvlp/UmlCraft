@@ -569,6 +569,7 @@ impl MainView {
                 .with_keywords(keywords);
             cx.notify();
         });
+        self.canvas.update(cx, |canvas, cx| canvas.forget_document(cx));
         self.collapsed.clear();
         self.expanded.clear();
         self.tree_revision = None;
@@ -933,12 +934,17 @@ impl MainView {
             let Ok(Ok(Some(path))) = rx.await else { return };
             let path = with_extension(path, "asta");
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let started = this.update(cx, |this, cx| {
+            // Another job may have started while the dialog was open.
+            let started = this.update_in(cx, |this, window, cx| {
+                if this.refuse_while_busy(window, cx) {
+                    return false;
+                }
                 this.busy = Some(Busy::ExportingAstah);
                 this.cancel_export = Some(cancel.clone());
                 cx.notify();
+                true
             });
-            if started.is_err() {
+            if !matches!(started, Ok(true)) {
                 return;
             }
             let target = path.clone();
@@ -981,12 +987,16 @@ impl MainView {
         });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else { return };
-            let started = this.update(cx, |this, cx| {
+            // Another job may have started while the dialog was open.
+            let started = this.update_in(cx, |this, window, cx| {
+                if this.refuse_while_busy(window, cx) {
+                    return None;
+                }
                 this.busy = Some(Busy::ImportingSource);
                 cx.notify();
-                this.generation
+                Some(this.generation)
             });
-            let Ok(generation) = started else { return };
+            let Ok(Some(generation)) = started else { return };
             let found = cx
                 .background_executor()
                 .spawn(async move {
@@ -1236,6 +1246,10 @@ impl MainView {
         }
         if picked.is_empty() {
             self.apply_source(&found, Vec::new(), window, cx);
+            return;
+        }
+        // Another job may have started while the methods were chosen.
+        if self.refuse_while_busy(window, cx) {
             return;
         }
         self.busy = Some(Busy::ImportingSource);

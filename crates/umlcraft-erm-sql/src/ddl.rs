@@ -382,7 +382,16 @@ impl Builder<'_> {
         if d == Dialect::Postgres
             && let Some(values) = translate::enum_values(&column.datatype)
         {
-            let name = format!("{}_{}", snake(table), snake(&column.name));
+            // `order` + `status_type` and `order_status` + `type` meet in one name, and
+            // PostgreSQL cuts names after 63 bytes: numbered apart where they would clash.
+            let base = format!("{}_{}", snake(table), snake(&column.name));
+            let mut name = cut(&base, NAME_LIMIT);
+            let mut k = 2;
+            while self.domains.iter().any(|x| x.name == name) {
+                let suffix = format!("_{k}");
+                name = format!("{}{suffix}", cut(&base, NAME_LIMIT - suffix.len()));
+                k += 1;
+            }
             let props = ErDomainProps { values, ..Default::default() };
             self.domains.push(Domain {
                 name: name.clone(),
@@ -401,7 +410,7 @@ impl Builder<'_> {
         if !self.foreign() {
             return Some(check.to_owned());
         }
-        let out = translate::condition(check, self.dialect);
+        let out = translate::condition(check, self.from, self.dialect);
         if out.is_none() {
             let (table, check) = (table.to_owned(), check.to_owned());
             self.left_out.push(LeftOut::Check { table, check });
@@ -896,6 +905,19 @@ impl Builder<'_> {
                 schemas.push(s);
             }
         }
+        // Domains and enumeration types are made in their schema too (`qualified`).
+        if d == Dialect::Postgres {
+            for x in &domains {
+                if let Some((s, n)) = x.name.split_once('.')
+                    && !s.is_empty()
+                    && !n.is_empty()
+                    && s != "public"
+                    && !schemas.contains(&s)
+                {
+                    schemas.push(s);
+                }
+            }
+        }
         if !schemas.is_empty() {
             sql.push('\n');
         }
@@ -1329,8 +1351,14 @@ fn split_on_update(default: &str) -> (&str, Option<&str>) {
         let boundary = k == 0 || default[..k].ends_with(char::is_whitespace);
         if !in_string && boundary && lower[k..].starts_with("on update") {
             let rest = default[k + "on update".len()..].trim();
-            if !rest.is_empty() {
-                return (default[..k].trim(), Some(rest));
+            let value = default[..k].trim();
+            // A string the model keeps without its quotes (`set on update now`) is no
+            // `ON UPDATE`: that sets a keyword or an expression, after a default that is none
+            // of those plain strings.
+            let plain = |t: &str| matches!(Value::of(t), Value::Str(_)) && unquoted(t).is_none();
+            let sets = matches!(Value::of(rest), Value::Word(_) | Value::Expr(_));
+            if !rest.is_empty() && sets && (value.is_empty() || !plain(value)) {
+                return (value, Some(rest));
             }
         }
     }
@@ -1409,6 +1437,12 @@ fn quote(name: &str, d: Dialect) -> String {
     } else {
         format!("\"{}\"", name.replace('"', "\"\""))
     }
+}
+
+/// `name` cut to at most `limit` bytes, at a character's start.
+fn cut(name: &str, limit: usize) -> String {
+    let end = (0..=limit.min(name.len())).rev().find(|&i| name.is_char_boundary(i)).unwrap_or(0);
+    name[..end].to_owned()
 }
 
 /// A name for new columns and constraints: lower case, spaces and dots as `_`.
@@ -1782,5 +1816,11 @@ mod tests {
         );
         assert_eq!(split_on_update("ON UPDATE now()"), ("", Some("now()")));
         assert_eq!(split_on_update("'on update x'"), ("'on update x'", None));
+        // A string kept without its quotes.
+        assert_eq!(split_on_update("set on update now"), ("set on update now", None));
+        assert_eq!(
+            split_on_update("set on update CURRENT_TIMESTAMP"),
+            ("set on update CURRENT_TIMESTAMP", None)
+        );
     }
 }

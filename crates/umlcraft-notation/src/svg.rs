@@ -130,7 +130,9 @@ pub fn render_scaled(scene: &Scene, measure: &dyn TextMeasure, units: f32) -> St
         }
         svg.ink = None;
         for (rect, rows) in &edge.qualifiers {
+            svg.line = edge.stroke;
             svg.primitive(&draw::qualifier_box(*rect));
+            svg.line = None;
             for row in rows {
                 svg.row(row);
             }
@@ -146,14 +148,19 @@ fn bounds(scene: &Scene, measure: &dyn TextMeasure) -> Option<Rect> {
         let width = measure.width(text, size, bold);
         Rect::new(draw::text_left(area, width, align), area.y, width, area.height)
     };
+    // What a figure draws may stick out of its bounds: an exception's triangle, a template's
+    // box, a cube's top and side, a control's arrow.
     let nodes = scene.nodes.iter().flat_map(|n| {
-        std::iter::once(n.rect)
+        std::iter::once(n.extent())
+            .chain(draw::figure(n).into_iter().filter_map(|p| p.bounds()))
             .chain(n.rows.iter().map(|r| text(&r.text, r.rect, r.size, r.bold, r.align)))
     });
     let edges = scene.edges.iter().flat_map(|e| {
-        e.path()
-            .into_owned()
-            .into_iter()
+        let path = e.path().into_owned();
+        // A double line lies beside its path.
+        let beside = if e.double { draw::double_line(&path).concat() } else { Vec::new() };
+        path.into_iter()
+            .chain(beside)
             .map(|p| Rect::from_corners(p, p))
             .chain(
                 e.labels
@@ -217,14 +224,17 @@ impl Svg<'_> {
                 self.line_color(),
                 num(1.0),
             ),
+            // In the line's color, as the canvas strokes it (an edge's circles: containment,
+            // IE's zero).
             Primitive::Ellipse { center, rx, ry, fill, width } => format!(
-                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{} stroke=\"{BLACK}\" \
+                "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{} stroke=\"{}\" \
                  stroke-width=\"{}\"/>",
                 num(center.x),
                 num(center.y),
                 num(*rx),
                 num(*ry),
                 self.fill_attr(*fill),
+                self.line_color(),
                 num(*width),
             ),
             Primitive::Frame { rect, width, radius, fill, border, style } => {
@@ -237,7 +247,12 @@ impl Svg<'_> {
                     Paint::None => String::new(),
                     paint => format!(
                         " stroke=\"{}\" stroke-width=\"{}\"{}",
-                        color(*paint),
+                        // A qualifier's box takes its line's color, as on the canvas.
+                        if *paint == Paint::Line {
+                            self.line_color()
+                        } else {
+                            color(*paint).to_owned()
+                        },
                         num(*width),
                         dashes(*style, k)
                     ),
@@ -597,6 +612,25 @@ mod tests {
         let width: f32 =
             svg.split("width=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
         assert_eq!(width, (v[2] * SCALE).ceil());
+    }
+
+    #[test]
+    fn the_image_covers_what_a_figure_draws_outside_its_bounds() {
+        let (doc, ids) = order_system();
+        let mut scene = build(doc.model(), ids.class_diagram, &Preview::default(), &ApproxMeasure);
+        // A deployment node at the right top: its cube reaches above and right of it.
+        let drawn = scene.bounds().unwrap();
+        let cube = &mut scene.nodes[0];
+        cube.rect = Rect::new(drawn.right() + 50.0, drawn.y, 100.0, 60.0);
+        cube.rows.clear();
+        cube.figure = crate::scene::Figure::Cube { depth: 10.0 };
+        let reach = draw::figure(cube).iter().filter_map(|p| p.bounds()).reduce(|a, b| a.union(&b));
+        let reach = reach.unwrap();
+        assert!(reach.right() > cube.rect.right() && reach.y < cube.rect.y);
+        let svg = render(&scene, &ApproxMeasure);
+        let view_box = svg.split("viewBox=\"").nth(1).unwrap().split('"').next().unwrap();
+        let v: Vec<f32> = view_box.split(' ').map(|n| n.parse().unwrap()).collect();
+        assert!(v[1] <= reach.y && v[0] + v[2] >= reach.right(), "{view_box} {reach:?}");
     }
 
     #[test]

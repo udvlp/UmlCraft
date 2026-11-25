@@ -1565,6 +1565,16 @@ impl PropertiesPanel {
             }
             state.update(cx, |s, cx| s.set_value(value, window, cx));
         };
+        // The same for the multi-line fields.
+        let set_area = |state: &Entity<TextareaState>,
+                        value: String,
+                        window: &mut Window,
+                        cx: &mut Context<Self>| {
+            if typing && state.focus_handle(cx).is_focused(window) {
+                return;
+            }
+            state.update(cx, |s, cx| s.set_value(value, window, cx));
+        };
         set(&self.name, data.name.clone(), window, cx);
         set(&self.declaration, declaration, window, cx);
         let condition = match &data.kind {
@@ -1577,10 +1587,9 @@ impl PropertiesPanel {
             ElementKind::Comment(p) => p.body.clone(),
             _ => data.documentation.clone(),
         };
-        self.text.update(cx, |s, cx| s.set_value(text, window, cx));
-        self.slots.update(cx, |s, cx| s.set_value(slots, window, cx));
-        let constraints = data.constraints.join("\n");
-        self.constraints.update(cx, |s, cx| s.set_value(constraints, window, cx));
+        set_area(&self.text, text, window, cx);
+        set_area(&self.slots, slots, window, cx);
+        set_area(&self.constraints, data.constraints.join("\n"), window, cx);
         let choose = |state: &Entity<Choice>,
                       ix: Option<usize>,
                       items: Option<Vec<SharedString>>,
@@ -1722,8 +1731,8 @@ impl PropertiesPanel {
                 let checks = p.checks.join("\n");
                 let indexes: Vec<String> = p.indexes.iter().map(index_text).collect();
                 let indexes = indexes.join("\n");
-                self.er_checks.update(cx, |s, cx| s.set_value(checks, window, cx));
-                self.er_indexes.update(cx, |s, cx| s.set_value(indexes, window, cx));
+                set_area(&self.er_checks, checks, window, cx);
+                set_area(&self.er_indexes, indexes, window, cx);
             }
             ElementKind::ErDomain(p) => {
                 set(&self.datatype, p.datatype.clone(), window, cx);
@@ -1878,7 +1887,9 @@ fn parse_index(line: &str) -> Option<ErIndex> {
         return None;
     }
     let mut head = head.trim();
-    let unique = head.len() >= 6 && head[..6].eq_ignore_ascii_case("unique");
+    // `head` is typed text: compare by `get`, which never cuts a character in two.
+    let unique = head.get(..6).is_some_and(|w| w.eq_ignore_ascii_case("unique"))
+        && head[6..].chars().next().is_none_or(char::is_whitespace);
     if unique {
         head = head[6..].trim();
     }
@@ -3464,7 +3475,16 @@ impl PropertiesPanel {
                 t!("prop.bounds").into(),
                 div()
                     .text_sm()
-                    .child(format!("x {}, y {}, {} × {}", b.x, b.y, b.width, b.height))
+                    .child(
+                        t!(
+                            "prop.bounds_value",
+                            x = b.x,
+                            y = b.y,
+                            width = b.width,
+                            height = b.height
+                        )
+                        .to_string(),
+                    )
                     .into_any_element(),
             ));
         }
@@ -3502,5 +3522,28 @@ impl PropertiesPanel {
                 )
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_index;
+
+    #[test]
+    fn indexes_read_unique_and_any_name() {
+        let index = parse_index("UNIQUE idx_kunde (kunde_id, datum)").unwrap();
+        assert!(index.unique);
+        assert_eq!(index.name, "idx_kunde");
+        assert_eq!(index.columns, ["kunde_id", "datum"]);
+        // A multi-byte character across the sixth byte, and a name that only starts with
+        // the word.
+        let index = parse_index("idx_für_kunde (kunde_id)").unwrap();
+        assert!(!index.unique);
+        assert_eq!(index.name, "idx_für_kunde");
+        let index = parse_index("uniquely (a)").unwrap();
+        assert!(!index.unique);
+        assert_eq!(index.name, "uniquely");
+        assert!(parse_index("unique (a)").unwrap().unique);
+        assert!(parse_index("a索引 (x)").is_some());
     }
 }

@@ -55,9 +55,14 @@ impl Importer<'_> {
         // Associations kept or made by this import, by id.
         let mut used: HashSet<Id> = HashSet::new();
         // Of a type declared in parts (C# `partial`), the import may hold only some: a field
-        // it does not find may stand in another part.
-        let sources: HashSet<Id> =
-            self.entries.iter().filter(|e| !e.decl.is_partial).map(|e| e.id).collect();
+        // it does not find may stand in another part. A forward declaration (C++
+        // `class Order;`) shows no fields at all.
+        let sources: HashSet<Id> = self
+            .entries
+            .iter()
+            .filter(|e| !e.decl.is_partial && !e.decl.is_forward)
+            .map(|e| e.id)
+            .collect();
         // The associations there are, by participant.
         let mut by_participant: HashMap<Id, Vec<Id>> = HashMap::new();
         for e in tx.model().elements() {

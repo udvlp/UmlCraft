@@ -149,6 +149,11 @@ pub(super) fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
             ElementKind::Comment(p) => p.body = text.clone(),
             _ => {}
         }
+        // The text sets a transition's trigger, guard and effect at once; a `guard` given
+        // beside it wins.
+        if matches!(settings, ElementKind::Transition(_) | ElementKind::InternalTransition(_)) {
+            set_properties(model, &mut settings, args)?;
+        }
     }
     set_er(&mut settings, args)?;
     set_extend(model, &mut settings, args)?;
@@ -202,7 +207,11 @@ pub(super) fn update_element(host: &mut dyn Host, args: &Value) -> Outcome {
     let regions = match args.get("regions") {
         None => None,
         Some(v) => {
-            let n = v.as_u64().filter(|&n| n >= 2).ok_or("`regions` is a number of at least 2")?;
+            // Bounded: each region is an edit of its own, made on the app's main thread.
+            let n = v
+                .as_u64()
+                .filter(|&n| (2..=MAX_REGIONS as u64).contains(&n))
+                .ok_or(format!("`regions` is a number from 2 to {MAX_REGIONS}"))?;
             if !matches!(kind, ElementKind::State(_)) {
                 return Err(format!("a {} has no regions", kind.type_name()));
             }
@@ -415,6 +424,9 @@ pub(super) fn extension_points_arg(
         })
         .collect()
 }
+
+/// The most regions `update_element` divides a state into (the schema says the same).
+const MAX_REGIONS: usize = 99;
 
 pub(super) const SHARED_STYLES: [(&str, SharedStyle); 3] = [
     ("separate", SharedStyle::Separate),

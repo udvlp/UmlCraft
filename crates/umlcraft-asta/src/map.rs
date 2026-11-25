@@ -368,6 +368,8 @@ struct Importer<'g> {
     /// Astah's association classes, each one element there: `ids` maps it to its class, this
     /// to its association.
     association_classes: HashMap<ObjId, Id>,
+    /// How deep the walks into owned elements, substates, lanes and operands are now.
+    nesting: usize,
     /// Generalization presentations in a shared group: the style and where the common line
     /// runs (y for the vertical style, x for the horizontal one), before shifting.
     shared: HashMap<ObjId, (SharedStyle, f32)>,
@@ -378,6 +380,10 @@ struct Importer<'g> {
 /// Most bound types expanded for one type; real ones such as `Map<String, List<Order>>` need
 /// a handful.
 const MAX_TYPE_NODES: usize = 1000;
+
+/// How deep packages, substates, lanes and fragments may nest; real models nest a few dozen
+/// levels at most.
+const MAX_NESTING: usize = 2000;
 
 pub fn import(graph: &Graph) -> Option<Imported> {
     let r = Reader { g: graph };
@@ -404,6 +410,7 @@ pub fn import(graph: &Graph) -> Option<Imported> {
         dimensions: HashSet::new(),
         type_budget: Cell::new(MAX_TYPE_NODES),
         association_classes: HashMap::new(),
+        nesting: 0,
         shared: HashMap::new(),
         er: er::ErPending::default(),
     };
@@ -418,10 +425,11 @@ pub fn import(graph: &Graph) -> Option<Imported> {
     for (owner, instance) in std::mem::take(&mut im.instances) {
         im.instance(owner, instance);
     }
-    im.links();
     for (owner, relationship) in std::mem::take(&mut im.relationships) {
         im.relationship(owner, relationship);
     }
+    // Links name the association they instantiate, so they come after the relationships.
+    im.links();
     im.er_relationships();
     // Parts may be association ends, created with their association.
     for (owner, connector) in std::mem::take(&mut im.connectors) {
@@ -464,6 +472,18 @@ fn project_model(r: &Reader<'_>) -> Option<ObjId> {
 impl Importer<'_> {
     fn skip(&mut self, object: ObjId) {
         *self.skipped.entry(self.r.class(object).to_owned()).or_default() += 1;
+    }
+
+    /// Whether the walks may go one level deeper to `object`, counted in `nesting` (the
+    /// caller takes the level back): a crafted file can chain objects deeper than any stack.
+    /// Deeper than [`MAX_NESTING`], `object` is skipped.
+    fn deeper(&mut self, object: ObjId) -> bool {
+        if self.nesting >= MAX_NESTING {
+            self.skip(object);
+            return false;
+        }
+        self.nesting += 1;
+        true
     }
 
     /// Name, visibility, stereotypes, tagged values and documentation of an Astah element.
@@ -511,9 +531,13 @@ impl Importer<'_> {
         if object.is_some_and(|o| self.ids.contains_key(&o)) {
             return None;
         }
-        let owner = std::iter::once(owner)
-            .chain(self.model.ancestors(owner))
-            .find(|&o| self.model.get(o).is_some_and(|e| e.kind().can_own(&data.kind)));
+        // The owner first: its ancestors are listed only when it may not own the element.
+        let can_own = |o: Id| self.model.get(o).is_some_and(|e| e.kind().can_own(&data.kind));
+        let owner = if can_own(owner) {
+            Some(owner)
+        } else {
+            self.model.ancestors(owner).into_iter().find(|&o| can_own(o))
+        };
         let id = Id::generate();
         let type_name = data.kind.type_name();
         let inserted = owner.map(|owner| {
@@ -572,8 +596,11 @@ impl Importer<'_> {
             let tags = self.r.tagged_values(child);
             if er::is_er_model(&tags) {
                 let data = self.data(child, ElementKind::Package, &[]);
-                if let Some(package) = self.create(id, data, Some(child)) {
+                if let Some(package) = self.create(id, data, Some(child))
+                    && self.deeper(child)
+                {
                     self.er_walk(child, package);
+                    self.nesting -= 1;
                 }
                 continue;
             }
@@ -590,8 +617,11 @@ impl Importer<'_> {
                     {
                         data.stereotypes.insert(0, palette::SUBSYSTEM.to_owned());
                     }
-                    if let Some(package) = self.create(id, data, Some(child)) {
+                    if let Some(package) = self.create(id, data, Some(child))
+                        && self.deeper(child)
+                    {
                         self.walk(child, package);
+                        self.nesting -= 1;
                     }
                 }
                 "UClassifierImp"
@@ -649,7 +679,10 @@ impl Importer<'_> {
                                 }
                             }
                         }
-                        self.walk(child, classifier);
+                        if self.deeper(child) {
+                            self.walk(child, classifier);
+                            self.nesting -= 1;
+                        }
                     }
                 }
                 "UExtensionPointImp" => {
@@ -826,7 +859,10 @@ impl Importer<'_> {
                 self.skip(link);
                 continue;
             };
-            let association = r.obj(link, "association").and_then(|a| self.ids.get(&a).copied());
+            // An association class is its class in `ids`; a link instantiates its association.
+            let association = r.obj(link, "association").and_then(|a| {
+                self.association_classes.get(&a).or_else(|| self.ids.get(&a)).copied()
+            });
             let owner = self.model.get(ends[0].instance).and_then(|e| e.owner());
             let owner = owner.unwrap_or_else(|| self.model.root());
             let data = self.data(link, ElementKind::Link(LinkProps { ends, association }), &[]);
@@ -1202,10 +1238,10 @@ impl Importer<'_> {
         self.create(owner, data, Some(object));
     }
 
-    /// Astah may draw a part in a structured class for the end of a composite association that
-    /// no diagram shows. UmlCraft keeps parts as attributes: such an end becomes an attribute
-    /// of the class at the other end, and the association is not imported. Returns whether the
-    /// association was taken so.
+    /// Astah may draw a part in a structured class for the end of a composite association.
+    /// UmlCraft keeps parts as attributes: such an end becomes an attribute of the class at the
+    /// other end. An association no diagram shows is then not imported; returns whether it was
+    /// taken so.
     fn parts(&mut self, association: ObjId) -> bool {
         let r = self.r;
         let ends = r.list(association, "connection");
@@ -1214,9 +1250,12 @@ impl Importer<'_> {
             r.list(end, "presentation").iter().any(|&p| r.class(p) == "PartPresentation")
                 || !r.list(end, "connectorEnd").is_empty()
         };
-        if !r.list(association, "presentation").is_empty() || !is_part(a) && !is_part(b) {
+        if !is_part(a) && !is_part(b) {
             return false;
         }
+        // A part whose association is drawn too, on a class diagram, stays an attribute for
+        // the composite structure diagram and its connectors; the association comes as well.
+        let drawn = !r.list(association, "presentation").is_empty();
         for (end, whole) in [(a, b), (b, a)].into_iter().filter(|&(end, _)| is_part(end)) {
             let Some(class) = r.obj(whole, "type").and_then(|t| self.classifier(t)) else {
                 self.skip(end);
@@ -1233,7 +1272,7 @@ impl Importer<'_> {
             let data = self.data(end, kind, &[]);
             self.create(class, data, Some(end));
         }
-        true
+        !drawn
     }
 
     /// A connector of a structured class between its parts and ports.
@@ -1442,8 +1481,11 @@ impl Importer<'_> {
                 if is_default_region_name(&data.name) {
                     data.name.clear();
                 }
-                if let Some(region) = self.create(owner, data, Some(vertex)) {
+                if let Some(region) = self.create(owner, data, Some(vertex))
+                    && self.deeper(vertex)
+                {
                     self.vertices(region, vertex);
+                    self.nesting -= 1;
                 }
                 continue;
             }
@@ -1508,7 +1550,10 @@ impl Importer<'_> {
                 data.name.clear();
                 self.create(id, data, Some(transition));
             }
-            self.vertices(id, vertex);
+            if self.deeper(vertex) {
+                self.vertices(id, vertex);
+                self.nesting -= 1;
+            }
         }
     }
 
@@ -1524,14 +1569,20 @@ impl Importer<'_> {
                 && is_default_dimension_name(&self.r.name(partition));
         if is_dimension {
             for sub in self.r.list(partition, "subGroup") {
-                self.partition(owner, sub);
+                if self.deeper(sub) {
+                    self.partition(owner, sub);
+                    self.nesting -= 1;
+                }
             }
             return;
         }
         let data = self.data(partition, ElementKind::Partition, &[]);
         let Some(id) = self.create(owner, data, Some(partition)) else { return };
         for sub in self.r.list(partition, "subGroup") {
-            self.partition(id, sub);
+            if self.deeper(sub) {
+                self.partition(id, sub);
+                self.nesting -= 1;
+            }
         }
     }
 
@@ -1882,6 +1933,58 @@ mod tests {
         assert_eq!((ends[0].participant, ends[0].role.as_str()), (order, "buyer"));
         assert_eq!(ends[0].navigability, Navigability::Navigable);
         assert_eq!((ends[1].participant, ends[1].aggregation), (item, Aggregation::Composite));
+    }
+
+    #[test]
+    fn links_instantiate_their_association() {
+        let mut b = Builder::default();
+        let model = named(&mut b, "UModelImp", "Model");
+        let (order, customer) =
+            (named(&mut b, "UClassifierImp", "Order"), named(&mut b, "UClassifierImp", "Customer"));
+        let ends: Vec<ObjId> = [(order, "order"), (customer, "customer")]
+            .into_iter()
+            .map(|(ty, role)| {
+                let end = named(&mut b, "UAssociationEndImp", role);
+                b.set(end, "type", Value::Object(ty));
+                end
+            })
+            .collect();
+        let association = b.instance("UAssociationImp");
+        let connection = b.list(&ends);
+        b.set(association, "connection", connection);
+        let objects: Vec<ObjId> = [("o1", order), ("c1", customer)]
+            .into_iter()
+            .map(|(name, class)| {
+                let object = named(&mut b, "UObjectImp", name);
+                let classifiers = b.list(&[class]);
+                b.set(object, "classifiers", classifiers);
+                object
+            })
+            .collect();
+        let link_ends: Vec<ObjId> = objects
+            .iter()
+            .map(|&object| {
+                let end = b.instance("ULinkEndImp");
+                b.set(end, "instance", Value::Object(object));
+                end
+            })
+            .collect();
+        let link = b.instance("ULinkImp");
+        let connections = b.list(&link_ends);
+        b.set(link, "connections", connections);
+        b.set(link, "association", Value::Object(association));
+        b.own(model, &[order, customer, association, objects[0], objects[1]]);
+
+        let imported = import(&b.0).unwrap();
+        let m = &imported.model;
+        m.check().unwrap();
+        let association =
+            m.elements().find(|e| matches!(e.kind(), ElementKind::Association(_))).map(|e| e.id());
+        let linked = m.elements().find_map(|e| match e.kind() {
+            ElementKind::Link(p) => Some(p.association),
+            _ => None,
+        });
+        assert_eq!(linked, Some(association), "the link and the association it instantiates");
     }
 
     #[test]

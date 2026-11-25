@@ -144,7 +144,7 @@ impl Parser {
                 if !constraint(s, a, b, &mut table) {
                     self.problem(line, ProblemKind::Constraint, s.text(a, b));
                 }
-            } else if !s.is(a, "LIKE") && !s.is(a, "PERIOD") && !column(s, a, b, &mut table) {
+            } else if !s.is(a, "LIKE") && !is_period(s, a, b) && !column(s, a, b, &mut table) {
                 self.problem(line, ProblemKind::Column, s.text(a, b));
             }
         }
@@ -378,6 +378,12 @@ impl Parser {
         self.schema.tables.retain(|k, _| !self.views.contains(k));
         self.schema
     }
+}
+
+/// Whether `a..b` is a period of a temporal table (`PERIOD FOR SYSTEM_TIME (…)`), which has
+/// no place in the model. A column may be called `period`: PostgreSQL does not reserve it.
+fn is_period(s: &Stmt, a: usize, b: usize) -> bool {
+    a + 1 < b && s.is(a, "PERIOD") && s.is(a + 1, "FOR")
 }
 
 /// A column definition in `a..b`; false if it has no name.
@@ -1182,6 +1188,20 @@ CREATE INDEX ix_lower ON public.flugzeug (lower(sitze));
         let cols: Vec<_> =
             table(&s, "public", "settings").columns.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(cols, ["id", "key", "index", "value"]);
+        assert_eq!(s.problems, []);
+    }
+
+    #[test]
+    fn period_is_a_column_name_unless_it_is_a_period_for() {
+        let sql = "CREATE TABLE public.invoice (id integer NOT NULL, period text);";
+        let s = parse(sql.as_bytes(), Dialect::Postgres);
+        let cols: Vec<_> =
+            table(&s, "public", "invoice").columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(cols, ["id", "period"]);
+        let sql = "CREATE TABLE t (id int, s datetime(6), e datetime(6), \
+                   PERIOD FOR SYSTEM_TIME (s, e));";
+        let s = parse(sql.as_bytes(), Dialect::MySql);
+        assert_eq!(s.tables.values().next().unwrap().columns.len(), 3);
         assert_eq!(s.problems, []);
     }
 

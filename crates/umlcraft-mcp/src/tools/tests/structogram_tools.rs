@@ -96,3 +96,23 @@ fn structograms_are_made_read_and_changed() {
     assert!(call(&mut host, &Access::default(), "create_structogram", &broken).is_error);
     host.document().model().check().unwrap();
 }
+
+#[test]
+fn too_deep_structograms_are_refused_before_they_are_built() {
+    let mut host = Headless::new();
+    // 500 nested loops: the model takes 200 levels, the parser more than that.
+    let mut body = json!([{ "kind": "instruction", "text": "x" }]);
+    for _ in 0..500 {
+        body = json!([{ "kind": "while", "text": "true", "body": body }]);
+    }
+    let tree = json!({ "title": "deep", "body": body });
+    let reply =
+        call(&mut host, &Access::default(), "create_structogram", &json!({ "structogram": tree }));
+    assert!(reply.is_error);
+    // 200 levels still go.
+    let mut body = json!([{ "kind": "instruction", "text": "x" }]);
+    for _ in 0..199 {
+        body = json!([{ "kind": "while", "text": "true", "body": body }]);
+    }
+    run(&mut host, "create_structogram", json!({ "structogram": { "title": "ok", "body": body } }));
+}

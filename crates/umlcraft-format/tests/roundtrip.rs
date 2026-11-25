@@ -446,6 +446,9 @@ fn only_older_files_get_their_language_tags_renamed() {
 fn rejects_foreign_newer_and_broken_files() {
     assert!(matches!(from_str("{}"), Err(FormatError::NotAProject)));
     assert!(matches!(from_str("[1,2]"), Err(FormatError::NotAProject)));
+    // An array that reads as a header: an old version, so it would go to the migrations.
+    assert!(matches!(from_str(r#"["umlcraft",1]"#), Err(FormatError::NotAProject)));
+    assert!(matches!(from_str(r#" ["umlcraft",6]"#), Err(FormatError::NotAProject)));
     assert!(matches!(from_str("not json"), Err(FormatError::Json(_))));
     let newer = format!(
         r#"{{"format":"umlcraft","formatVersion":{},"root":"00000000-0000-0000-0000-000000000000","elements":[]}}"#,

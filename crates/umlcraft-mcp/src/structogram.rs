@@ -20,6 +20,7 @@
 
 use serde_json::{Value, json};
 use umlcraft_nsd::edit::new_element;
+use umlcraft_nsd::read::MAX_DEPTH;
 use umlcraft_nsd::{
     Color, Diagram, Element, ElementKind, Keywords, Provenance, RootKind, Sequence,
 };
@@ -158,7 +159,7 @@ pub fn from_json(v: &Value, base: Option<&Diagram>) -> Result<Diagram, String> {
     }
     if let Some(body) = v.get("body") {
         let root = d.clone();
-        d.children = sequence_of(&root, body, "body")?;
+        d.children = sequence_of(&root, body, "body", 1)?;
     }
     Ok(d)
 }
@@ -167,7 +168,8 @@ fn lines(text: &str) -> Vec<String> {
     text.split('\n').map(|l| l.trim_end_matches('\r').to_owned()).collect()
 }
 
-fn sequence_of(d: &Diagram, v: &Value, at: &str) -> Result<Sequence, String> {
+/// The elements of the list `v`, which lie `level` deep (the body's at 1).
+fn sequence_of(d: &Diagram, v: &Value, at: &str, level: usize) -> Result<Sequence, String> {
     let items = match v {
         Value::Null => return Ok(Sequence::new(Vec::new())),
         Value::Array(items) => items,
@@ -176,19 +178,25 @@ fn sequence_of(d: &Diagram, v: &Value, at: &str) -> Result<Sequence, String> {
     let elements = items
         .iter()
         .enumerate()
-        .map(|(i, e)| element_of(d, e, &format!("{at}.{i}")))
+        .map(|(i, e)| element_of(d, e, &format!("{at}.{i}"), level))
         .collect::<Result<_, _>>()?;
     Ok(Sequence::new(elements))
 }
 
-fn element_of(d: &Diagram, v: &Value, at: &str) -> Result<Element, String> {
+fn element_of(d: &Diagram, v: &Value, at: &str, level: usize) -> Result<Element, String> {
+    // Checked here, before the recursion goes deeper than the model would take anyway.
+    if level > MAX_DEPTH {
+        return Err(format!("`{at}` lies deeper than {MAX_DEPTH} levels"));
+    }
     let name = v.get("kind").and_then(Value::as_str).ok_or(format!("`{at}.kind` is missing"))?;
     let kind = KINDS.iter().find(|(n, _)| *n == name).map(|(_, k)| *k).ok_or_else(|| {
         format!("`{at}.kind` is one of {}, not `{name}`", kind_names().join(", "))
     })?;
     let text = v.get("text").and_then(Value::as_str).unwrap_or_default();
-    let part =
-        |key: &str| sequence_of(d, v.get(key).unwrap_or(&Value::Null), &format!("{at}.{key}"));
+    let part = |key: &str| {
+        let body = v.get(key).unwrap_or(&Value::Null);
+        sequence_of(d, body, &format!("{at}.{key}"), level + 1)
+    };
     let branches: &[Value] = v.get("branches").and_then(Value::as_array).map_or(&[], Vec::as_slice);
     let mut e = match kind {
         ElementKind::Case => {
@@ -202,7 +210,7 @@ fn element_of(d: &Diagram, v: &Value, at: &str) -> Result<Element, String> {
             let mut e = new_element(d, kind, &texts);
             for (i, (b, slot)) in branches.iter().zip(e.branches.iter_mut()).enumerate() {
                 let body = b.get("body").unwrap_or(&Value::Null);
-                *slot = sequence_of(d, body, &format!("{at}.branches.{i}.body"))?;
+                *slot = sequence_of(d, body, &format!("{at}.branches.{i}.body"), level + 1)?;
             }
             e
         }
@@ -216,7 +224,7 @@ fn element_of(d: &Diagram, v: &Value, at: &str) -> Result<Element, String> {
             let count = branches.len().max(1);
             let mut e = new_element(d, kind, &[count.to_string()]);
             for (i, (b, slot)) in branches.iter().zip(e.branches.iter_mut()).enumerate() {
-                *slot = sequence_of(d, b, &format!("{at}.branches.{i}"))?;
+                *slot = sequence_of(d, b, &format!("{at}.branches.{i}"), level + 1)?;
             }
             e
         }

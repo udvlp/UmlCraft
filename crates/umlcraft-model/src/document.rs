@@ -18,6 +18,13 @@ struct Transaction {
     inverse: Vec<Op>,
 }
 
+/// The history at one moment, to roll back to ([`Document::mark`]).
+#[derive(Clone, Debug)]
+pub struct Mark {
+    depth: usize,
+    redo: Vec<Transaction>,
+}
+
 /// A model with undo/redo history and dirty tracking.
 #[derive(Clone, Debug)]
 pub struct Document {
@@ -138,6 +145,22 @@ impl Document {
             let t = self.undo.pop().expect("deeper than depth");
             revert(&mut self.model, t.inverse);
             self.revision += 1;
+        }
+    }
+
+    /// The history as it is, for [`Document::roll_back`]: its depth and what could be redone,
+    /// which the first edit after it forgets.
+    pub fn mark(&self) -> Mark {
+        Mark { depth: self.undo.len(), redo: self.redo.clone() }
+    }
+
+    /// Takes back the steps done since `mark` was taken, like [`Document::roll_back_to`], and
+    /// brings back what could be redone then: steps that changed nothing in the end leave the
+    /// history as it was.
+    pub fn roll_back(&mut self, mark: Mark) {
+        self.roll_back_to(mark.depth);
+        if self.undo.len() == mark.depth {
+            self.redo = mark.redo;
         }
     }
 

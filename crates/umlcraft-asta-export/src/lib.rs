@@ -209,12 +209,15 @@ impl Export {
                 output: tail(&text),
             });
         }
-        // Next to the target first, then over it: a failed copy leaves the old file whole.
+        // Next to the target first, then over it: a failed copy leaves the old file whole. The
+        // partial file has a name of its own and is made new, so that no file of the user's
+        // (`model.asta.tmp`) is overwritten.
         let mut partial = target.as_os_str().to_owned();
-        partial.push(".tmp");
+        partial.push(format!(".{}.tmp", Id::generate()));
         let partial = PathBuf::from(partial);
-        let copied =
-            fs::copy(file("out.asta"), &partial).and_then(|_| fs::rename(&partial, target));
+        let copied = fs::File::create_new(&partial)
+            .and_then(|mut to| io::copy(&mut fs::File::open(file("out.asta"))?, &mut to))
+            .and_then(|_| fs::rename(&partial, target));
         if let Err(e) = copied {
             fs::remove_file(&partial).ok();
             return Err(e.into());

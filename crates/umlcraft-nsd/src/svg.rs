@@ -190,6 +190,31 @@ fn color(ink: Ink, palette: &Palette) -> String {
     }
 }
 
+/// `text` for an element's content. Characters XML does not allow (control characters a
+/// string from source code may hold, as the `.nsd` writer notes) become U+FFFD.
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\t' | '\n' | '\r' => out.push(c),
+            '\0'..='\u{1F}' | '\u{FFFE}' | '\u{FFFF}' => out.push('\u{FFFD}'),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape;
+
+    #[test]
+    fn texts_are_escaped_and_hold_only_what_xml_allows() {
+        assert_eq!(escape("a < b && c > d"), "a &lt; b &amp;&amp; c &gt; d");
+        assert_eq!(escape("\u{1b}[31mred\tx"), "\u{FFFD}[31mred\tx");
+        assert_eq!(escape("\u{FFFF}"), "\u{FFFD}");
+    }
 }

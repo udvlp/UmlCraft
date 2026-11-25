@@ -146,7 +146,14 @@ impl Install {
         } else if cfg!(target_os = "macos") {
             Install::MacApp(bundle_of(&exe)?)
         } else {
-            // Set by the AppImage's runtime to the file it runs from.
+            // Set by the AppImage's runtime to the file it runs from, and `APPDIR` to where it
+            // is mounted. Child processes inherit both: a tar.gz build started from another
+            // AppImage's terminal would replace that program, so the running program has to
+            // lie in the mount.
+            let appdir = PathBuf::from(std::env::var_os("APPDIR")?);
+            if !is_within(&exe, &appdir) {
+                return None;
+            }
             Install::AppImage(PathBuf::from(std::env::var_os("APPIMAGE")?))
         };
         install.writable().then_some(install)

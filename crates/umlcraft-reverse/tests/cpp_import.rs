@@ -277,3 +277,26 @@ fn a_new_import_matches_what_is_there() {
     assert!(ops.contains(&ship));
     check("reimport", model);
 }
+
+#[test]
+fn a_forward_declaration_keeps_the_types_associations() {
+    let mut doc = Document::new(Model::new("t"));
+    import(&mut doc, "forward/full");
+    let roles = |model: &Model| -> Vec<String> {
+        let mut roles: Vec<String> = model
+            .elements()
+            .filter_map(|e| match e.kind() {
+                ElementKind::Association(p) => Some(p.ends.iter().map(|e| e.role.clone())),
+                _ => None,
+            })
+            .flatten()
+            .filter(|r| !r.is_empty())
+            .collect();
+        roles.sort();
+        roles
+    };
+    assert_eq!(roles(doc.model()), ["customer"]);
+    // Only Customer's header: `class Order;` there says nothing about Order's fields.
+    import(&mut doc, "forward/partial");
+    assert_eq!(roles(doc.model()), ["customer", "order"]);
+}

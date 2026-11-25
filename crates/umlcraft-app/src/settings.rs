@@ -45,6 +45,10 @@ pub struct Settings {
     pub last_update_check: Option<u64>,
     /// The latest release it found, e.g. `0.15.3`.
     pub latest_version: Option<String>,
+    /// The settings as this program last read or wrote them: saving writes only what it
+    /// changed since, so that a second UmlCraft running keeps its changes.
+    #[serde(skip)]
+    base: Option<serde_json::Value>,
 }
 
 impl Settings {
@@ -55,9 +59,11 @@ impl Settings {
 
     /// Loads the settings; a missing or broken file gives the defaults.
     pub fn load() -> Self {
-        Self::file()
+        let mut settings = Self::file()
             .and_then(|f| fs::read_to_string(f).ok())
-            .map_or_else(Self::default, |json| Self::from_json(&json))
+            .map_or_else(Self::default, |json| Self::from_json(&json));
+        settings.base = serde_json::to_value(&settings).ok();
+        settings
     }
 
     /// Reads each setting on its own, so one that is wrong (`"dark": "yes"`) falls back to its
@@ -95,22 +101,27 @@ impl Settings {
             update_check: field(&fields, "updateCheck"),
             last_update_check: field(&fields, "lastUpdateCheck"),
             latest_version: field(&fields, "latestVersion"),
+            base: None,
         }
     }
 
     /// Best effort: a failure to write settings must never disturb the user's work. Written
     /// to a file beside and renamed, so a crash never leaves half a file.
-    pub fn save(&self) {
+    pub fn save(&mut self) {
         let Some(file) = Self::file() else { return };
+        let Ok(mine) = serde_json::to_value(&*self) else { return };
+        let on_disk = fs::read_to_string(&file).ok().and_then(|j| serde_json::from_str(&j).ok());
+        let merged = merged(self.base.as_ref(), &mine, on_disk);
         if let Some(dir) = file.parent()
             && fs::create_dir_all(dir).is_ok()
-            && let Ok(json) = serde_json::to_string_pretty(self)
+            && let Ok(json) = serde_json::to_string_pretty(&merged)
         {
             let partial = file.with_extension("json.tmp");
             if fs::write(&partial, json).is_ok() && fs::rename(&partial, &file).is_err() {
                 let _ = fs::remove_file(&partial);
             }
         }
+        self.base = Some(mine);
     }
 
     /// Adds `path` to the recent files as saved now, so that another UmlCraft window's recent
@@ -187,6 +198,28 @@ impl Settings {
 }
 
 /// The system's language if UmlCraft speaks it, else English.
+/// The settings to write: those on disk (another UmlCraft may have changed them since `base`
+/// was read), with what this program changed since then (`mine` where it differs from
+/// `base`). Without a base or a readable file, `mine` as it is.
+fn merged(
+    base: Option<&serde_json::Value>,
+    mine: &serde_json::Value,
+    on_disk: Option<serde_json::Value>,
+) -> serde_json::Value {
+    use serde_json::Value;
+    let (Some(Value::Object(base)), Value::Object(mine), Some(Value::Object(mut disk))) =
+        (base, mine, on_disk)
+    else {
+        return mine.clone();
+    };
+    for (key, value) in mine {
+        if base.get(key) != Some(value) {
+            disk.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(disk)
+}
+
 fn system_language() -> &'static str {
     language_of(&sys_locale::get_locale().unwrap_or_default())
 }
@@ -210,6 +243,20 @@ mod tests {
         assert_eq!(s.recent.len(), MAX_RECENT);
         assert_eq!(s.recent[0], Path::new("p5.ucraft"));
         assert_eq!(s.recent.iter().filter(|p| *p == Path::new("p5.ucraft")).count(), 1);
+    }
+
+    #[test]
+    fn saving_keeps_what_another_window_changed() {
+        let base = serde_json::json!({ "dark": null, "updateCheck": null, "recent": [] });
+        // This window opened a file; the other one meanwhile chose the dark theme.
+        let mine = serde_json::json!({ "dark": null, "updateCheck": null, "recent": ["a"] });
+        let disk = serde_json::json!({ "dark": true, "updateCheck": null, "recent": [] });
+        let written = merged(Some(&base), &mine, Some(disk));
+        assert_eq!(written["dark"], true);
+        assert_eq!(written["recent"], serde_json::json!(["a"]));
+        // Without a file, or never read, it writes its own.
+        assert_eq!(merged(Some(&base), &mine, None), mine);
+        assert_eq!(merged(None, &mine, Some(serde_json::json!({ "dark": true }))), mine);
     }
 
     #[test]

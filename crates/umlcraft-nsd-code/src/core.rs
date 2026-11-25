@@ -434,9 +434,13 @@ impl<'a, G: Grammar> Builder<'a, G> {
             if j > i {
                 self.note(g.node, NoteKind::Fallthrough);
             }
-            // The last unlabelled `break` only ends the case.
-            if G::BREAK_ENDS_CASE && body.last().is_some_and(|s| is_plain_break(*s)) {
-                body.pop();
+            // The last unlabelled `break` only ends the case, comments after it aside
+            // (`break; // done`).
+            if G::BREAK_ENDS_CASE
+                && let Some(at) = body.iter().rposition(|s| !G::COMMENTS.contains(&s.kind()))
+                && is_plain_break(body[at])
+            {
+                body.remove(at);
             }
             bodies.push(body);
         }

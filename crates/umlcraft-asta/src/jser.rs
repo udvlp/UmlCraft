@@ -592,6 +592,10 @@ enum Handle {
 /// exhausts memory, which would abort the process instead of failing.
 const BUDGET_PER_BYTE: usize = 24;
 const BUDGET_BASE: usize = 64 << 20;
+/// The most the graph may take whatever the stream's size: the largest store read (256 MB)
+/// would otherwise allow 6 GB, which a few hundred KB of zipped `null`s reach. Enough for a
+/// stream of about 40 MB at Astah's 13 bytes per byte.
+const BUDGET_MAX: usize = 512 << 20;
 
 struct Reader<'a> {
     data: &'a [u8],
@@ -607,7 +611,7 @@ struct Reader<'a> {
 /// `writeStreamHeader` wrote after the standard magic and version.
 pub fn parse(data: &[u8], extra_header: usize) -> Result<Graph> {
     let budget = data.len().saturating_mul(BUDGET_PER_BYTE).saturating_add(BUDGET_BASE);
-    parse_with_budget(data, extra_header, budget)
+    parse_with_budget(data, extra_header, budget.min(BUDGET_MAX))
 }
 
 /// [`parse`] with `budget` bytes for the graph.

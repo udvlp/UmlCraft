@@ -21,3 +21,13 @@ class Modern[T, *Ts]:
     item: T
 
     def first[U](self, u: U) -> U: ...
+
+
+class Comparable(Protocol):
+    def compare(self, other: object) -> int: ...
+
+
+class Sorted[T: Comparable]:
+    items: list[T]
+
+    def pick[V: Comparable](self, v: V) -> V: ...

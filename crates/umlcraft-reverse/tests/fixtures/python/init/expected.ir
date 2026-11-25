@@ -6,4 +6,7 @@ namespace init
     public field y : float = y
     protected field _cache = None
     public operation constructor __init__(x : float, y : float)
-skipped method_body × 1
+  public class Late (line 15)
+    public field total : int = 0
+    public operation constructor __init__()
+skipped method_body × 2

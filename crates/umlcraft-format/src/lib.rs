@@ -221,6 +221,11 @@ fn read_json(json: &str) -> Result<(Model, u32), FormatError> {
         Err(err) if err.is_data() => return Err(FormatError::NotAProject),
         Err(err) => return Err(err.into()),
     };
+    // A project is an object. The derived header reads an array too (`["umlcraft", 1]`),
+    // which the migrations below cannot index.
+    if !json.trim_start().starts_with('{') {
+        return Err(FormatError::NotAProject);
+    }
     if header.format.as_deref() != Some(FORMAT_ID) {
         return Err(FormatError::NotAProject);
     }

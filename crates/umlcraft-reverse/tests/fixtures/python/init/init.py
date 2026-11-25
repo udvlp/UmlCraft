@@ -10,3 +10,10 @@ class Point:
             self.hidden = 1
         other = self
         other.not_mine = 2
+
+
+class Late:
+    def __init__(self) -> None:
+        self.total = 0
+
+    total: int

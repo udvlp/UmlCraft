@@ -350,9 +350,10 @@ impl Headless {
         self
     }
 
-    /// Whether anything happened to the project yet: an edit, or a file opened.
+    /// Whether anything happened to the project yet: an edit, or a file opened. An edit taken
+    /// back by a failed batch is none; the revision counts it all the same.
     pub fn touched(&self) -> bool {
-        self.doc.revision() > 0 || self.path.is_some()
+        self.doc.can_undo() || self.doc.can_redo() || self.path.is_some()
     }
 }
 

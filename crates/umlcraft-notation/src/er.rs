@@ -120,6 +120,10 @@ pub fn connect(tx: &mut Tx<'_>, diagram: Id, source: Id, target: Id) -> Result<I
             tx.add_edge(diagram, Some(line), first_node, second_node, Vec::new())
         }
         Join::Subtyping => {
+            // An entity takes part in an IS-A once: as its supertype or as one subtype.
+            if subtypings(model, first).any(|p| p.entity == second) {
+                return Err(ModelError::Refused(Refusal::ErNotJoined));
+            }
             let supertype = !subtypings(model, first).any(|p| p.supertype);
             let kind = ElementKind::ErSubtyping(ErSubtypingProps {
                 is_a: first,
@@ -1580,5 +1584,10 @@ mod tests {
             d.connect(person_node, person_node),
             Err(ModelError::Refused(Refusal::ErNotJoined))
         );
+        // Once per entity: Person is no subtype of its own IS-A, Pilot no subtype twice.
+        for node in [person_node, pilot_node] {
+            assert_eq!(d.connect(is_a_node, node), Err(ModelError::Refused(Refusal::ErNotJoined)));
+        }
+        assert_eq!(subtypings(d.doc.model(), is_a).count(), 2);
     }
 }

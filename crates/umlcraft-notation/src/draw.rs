@@ -907,6 +907,8 @@ fn ellipse_points(c: Point, rx: f32, ry: f32) -> Vec<Point> {
 
 /// Half the distance between the two lines of a double line.
 pub const DOUBLE_GAP: f32 = 2.0;
+/// How far, in gaps, the corner of a double line may lie from its path's corner.
+const MITER_LIMIT: f32 = 3.0;
 
 /// The two lines of an edge drawn double: its path moved [`DOUBLE_GAP`] to each side; at
 /// corners the moved segments meet where they cross.
@@ -939,7 +941,15 @@ fn beside(points: &[Point], by: f32) -> Vec<Point> {
                         moved(p, a)
                     } else {
                         let t = ((p1.x - p0.x) * d1.1 - (p1.y - p0.y) * d1.0) / cross;
-                        Point::new(p0.x + t * d0.0, p0.y + t * d0.1)
+                        let corner = Point::new(p0.x + t * d0.0, p0.y + t * d0.1);
+                        // At a sharp turn the lines meet far out: no further than a few gaps.
+                        let (dx, dy) = (corner.x - p.x, corner.y - p.y);
+                        let (far, limit) = (dx.hypot(dy), MITER_LIMIT * by.abs());
+                        if far > limit {
+                            Point::new(p.x + dx * limit / far, p.y + dy * limit / far)
+                        } else {
+                            corner
+                        }
                     }
                 }
                 (Some(v), None) | (None, Some(v)) => moved(p, v),
@@ -1252,4 +1262,25 @@ pub fn tab_backdrop(node: &NodeShape) -> Option<Primitive> {
 /// `r` made smaller by `by` on each side.
 fn inset(r: Rect, by: f32) -> Rect {
     Rect::new(r.x + by, r.y + by, (r.width - 2.0 * by).max(0.0), (r.height - 2.0 * by).max(0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn double_lines_keep_their_corners_close_at_sharp_turns() {
+        // Nearly back on itself: the moved segments would cross about 130 away.
+        let points = [Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(0.0, 3.0)];
+        for line in double_line(&points) {
+            let corner = line[1];
+            let far = (corner.x - 100.0).hypot(corner.y);
+            assert!(far <= MITER_LIMIT * DOUBLE_GAP + 0.01, "{corner:?}");
+        }
+        // A right angle keeps its exact corner.
+        let points = [Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 100.0)];
+        let [left, right] = double_line(&points);
+        assert_eq!(left[1], Point::new(102.0, -2.0));
+        assert_eq!(right[1], Point::new(98.0, 2.0));
+    }
 }

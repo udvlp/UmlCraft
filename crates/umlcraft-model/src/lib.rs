@@ -19,7 +19,7 @@ pub use diagram::{
     Color, DiagramKind, EdgeLabels, LineShape, ParameterDirections, ParseColorError, Presentation,
     Regions, Shape, SharedStyle, Style, View,
 };
-pub use document::{Document, Tx};
+pub use document::{Document, Mark, Tx};
 pub use element::{
     ActivityEdgeProps, ActivityNodeKind, ActivityNodeProps, Aggregation, AssociationEnd,
     AssociationProps, AttributeProps, ClassifierProps, CombinedFragmentProps, CommentProps,

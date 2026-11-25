@@ -1172,6 +1172,9 @@ pub fn make_room(tx: &mut Tx<'_>, diagram: Id, at: f32, dy: f32) -> Result<()> {
                 *y += dy;
                 *end_y = end_y.map(|e| e + dy);
             }
+            // A message to itself that starts above and ends below: its end goes down with
+            // the bar it starts there, so the two stay together.
+            Shape::Message { end_y: Some(end), .. } if below(*end) => *end += dy,
             Shape::Activation { top, height, .. } if below(*top) => *top += dy,
             // A bar that only reaches `at` grows later if a message there needs it to.
             Shape::Activation { top, height, .. } if *top + *height > at + 1.0 => *height += dy,
@@ -1485,10 +1488,12 @@ pub fn move_item(tx: &mut Tx<'_>, diagram: Id, element: Id, y: f32) -> Result<()
     }
     for to in made {
         let bottom = to.bottom();
+        // An icon's name lies between its head and its line (`Lane::line_top`).
+        let name = if to.iconic { ICON_NAME } else { 0.0 };
         tx.update_presentation(diagram, to.id, |p| {
             if let Shape::Lifeline { head, length, .. } = &mut p.shape {
                 head.y += dy;
-                *length = (bottom - head.bottom()).max(RECEIVER_BAR + BAR_MARGIN);
+                *length = (bottom - head.bottom() - name).max(RECEIVER_BAR + BAR_MARGIN);
             }
         })?;
     }
@@ -2412,7 +2417,15 @@ fn place(
                 let (Some(&source), Some(&target)) = (lanes.get(&from), lanes.get(&to)) else {
                     continue;
                 };
-                let id = add_message(tx, diagram, child, source, target, *y)?;
+                // A message the drawing has no room for (a second create message to the same
+                // lifeline, a call before the create) stays undrawn, as one without lifelines
+                // does; the rest of the document is upgraded all the same.
+                let id = match tx.attempt(|tx| add_message(tx, diagram, child, source, target, *y))
+                {
+                    Ok(id) => id,
+                    Err(ModelError::Refused(_)) => continue,
+                    Err(err) => return Err(err),
+                };
                 let placed =
                     match tx.model().view(diagram).and_then(|v| v.get(id)).map(|p| &p.shape) {
                         Some(Shape::Message { y, end_y, .. }) => end_y.unwrap_or(*y),
@@ -3520,8 +3533,44 @@ mod tests {
     }
 
     #[test]
+    fn room_made_inside_a_message_to_itself_keeps_it_on_its_bar() {
+        let (mut doc, d, a, b) = two_lifelines();
+        draw(&mut doc, d, EdgeTool::Message, a, b, 120.0);
+        let own = draw(&mut doc, d, EdgeTool::Message, a, a, 150.0);
+        let shape = |doc: &Document| {
+            doc.model().view(d).unwrap().presentations_of(own).next().unwrap().shape.clone()
+        };
+        let bars = |doc: &Document| {
+            let view = doc.model().view(d).unwrap();
+            view.presentations()
+                .iter()
+                .filter(|p| matches!(p.shape, Shape::Activation { .. }))
+                .count()
+        };
+        let Shape::Message { y, end_y: Some(end), .. } = shape(&doc) else { panic!() };
+        let before = bars(&doc);
+        let at = (y + end) / 2.0;
+        doc.edit("room", |tx| super::make_room(tx, d, at, 50.0).and(super::tidy(tx, d))).unwrap();
+        let Shape::Message { y: now, end_y: Some(now_end), .. } = shape(&doc) else { panic!() };
+        assert_eq!((now, now_end), (y, end + 50.0));
+        assert_eq!(bars(&doc), before, "the bar it starts stays");
+        assert!(
+            super::violations(doc.model(), d).is_empty(),
+            "{:?}",
+            super::violations(doc.model(), d)
+        );
+    }
+
+    #[test]
     fn a_create_message_moved_along_takes_its_head_along() {
         let (mut doc, d, a, b) = two_lifelines();
+        // Drawn as an icon, whose name lies between head and line: the line keeps its end.
+        doc.edit("icon", |tx| tx.update_presentation(d, b, |p| p.style.iconic = true)).unwrap();
+        let bottom = |doc: &Document| {
+            let view = doc.model().view(d).unwrap();
+            let Shape::Lifeline { head, length, .. } = view.get(b).unwrap().shape else { panic!() };
+            head.bottom() + super::ICON_NAME + length
+        };
         let own = draw(&mut doc, d, EdgeTool::Message, a, a, 150.0);
         let create = draw(&mut doc, d, EdgeTool::CreateMessage, a, b, 180.0);
         let at = |doc: &Document| {
@@ -3534,9 +3583,10 @@ mod tests {
             (y, head.center().y)
         };
         let (y, head) = at(&doc);
+        let end = bottom(&doc);
         // The call to itself takes the create message sent from inside it along, and with it
         // the head it made and the constructor's bar.
-        for to in [250.0, 120.0] {
+        for to in [250.0, 120.0, 150.0] {
             doc.edit("move", |tx| super::move_item(tx, d, own, to)).unwrap();
             let (moved, moved_head) = at(&doc);
             assert_eq!(moved - y, moved_head - head);
@@ -3546,6 +3596,8 @@ mod tests {
                 super::violations(doc.model(), d)
             );
         }
+        // Back where it was, the line ends where it ended.
+        assert!((bottom(&doc) - end).abs() < 0.01, "{} → {}", end, bottom(&doc));
     }
 
     #[test]
@@ -3813,6 +3865,48 @@ mod tests {
         let first = doc.model().get(messages[0].0).unwrap();
         let owner = doc.model().get(first.owner().unwrap()).unwrap();
         assert!(matches!(owner.kind(), ElementKind::InteractionOperand(_)));
+        doc.model().check().unwrap();
+    }
+
+    #[test]
+    fn a_message_without_room_leaves_the_rest_of_the_upgrade() {
+        let (mut doc, ids) = order_system();
+        let d = ids.sequence_diagram;
+        let model: &Model = doc.model();
+        let interaction = model.get(d).unwrap().owner().unwrap();
+        let messages: Vec<(Id, Id, Id)> = model
+            .subtree(interaction)
+            .into_iter()
+            .filter_map(|id| match model.get(id).unwrap().kind() {
+                ElementKind::Message(p) => Some((id, p.from, p.to)),
+                _ => None,
+            })
+            .collect();
+        let lifelines = [messages[0].1, messages[0].2];
+        // A create message after calls to the lifeline it would create has no room.
+        let late = messages[1..].iter().find(|m| m.1 == lifelines[0]).unwrap().0;
+        let old = doc.model().view(d).unwrap().presentations().iter().map(|p| p.id).collect();
+        doc.edit("old", |tx| {
+            tx.update(late, |data| {
+                if let ElementKind::Message(p) = &mut data.kind {
+                    p.sort = umlcraft_model::MessageSort::Create;
+                }
+            })?;
+            tx.remove_presentations(d, old)?;
+            let a = tx.add_node(d, Some(lifelines[0]), Rect::new(60.0, 40.0, 100.0, 300.0))?;
+            let b = tx.add_node(d, Some(lifelines[1]), Rect::new(260.0, 40.0, 100.0, 300.0))?;
+            for &(m, from, _) in &messages {
+                let (s, t) = if from == lifelines[0] { (a, b) } else { (b, a) };
+                tx.add_edge(d, Some(m), s, t, vec![])?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        super::upgrade_document(&mut doc);
+        let shapes = shapes(&doc, d);
+        assert!(shapes.iter().all(|s| !matches!(s, Shape::Edge { .. })));
+        assert_eq!(shapes.iter().filter(|s| matches!(s, Shape::Lifeline { .. })).count(), 2);
+        assert_eq!(shapes.iter().filter(|s| matches!(s, Shape::Message { .. })).count(), 2);
         doc.model().check().unwrap();
     }
 }

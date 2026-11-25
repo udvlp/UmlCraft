@@ -10,11 +10,13 @@ pub(super) const NOT_IN_BATCH: [&str; 7] =
 pub(super) fn batch(host: &mut dyn Host, access: &Access, args: &Value) -> Outcome {
     let calls = args.get("calls").and_then(Value::as_array).ok_or("`calls` must be an array")?;
     let depth = host.document().undo_depth();
+    // A failed batch leaves the history as it was, what could be redone included.
+    let mark = host.document().mark();
     let mut results: Vec<Value> = Vec::with_capacity(calls.len());
     // Files the exports wrote, which stay when a later call fails.
     let mut written: Vec<String> = Vec::new();
     let failed = |host: &mut dyn Host, written: &[String], i: usize, why: String| {
-        host.parts().0.roll_back_to(depth);
+        host.parts().0.roll_back(mark.clone());
         if written.is_empty() {
             Err(format!("call {i} failed, nothing was changed: {why}"))
         } else {

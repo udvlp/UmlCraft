@@ -865,6 +865,30 @@ impl DiagramCanvas {
         HIT_TOLERANCE / self.zoom
     }
 
+    /// Forgets everything about the document shown, when another one replaces it: the same file
+    /// opened again has the same ids and revision 0, so neither the scene's key nor the
+    /// diagram shown would notice.
+    pub fn forget_document(&mut self, cx: &mut Context<Self>) {
+        self.viewports.clear();
+        self.shown_diagram = None;
+        self.scene_key = None;
+        self.scene = Rc::new(Scene::empty());
+        self.drag = None;
+        self.lanes_at_start = None;
+        self.editing = None;
+        self.edit_when_drawn = None;
+        self.select_when_drawn = false;
+        self.new_member_when_drawn = None;
+        self.right_click = None;
+        self.right_member = None;
+        self.menu_at = None;
+        self.hover = None;
+        self.offer = None;
+        self.structogram = None;
+        self._structogram_watch = None;
+        cx.notify();
+    }
+
     /// Keeps a separate zoom and pan per diagram.
     fn switch_viewport(&mut self, diagram: Option<Id>) {
         if diagram == self.shown_diagram {

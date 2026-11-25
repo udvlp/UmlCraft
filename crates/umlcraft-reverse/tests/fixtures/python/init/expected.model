@@ -5,3 +5,6 @@ package init
     attribute + y : float = y
     attribute # _cache = None
     operation + __init__(x : float, y : float)
+  class Late Public
+    attribute + total : int = 0
+    operation + __init__()
