@@ -3,6 +3,46 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## 0.24.2 – 2026-11-25
+
+Fixes from a review of the whole code base.
+
+- **Crashes**: an index condition in an ER entity with umlauts or other non-ASCII letters, a
+  damaged project file, and an `enum` type with stray parentheses in a SQL export no longer
+  end the program. Very large or deeply nested files are refused instead of filling the memory.
+- **Paste**: relationships are drawn only between the pasted copies, never between the
+  originals.
+- **Properties**: a multi-line field (a note's text, constraints, an entity's indexes and
+  checks) keeps what is being typed when the project changes meanwhile.
+- **Opening a project again** starts the diagram fresh, without a leftover drag, open menu or
+  inline editor.
+- **Settings of two windows**: saving writes only what this window changed, so the other
+  window's changes stay.
+- **Renamed structograms** show their new name in the model tree.
+- **Sequence diagrams**: dragging a create message no longer lengthens an actor-style lifeline,
+  room made below keeps a message to itself on its bar, and moving an element in the model
+  tree tidies the diagram.
+- **Parameters**: an `out` or `inout` parameter without a name keeps its direction.
+- **Chen IS-A**: an entity already in the hierarchy can no longer be made its own subtype.
+- **Source import**: a C++ forward declaration in another file no longer drops a class's
+  associations; Python reads `class Box[T: Comparable]` with `Comparable` as the bound of `T`,
+  and a class field declared after `__init__` is no longer listed twice.
+- **SQL import**: a column named `period` is kept.
+- **SQL export**: backslashes in CHECK conditions are carried over correctly between MySQL and
+  PostgreSQL, `CREATE SCHEMA` also covers schemas that hold only domains or enum types, a
+  `numeric` without precision becomes `decimal(65,30)` in MySQL, enum type names stay within
+  the name limit and apart from each other, and a text default containing "on update" is no
+  longer split.
+- **Code to structograms**: a `break` followed by a comment ends its `case` branch.
+- **SVG and PNG images**: the image takes in all of a node's drawing (cubes, template boxes,
+  double lines); ellipses and qualifier boxes use the line color, and double lines keep their
+  corners close at sharp turns.
+- **Astah files**: links of association classes, parts whose association is drawn elsewhere
+  and notes anchored to messages are imported; the export writes through a fresh temporary
+  file.
+- **MCP server**: a failed `batch` keeps the redo history, a transition's `guard` wins over
+  its text, and `--allow-path=DIR` and relative `--in` paths work.
+
 ## 0.24.1 – 2026-11-24
 
 - **Details start folded in the model tree**: after opening a project or the sample, only the
