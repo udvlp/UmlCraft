@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.25.1 – 2026-11-27
 
 - **Ribbon labels** show whenever they fit: the ribbon measures them in the user interface's
   font instead of estimating them by their length, so French labels no longer fold the ribbon
