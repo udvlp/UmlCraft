@@ -6,7 +6,8 @@ and writes `.asta` project files and imports Java, C#, C++ and Python source cod
 ![UmlCraft with the sample project's state machine diagram](assets/screenshot.png)
 
 New to UmlCraft? [Getting started](GETTING-STARTED.md) explains in a quarter of an hour how
-it works and why it is not a drawing program ([auf Deutsch](GETTING-STARTED.de.md)).
+it works and why it is not a drawing program ([auf Deutsch](GETTING-STARTED.de.md),
+[en français](GETTING-STARTED.fr.md)).
 
 ## Download
 

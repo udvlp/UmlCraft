@@ -1,6 +1,6 @@
 # Getting started with UmlCraft
 
-[Deutsch](GETTING-STARTED.de.md)
+[Deutsch](GETTING-STARTED.de.md) · [Français](GETTING-STARTED.fr.md)
 
 This guide is for you if you have never used UmlCraft, or a UML tool of its kind. It takes
 about fifteen minutes. What UmlCraft can do in full is in the [README](README.md).

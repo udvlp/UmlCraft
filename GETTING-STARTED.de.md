@@ -1,6 +1,6 @@
 # Erste Schritte mit UmlCraft
 
-[English](GETTING-STARTED.md)
+[English](GETTING-STARTED.md) · [Français](GETTING-STARTED.fr.md)
 
 Diese Anleitung ist für dich, wenn du UmlCraft oder ein UML-Werkzeug dieser Art noch nicht
 kennst. Sie dauert etwa eine Viertelstunde. Was UmlCraft insgesamt kann, steht im
