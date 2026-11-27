@@ -60,7 +60,7 @@ impl Workspace {
             tool: Tool::Select,
             message: None,
             measure: Box::new(ApproxMeasure),
-            keywords: umlcraft_nsd::Keywords::English,
+            keywords: umlcraft_nsd::Keywords::english(),
             content_edit: None,
         }
     }
@@ -1900,12 +1900,16 @@ mod tests {
     #[test]
     fn new_structograms_take_the_keywords_of_the_setting() {
         let (doc, ids) = order_system();
-        let mut ws = Workspace::new(doc, None).with_keywords(umlcraft_nsd::Keywords::German);
+        let mut ws =
+            Workspace::new(doc, None).with_keywords(umlcraft_nsd::Keywords::by_code("de").unwrap());
         let id = ws.add_item(ids.domain, NewItem::Structogram).unwrap();
         let ElementKind::Structogram(p) = ws.doc.model().get(id).unwrap().kind() else {
             panic!("not a structogram")
         };
-        assert_eq!(umlcraft_nsd::Keywords::of(&p.structogram), umlcraft_nsd::Keywords::German);
+        assert_eq!(
+            umlcraft_nsd::Keywords::of(&p.structogram),
+            umlcraft_nsd::Keywords::by_code("de").unwrap()
+        );
         assert_eq!(p.structogram.header("preReturn"), Some("gib"));
     }
 

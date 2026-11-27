@@ -28,16 +28,12 @@ type Result<T> = std::result::Result<T, EditError>;
 /// installed), but conditions without the parentheses it puts around them, which a
 /// structogram does not need. Case lines: selector, two cases, default.
 pub fn default_text(kind: ElementKind, keywords: Keywords) -> Vec<String> {
-    let german = keywords == Keywords::German;
     let text: &[&str] = match kind {
         ElementKind::Alternative => &["?"],
         ElementKind::Case => &["?", "!", "!", "default"],
-        ElementKind::For if german => &["für ? := ? bis ?"],
-        ElementKind::For => &["for ? <- ? to ?"],
-        ElementKind::While if german => &["solange ?"],
-        ElementKind::While => &["while ?"],
-        ElementKind::Repeat if german => &["bis ?"],
-        ElementKind::Repeat => &["until ?"],
+        ElementKind::For => &[keywords.new_for()],
+        ElementKind::While => &[keywords.new_while()],
+        ElementKind::Repeat => &[keywords.new_repeat()],
         ElementKind::Parallel => &["2"],
         _ => &[""],
     };
@@ -364,10 +360,9 @@ pub fn fit_for(d: &Diagram, e: &mut Element) {
 
 /// The text after a leading keyword followed by a space.
 fn after_keyword<'a>(text: &'a str, keyword: &str, ignore_case: bool) -> Option<&'a str> {
-    let head = text.get(..keyword.len())?;
-    let same = if ignore_case { head.eq_ignore_ascii_case(keyword) } else { head == keyword };
-    let rest = &text[keyword.len()..];
-    (same && rest.starts_with(char::is_whitespace)).then_some(rest)
+    let end = keyword_end(text, keyword, ignore_case)?;
+    let rest = &text[end..];
+    rest.starts_with(char::is_whitespace).then_some(rest)
 }
 
 /// `text` split around the first `keyword` standing as a word between spaces.
@@ -375,7 +370,7 @@ fn split_word<'a>(text: &'a str, keyword: &str, ignore_case: bool) -> Option<(&'
     let mut from = 0;
     while let Some(found) = find(&text[from..], keyword, ignore_case) {
         let at = from + found;
-        let end = at + keyword.len();
+        let end = keyword_end(&text[at..], keyword, ignore_case).map(|n| at + n)?;
         let before = text[..at].ends_with(char::is_whitespace);
         let after = text[end..].starts_with(char::is_whitespace);
         if before && after {
@@ -386,12 +381,40 @@ fn split_word<'a>(text: &'a str, keyword: &str, ignore_case: bool) -> Option<(&'
     None
 }
 
+/// The byte index in `text` where the first match of `keyword` starts.
 fn find(text: &str, keyword: &str, ignore_case: bool) -> Option<usize> {
     if ignore_case {
-        text.to_ascii_lowercase().find(&keyword.to_ascii_lowercase())
+        text.char_indices()
+            .map(|(at, _)| at)
+            .find(|&at| keyword_end(&text[at..], keyword, true).is_some())
     } else {
         text.find(keyword)
     }
+}
+
+/// The byte length of the leading part of `text` that spells `keyword`.
+///
+/// With `ignore_case`, letters are compared by their Unicode lowercase, so the
+/// matched part can be longer or shorter in bytes than `keyword`. It always
+/// ends on a character boundary of `text`.
+fn keyword_end(text: &str, keyword: &str, ignore_case: bool) -> Option<usize> {
+    if !ignore_case {
+        return text.starts_with(keyword).then_some(keyword.len());
+    }
+    let mut wanted = keyword.chars().flat_map(char::to_lowercase).peekable();
+    let mut end = 0;
+    for (at, c) in text.char_indices() {
+        if wanted.peek().is_none() {
+            break;
+        }
+        for lower in c.to_lowercase() {
+            if wanted.next() != Some(lower) {
+                return None;
+            }
+        }
+        end = at + c.len_utf8();
+    }
+    wanted.peek().is_none().then_some(end)
 }
 
 /// The path of the element that holds the sequence `seq`, if it is a branch.
@@ -454,6 +477,18 @@ mod tests {
 
     fn span(seq: &[usize], start: usize, end: usize) -> Span {
         Span { seq: seq.to_vec(), start, end }
+    }
+
+    #[test]
+    fn keywords_ignore_case_beyond_ascii() {
+        assert_eq!(after_keyword("POUR i", "pour", true), Some(" i"));
+        assert_eq!(split_word("1 À 10", "à", true), Some(("1 ", " 10")));
+        assert_eq!(find("x JUSQU'À y", "jusqu'à", true), Some(2));
+        assert_eq!(after_keyword("für i", "FÜR", true), Some(" i"));
+        assert_eq!(after_keyword("Für i", "für", false), None);
+        // No panic on a character boundary.
+        assert_eq!(after_keyword("é", "e", true), None);
+        assert_eq!(split_word("1 àà 2", "à", true), None);
     }
 
     #[test]
@@ -546,8 +581,11 @@ mod tests {
     #[test]
     fn case_text_brings_its_branches() {
         let mut d = sample();
-        let case =
-            new_element(&d, ElementKind::Case, &default_text(ElementKind::Case, Keywords::English));
+        let case = new_element(
+            &d,
+            ElementKind::Case,
+            &default_text(ElementKind::Case, Keywords::english()),
+        );
         assert_eq!(case.branches.len(), 3);
         insert(&mut d, &Slot { seq: vec![], index: 0 }, vec![case]).unwrap();
         let x = Element::instruction(&lines(&["in default"]));
@@ -646,7 +684,7 @@ mod tests {
     fn new_elements_are_what_structorizer_starts_with() {
         let d = sample();
         for kind in ElementKind::ALL {
-            let e = new_element(&d, kind, &default_text(kind, Keywords::English));
+            let e = new_element(&d, kind, &default_text(kind, Keywords::english()));
             assert_eq!(e.kind, kind);
             if has_text(kind) {
                 assert!(e.attr("text").is_some());
@@ -656,11 +694,11 @@ mod tests {
         let empty = new_element(
             &d,
             ElementKind::Instruction,
-            &default_text(ElementKind::Instruction, Keywords::English),
+            &default_text(ElementKind::Instruction, Keywords::english()),
         );
         assert_eq!(empty.attr("text"), Some(""));
         let f =
-            new_element(&d, ElementKind::For, &default_text(ElementKind::For, Keywords::English));
+            new_element(&d, ElementKind::For, &default_text(ElementKind::For, Keywords::english()));
         assert_eq!(f.attr("style"), Some("COUNTER"));
         assert_eq!(f.attr("counterVar"), Some("?"));
     }
@@ -668,11 +706,11 @@ mod tests {
     #[test]
     fn german_keywords_count_in_german() {
         let mut d = test_diagram(Vec::new());
-        assert_eq!(Keywords::of(&d), Keywords::English);
-        d.set_keywords(Keywords::German);
-        assert_eq!(Keywords::of(&d), Keywords::German);
+        assert_eq!(Keywords::of(&d), Keywords::english());
+        d.set_keywords(Keywords::by_code("de").unwrap());
+        assert_eq!(Keywords::of(&d), Keywords::by_code("de").unwrap());
         assert_eq!(d.header("preWhile"), Some("solange "));
-        let german = |kind| default_text(kind, Keywords::German);
+        let german = |kind| default_text(kind, Keywords::by_code("de").unwrap());
         assert_eq!(german(ElementKind::While), ["solange ?"]);
         assert_eq!(german(ElementKind::Repeat), ["bis ?"]);
         let f = new_element(&d, ElementKind::For, &german(ElementKind::For));
@@ -684,6 +722,6 @@ mod tests {
         assert_eq!((each.attr("style"), each.attr("counterVar")), (Some("TRAVERSAL"), Some("x")));
         // The German keywords stay in the normal form of a project.
         let normal = crate::content::normalize(&d);
-        assert_eq!(Keywords::of(&normal), Keywords::German);
+        assert_eq!(Keywords::of(&normal), Keywords::by_code("de").unwrap());
     }
 }

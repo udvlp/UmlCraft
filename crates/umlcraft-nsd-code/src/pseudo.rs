@@ -272,7 +272,7 @@ mod tests {
 
     /// The first statement of `body` as the notation gives it.
     fn first(body: &str) -> Vec<String> {
-        written(body, umlcraft_nsd::Keywords::English).children.elements[0].text()
+        written(body, umlcraft_nsd::Keywords::english()).children.elements[0].text()
     }
 
     /// The diagram of a method with `body`, its keywords in the language of `keywords`.
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn german_keywords_count_and_give_in_german() {
-        let german = umlcraft_nsd::Keywords::German;
+        let german = umlcraft_nsd::Keywords::by_code("de").unwrap();
         let d = written(
             "for (int i = 1; i <= n; i += 2) { } for (int v : values) { } return n;",
             german,

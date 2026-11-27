@@ -517,10 +517,15 @@ impl MainView {
         let language = match language {
             None => None,
             Some("system") => Some(None),
-            Some(code @ ("en" | "de")) => Some(Some(code.to_owned())),
+            Some(code) if crate::settings::languages().iter().any(|(c, _)| c == code) => {
+                Some(Some(code.to_owned()))
+            }
             Some(other) => {
+                let codes: Vec<String> =
+                    crate::settings::languages().into_iter().map(|(code, _)| code).collect();
                 return umlcraft_mcp::Reply::error(format!(
-                    "`language` is en, de or system, not `{other}`"
+                    "`language` is {} or system, not `{other}`",
+                    codes.join(", ")
                 ));
             }
         };
@@ -1681,9 +1686,13 @@ impl MainView {
         self.set_dark(theme.dark, window, cx);
     }
 
-    fn toggle_language(&mut self, _: &ToggleLanguage, window: &mut Window, cx: &mut Context<Self>) {
-        let next = if &*rust_i18n::locale() == "de" { "en" } else { "de" };
-        self.set_language(Some(next.to_owned()), window, cx);
+    fn choose_language(
+        &mut self,
+        choice: &SetLanguage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_language(choice.code.clone(), window, cx);
     }
 
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
@@ -1778,6 +1787,7 @@ impl MainView {
             can_paste: structogram.is_some() || (self.clipboard.is_some() && diagram.is_some()),
             can_wrap: has_selection && diagram == Some(DiagramKind::Sequence),
             theme: self.settings.dark,
+            language: self.settings.language.clone(),
         };
         let tabs = ribbon::tabs(&state);
         let active = if tabs.iter().any(|(t, _)| *t == self.ribbon_tab) {
@@ -1859,7 +1869,8 @@ impl MainView {
         window.refresh();
     }
 
-    /// Writes new structograms in German or English (`de`, `en`), or as the user interface.
+    /// Writes new structograms with the keywords of a language (`de`, `en`), or as the user
+    /// interface.
     pub fn set_structogram_keywords(&mut self, language: Option<String>, cx: &mut Context<Self>) {
         self.settings.structogram_keywords = language;
         self.settings.save();
@@ -2761,7 +2772,7 @@ impl Render for MainView {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::paste_as_reference))
             .on_action(cx.listener(Self::set_theme))
-            .on_action(cx.listener(Self::toggle_language))
+            .on_action(cx.listener(Self::choose_language))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::select_tool))

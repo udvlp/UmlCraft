@@ -31,7 +31,7 @@ fn main() {
         author: "smoke",
         date: "2026-10-29",
         origin: "UmlCraft smoke test",
-        keywords: umlcraft_nsd::Keywords::English,
+        keywords: umlcraft_nsd::Keywords::english(),
     };
     let start = Instant::now();
     let (mut methods, mut elements, mut largest) = (0usize, 0usize, (0usize, String::new()));

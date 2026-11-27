@@ -6904,6 +6904,7 @@ dependencies = [
  "rustls",
  "semver",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "sha2 0.11.1",
  "sys-locale",
@@ -7025,6 +7026,7 @@ dependencies = [
  "quick-xml 0.42.0",
  "resvg 0.50.0",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "thiserror 2.0.21",
 ]

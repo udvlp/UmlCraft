@@ -471,7 +471,7 @@ mod tests {
         for condition in [vec!["x > 0?"], vec!["x > 0 und y > 0", "oder z > 0?"]] {
             // Empty branches: both columns as narrow as their labels allow.
             let mut d = test_diagram(vec![Element::alternative(&lines(&condition))]);
-            d.set_keywords(Keywords::German);
+            d.set_keywords(Keywords::by_code("de").unwrap());
             let layout = Layout::of(&d, m);
             let b = layout.element(&[0]).unwrap();
             let Shape::Alternative { head, split } = b.shape else { panic!() };
@@ -490,8 +490,8 @@ mod tests {
     #[test]
     fn german_diagrams_label_their_branches_ja_and_nein() {
         assert_eq!(branch_labels(None), ["T", "F"]);
-        assert_eq!(branch_labels(Some(Keywords::English)), ["T", "F"]);
-        assert_eq!(branch_labels(Some(Keywords::German)), ["ja", "nein"]);
+        assert_eq!(branch_labels(Some(Keywords::english())), ["T", "F"]);
+        assert_eq!(branch_labels(Some(Keywords::by_code("de").unwrap())), ["ja", "nein"]);
     }
 
     /// A case with so many branches that its plain elements are turned.

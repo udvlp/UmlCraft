@@ -370,5 +370,5 @@ const TEST_MADE: Made = Made {
     author: "t",
     date: "2026-10-30",
     origin: "test",
-    keywords: umlcraft_nsd::Keywords::English,
+    keywords: umlcraft_nsd::Keywords::english(),
 };

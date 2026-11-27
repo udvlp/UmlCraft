@@ -11,9 +11,10 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme, WindowExt, v_flex};
 use gpui_kit::*;
 use rust_i18n::t;
+use umlcraft_nsd::Keywords;
 
 use crate::main_view::MainView;
-use crate::settings::LANGUAGES;
+use crate::settings::languages;
 use crate::shell::section;
 
 /// Opens the dialog on the settings of `view`, unless a dialog is open already.
@@ -26,22 +27,23 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |dialog, _, cx| {
         let Some(main) = view.upgrade() else { return dialog };
         let settings = main.read(cx).settings();
-        // 0 is the system's language, then those of `LANGUAGES`.
+        // 0 is the system's language, then those of `languages()`.
+        let all_languages = languages();
         let language = settings
             .language
             .as_deref()
-            .and_then(|l| LANGUAGES.iter().position(|&(code, _)| code == l))
+            .and_then(|l| all_languages.iter().position(|(code, _)| code == l))
             .map_or(0, |ix| ix + 1);
         let column = settings.visibility_column;
         let stereotype = settings.abstract_stereotype;
         let read_only = settings.read_only_constraint;
         let guillemets = settings.guillemets;
         let align = settings.aligns_to_nodes();
-        // 0 follows the user interface, then those of `LANGUAGES`.
+        // 0 follows the user interface, then those of `Keywords::all()`.
         let keywords = settings
             .structogram_keywords
             .as_deref()
-            .and_then(|l| LANGUAGES.iter().position(|&(code, _)| code == l))
+            .and_then(|l| Keywords::all().position(|k| k.code() == l))
             .map_or(0, |ix| ix + 1);
         let update_check = settings.update_check == Some(true);
         let dark = settings.dark;
@@ -51,11 +53,11 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
         let (v5, v6, v7) = (view.clone(), view.clone(), view.clone());
         let languages = RadioGroup::horizontal("settings-language")
             .child(t!("settings.system_language").to_string())
-            .children(LANGUAGES.map(|(_, name)| name))
+            .children(all_languages.iter().map(|(_, name)| name.clone()))
             .selected_index(Some(language))
             .on_change(move |&ix, window, cx| {
-                let chosen = ix.checked_sub(1).and_then(|i| LANGUAGES.get(i));
-                let chosen = chosen.map(|&(code, _)| code.to_owned());
+                let chosen = ix.checked_sub(1).and_then(|i| all_languages.get(i));
+                let chosen = chosen.map(|(code, _)| code.clone());
                 v1.update(cx, |this, cx| {
                     if this.settings().language != chosen {
                         this.set_language(chosen, window, cx);
@@ -164,14 +166,11 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
             .child(
                 RadioGroup::vertical("settings-keywords")
                     .child(t!("settings.keywords_ui").to_string())
-                    .children([
-                        t!("settings.keywords_de").to_string(),
-                        t!("settings.keywords_en").to_string(),
-                    ])
+                    .children(Keywords::all().map(keywords_label))
                     .selected_index(Some(keywords))
                     .on_change(move |&ix, _, cx| {
-                        let chosen = ix.checked_sub(1).and_then(|i| LANGUAGES.get(i));
-                        let chosen = chosen.map(|&(code, _)| code.to_owned());
+                        let chosen = ix.checked_sub(1).and_then(|i| Keywords::all().nth(i));
+                        let chosen = chosen.map(|k| k.code().to_owned());
                         v6.update(cx, |this, cx| {
                             if this.settings().structogram_keywords != chosen {
                                 this.set_structogram_keywords(chosen, cx);
@@ -226,4 +225,10 @@ pub fn open(view: WeakEntity<MainView>, window: &mut Window, cx: &mut App) {
                 ),
             )
     });
+}
+
+/// The choice of `k` for new structograms: its language's name and three of its keywords.
+fn keywords_label(k: Keywords) -> String {
+    let words = format!("{}, {}, {}", k.word("preWhile"), k.word("preFor"), k.word("preReturn"));
+    t!("settings.keywords_in", name = k.name(), words = words).into_owned()
 }

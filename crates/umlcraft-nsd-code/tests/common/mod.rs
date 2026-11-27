@@ -11,7 +11,7 @@ pub const MADE: Made = Made {
     author: "tester",
     date: "2026-10-29",
     origin: "UmlCraft test",
-    keywords: umlcraft_nsd::Keywords::English,
+    keywords: umlcraft_nsd::Keywords::english(),
 };
 
 pub fn tree(d: &Diagram) -> String {

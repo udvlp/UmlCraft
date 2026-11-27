@@ -3,6 +3,18 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Languages** come from the files in `locales/`. A new language is a new file; the settings,
+  the language menu of the View tab and the system-language detection pick it up. Structogram
+  keywords are the `structogram:` section of the same file. A new text needs only German and
+  English; another language shows it in English until it is translated.
+- **View tab**: the language button is a menu, like the theme's: the system's language or one
+  of the files.
+- **Keywords**: matching folds case beyond ASCII, so capitals with accents are recognised.
+- **MCP**: `keywords` in structogram JSON is a language code (`de`, `en`). `english` and
+  `german` are still accepted as input.
+
 ## 0.24.2 – 2026-11-25
 
 Fixes from a review of the whole code base.

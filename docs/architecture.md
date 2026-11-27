@@ -248,7 +248,9 @@ migrations. Writing serializes from the model's own data without copying it.
   app's own dialog, which wraps its text, scrolls a long detail, follows the theme and answers
   Enter with the first button and Escape with Cancel or the last one. GPUI's fallback on Linux
   was 288 px wide and cut off what did not fit on one line.
-- Texts come from `locales/{de,en}.yml` (rust-i18n). Without a setting, the system language is used.
+- Texts come from the files in `locales/` (rust-i18n); the languages are those files, listed by
+  `rust_i18n::available_locales!()`, and each file names itself in `language.name`. Without a
+  setting, the system language is used, or English when no file matches.
 - Shortcuts are bound through `key` in `main.rs`, which resolves `secondary-` (Cmd on macOS,
   Ctrl elsewhere) with `KeyBinding::load`; since `gpui-pre` 0.3.10 `KeyBinding::new` no longer
   does and panics on it.
@@ -865,6 +867,13 @@ Structorizer is GPL-licensed; the format and the way
 Structorizer writes it were worked out from its XML schema, its user guide and the files it
 writes, and none of its code is used.
 
+- **Keywords.** The `structogram:` section of each `locales/*.yml` holds a language's parser
+  keywords. `build.rs` of `umlcraft-nsd` reads these sections at compile time (with
+  `serde-saphyr`) and generates the keyword table behind `Keywords`, a handle on one language
+  (`all`, `english`, `by_code`, `code`, `name` …). English is required. A locale without the
+  section uses English keywords. The 14 header attributes are fixed, in Structorizer's
+  order, and `preWhile` must differ between languages, since it tells a diagram's language.
+  Matching folds case beyond ASCII. The crate does not depend on rust-i18n.
 - **Model.** A `Diagram` has the attributes of `<root>` (header: version, parser keywords,
   author, dates, licence; the root's own text, comment, colour, `type` program/sub/includable,
   `style` nice/abbr) and a `Sequence` of `Element`s. An element has a kind (instruction, call,

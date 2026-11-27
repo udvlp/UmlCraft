@@ -44,6 +44,8 @@ pub struct State {
     pub can_wrap: bool,
     /// The chosen theme; `None` follows the system's appearance.
     pub theme: Option<bool>,
+    /// The chosen language; `None` follows the system's.
+    pub language: Option<String>,
 }
 
 impl State {
@@ -568,13 +570,31 @@ fn view(state: &State) -> Vec<Group> {
                         state.theme == Some(true),
                         SetTheme { dark: Some(true) },
                     ),
-                Item::new("language", fluent("local_language"), t!("toolbar.language"))
-                    .action(ToggleLanguage),
+                language_menu(state.language.as_deref()),
                 Item::new("settings", fluent("settings"), t!("toolbar.settings"))
                     .action(OpenSettings),
             ],
         ),
     ]
+}
+
+/// The language button: it shows the language chosen, each in its own name, and its menu
+/// chooses the system's or one of the locale files.
+fn language_menu(chosen: Option<&str>) -> Item {
+    let system = t!("settings.system_language").into_owned();
+    let languages = crate::settings::languages();
+    let label = chosen
+        .and_then(|code| languages.iter().find(|(c, _)| c == code))
+        .map_or_else(|| system.clone(), |(_, name)| name.clone());
+    let item = Item::new("language", fluent("local_language"), label).menu_check_entry(
+        system,
+        chosen.is_none(),
+        SetLanguage { code: None },
+    );
+    languages.into_iter().fold(item, |item, (code, name)| {
+        let checked = chosen == Some(code.as_str());
+        item.menu_check_entry(name, checked, SetLanguage { code: Some(code) })
+    })
 }
 
 // ----- Width --------------------------------------------------------------------------------
@@ -937,7 +957,9 @@ pub fn render(groups: Vec<Group>, compact: bool, focus: &FocusHandle, cx: &App) 
 #[cfg(test)]
 mod tests {
     // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
-    use super::{RibbonTab, State, diagram, diagram_key, label_lines, sort_key, tabs};
+    use super::{
+        MenuEntry, RibbonTab, State, diagram, diagram_key, label_lines, sort_key, tabs, view,
+    };
     use umlcraft_model::{DiagramKind, DiagramProps, ElementKind, ErNotation};
     use umlcraft_notation::palette::{self, Tool};
 
@@ -1027,6 +1049,39 @@ mod tests {
     }
 
     #[test]
+    fn the_view_tab_chooses_the_language_from_a_menu() {
+        let state = State {
+            props: None,
+            structogram: None,
+            tool: Tool::Select,
+            has_selection: false,
+            can_align: false,
+            can_paste: false,
+            can_wrap: false,
+            theme: None,
+            language: Some("de".into()),
+        };
+        let groups = view(&state);
+        let item = groups.iter().flat_map(|g| &g.items).find(|i| i.id == "language").unwrap();
+        // Like the theme: the button shows the choice and opens the menu.
+        assert!(item.action.is_none());
+        assert_eq!(item.label, "Deutsch");
+        let entries: Vec<(&str, bool)> = item
+            .menu
+            .iter()
+            .filter_map(|e| match e {
+                MenuEntry::Check { label, checked, .. } => Some((label.as_str(), *checked)),
+                _ => None,
+            })
+            .collect();
+        // The system's language first, then every locale file.
+        assert_eq!(entries.len(), crate::settings::languages().len() + 1);
+        assert!(!entries[0].1);
+        assert!(entries.contains(&("Deutsch", true)));
+        assert!(entries.contains(&("English", false)));
+    }
+
+    #[test]
     fn the_diagram_tab_is_there_only_with_a_diagram() {
         let mut state = State {
             props: None,
@@ -1037,6 +1092,7 @@ mod tests {
             can_paste: false,
             can_wrap: false,
             theme: None,
+            language: None,
         };
         assert!(!tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));
         state.props = Some(props(DiagramKind::Class));
@@ -1046,29 +1102,5 @@ mod tests {
         state.props = None;
         state.structogram = Some(crate::nsd::Allowed::default());
         assert!(tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));
-    }
-
-    #[test]
-    fn ribbon_texts_exist_in_both_languages() {
-        let de: serde_json::Value = serde_yaml_like(include_str!("../../../locales/de.yml"));
-        let en: serde_json::Value = serde_yaml_like(include_str!("../../../locales/en.yml"));
-        assert_eq!(de, en);
-    }
-
-    /// The `ribbon:` keys of a locale file, as nested names (values left out).
-    fn serde_yaml_like(text: &str) -> serde_json::Value {
-        let mut keys = Vec::new();
-        let mut inside = false;
-        for line in text.lines() {
-            if !line.starts_with(' ') {
-                inside = line.trim_end() == "ribbon:";
-                continue;
-            }
-            if inside && let Some((key, _)) = line.split_once(':') {
-                keys.push(key.to_string());
-            }
-        }
-        assert!(!keys.is_empty());
-        keys.into()
     }
 }

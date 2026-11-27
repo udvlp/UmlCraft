@@ -67,9 +67,9 @@ theme draws a dark counterpart of each, of the same hue and as far from the defa
   with their content and changed parser keywords; opening one starts a new project with it.
   Methods of Java, C#, Python or C++ files become structograms without types, with
   assignments as `x := 42 + a`, conditions as `a > 0?` and returns as `return x`; what has no
-  place in a structogram (`continue`, labels …) is listed. New structograms and imported methods use German keywords
-  (`solange ?`, `für i := 1 bis n`, `gib x`) or Structorizer's English ones, as chosen in the
-  settings; by default as the user interface.
+  place in a structogram (`continue`, labels …) is listed. New structograms and imported
+  methods use the keywords of a language (German `solange ?`, `für i := 1 bis n`, `gib x`, or
+  Structorizer's English ones), as chosen in the settings; by default as the user interface.
 - **SQL dumps as ER diagrams** (File › Import SQL dump as ER diagram …): dumps of MySQL,
   MariaDB and PostgreSQL (`mysqldump`, `mariadb-dump`, `pg_dump` in plain format) become laid
   out ER diagrams in the open project, each in a package named after the database: tables

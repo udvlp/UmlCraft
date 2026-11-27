@@ -5,12 +5,23 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 const MAX_RECENT: usize = 8;
 
-/// The languages of the user interface, each with its name in itself.
-pub const LANGUAGES: [(&str, &str); 2] = [("de", "Deutsch"), ("en", "English")];
+/// (code, native name) of every locale file, by code.
+pub fn languages() -> Vec<(String, String)> {
+    let mut codes = rust_i18n::available_locales!();
+    codes.sort();
+    codes
+        .into_iter()
+        .map(|code| {
+            let name = t!("language.name", locale = &*code).into_owned();
+            (code.into_owned(), name)
+        })
+        .collect()
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -34,8 +45,8 @@ pub struct Settings {
     pub guillemets: bool,
     /// Moved nodes line up with the others when they come close; `None` is on.
     pub align_to_nodes: Option<bool>,
-    /// The language of new structograms' keywords (`de`, `en`); `None` follows the user
-    /// interface.
+    /// The language of new structograms' keywords, a code of `umlcraft_nsd::Keywords` (`de`,
+    /// `en`); `None` follows the user interface.
     pub structogram_keywords: Option<String>,
     /// The ribbon shows only its tabs.
     pub ribbon_collapsed: bool,
@@ -159,19 +170,16 @@ impl Settings {
         self.align_to_nodes != Some(false)
     }
 
-    /// The keywords new structograms are written with: German or English as chosen, else as
-    /// the user interface.
+    /// The keywords new structograms are written with: those of the chosen language, else of
+    /// the user interface; English for a language without keywords.
     pub fn keywords(&self) -> umlcraft_nsd::Keywords {
         let language = self.structogram_keywords.clone().unwrap_or_else(|| self.ui_language());
-        match language.starts_with("de") {
-            true => umlcraft_nsd::Keywords::German,
-            false => umlcraft_nsd::Keywords::English,
-        }
+        umlcraft_nsd::Keywords::by_code(&language).unwrap_or_default()
     }
 
     /// The language to show: the chosen one, else the system's.
     pub fn ui_language(&self) -> String {
-        self.language.clone().unwrap_or_else(|| system_language().to_owned())
+        self.language.clone().unwrap_or_else(system_language)
     }
 
     /// Whether to ask GitHub for new versions now (`now` in seconds since the Unix epoch): if
@@ -202,7 +210,6 @@ impl Settings {
     }
 }
 
-/// The system's language if UmlCraft speaks it, else English.
 /// The settings to write: those on disk (another UmlCraft may have changed them since `base`
 /// was read), with what this program changed since then (`mine` where it differs from
 /// `base`). Without a base or a readable file, `mine` as it is.
@@ -225,13 +232,19 @@ fn merged(
     Value::Object(disk)
 }
 
-fn system_language() -> &'static str {
+/// The system's language if UmlCraft speaks it, else English.
+fn system_language() -> String {
     language_of(&sys_locale::get_locale().unwrap_or_default())
 }
 
-/// The language of the user interface for a locale such as `de-AT`.
-fn language_of(locale: &str) -> &'static str {
-    LANGUAGES.iter().map(|&(code, _)| code).find(|code| locale.starts_with(code)).unwrap_or("en")
+/// The language of the user interface for a locale such as `de-AT`: the one its code starts
+/// with, else English.
+fn language_of(locale: &str) -> String {
+    languages()
+        .into_iter()
+        .map(|(code, _)| code)
+        .find(|code| locale.starts_with(code.as_str()))
+        .unwrap_or_else(|| "en".to_owned())
 }
 
 #[cfg(test)]
@@ -280,14 +293,14 @@ mod tests {
     fn structogram_keywords_follow_the_interface_unless_chosen() {
         use umlcraft_nsd::Keywords;
         let mut s = Settings { language: Some("de".into()), ..Settings::default() };
-        assert_eq!(s.keywords(), Keywords::German);
+        assert_eq!(s.keywords(), Keywords::by_code("de").unwrap());
         s.structogram_keywords = Some("en".into());
-        assert_eq!(s.keywords(), Keywords::English);
+        assert_eq!(s.keywords(), Keywords::english());
         s.language = Some("en".into());
         s.structogram_keywords = None;
-        assert_eq!(s.keywords(), Keywords::English);
+        assert_eq!(s.keywords(), Keywords::english());
         let s = Settings::from_json(r#"{"language": "en", "structogramKeywords": "de"}"#);
-        assert_eq!(s.keywords(), Keywords::German);
+        assert_eq!(s.keywords(), Keywords::by_code("de").unwrap());
     }
 
     #[test]
@@ -310,7 +323,15 @@ mod tests {
         assert_eq!(language_of("de-AT"), "de");
         assert_eq!(language_of("de"), "de");
         assert_eq!(language_of("en-US"), "en");
-        assert_eq!(language_of("fr-FR"), "en");
+        assert_eq!(language_of("xx-YY"), "en");
         assert_eq!(language_of(""), "en");
+    }
+
+    #[test]
+    fn languages_come_from_the_locale_files() {
+        let all = languages();
+        assert!(all.is_sorted_by(|a, b| a.0 <= b.0));
+        assert!(all.contains(&("de".into(), "Deutsch".into())));
+        assert!(all.contains(&("en".into(), "English".into())));
     }
 }

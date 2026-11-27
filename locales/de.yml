@@ -1,3 +1,5 @@
+language:
+  name: Deutsch
 about:
   title: Über UmlCraft
   version: "Version %{version}"
@@ -39,7 +41,6 @@ toolbar:
   redo: Wiederholen
   undo_named: "Rückgängig: %{what}"
   redo_named: "Wiederholen: %{what}"
-  language: English
   settings: Einstellungen
   about: Über UmlCraft
   update: "Update %{version}"
@@ -660,8 +661,7 @@ settings:
   structograms: Struktogramme
   keywords: Schlüsselwörter neuer Struktogramme
   keywords_ui: Wie die Oberfläche
-  keywords_de: "Deutsch (solange, für, gib)"
-  keywords_en: "Englisch (while, for, return)"
+  keywords_in: "%{name} (%{words})"
   updates: Updates
   update_check: Beim Start bei GitHub nach neuen Versionen suchen
   update_check_detail: "Höchstens einmal am Tag. GitHub erfährt dabei deine IP-Adresse und die Version von UmlCraft, sonst nichts."
@@ -923,8 +923,7 @@ nsd:
   branches: Anzahl der Zweige
   exception: Name der gefangenen Ausnahme
   case_hint: "Erste Zeile: was geprüft wird; dann je Fall eine Zeile; letzte Zeile: der Sonst-Fall (% für keinen)."
-  for_hint: "for i <- 1 to 10 by 2 zählt, foreach x in liste geht eine Liste durch; alles andere bleibt freier Text."
-  for_hint_german: "für i := 1 bis 10 Schritt 2 zählt, für jedes x in liste geht eine Liste durch; alles andere bleibt freier Text."
+  for_hint: "%{counting} zählt, %{traversing} geht eine Liste durch; alles andere bleibt freier Text."
   root_program: Programm
   root_sub: Unterprogramm
   root_includable: Includable
@@ -1070,3 +1069,29 @@ file_page:
   source_note: Klassen aus Quelltext ins Modell übernehmen
   files: Dateien …
   folder: Ordner …
+structogram:
+  header:
+    preRepeat: "bis "
+    postFor: "bis"
+    preReturn: "gib"
+    postForIn: "in"
+    preWhile: "solange "
+    output: "AUSGABE"
+    input: "EINGABE"
+    preFor: "für"
+    preExit: "verlasse"
+    preLeave: "leave"
+    ignoreCase: "true"
+    preThrow: "throw"
+    preForIn: "für jedes"
+    stepFor: "Schritt"
+  branches:
+    "true": "ja"
+    "false": "nein"
+  new:
+    for: "für ? := ? bis ?"
+    while: "solange ?"
+    repeat: "bis ?"
+  examples:
+    counting: "für i := 1 bis 10 Schritt 2"
+    traversing: "für jedes x in liste"
