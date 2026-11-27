@@ -33,6 +33,8 @@ pub const COND_BASELINE: i32 = 19;
 pub const LABEL_BASELINE: i32 = 10;
 /// The least room between a branch label and the diagonal above it.
 const LABEL_GAP: i32 = 3;
+/// The least room between a line of an alternative's condition and a diagonal.
+pub const COND_GAP: i32 = 2;
 /// The include list above the title: its box's top and the space below it (its height and
 /// caption width depend on the platform's small font, `Metrics::includes`).
 pub const INCLUDES: (i32, i32) = (20, 10);
@@ -436,7 +438,8 @@ impl Layouter<'_> {
     fn alternative_parts(&self, e: &Element, n: usize) -> (i32, i32, Size, Size) {
         let head = self.line() * n.max(1) as i32 + 2 * PADDING - 1;
         // Each line of the condition fits between the diagonals at its baseline (19 px below
-        // the top for the first, a line further for each next).
+        // the top for the first, a line further for each next), as Structorizer has it; the
+        // drawing moves a line that would touch a diagonal clear of it (`condition_x`).
         let lines = e.text();
         let min_w = lines
             .iter()
@@ -451,14 +454,10 @@ impl Layouter<'_> {
         let mut l = self.sequence_size(&e.branches[0], false);
         let mut r = self.sequence_size(&e.branches[1], false);
         let (yes, no) = (self.m.width(self.labels.0, false), self.m.width(self.labels.1, false));
-        l.w = l.w.max(2 * yes + 16);
-        r.w = r.w.max(no + 23);
-        if self.labels != (TRUE_LABEL, FALSE_LABEL) {
-            // Longer labels (`ja`, `nein`) get columns wide enough that the diagonals pass above
-            // them; Structorizer's rule above is made for its one-letter `T` and `F`.
-            l.w = l.w.max(self.label_clearance(head, 10 + yes));
-            r.w = r.w.max(self.label_clearance(head, 16 + no) - 1);
-        }
+        // Structorizer's rule for its one-letter `T` and `F`, and columns wide enough that the
+        // diagonals pass above the labels, which that rule does not ensure for a narrow column.
+        l.w = l.w.max(2 * yes + 16).max(self.label_clearance(head, 10 + yes));
+        r.w = r.w.max(no + 23).max(self.label_clearance(head, 16 + no) - 1);
         (head, min_w, l, r)
     }
 
@@ -656,9 +655,7 @@ impl Layouter<'_> {
     }
 }
 
-/// The labels of an alternative's branches and of try elements (Structorizer's defaults).
-pub const TRUE_LABEL: &str = "T";
-pub const FALSE_LABEL: &str = "F";
+/// The labels of try elements (Structorizer's defaults).
 pub const TRY_LABEL: &str = "try";
 pub const CATCH_LABEL: &str = "catch";
 pub const FINALLY_LABEL: &str = "finally";

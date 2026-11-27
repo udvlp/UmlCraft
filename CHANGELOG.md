@@ -3,6 +3,14 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Structograms**: a line of an alternative's condition that would touch a diagonal moves
+  clear of it, as happens with several lines over branches of very different widths, and a
+  narrow branch column is wide enough that the diagonal passes above its `T` or `F` (#113).
+- **MCP**: `move_node` with `height` on a lifeline sets how far down the lifeline runs, as
+  dragging its end does, though not above its last message; its head keeps its size (#114).
+
 ## 0.25.1 – 2026-11-27
 
 - **Ribbon labels** show whenever they fit: the ribbon measures them in the user interface's

@@ -6,8 +6,8 @@
 
 use crate::create::Keywords;
 use crate::layout::{
-    CASE_LABELS, CATCH_LABEL, COND_BASELINE, ElementBox, FINALLY_LABEL, INCLUDES, INCLUDES_LABEL,
-    LABEL_BASELINE, Layout, PADDING, Rect, SeqBox, Shape, TRY_LABEL, case_parts,
+    CASE_LABELS, CATCH_LABEL, COND_BASELINE, COND_GAP, ElementBox, FINALLY_LABEL, INCLUDES,
+    INCLUDES_LABEL, LABEL_BASELINE, Layout, PADDING, Rect, SeqBox, Shape, TRY_LABEL, case_parts,
 };
 use crate::metrics::Metrics;
 use crate::model::{Color, Diagram, Element, ElementKind, RootKind, RootStyle, Sequence};
@@ -118,6 +118,31 @@ impl Drawing<'_> {
                 small: false,
             });
         }
+    }
+
+    /// Where the line `i` of the condition of the alternative `r` (with `head` and `split`)
+    /// starts: at `x`, Structorizer's place for all lines, unless that would bring it within
+    /// `COND_GAP` of a diagonal; then as near to `x` as stays clear of both (a multi-line
+    /// condition over columns of very different widths, #113). Clear down to the bottom of its
+    /// descenders where the head is wide enough, else down to its baseline, for which the
+    /// head's width is made.
+    fn condition_x(&self, line: &str, i: usize, x: i32, r: Rect, head: i32, split: i32) -> i32 {
+        let w = self.m.width(line, false);
+        let baseline = COND_BASELINE + self.m.line() * i as i32;
+        let room = |depth: i32| {
+            let t = f64::from(depth) / f64::from(head);
+            let left = f64::from(r.x) + f64::from(split - r.x) * t;
+            let right = f64::from(r.right()) - f64::from(r.right() - split) * t;
+            let lo = (left + f64::from(COND_GAP)).ceil() as i32;
+            let hi = (right - f64::from(COND_GAP)).floor() as i32 - w;
+            (lo, hi)
+        };
+        let (lo, hi) = room(baseline + self.m.line() / 4);
+        if lo <= hi {
+            return x.clamp(lo, hi);
+        }
+        let (lo, hi) = room(baseline);
+        if lo <= hi { x.clamp(lo, hi) } else { (lo + hi) / 2 }
     }
 
     /// Lines of text from `x`, the first baseline at `y`.
@@ -290,7 +315,10 @@ impl Drawing<'_> {
                     - 0.5315 * f64::from(tw)
                     + 5.83)
                     .round()) as i32;
-                self.lines_at(&text, r.x + x, r.y + COND_BASELINE);
+                for (i, line) in text.iter().enumerate() {
+                    let at = self.condition_x(line, i, r.x + x, r, *head, *split);
+                    self.text(at, r.y + COND_BASELINE + self.m.line() * i as i32, line, false);
+                }
                 let (yes, no) = self.labels;
                 self.text(r.x + 10, hy - LABEL_BASELINE, yes, false);
                 let fw = self.m.width(no, false);
@@ -484,6 +512,86 @@ mod tests {
             assert!(r.x + 10 + m.width("ja", false) < left, "{condition:?}");
             assert!(right < r.right() - 16 - m.width("nein", false), "{condition:?}");
             assert!(hy > r.y);
+        }
+    }
+
+    /// What of the alternative at `path` touches one of its diagonals: a line of its condition
+    /// (down to its baseline, for which Structorizer sizes the head) or a branch label.
+    fn touching_diagonals(d: &Diagram, m: &Metrics, path: &[usize]) -> Vec<String> {
+        let layout = Layout::of(d, m);
+        let b = layout.element(path).unwrap();
+        let Shape::Alternative { head, split } = b.shape else { panic!("{path:?}") };
+        let r = b.rect;
+        // Where the diagonals are at height `y`, in pixels from the left.
+        let left =
+            |y: i32| f64::from(r.x) + f64::from(split - r.x) * f64::from(y - r.y) / f64::from(head);
+        let right = |y: i32| {
+            f64::from(r.right())
+                - f64::from(r.right() - split) * f64::from(y - r.y) / f64::from(head)
+        };
+        let primitives = draw(d, &layout, m);
+        let text_at = |text: &str, baseline: i32| {
+            primitives.iter().find_map(|p| match p {
+                Primitive::Text { at, text: t, .. } if t == text && at.y == baseline => Some(at.x),
+                _ => None,
+            })
+        };
+        let mut touching: Vec<String> = Vec::new();
+        let e = crate::path::element(d, path).unwrap();
+        for (i, line) in e.text().iter().enumerate() {
+            let baseline = r.y + COND_BASELINE + m.line() * i as i32;
+            let x = text_at(line, baseline).unwrap();
+            let w = m.width(line, false);
+            if f64::from(x) <= left(baseline) || f64::from(x + w) >= right(baseline) {
+                touching.push(line.to_string());
+            }
+        }
+        let (yes, no) = Keywords::of(d).branch_labels();
+        let hy = r.y + head;
+        let top = hy - LABEL_BASELINE - m.line() * 3 / 4;
+        if f64::from(r.x + 10 + m.width(yes, false)) >= left(top) {
+            touching.push(yes.to_owned());
+        }
+        if f64::from(r.right() - 16 - m.width(no, false)) <= right(top) {
+            touching.push(no.to_owned());
+        }
+        touching
+    }
+
+    /// An alternative with `then` and `otherwise` as its branches.
+    fn alternative(condition: &[&str], then: Element, otherwise: Element) -> Element {
+        let mut alt = Element::alternative(&lines(condition));
+        alt.branches = vec![Sequence::new(vec![then]), Sequence::new(vec![otherwise])];
+        alt
+    }
+
+    /// A condition of three lines over a wide `then` branch, and alternatives nested in the
+    /// `then` branch with narrow `else` columns, stay clear of the diagonals (#113).
+    #[test]
+    fn conditions_and_labels_stay_clear_of_the_diagonals() {
+        let ret = |t: &str| Element::jump(&lines(&[t]));
+        let dash = || Element::instruction(&lines(&["–"]));
+        let three = alternative(
+            &["b.day = day and", "start < b.start + b.length and", "b.start < start + length?"],
+            ret("return false"),
+            dash(),
+        );
+        let innermost = alternative(&["c < a + b?"], ret("return false"), dash());
+        let inner = alternative(&["b < c + 10?"], innermost, dash());
+        let nested = alternative(&["a = 1?"], inner, dash());
+        for m in [Metrics::linux(), Metrics::windows()] {
+            for keywords in [Keywords::english(), Keywords::by_code("de").unwrap()] {
+                let mut d = test_diagram(vec![three.clone()]);
+                d.set_keywords(keywords);
+                let touching = touching_diagonals(&d, m, &[0]);
+                assert!(touching.is_empty(), "{}: {touching:?}", keywords.code());
+                let mut d = test_diagram(vec![nested.clone()]);
+                d.set_keywords(keywords);
+                for path in [&[0][..], &[0, 0, 0], &[0, 0, 0, 0, 0]] {
+                    let touching = touching_diagonals(&d, m, path);
+                    assert!(touching.is_empty(), "{} {path:?}: {touching:?}", keywords.code());
+                }
+            }
         }
     }
 
