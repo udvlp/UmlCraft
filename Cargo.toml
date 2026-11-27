@@ -27,11 +27,11 @@ umlcraft-mcp = { path = "crates/umlcraft-mcp" }
 umlcraft-screenshot = { path = "crates/umlcraft-screenshot" }
 
 # gpui-kit pins the matching GPUI release (gpui-pre) together with gpui-component.
-gpui-kit = "^0.10.0"
+gpui-kit = "^0.11.0"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-serde-saphyr = "1.3"
+serde-saphyr = "2.2"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 indexmap = { version = "2", features = ["serde"] }
 thiserror = "2"
