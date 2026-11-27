@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.25.3 – 2026-11-27
 
 - **Ribbon labels** go one step at a time when the window gets narrower: first a group's large
   buttons become small ones with their labels beside them, then the small buttons lose their
