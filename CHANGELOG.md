@@ -3,8 +3,12 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.25.0 – 2026-11-27
 
+- **French**: the user interface and the structogram keywords (`pour i <- 1 à 10 pas 2`,
+  `tant que`, `jusqu'à`) are available in French, and so are the Windows installer and the
+  Linux desktop entry. A counting loop keeps `<-` after its variable, because Structorizer
+  recognises only that.
 - **Languages** come from the files in `locales/`. A new language is a new file; the settings,
   the language menu of the View tab and the system-language detection pick it up. Structogram
   keywords are the `structogram:` section of the same file. A new text needs only German and
@@ -13,10 +17,11 @@ today.
   of the files.
 - **Keywords**: matching folds case beyond ASCII, so capitals with accents are recognised.
 - **MCP**: `keywords` in structogram JSON is a language code (`de`, `en`, `fr`). `english` and
-  `german` are still accepted as input.
-- **French**: the user interface and the structogram keywords (`pour i <- 1 à 10 pas 2`,
-  `tant que`, `jusqu'à`) are available in French. A counting loop keeps `<-` after its
-  variable, because Structorizer recognises only that.
+  `german` are still accepted as input. `new_document` with `sample` also works without the
+  app.
+- **ER diagrams**: the rounded corners of a narrow table stay within its width.
+- **Image export** writes through a temporary file, so a failed export leaves no half-written
+  image.
 
 ## 0.24.2 – 2026-11-25
 
