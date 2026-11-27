@@ -3,7 +3,7 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
-## Unreleased
+## 0.25.2 – 2026-11-27
 
 - **Structograms**: a line of an alternative's condition that would touch a diagonal moves
   clear of it, as happens with several lines over branches of very different widths, and a
