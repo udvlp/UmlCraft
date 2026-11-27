@@ -135,7 +135,7 @@ menu:
   cardinality: Cardinalité
   total_participation: Participation totale (double ligne)
   clicked_end: "%{end} – l'extrémité cliquée"
-  unspecified: non précisé
+  unspecified: non précisée
   zoom_in: Zoom avant
   zoom_out: Zoom arrière
   zoom_reset: Taille réelle
@@ -597,7 +597,7 @@ export_dropped:
   port: Ports
   connector: Connecteurs
   pin: Broches non affichées avec leur action
-  calledActivity: Activités appelées par des actions d'appel de comportement qui n'ont pas de diagramme
+  calledActivity: Activités sans diagramme appelées par des actions d'appel de comportement
   position: Positions qu'Astah n'a pas reprises
   entryPoint: Points d'entrée (l'API d'Astah ne peut pas les créer)
   exitPoint: Points de sortie (l'API d'Astah ne peut pas les créer)
@@ -895,7 +895,7 @@ error:
   port_on_untyped_part: "Un port sur une partie appartient au type de la partie : donnez d'abord une classe comme type à la partie (p. ex. moteur : Moteur)."
   multiplicity: "« %{text} » n'est pas une multiplicité. Exemples : 1, 0..1, 1..*, *"
   cardinality: "« %{text} » n'est pas une cardinalité. Exemples : [0,1], [1,n], 0..*, [*,m], [1,q] (un nombre ou une lettre comme maximum)"
-  cardinality_ratio: "« %{text} » n'est pas un rapport. Exemples : 1, n, m, q, 3 (un nombre ou une lettre) ou en entier [1,n]"
+  cardinality_ratio: "« %{text} » n'est pas un rapport. Exemples : 1, n, m, q, 3 (un nombre ou une lettre) ou en notation complète [1,n]"
   malformed: "Le fichier est endommagé (ligne %{line}, colonne %{column})."
   not_a_project: Le fichier n'est pas un projet UmlCraft.
   not_astah: Le fichier n'est pas un projet .asta, ou il est endommagé.
@@ -968,15 +968,15 @@ nsd:
   note_continue: continue n'a pas d'élément ; conservé comme instruction rouge désactivée
   note_label: l'étiquette est laissée de côté
   note_local_class: une classe déclarée dans la méthode est laissée de côté
-  note_synchronized: synchronized – le corps est à sa place, le verrou en commentaire
+  note_synchronized: synchronized – le corps prend sa place, le verrou en commentaire
   note_fallthrough: le cas se poursuit dans le suivant ; ses instructions y sont copiées
   note_syntax_error: l'analyseur n'a pas pu lire ceci ; conservé comme instruction rouge désactivée
-  note_using: using – la ressource est affectée, le corps est à sa place
-  note_lock: lock – le corps est à sa place, le verrou en commentaire
+  note_using: using – la ressource est affectée, le corps prend sa place
+  note_lock: lock – le corps prend sa place, le verrou en commentaire
   note_yield: yield n'a pas d'élément ; conservé tel qu'il est écrit
   note_goto: goto n'a pas d'élément ; conservé comme sortie avec son texte
   note_local_function: une fonction déclarée dans la méthode est laissée de côté
-  note_with: with – le contexte est affecté, le corps est à sa place
+  note_with: with – le contexte est affecté, le corps prend sa place
   note_loop_else: le else de la boucle la suit ; il s'exécute aussi là après un break
   note_try_else: le else de try termine le bloc try
   note_nested_function: une fonction définie dans la fonction est laissée de côté
