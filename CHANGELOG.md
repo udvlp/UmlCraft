@@ -3,6 +3,13 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Ribbon labels** go one step at a time when the window gets narrower: first a group's large
+  buttons become small ones with their labels beside them, then the small buttons lose their
+  labels, and only then does the ribbon show icons alone. A class diagram's ribbon, with its
+  many tools, keeps its labels in a window about 1280 px wide.
+
 ## 0.25.2 – 2026-11-27
 
 - **Structograms**: a line of an alternative's condition that would touch a diagonal moves

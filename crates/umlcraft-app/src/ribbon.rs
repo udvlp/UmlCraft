@@ -689,6 +689,42 @@ pub fn width(groups: &[Group], measure: impl Fn(&str, Pixels) -> f32) -> f32 {
         .sum()
 }
 
+/// The groups `make` builds as they fit into `room` pixels, and whether they show icons only:
+/// as built; else the large buttons of a group with several become small ones, their labels
+/// beside their icons, three to a column; else the small buttons lose their labels too; else
+/// icons only. So the labels go one step at a time, as in Office, not all at once.
+pub fn fit(
+    make: impl Fn() -> Vec<Group>,
+    room: f32,
+    measure: impl Fn(&str, Pixels) -> f32,
+) -> (Vec<Group>, bool) {
+    let mut groups = make();
+    if width(&groups, &measure) <= room {
+        return (groups, false);
+    }
+    for g in &mut groups {
+        let large = g.items.iter().filter(|i| i.size == Size::Large).count();
+        // A large split button or menu has no small form: it keeps its size.
+        for item in g.items.iter_mut().filter(|i| large > 2 && i.menu.is_empty()) {
+            if item.size == Size::Large {
+                item.size = Size::Small;
+            }
+        }
+    }
+    if width(&groups, &measure) <= room {
+        return (groups, false);
+    }
+    for item in groups.iter_mut().flat_map(|g| g.items.iter_mut()) {
+        if item.size == Size::Small {
+            item.size = Size::Icon;
+        }
+    }
+    if width(&groups, &measure) <= room {
+        return (groups, false);
+    }
+    (make(), true)
+}
+
 // ----- Drawing ------------------------------------------------------------------------------
 
 /// Room for a large button: its icon and two lines of label.
@@ -986,8 +1022,8 @@ pub fn render(groups: Vec<Group>, compact: bool, focus: &FocusHandle, cx: &App) 
 mod tests {
     // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
     use super::{
-        MenuEntry, RibbonTab, State, diagram, diagram_key, groups, label_lines, sort_key, tabs,
-        view, width,
+        Group, MenuEntry, RibbonTab, Size, State, diagram, diagram_key, fit, groups, label_lines,
+        sort_key, tabs, view, width,
     };
     use umlcraft_model::{DiagramKind, DiagramProps, ElementKind, ErNotation};
     use umlcraft_notation::palette::{self, Tool};
@@ -1176,5 +1212,35 @@ mod tests {
         assert!(by(6.0) < by(7.0));
         // Without text, what is left are the buttons' icons and paddings.
         assert!(by(0.0) > 0.0 && by(0.0) < by(6.0));
+    }
+
+    #[test]
+    fn labels_go_one_step_at_a_time() {
+        let make = || {
+            let tools = palette::diagram_palette(&props(DiagramKind::Class));
+            diagram(&tools, Tool::Select, None, None)
+        };
+        let measure = |text: &str, _| text.chars().count() as f32 * 7.0;
+        let sizes = |groups: &[Group], id: &str| -> Vec<Size> {
+            let g = groups.iter().find(|g| g.id == id).unwrap();
+            g.items.iter().map(|i| i.size).collect()
+        };
+        let full = width(&make(), measure);
+        let (groups, compact) = fit(make, full, measure);
+        assert!(!compact && sizes(&groups, "elements").contains(&Size::Large));
+
+        // A little less room: the elements become small buttons, labelled; Select stays large.
+        let (groups, compact) = fit(make, full - 1.0, measure);
+        assert!(!compact);
+        assert!(sizes(&groups, "elements").iter().all(|&s| s == Size::Small));
+        assert_eq!(sizes(&groups, "select"), [Size::Large]);
+        assert!(sizes(&groups, "relations").iter().all(|&s| s == Size::Small));
+        let small = width(&groups, measure);
+
+        // Less still: the small buttons lose their labels, then everything does.
+        let (groups, compact) = fit(make, small - 1.0, measure);
+        assert!(!compact && sizes(&groups, "relations").iter().all(|&s| s == Size::Icon));
+        let (_, compact) = fit(make, 100.0, measure);
+        assert!(compact);
     }
 }
