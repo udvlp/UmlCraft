@@ -1798,7 +1798,7 @@ impl MainView {
         let groups = ribbon::groups(active, &state);
         // The gaps and the window's edges take about 40 px.
         let room = f32::from(window.viewport_size().width) - 40.0;
-        let compact = ribbon::width(&groups) > room;
+        let compact = ribbon::width(&groups, ribbon::text_width(window, cx)) > room;
         let collapsed = self.settings.ribbon_collapsed;
         let focus = self.view_focus(cx);
         let order: Vec<RibbonTab> = tabs.iter().map(|(t, _)| *t).collect();

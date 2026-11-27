@@ -604,16 +604,32 @@ fn language_menu(chosen: Option<&str>) -> Item {
 
 // ----- Width --------------------------------------------------------------------------------
 
-/// About the mean width of a character of a button's label ([`LABEL`]).
-const CHAR: f32 = 7.0;
+// The sizes [`render`] lays the groups out with, in pixels.
 const LARGE_MIN: f32 = 56.0;
-const SMALL_ICON: f32 = 34.0;
-/// A group's padding on both sides and the line after it.
+/// A button's padding on both sides (`px_1p5`).
+const BUTTON_PADDING: f32 = 12.0;
+/// A small button's icon.
+const SMALL_ICON: f32 = 20.0;
+/// Between a small button's icon and its label (`gap_1p5`).
+const SMALL_GAP: f32 = 6.0;
+/// Between the large buttons and columns of a group (`gap_1`).
+const COLUMN_GAP: f32 = 4.0;
+/// A group's padding on both sides (`px_3`) and the line after it.
 const GROUP_PADDING: f32 = 25.0;
+/// A caret and the gap before it.
 const CARET: f32 = 14.0;
 
-fn label_width(label: &str) -> f32 {
-    label.chars().count() as f32 * CHAR
+/// How wide a text is in the user interface's font at a size, as the ribbon draws it.
+pub fn text_width(window: &Window, cx: &App) -> impl Fn(&str, Pixels) -> f32 {
+    let text = window.text_system().clone();
+    let family = cx.theme().font_family.clone();
+    move |label, size| {
+        if label.is_empty() {
+            return 0.0;
+        }
+        let run = TextRun { len: label.len(), font: font(family.clone()), ..Default::default() };
+        f32::from(text.shape_line(label.to_owned().into(), size, &[run], None).width())
+    }
 }
 
 /// A large button's label on two lines, broken as Office does: a single word stays on the
@@ -626,42 +642,49 @@ pub fn label_lines(label: &str) -> (&str, &str) {
         .unwrap_or((label, ""))
 }
 
-/// About how wide the groups are with labels; with less room the ribbon shows icons only.
-pub fn width(groups: &[Group]) -> f32 {
+/// How wide the groups are with labels, each text measured by `measure` (text, font size);
+/// with less room the ribbon shows icons only.
+pub fn width(groups: &[Group], measure: impl Fn(&str, Pixels) -> f32) -> f32 {
+    let label_width = |label: &str| measure(label, LABEL);
     groups
         .iter()
         .map(|g| {
-            let mut width = 0.0;
+            // The widths of the group's large buttons and columns of small ones, in order.
+            let mut parts: Vec<f32> = Vec::new();
             let mut column: Vec<f32> = Vec::new();
-            let flush = |column: &mut Vec<f32>, width: &mut f32| {
+            let flush = |column: &mut Vec<f32>, parts: &mut Vec<f32>| {
                 if let Some(widest) = column.iter().copied().reduce(f32::max) {
-                    *width += widest;
+                    parts.push(widest);
                 }
                 column.clear();
             };
             for item in &g.items {
+                let caret = if item.menu.is_empty() { 0.0 } else { CARET };
                 match item.size {
                     Size::Large => {
-                        flush(&mut column, &mut width);
+                        flush(&mut column, &mut parts);
                         let (first, second) = label_lines(&item.label);
-                        let caret = if item.menu.is_empty() { 0.0 } else { CARET };
                         let label = label_width(first).max(label_width(second) + caret);
-                        width += (label + 20.0).max(LARGE_MIN);
+                        parts.push((label + BUTTON_PADDING).max(LARGE_MIN));
                     }
                     Size::Small | Size::Icon => {
-                        let w = match item.size {
-                            Size::Small => SMALL_ICON + label_width(&item.label) + 12.0,
-                            _ => SMALL_ICON,
+                        let label = match item.size {
+                            Size::Small => SMALL_GAP + label_width(&item.label),
+                            _ => 0.0,
                         };
-                        column.push(w);
+                        // A small button with a menu and no action of its own has a caret.
+                        let caret = if item.action.is_none() { caret } else { 0.0 };
+                        column.push(SMALL_ICON + label + caret + BUTTON_PADDING);
                         if column.len() == 3 {
-                            flush(&mut column, &mut width);
+                            flush(&mut column, &mut parts);
                         }
                     }
                 }
             }
-            flush(&mut column, &mut width);
-            width.max(label_width(&g.caption) + 20.0) + GROUP_PADDING
+            flush(&mut column, &mut parts);
+            let gaps = COLUMN_GAP * parts.len().saturating_sub(1) as f32;
+            let buttons = parts.iter().sum::<f32>() + gaps;
+            buttons.max(measure(&g.caption, CAPTION)) + GROUP_PADDING
         })
         .sum()
 }
@@ -963,7 +986,8 @@ pub fn render(groups: Vec<Group>, compact: bool, focus: &FocusHandle, cx: &App) 
 mod tests {
     // No glob import: gpui_kit's `test` macro would shadow the built-in `#[test]`.
     use super::{
-        MenuEntry, RibbonTab, State, diagram, diagram_key, label_lines, sort_key, tabs, view,
+        MenuEntry, RibbonTab, State, diagram, diagram_key, groups, label_lines, sort_key, tabs,
+        view, width,
     };
     use umlcraft_model::{DiagramKind, DiagramProps, ElementKind, ErNotation};
     use umlcraft_notation::palette::{self, Tool};
@@ -1130,5 +1154,27 @@ mod tests {
         state.props = None;
         state.structogram = Some(crate::nsd::Allowed::default());
         assert!(tabs(&state).iter().any(|(t, _)| *t == RibbonTab::Diagram));
+    }
+
+    /// The ribbon's width follows the measured labels, not their number of characters: a
+    /// narrower font makes a narrower ribbon.
+    #[test]
+    fn the_width_comes_from_the_measured_labels() {
+        let state = State {
+            props: None,
+            structogram: None,
+            tool: Tool::Select,
+            has_selection: false,
+            can_align: false,
+            can_paste: false,
+            can_wrap: false,
+            theme: None,
+            language: None,
+        };
+        let groups = groups(RibbonTab::Home, &state);
+        let by = |px: f32| width(&groups, |text: &str, _| text.chars().count() as f32 * px);
+        assert!(by(6.0) < by(7.0));
+        // Without text, what is left are the buttons' icons and paddings.
+        assert!(by(0.0) > 0.0 && by(0.0) < by(6.0));
     }
 }
