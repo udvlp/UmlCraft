@@ -1,0 +1,1097 @@
+language:
+  name: Français
+about:
+  title: À propos d'UmlCraft
+  version: "Version %{version}"
+  summary: Dessiner des diagrammes UML et des structogrammes, importer du code source et échanger des fichiers .asta.
+  copyright: "© %{years} %{authors}"
+  license: "Licence : MIT ou Apache-2.0"
+  close: Fermer
+  check: Rechercher des mises à jour
+  checking: Interrogation de GitHub…
+  up_to_date: Vous avez la dernière version.
+  check_failed: GitHub est injoignable pour le moment.
+  new_version: "La version %{version} est disponible"
+  install: Installer maintenant
+update:
+  question: "UmlCraft doit-il rechercher de nouvelles versions sur GitHub au démarrage ? GitHub reçoit alors votre adresse IP."
+  privacy: Confidentialité
+  "yes": Oui, rechercher
+  "no": "Non"
+  downloading: "Téléchargement de %{version}…"
+  progress: "Téléchargement de %{version}… %{percent} %"
+  failed: "Mise à jour %{version} (échec du téléchargement)"
+privacy:
+  title: Confidentialité
+  intro: "UmlCraft fonctionne hors ligne et n'envoie rien nulle part, à une exception près, que vous choisissez : la recherche de nouvelles versions."
+  when_title: Quand
+  when: "Au premier démarrage, UmlCraft demande s'il peut rechercher de nouvelles versions. Ce n'est que si vous acceptez qu'il interroge GitHub, au démarrage et au plus une fois par jour. Vous pouvez modifier votre réponse dans Paramètres › Mises à jour. « Rechercher des mises à jour » dans « À propos d'UmlCraft » interroge GitHub une fois, chaque fois que vous cliquez dessus. UmlCraft ne télécharge la nouvelle version elle-même que lorsque vous cliquez sur « Mise à jour » ou « Installer maintenant »."
+  what_title: Ce qui est envoyé
+  what: "Une requête à api.github.com demandant la dernière version publiée d'UmlCraft. Comme toute connexion, elle indique à GitHub votre adresse IP et l'heure. La requête nomme UmlCraft et sa version. Rien sur vous, votre ordinateur ou vos projets n'est envoyé. Si vous téléchargez une nouvelle version, UmlCraft la récupère, ainsi que ses sommes de contrôle, sur github.com et ses serveurs de téléchargement ; ces requêtes, elles aussi, ne nomment qu'UmlCraft et sa version. UmlCraft conserve seulement la date de la dernière recherche et la version trouvée, dans son fichier de paramètres sur votre ordinateur."
+  who_title: Qui les reçoit
+  who: "GitHub, Inc. (États-Unis), certifiée au titre du cadre de protection des données UE–États-Unis (EU-US Data Privacy Framework). Ce que GitHub fait des données est décrit dans la déclaration de confidentialité de GitHub (GitHub General Privacy Statement) sur docs.github.com."
+  basis_title: Pourquoi et sur quelle base
+  basis: "Pour vous signaler les nouvelles versions, avec votre consentement (art. 6, paragraphe 1, point a), du RGPD). Vous pouvez le retirer à tout moment dans les paramètres ; les requêtes effectuées auparavant restent licites."
+  responsible_title: Responsable
+  responsible: "Ulf Haueisen, c/o Heinrich-Kleyer-Schule, Kühhornshofweg 27, 60320 Frankfurt am Main, Allemagne, app@umlcraft.com. C'est à cette adresse que le courrier concernant UmlCraft me parvient. La Heinrich-Kleyer-Schule ne fournit pas UmlCraft et n'en est pas responsable. Vous disposez des droits prévus par le RGPD, notamment le droit d'accès, le droit à l'effacement et le droit d'introduire une réclamation auprès d'une autorité de contrôle. UmlCraft lui-même ne conserve rien à votre sujet. Pour ce que conserve GitHub, adressez-vous à GitHub."
+  close: Fermer
+toolbar:
+  save: Enregistrer
+  undo: Annuler
+  redo: Rétablir
+  undo_named: "Annuler : %{what}"
+  redo_named: "Rétablir : %{what}"
+  settings: Paramètres
+  about: À propos d'UmlCraft
+  update: "Mise à jour %{version}"
+  update_tip: Une nouvelle version est disponible sur GitHub ; ouvre sa page dans le navigateur
+  update_install_tip: Une nouvelle version est disponible sur GitHub ; la télécharge, l'installe et redémarre UmlCraft
+  zoom_reset: "Réinitialiser le zoom à 100 % (Ctrl+0)"
+  zoom_fit: Ajuster
+ribbon:
+  tab:
+    home: Édition
+    view: Affichage
+  group:
+    new: Nouveau
+    clipboard: Presse-papiers
+    edit: Édition
+    arrange: Organiser
+    layout: Disposition
+    select: Sélection
+    elements: Éléments
+    relations: Relations
+    notes: Notes
+    zoom: Zoom
+    appearance: Apparence
+    nsd_simple: Simples
+    nsd_branches: Branchements
+    nsd_loops: Boucles
+    nsd_element: Élément
+    numbering: Numérotation
+    notation: Notation
+  paste: Coller
+  cut: Couper
+  copy: Copier
+  delete: Supprimer
+  remove: Retirer du diagramme
+  select_all: Tout sélectionner
+  wrap_in_fragment: Dans un fragment
+  auto_arrange: Disposer automatiquement
+  route_lines: Tracer les lignes
+  message_numbers: Numéros
+  flat_numbers: En continu
+  notation:
+    chen: Chen
+    ie: IE (patte de corbeau)
+    idef1x: IDEF1X
+  light: Clair
+  dark: Sombre
+  copy_as_image: Copier comme image
+  new_diagram: Nouveau diagramme
+menu:
+  file: Fichier
+  quit: Quitter
+  edit: Édition
+  delete: Supprimer du modèle
+  remove_from_diagram: Retirer du diagramme
+  select_all: Tout sélectionner
+  copy: Copier
+  cut: Couper
+  paste: Coller (comme copie)
+  paste_reference: Coller (mêmes éléments)
+  align_left: Aligner à gauche
+  align_center: Centrer horizontalement
+  align_right: Aligner à droite
+  align_top: Aligner en haut
+  align_middle: Centrer verticalement
+  align_bottom: Aligner en bas
+  line_style: Style de ligne
+  line_straight: Ligne
+  line_right_angle: Ligne (à angle droit)
+  line_curve: Courbe
+  line_curve_right_angle: Courbe (à angle droit)
+  reset_line_ends: Rattacher les extrémités des lignes aux centres
+  reset_labels: Réinitialiser la position des étiquettes
+  shared_style: Style partagé
+  shared_separate: Séparé
+  shared_vertical: Vertical
+  shared_horizontal: Horizontal
+  make_association_class: Convertir en classe d'association
+  arrange_down: De haut en bas
+  arrange_right: De gauche à droite
+  type: Type
+  change_kind: Changer de type
+  delete_attribute: Supprimer l'attribut
+  delete_operation: Supprimer l'opération
+  delete_literal: Supprimer le littéral
+  add_attribute: Ajouter un attribut
+  add_operation: Ajouter une opération
+  add_literal: Ajouter un littéral
+  add_extension_point: Ajouter un point d'extension
+  navigability: Navigabilité
+  aggregation: Agrégation
+  multiplicity: Multiplicité
+  cardinality: Cardinalité
+  total_participation: Participation totale (double ligne)
+  clicked_end: "%{end} – l'extrémité cliquée"
+  unspecified: non précisé
+  zoom_in: Zoom avant
+  zoom_out: Zoom arrière
+  zoom_reset: Taille réelle
+  java: Java
+  csharp: C#
+  cpp: C++
+  python: Python
+  settings: Paramètres…
+  about: À propos d'UmlCraft…
+  open_diagram: Ouvrir le diagramme
+  new_prefix: "Nouveau :"
+  rename: Renommer
+tool:
+  select: Sélection
+  class: Classe
+  boundary: Frontière
+  control: Contrôle
+  entity: Entité
+  associationClass: Classe d'association
+  interface: Interface
+  enumeration: Énumération
+  package: Paquetage
+  subsystem: Sous-système
+  note: Note
+  actor: Acteur
+  useCase: Cas d'utilisation
+  lifeline: Ligne de vie
+  systemBoundary: Frontière du système
+  association: Association
+  link: Lien
+  generalization: Généralisation
+  realization: Réalisation
+  dependency: Dépendance
+  include: Inclusion
+  extend: Extension
+  noteAnchor: Ancre de note
+  constraint: Contrainte
+  combinedFragment: Fragment combiné
+  message: Message
+  asyncMessage: Asynchrone
+  reply: Retour
+  createMessage: Création
+  destroyMessage: Destruction
+  action: Action
+  initialNode: Nœud initial
+  activityFinal: Fin d'activité
+  flowFinal: Fin de flot
+  decision: Décision
+  merge: Fusion
+  fork: Bifurcation
+  join: Union
+  objectNode: Nœud d'objet
+  partition: Partition
+  flow: Flot
+  state: État
+  finalState: État final
+  initialPseudostate: État initial
+  choice: Choix
+  junction: Jonction
+  forkPseudostate: Bifurcation
+  joinPseudostate: Union
+  shallowHistory: Historique
+  deepHistory: Historique profond
+  transition: Transition
+  text: Texte
+  line: Ligne
+  component: Composant
+  artifact: Artefact
+  node: Nœud
+  componentInstance: Instance de composant
+  nodeInstance: Instance de nœud
+  object: Objet
+  interactionUse: Référence d'interaction
+  foundMessage: Message trouvé
+  lostMessage: Message perdu
+  part: Partie
+  port: Port
+  connector: Connecteur
+  erEntity: Entité
+  erWeakEntity: Entité faible
+  erAssociativeEntity: Entité associative
+  erAttribute: Attribut
+  erKeyAttribute: Clé
+  erPartialKeyAttribute: Clé partielle
+  erMultivaluedAttribute: Multivalué
+  erDerivedAttribute: Dérivé
+  erRelationship: Association
+  erIdentifyingRelationship: Identifiante
+  erIsA: IS-A
+  erLine: Ligne
+  erIdentifying: Identifiante
+  erNonIdentifying: Non identifiante
+  erManyToMany: Plusieurs à plusieurs
+  erSubtype: Sous-type
+  callBehavior: Appel de comportement
+  sendSignal: Envoi de signal
+  acceptEvent: Réception d'événement
+  acceptTimeEvent: Événement temporel
+  activityConnector: Connecteur
+  inputPin: Broche d'entrée
+  outputPin: Broche de sortie
+  activityParameter: Paramètre d'activité
+  submachineState: État sous-machine
+  entryPoint: Point d'entrée
+  exitPoint: Point de sortie
+  stubState: État souche
+  stateInvariant: Invariant d'état
+  termination: Terminaison
+  durationConstraint: Contrainte de durée
+  timeConstraint: Contrainte de temps
+tool_tip:
+  associationClass: "Une association dotée de sa propre classe : faites glisser d'une classe à l'autre. La classe est reliée au milieu de la ligne par une ligne pointillée"
+  inputPin: "Une broche d'entrée : cliquez sur une action ou à proximité. Elle appartient à l'action et reste sur son bord"
+  outputPin: "Une broche de sortie : cliquez sur une action ou à proximité. Elle appartient à l'action et reste sur son bord"
+  activityParameter: "Une entrée ou une sortie de l'activité entière : cliquez près du bord du cadre. Sans cadre, le diagramme en reçoit un"
+  activityConnector: "Poursuit un flot ailleurs : un flot qui entre dans un connecteur repart du connecteur de même nom"
+  submachineState: "Un état qui représente une autre machine à états, choisie dans ses propriétés : par défaut la première autre machine du projet, ou une nouvelle"
+  entryPoint: "Un point d'entrée : cliquez sur le bord d'un état ou à proximité, ou près du cadre pour un point de toute la machine à états. Il reste sur ce bord"
+  exitPoint: "Un point de sortie : cliquez sur le bord d'un état ou à proximité, ou près du cadre pour un point de toute la machine à états. Il reste sur ce bord"
+  stubState: "Un état souche : cliquez à l'intérieur d'un état sous-machine. Il représente un état de la sous-machine d'où partent ou vers lequel mènent des transitions"
+  stateInvariant: "Une condition vraie sur une ligne de vie à ce moment-là : cliquez sur la ligne de vie à l'endroit voulu"
+  termination: "Termine une ligne de vie par une croix : cliquez sur la ligne de vie. Aucun message n'est possible en dessous"
+  durationConstraint: "Le temps que peut prendre le passage d'un message à un autre : faites glisser du premier message au second"
+  timeConstraint: "Le moment où un message peut arriver : cliquez sur le message"
+  constraint: "Une contrainte entre deux associations, par défaut {xor} (un objet participe à l'une d'elles, jamais aux deux) : faites glisser de la ligne d'une association à celle de l'autre"
+  foundMessage: "Un message venant de l'extérieur du diagramme, comme le premier appel d'une séquence : cliquez sur la ligne de vie qui le reçoit. Faites glisser le point pour changer sa longueur et son côté"
+  lostMessage: "Un message dont le diagramme ne montre pas le destinataire, par défaut un retour : cliquez sur la ligne de vie qui l'envoie. Faites glisser le point pour changer sa longueur et son côté"
+  part: "Une partie d'une classe : cliquez à l'intérieur de la classe. Elle devient un attribut de la classe ; son type indique ce qu'elle est"
+  port: "Un port : cliquez sur le bord d'une classe ou d'une partie, ou à proximité. Le port d'une partie appartient à la classe qui est le type de la partie"
+  erAssociativeEntity: "Une association qui est aussi une entité : des entités y participent, des attributs lui appartiennent"
+  erPartialKeyAttribute: "Clé partielle d'une entité faible : l'identifie conjointement avec la clé de son entité propriétaire"
+  erIdentifying: "Faites glisser du parent à l'enfant : sa clé devient une partie de la clé de l'enfant, l'enfant dépend de lui"
+  erNonIdentifying: "Faites glisser du parent à l'enfant : sa clé devient une clé étrangère de l'enfant"
+  erManyToMany: "Faites glisser d'une entité à l'autre : chacune peut être liée à plusieurs occurrences de l'autre"
+  erSubtype: "Faites glisser du surtype au sous-type : le sous-type reprend la clé du surtype. Les autres sous-types se rattachent au même symbole"
+  notation_chen: "Entités en rectangles, attributs en ovales, associations en losanges"
+  notation_ie: "Entités en tables avec leurs colonnes, associations en lignes avec pattes de corbeau"
+  notation_idef1x: "Entités en tables avec leurs colonnes et leurs types, associations en lignes avec un point du côté de l'enfant"
+  erLine: "Une ligne pour tout : d'un attribut à ce qu'il décrit, d'une association à une entité (avec [0,n]), d'un IS-A à un surtype ou à un sous-type (la première vers le surtype)"
+diagram:
+  class: Diagramme de classes
+  object: Diagramme d'objets
+  useCase: Diagramme de cas d'utilisation
+  sequence: Diagramme de séquence
+  activity: Diagramme d'activité
+  stateMachine: Diagramme d'états-transitions
+  component: Diagramme de composants
+  deployment: Diagramme de déploiement
+  compositeStructure: Diagramme de structure composite
+  entityRelationship: Diagramme entité-association
+panel:
+  model: Modèle
+  properties: Propriétés
+prop:
+  name: Nom
+  type: Type d'élément
+  visibility: Visibilité
+  stereotypes: Stéréotypes
+  stereotypes_placeholder: entity, control
+  constraints_placeholder: ordered, unique
+  in_state_placeholder: rempli, payé
+  abstract: Abstrait
+  declaration: Déclaration
+  static: Statique
+  read_only: Lecture seule
+  message_numbers: Afficher les numéros des messages
+  return_values: Afficher les valeurs de retour
+  flat_message_numbers: Numéroter en continu (1, 2, 3 au lieu de 2.1)
+  simple_states: États simples réduits à leur nom
+  query: Requête (ne modifie rien)
+  end: Extrémité
+  role: Rôle
+  multiplicity: Multiplicité
+  constraints: Contraintes
+  constraint: Contrainte
+  navigability: Navigabilité
+  aggregation: Agrégation
+  display: Affichage sur le diagramme
+  hide_attributes: Masquer les attributs
+  hide_operations: Masquer les opérations
+  hide_stereotypes: Masquer les stéréotypes
+  hide_member_visibility: Masquer la visibilité des membres
+  hide_attribute_types: Masquer les types des attributs
+  hide_initial_values: Masquer les valeurs initiales
+  hide_parameters: Masquer les paramètres
+  hide_parameter_types: Masquer les types des paramètres
+  hide_return_types: Masquer les types de retour
+  hide_attribute_stereotypes: Masquer les stéréotypes des attributs
+  hide_operation_stereotypes: Masquer les stéréotypes des opérations
+  hide_attribute_constraints: Masquer les contraintes des attributs
+  hide_operation_constraints: Masquer les contraintes des opérations
+  hide_constraints: Masquer les contraintes
+  robustness_icon: Afficher comme icône
+  element_constraints: Contraintes
+  element_constraints_placeholder: Une par ligne, p. ex. age >= 18
+  parameter_directions: Direction des paramètres
+  parameter_directions_explicit: out et inout
+  parameter_directions_hidden: Aucune
+  parameter_directions_all: Toutes, in compris
+  shown_attributes: Afficher les attributs
+  shown_operations: Afficher les opérations
+  shown_members: Afficher certains attributs et opérations
+  font_color: Couleur du texte
+  line_color: Couleur de ligne
+  fill_color: Couleur de remplissage
+  default_color: Par défaut
+  reset_color: Réinitialiser
+  hide_instance_name: Masquer le nom
+  hide_instance_type: Masquer le classeur
+  dashed: Pointillé
+  start_arrow: Flèche au début
+  end_arrow: Flèche à la fin
+  hide_slots: Masquer les emplacements
+  hide_empty_slots: Masquer les emplacements sans valeur
+  iconic: Afficher comme cercle
+  socket: Afficher en demi-cercle (requise)
+  condition: Condition
+  extension_points: Points d'extension
+  owner: Propriétaire
+  documentation: Documentation
+  text: Texte
+  bounds: Position et taille
+  bounds_value: "x %{x}, y %{y}, %{width} × %{height}"
+  nothing_selected: Aucune sélection
+  message_sort: Type de message
+  arguments: Arguments
+  return_value: Valeur de retour
+  operation: Opération
+  represents: Type
+  operator: Opérateur
+  operands: Opérandes
+  add_operand: Ajouter un opérande
+  delete_operand: Supprimer l'opérande
+  guard: Garde
+  trigger: Déclencheur
+  effect: Effet
+  entry: Entrée (entry)
+  do_activity: Activité (do)
+  exit: Sortie (exit)
+  internal_transitions: Transitions internes
+  add_internal_transition: Ajouter une transition interne
+  delete_internal_transition: Supprimer la transition interne
+  new_trigger: événement
+  regions: Régions
+  add_region: Ajouter une région
+  add_regions_stacked: Diviser en régions, l'une sous l'autre
+  add_regions_side_by_side: Diviser en régions, côte à côte
+  delete_region: Supprimer la région
+  covered: Lignes de vie couvertes
+  covered_automatic: Aucune cochée – le fragment couvre les lignes de vie de ses messages.
+  classifier: Instance de
+  slots: Emplacements (un « nom = valeur » par ligne)
+  instance_of_association: Instance de l'association
+  refers_to: Fait référence à
+  leaf: Feuille (ne peut être ni spécialisé ni redéfini)
+  parameter_kind: Nature du paramètre
+  value_type: Type de la valeur
+  object_type: Type
+  in_state: État
+  ordering: Ordre
+  upper_bound: Borne supérieure
+  stream: Flux
+  object_effect: Effet
+  object_control: Contrôle (jetons de contrôle)
+  object_exception: Exception
+  calls: Activité appelée
+  submachine: Machine à états
+  return_type: Type de retour
+  initial_value: Valeur initiale
+  type_bounds: Bornes
+  binding: Liaison
+  default: Par défaut
+  variadic: Variadique (nombre quelconque d'arguments)
+  er_weak: Faible (identifiée par une entité propriétaire)
+  er_associative: Associative (aussi une association)
+  er_physical_name: Nom physique
+  er_key: Clé
+  er_key_none: Pas de clé
+  er_key_primary: Clé
+  er_key_partial: Clé partielle
+  er_derived: Dérivé
+  er_multivalued: Multivalué
+  er_datatype: Type de données
+  er_length_precision: Longueur/précision
+  er_not_null: NOT NULL
+  er_unique: Unique
+  er_check: Condition (CHECK)
+  er_checks: Conditions (CHECK), une par ligne
+  er_indexes: Index, un par ligne
+  er_indexes_placeholder: "UNIQUE ix_nom (colonne_a, colonne_b)"
+  er_check_placeholder: prix >= 0
+  er_checks_placeholder: fin > debut
+  er_values_placeholder: rouge, vert, bleu
+  er_values: Valeurs (énumération), séparées par des virgules
+  er_foreign_key: Clé étrangère de
+  er_unnamed: (association sans nom)
+  er_notation: Notation
+  er_display: Les tables affichent
+  er_display_attributes: Tous les attributs
+  er_display_keys: Les clés primaires seulement
+  er_display_name: Les noms seulement
+  er_physical_names: Noms physiques (base de données)
+  er_cardinalities: Cardinalités
+  er_look_across: "[min,max]"
+  er_look_here: (min,max) du côté de l'entité
+  er_ratios: "1 : n (Chen)"
+  er_default_value: Valeur par défaut
+  er_identifying: Identifiante
+  er_cardinality: Cardinalité
+  er_total_participation: Totale (double ligne)
+  er_total_specialization: Totale (double ligne vers le surtype)
+  er_disjoint: Sous-types
+  er_disjoint_unspecified: Non précisé
+  er_disjoint_yes: Disjoints (d)
+  er_disjoint_no: Chevauchants (o)
+  er_database: Base de données
+  er_auto_increment: Numéroté par la base de données (AUTO_INCREMENT)
+  er_virtual: Calculé à la lecture (VIRTUAL), non stocké
+  er_on_delete: À la suppression
+  er_on_update: À la mise à jour
+  er_action_default: Selon la base de données
+  er_action_cascade: CASCADE
+  er_action_set_null: SET NULL
+  er_action_set_default: SET DEFAULT
+  er_action_restrict: RESTRICT
+  er_action_no_action: NO ACTION
+template_kind:
+  type: type
+  value: valeur
+message_sort:
+  synchronous: synchrone
+  asynchronous: asynchrone
+  reply: retour
+  create: création
+  destroy: destruction
+navigability:
+  unspecified: non précisée
+  navigable: navigable
+  non_navigable: non navigable
+aggregation:
+  none: aucune
+  shared: agrégation (◇)
+  composite: composition (◆)
+visibility:
+  public: public
+  protected: protégé
+  package: paquetage
+  private: privé
+status:
+  exporting: Export vers .asta…
+  importing: Import du code source…
+  importing_astah: Import du projet .asta…
+  importing_sql: Disposition des tables du dump SQL…
+  opening: Ouverture du projet…
+  busy: Attendez que l'opération de fichier en cours soit terminée.
+  no_diagram_font: "Ni Arial ni Liberation Sans n'est installée : les textes des diagrammes utilisent une autre police et risquent de dépasser de leurs cadres."
+  cancel: Annuler
+  imported: "%{files} fichiers importés : %{created} nouveaux types, %{updated} mis à jour, %{associations} associations."
+  imported_structograms: "%{count} structogrammes créés ou mis à jour."
+canvas:
+  handle_connect: Faites glisser pour tracer une ligne vers un autre élément
+  handle_message: Faites glisser pour tracer un message vers une ligne de vie
+dialog:
+  unsaved: Le projet contient des modifications non enregistrées.
+  unsaved_detail: Voulez-vous les enregistrer ?
+  save: Enregistrer
+  discard: Ne pas enregistrer
+  cancel: Annuler
+  ok: OK
+  structogram_open_failed: Le structogramme n'a pas pu être ouvert.
+  open_failed: Le projet n'a pas pu être ouvert.
+  save_failed: Le projet n'a pas pu être enregistré.
+  import_failed: Le projet .asta n'a pas pu être importé.
+  import_partial: "%{count} éléments du projet .asta n'ont pas été repris."
+  import_partial_detail: "UmlCraft ne connaît pas encore ces types d'éléments : %{kinds}"
+  import_failed_detail: "Ces éléments n'ont pas pu être placés dans le modèle : %{kinds}"
+  import_lost_shapes: "%{count} formes des diagrammes ont été laissées de côté."
+  import_shapes_partial: Certaines formes du projet .asta n'ont pas été reprises.
+  export_done: Le projet .asta a été exporté.
+  export_failed: Le projet .asta n'a pas pu être exporté.
+  export_partial: "%{count} détails du projet n'ont pas pu être repris dans le format .asta."
+  export_partial_detail: "L'interface vers le format .asta ne peut pas exprimer ceci :\n%{items}"
+  image_failed: Le diagramme n'a pas pu être enregistré comme image.
+  copy_image_failed: Le diagramme n'a pas pu être copié comme image.
+  astah_missing: L'export au format .asta nécessite une application qui n'est pas installée.
+  astah_missing_detail: "UmlCraft écrit les projets .asta par l'interface de programmation de l'application à laquelle appartient ce format. Elle doit être installée, ou la variable d'environnement ASTAH_HOME doit indiquer son dossier d'installation ; redémarrez ensuite UmlCraft."
+  import_source_failed: Le code source n'a pas pu être importé.
+  import_source_none: Aucun fichier source trouvé.
+  import_source_discarded: L'import du code source a été abandonné.
+  import_source_discarded_detail: Un autre projet a été ouvert pendant l'import. Veuillez refaire l'import dans ce projet.
+  import_sql_discarded: L'import SQL a été abandonné.
+  import_sql_discarded_detail: Un autre projet a été ouvert pendant la lecture du dump. Veuillez refaire l'import dans ce projet.
+  import_source_none_detail: "La sélection ne contient aucun fichier se terminant par %{extensions}."
+  import_source_partial: "%{count} fichiers n'ont pas pu être importés ; les autres l'ont été."
+  import_source_skipped: "Laissés de côté volontairement : %{items}"
+  syntax_error: "%{file} : erreur de syntaxe ligne %{line}, colonne %{column}, à « %{token} »"
+  syntax_missing: "%{file} : erreur de syntaxe ligne %{line}, colonne %{column}, %{token} manquant"
+  read_error: "%{file} : %{error}"
+  encoding_guessed: "%{file} : lu comme %{encoding}"
+  more_files: "… et %{count} autres"
+  astah_unlicensed: "L'application qui écrit les projets .asta a refusé d'enregistrer, car la vérification de sa licence a échoué. Lancez-la une fois et vérifiez sa licence, puis exportez à nouveau."
+export_dropped:
+  displayOption: Options d'affichage qu'Astah ne reprend pas pour ce type de forme
+  comment: Notes qui ne figurent sur aucun diagramme
+  interaction: Interactions sans diagramme
+  message: Messages non affichés sur leur diagramme
+  systemBoundary: Frontières du système
+  query: Indicateur de requête des opérations
+  extendCondition: Conditions des extensions
+  extendExtensionPoints: Points d'extension des extensions
+  returnParameter: Paramètres de retour
+  parameterDetails: Multiplicité et valeur par défaut des paramètres
+  unmatchedReply: Retours sans appel (exportés comme appels)
+  replyArguments: Arguments des retours
+  messageOperation: Opérations appelées par des messages
+  linkAssociation: Associations dont des liens sont des instances
+  emptyOperand: Opérandes vides des fragments combinés
+  nestedEnumeration: Énumérations imbriquées (déplacées dans le paquetage)
+  activity: Activités sans diagramme
+  activityDiagram: Diagrammes supplémentaires d'une activité (le format .asta en a un par activité)
+  activityNode: Nœuds d'activité non affichés sur leur diagramme
+  activityEdge: Flots non affichés sur leur diagramme
+  partition: Partitions non affichées sur leur diagramme
+  mergeNode: Nœuds de fusion (exportés comme nœuds de décision et de fusion)
+  objectNodeType: Types de nœuds d'objet qui ne sont pas des classes
+  stateMachine: Machines à états sans diagramme
+  stateMachineDiagram: Diagrammes supplémentaires d'une machine à états (le format .asta en a un par machine à états)
+  state: États non affichés sur leur diagramme
+  finalState: États finaux non affichés sur leur diagramme
+  pseudostate: Pseudo-états non affichés sur leur diagramme
+  transition: Transitions non affichées sur leur diagramme
+  structogram: Structogrammes (Astah n'en a pas)
+  renamed: Éléments renommés parce que leur nom était vide ou en double
+  details: Stéréotypes, valeurs étiquetées ou documentation
+  presentation: Formes des diagrammes
+  componentDiagram: Diagrammes de composants (exportés comme diagrammes de classes)
+  deploymentDiagram: Diagrammes de déploiement (exportés comme diagrammes de classes)
+  compositeStructureDiagram: Diagrammes de structure composite (exportés comme diagrammes de classes, sans parties ni ports)
+  erDiagram: Diagrammes entité-association
+  erChenNotation: Diagrammes entité-association en notation de Chen (exportés en notation IE)
+  erRelationship: Associations des diagrammes entité-association reliant plus de deux entités ou ayant leurs propres attributs
+  erAssociativeEntity: Entités associatives (exportées comme entités)
+  erCompositeAttribute: Attributs composés (leurs parties exportées comme colonnes)
+  erUnique: UNIQUE des colonnes
+  erCheck: Conditions (CHECK)
+  erEnumeration: Valeurs des domaines d'énumération
+  erIndex: Index sans colonne présente dans la table
+  erDerived: Attributs dérivés (exportés comme colonnes)
+  erMultivalued: Attributs multivalués (exportés comme colonnes)
+  erDisjoint: Sous-types disjoints ou chevauchants
+  erIsA: IS-A sans surtype
+  erSubtyping: Sous-types qui n'ont pas pu être exportés
+  erCardinality: Cardinalités qu'Astah ne reprend pas
+  erForeignKeyName: Noms des colonnes de clé étrangère (les noms propres à Astah sont conservés)
+  erForeignKey: Clés étrangères dont l'association n'a pas pu être exportée (exportées comme simples colonnes)
+  partialDiagram: Diagrammes exportés seulement en partie
+  erEntity: Entités des diagrammes entité-association
+  erAttribute: Attributs des diagrammes entité-association
+  port: Ports
+  connector: Connecteurs
+  pin: Broches non affichées avec leur action
+  calledActivity: Activités appelées par des actions d'appel de comportement qui n'ont pas de diagramme
+  position: Positions qu'Astah n'a pas reprises
+  entryPoint: Points d'entrée (l'API d'Astah ne peut pas les créer)
+  exitPoint: Points de sortie (l'API d'Astah ne peut pas les créer)
+  stubState: États souches (l'API d'Astah ne peut pas les créer)
+  durationConstraint: Contraintes de durée (l'API d'Astah ne peut pas les créer)
+  timeConstraint: Contraintes de temps (l'API d'Astah ne peut pas les créer)
+  constraint: Contraintes entre associations, comme {xor}
+  submachine: États sous-machines dont la machine à états n'a pas de diagramme (exportés comme états)
+  nestedComponent: Composants, artefacts et nœuds contenus dans d'autres (déplacés dans le paquetage)
+  instanceKind: Instances de composants et de nœuds (exportées comme objets)
+  instance: Instances non affichées sur un diagramme de composants, de déploiement ou de classes
+  interactionUse: Références d'interaction non affichées sur leur diagramme
+  interactionUseReference: Références d'interaction vers des interactions sans diagramme de séquence
+  templateParameter: Paramètres de template d'éléments autres que des classes
+  templateParameterBounds: Bornes supplémentaires des paramètres de template (seule la première est conservée)
+  variadicTemplateParameter: Indicateur variadique des paramètres de template
+  edgeRoute: Tracés des lignes (recalculés à l'export)
+  barHeight: Hauteurs des barres d'activation (recalculées à l'export)
+  barColor: Couleurs des barres d'activation
+  lifelineLength: Longueurs des lignes de vie (recalculées à l'export)
+  framePosition: Positions des cadres
+  extraOperand: Opérandes supplémentaires des fragments combinés (leurs messages restent dans le premier)
+  region: Régions d'un état au-delà de la deuxième (leur contenu va dans la deuxième)
+  internalTransition: Transitions internes des états non affichés sur leur diagramme
+  binding: Liaisons des classes liées dont le template n'est pas une classe
+  bindingArgument: Arguments des classes liées qui ne sont ni des classes ni des types primitifs
+  fontSize: Tailles de police propres à certains éléments
+  containment: Lignes d'imbrication des classes imbriquées
+  guardPosition: Gardes déplacées au-dessus de leur opérande
+  constraintPosition: Emplacements des étiquettes de contrainte sur les lignes (Astah prend un seul décalage pour toutes les contraintes d'une association)
+  instanceNameVisibility: Noms masqués des instances
+  instanceTypeVisibility: Classeurs masqués des instances
+  associationClassDetails: Noms, stéréotypes, valeurs étiquetées et documentation des associations des classes d'association (ceux de la classe sont conservés)
+  associationClassOwner: Propriétaires des classes d'association (Astah les place à côté de leur première extrémité)
+  componentAttribute: Attributs des composants dont le type n'est pas une classe
+  connectorEndMultiplicity: Multiplicités des extrémités de connecteurs
+  diagramFrame: Cadres des diagrammes de structure composite
+  sharedGeneralization: Style partagé des généralisations (exportées comme lignes séparées)
+  socket: Demi-cercles des interfaces requises (Astah ne les dessine qu'aux ports)
+  portOutsideHost: Ports qui ne sont pas sur le bord d'une classe ou d'une partie
+  partOutsideClass: Parties non dessinées à l'intérieur de leur classe
+settings:
+  title: Paramètres
+  language: Langue
+  system_language: Langue du système
+  system_theme: Système
+  theme: Thème
+  light: Clair
+  dark: Sombre
+  diagrams: Diagrammes
+  guillemets: "Stéréotypes entre guillemets : «include» au lieu de <<include>>"
+  align_to_nodes: Aligner sur les autres éléments pendant le déplacement
+  align_to_nodes_detail: Les centres s'alignent sur les centres et les bords sur les bords quand ils s'approchent. Des repères montrent ce qui est aligné.
+  classes: Classes
+  visibility_column: Visibilité dans une colonne à part
+  abstract: En plus du nom en italique, les classes abstraites affichent
+  abstract_keyword: "{abstract} sous le nom"
+  abstract_stereotype: "«abstract» au-dessus du nom"
+  read_only: "Marquer les attributs en lecture seule par {readOnly}"
+  visibility_column_detail: "Aligne les noms de tous les attributs et opérations d'une classe. Si l'option est désactivée, la visibilité se place juste avant le nom."
+  structograms: Structogrammes
+  keywords: Mots-clés des nouveaux structogrammes
+  keywords_ui: Comme l'interface
+  keywords_in: "%{name} (%{words})"
+  updates: Mises à jour
+  update_check: Rechercher de nouvelles versions sur GitHub au démarrage
+  update_check_detail: "Au plus une fois par jour. GitHub reçoit votre adresse IP et la version d'UmlCraft, rien d'autre."
+  close: Fermer
+project:
+  untitled: Nouveau projet
+edit:
+  create: Créer
+  notation: Changer de notation
+  change_kind: Changer de type
+  connect: Relier
+  move: Déplacer
+  resize: Redimensionner
+  align: Aligner
+  delete: Supprimer
+  structogram: Modifier le structogramme
+  mcp: "IA : %{tool}"
+  remove_from_diagram: Retirer du diagramme
+  properties: Modifier les propriétés
+  waypoints: Modifier le tracé de la ligne
+  line_style: Changer le style de ligne
+  shared_style: Changer le style partagé
+  association_class: Convertir en classe d'association
+  line_ends: Rattacher les extrémités des lignes aux centres
+  labels: Réinitialiser la position des étiquettes
+  show: Afficher sur le diagramme
+  move_element: Déplacer dans le modèle
+  set_slots: Modifier les valeurs des emplacements
+  paste: Coller
+  wrap_in_fragment: Entourer d'un fragment combiné
+  import_source: Importer du code source
+  text: Modifier le texte
+  arrange: Disposer automatiquement
+  route_lines: Tracer les lignes
+  import_sql: Importer un dump SQL
+skipped:
+  method_body: corps des méthodes
+  initializer: blocs d'initialisation
+  local_class: classes locales
+  anonymous_class: classes anonymes
+  enum_constant_body: arguments et corps des constantes d'enum
+  free_member: fonctions et variables hors des classes
+  attribute: attributs C# ([…])
+  delegate: délégués
+  event: événements
+  enum_value: valeurs des littéraux d'énumération
+  preprocessor_branch: "branches #elif et #else"
+  generic_alias: alias de types construits
+  unknown_owner: définitions pour des types inconnus
+  macro: "définitions de macros (#define)"
+  specialization: spécialisations de templates
+  deleted_function: fonctions supprimées (= delete)
+  friend: déclarations friend
+  statement: instructions qui ne déclarent rien
+  conditional_branch: "branches de #if laissées de côté (#elif, #else, #if 0)"
+  deep_method: méthodes imbriquées trop profondément pour un structogramme
+new_name:
+  systemBoundary: Système
+kind:
+  model: Projet
+  associationClass: Classe d'association
+  package: Paquetage
+  subsystem: Sous-système
+  class: Classe
+  boundary: Frontière
+  control: Contrôle
+  entity: Entité
+  interface: Interface
+  enumeration: Énumération
+  dataType: Type de données
+  enumerationLiteral: Littéral d'énumération
+  attribute: Attribut
+  operation: Opération
+  parameter: Paramètre
+  templateParameter: Paramètre de template
+  actor: Acteur
+  useCase: Cas d'utilisation
+  extensionPoint: Point d'extension
+  systemBoundary: Frontière du système
+  interaction: Interaction
+  lifeline: Ligne de vie
+  message: Message
+  combinedFragment: Fragment combiné
+  interactionOperand: Opérande
+  association: Association
+  generalization: Généralisation
+  realization: Réalisation
+  dependency: Dépendance
+  include: Inclusion
+  extend: Extension
+  comment: Note
+  diagram: Diagramme
+  structogram: Structogramme
+  activity: Activité
+  activityNode: Nœud d'activité
+  activityEdge: Flot
+  action: Action
+  initialNode: Nœud initial
+  activityFinal: Nœud de fin d'activité
+  flowFinal: Nœud de fin de flot
+  decision: Nœud de décision
+  merge: Nœud de fusion
+  fork: Nœud de bifurcation
+  join: Nœud d'union
+  objectNode: Nœud d'objet
+  partition: Partition
+  stateMachine: Machine à états
+  state: État
+  finalState: État final
+  pseudostate: Pseudo-état
+  transition: Transition
+  text: Texte
+  region: Région
+  internalTransition: Transition interne
+  initialPseudostate: Pseudo-état initial
+  choice: Choix
+  junction: Jonction
+  forkPseudostate: Bifurcation
+  joinPseudostate: Union
+  shallowHistory: Historique superficiel
+  deepHistory: Historique profond
+  component: Composant
+  artifact: Artefact
+  node: Nœud
+  instance: Instance
+  componentInstance: Instance de composant
+  nodeInstance: Instance de nœud
+  object: Objet
+  slot: Emplacement
+  link: Lien
+  interactionUse: Référence d'interaction
+  part: Partie
+  port: Port
+  connector: Connecteur
+  erEntity: Entité
+  erWeakEntity: Entité
+  erAssociativeEntity: Entité
+  erAttribute: Attribut
+  erKeyAttribute: Attribut
+  erPartialKeyAttribute: Attribut
+  erMultivaluedAttribute: Attribut
+  erDerivedAttribute: Attribut
+  erRelationship: Association
+  erIdentifyingRelationship: Association
+  erIsA: IS-A
+  erParticipation: Participation
+  erSubtyping: Sous-typage
+  erDomain: Domaine
+  callBehavior: Action d'appel de comportement
+  sendSignal: Action d'envoi de signal
+  acceptEvent: Action de réception d'événement
+  acceptTimeEvent: Action de réception d'événement temporel
+  activityConnector: Connecteur
+  inputPin: Broche d'entrée
+  outputPin: Broche de sortie
+  activityParameter: Nœud de paramètre d'activité
+  submachineState: État sous-machine
+  entryPoint: Point d'entrée
+  exitPoint: Point de sortie
+  stubState: État souche
+  stateInvariant: Invariant d'état
+  termination: Terminaison
+  durationConstraint: Contrainte de durée
+  timeConstraint: Contrainte de temps
+  constraint: Contrainte
+error:
+  pin_outside: Une broche se place sur une action. Cliquez sur le bord d'une action ou à proximité.
+  stub_outside: Un état souche se place dans un état sous-machine. Cliquez à l'intérieur d'un état sous-machine.
+  not_on_lifeline: Un invariant d'état ou une terminaison se place sur une ligne de vie. Cliquez sur une ligne de vie.
+  lifeline_ended: La ligne de vie se termine déjà par une terminaison ou un message de destruction.
+  not_on_message: Une contrainte de durée va d'un message à un autre, une contrainte de temps se place sur un message. Cliquez sur un message.
+  nsd_xml: "Ligne %{line}, colonne %{column} : XML non valide (%{message})."
+  nsd_not_structorizer: Le fichier n'est pas un structogramme Structorizer.
+  nsd_unexpected_element: "Ligne %{line}, colonne %{column} : élément inconnu <%{name}> dans <%{parent}>."
+  nsd_wrong_branches: "Ligne %{line}, colonne %{column} : il manque à <%{element}> les branches qu'écrit Structorizer."
+  nsd_unexpected_text: "Ligne %{line}, colonne %{column} : texte inattendu dans <%{parent}>."
+  nsd_encoding: "Le fichier est encodé en %{encoding} ; les structogrammes sont en UTF-8."
+  nsd_not_utf8: Le fichier n'est pas encodé en UTF-8 ; les structogrammes sont en UTF-8.
+  nsd_truncated: "Le fichier se termine à l'intérieur de <%{element}>."
+  nsd_too_deep: "Ligne %{line}, colonne %{column} : les éléments sont imbriqués sur plus de %{max} niveaux."
+  named: "« %{name} »"
+  unnamed: un élément
+  not_found: "%{a} n'existe pas."
+  duplicate_id: L'identifiant d'un élément est utilisé deux fois.
+  invalid_owner: "Impossible de placer %{child} (%{child_kind}) dans %{owner} (%{owner_kind})."
+  index_out_of_range: La position est hors limites.
+  root: Le modèle lui-même ne peut être ni retiré, ni déplacé, ni créé.
+  has_children: "%{a} contient encore des éléments."
+  still_referenced: "%{a} est encore utilisé par %{b}."
+  still_shown: "%{a} est encore affiché sur le diagramme %{b}."
+  invalid_reference: "%{a} fait référence à un élément qui n'existe pas ou qui ne convient pas à cet endroit."
+  kind_changed: "Le type d'élément de %{a} ne peut pas changer."
+  ownership_cycle: "%{a} ne peut pas être placé à l'intérieur de lui-même."
+  generalization_cycle: Cette généralisation ferait d'un élément son propre ancêtre.
+  not_a_diagram: "%{a} n'est pas un diagramme."
+  diagram_not_empty: "Le diagramme %{a} affiche encore des éléments."
+  edges_attached: Des lignes sont encore rattachées à cette forme.
+  shape_changed: Une forme ne peut pas devenir une ligne, ni l'inverse.
+  edge_cycle: Cette ligne aboutirait sur elle-même en passant par d'autres lignes.
+  reference_cycle: "%{a} se relierait à lui-même en passant par d'autres relations."
+  not_finite: Une position ou une taille n'est pas un nombre valide.
+  type_too_deep: "Un type de %{a} est imbriqué sur plus de %{max} niveaux."
+  structogram_too_deep: "%{a} imbrique des éléments sur plus de %{max} niveaux."
+  invalid: Le modèle est incohérent à cet endroit ; l'opération n'a pas été effectuée.
+  already_shown: L'élément figure déjà sur ce diagramme.
+  other_interaction: L'élément appartient à une autre interaction et ne peut figurer que sur son diagramme de séquence.
+  cannot_show: "Un élément de type %{what} ne peut pas figurer sur ce type de diagramme."
+  cannot_connect: "Impossible de relier %{source} et %{target} de cette façon."
+  cannot_paste: "Impossible de coller ici un élément de type %{what}."
+  connector_same_ends: Un connecteur a besoin de deux extrémités différentes.
+  connector_no_class: Les deux extrémités appartiennent à des classes différentes ; un connecteur relie les parties et les ports d'une même classe.
+  connector_cannot: "Un connecteur ne peut pas relier un élément de type %{what}."
+  created_already: Un autre message crée déjà cette ligne de vie.
+  no_room: Il n'y a pas de place pour le message entre ces lignes de vie à cet endroit.
+  messages_connect_lifelines: Les messages relient des lignes de vie.
+  partitions_stacked: Les activités dont les partitions sont placées l'une sous l'autre ne peuvent pas être disposées automatiquement.
+  sequence_not_arranged: Les diagrammes de séquence ne sont pas disposés automatiquement.
+  empty_name: Le nom ne doit pas être vide.
+  binding_without_template: Une liaison nomme un template et ses arguments, comme Box<int>.
+  has_association_class: L'association a déjà une classe d'association.
+  member_no_name: "Aucun nom valide dans %{text}."
+  member_multiplicity: "Multiplicité %{text} non valide ; par exemple 0..1, 1..* ou *."
+  member_missing: "Il manque « %{missing} »."
+  member_unexpected: "Après la liste des paramètres ne peuvent suivre que « : » et le type de retour."
+  part_outside: Une partie se place à l'intérieur d'une classe. Dessinez d'abord la classe, puis cliquez à l'intérieur.
+  er_not_joined: "Ces deux éléments ne peuvent pas être reliés. Les attributs appartiennent à des entités, des associations ou des attributs ; les associations relient des entités ; un IS-A relie des entités."
+  er_attribute_owned: L'attribut appartient déjà à un élément. Supprimez d'abord sa ligne.
+  er_second_weak: Une association identifiante identifie exactement une entité faible.
+  er_associative_in_use: Des entités participent à cette entité associative, elle reste donc associative. Supprimez d'abord ses lignes vers les entités.
+  port_outside: Un port se place sur le bord d'une classe ou d'une partie.
+  port_on_untyped_part: "Un port sur une partie appartient au type de la partie : donnez d'abord une classe comme type à la partie (p. ex. moteur : Moteur)."
+  multiplicity: "« %{text} » n'est pas une multiplicité. Exemples : 1, 0..1, 1..*, *"
+  cardinality: "« %{text} » n'est pas une cardinalité. Exemples : [0,1], [1,n], 0..*, [*,m], [1,q] (un nombre ou une lettre comme maximum)"
+  cardinality_ratio: "« %{text} » n'est pas un rapport. Exemples : 1, n, m, q, 3 (un nombre ou une lettre) ou en entier [1,n]"
+  malformed: "Le fichier est endommagé (ligne %{line}, colonne %{column})."
+  not_a_project: Le fichier n'est pas un projet UmlCraft.
+  not_astah: Le fichier n'est pas un projet .asta, ou il est endommagé.
+  astah_no_model: Le projet .asta ne contient aucun modèle.
+  astah_too_large: Le projet .asta est trop volumineux.
+  java_launch: "Java n'a pas pu être lancé (%{java}) : %{reason}"
+  astah_reported: "Signalé pendant l'export : %{message}"
+  export_tool: "L'outil d'export a échoué (%{status}) : %{output}"
+  export_timeout: "L'export ne s'est pas terminé en %{minutes} minutes et a été arrêté."
+  export_cancelled: L'export a été annulé.
+  image_empty: L'image serait vide.
+  image_too_large: L'image est trop grande.
+  too_new: "Le fichier a été enregistré par une version plus récente d'UmlCraft (version de format %{found} ; cette version lit jusqu'à la %{supported})."
+  migration: "Le fichier n'a pas pu être mis à niveau depuis la version de format %{from} : %{reason}"
+  not_saved_unreadable: "Le projet n'a pas été enregistré, car le fichier ne pourrait plus être ouvert : %{reason}"
+nsd:
+  untitled_stem: Sans titre
+  save_failed: Le structogramme n'a pas pu être exporté.
+  edit: Édition
+  edit_diagram: Diagramme
+  signature: Nom ou signature
+  text: Texte
+  comment: Commentaire
+  disabled: Désactivé
+  branches: Nombre de branches
+  exception: Nom de l'exception interceptée
+  case_hint: "Première ligne : ce qui est examiné ; puis une ligne par cas ; dernière ligne : le cas par défaut (% pour aucun)."
+  for_hint: "« %{counting} » compte ; « %{traversing} » parcourt une liste ; tout autre texte reste libre."
+  root_program: Programme
+  root_sub: Sous-programme
+  root_includable: À inclure
+  insert_after: Insérer après
+  insert_before: Insérer avant
+  paste: Coller
+  delete: Supprimer
+  move_up: Monter
+  move_down: Descendre
+  color: Couleur
+  add_branch: Ajouter une branche
+  remove_branch: Supprimer la branche
+  kind_instruction: Instruction
+  kind_call: Appel
+  kind_jump: Sortie
+  kind_alternative: Alternative
+  kind_case: Choix multiple
+  kind_for: Boucle pour
+  kind_while: Boucle tant que
+  kind_repeat: Boucle répéter
+  kind_forever: Boucle infinie
+  kind_try: Try
+  kind_parallel: Parallèle
+  color_0: Blanc (aucune)
+  color_1: Rouge
+  color_2: Jaune
+  color_3: Vert
+  color_4: Cyan
+  color_5: Bleu
+  color_6: Rose
+  color_7: Gris
+  color_8: Orange
+  color_9: Violet
+  source_title: Structogrammes des méthodes
+  source_hint: "Cochez les méthodes qui reçoivent un structogramme ; il est rangé sous sa classe, lié à l'opération. Si aucune n'est cochée, seules les classes sont importées. Décocher une méthode importée auparavant supprime son structogramme."
+  source_import: Importer
+  source_edited: modifié, conservé
+  source_more: "%{count} de plus ; la recherche les trouve."
+  source_search: Rechercher des méthodes…
+  notes: "%{count} endroits ne sont pas représentés tels qu'ils sont écrits"
+  note_line: "Ligne %{line} : %{what}"
+  note_continue: continue n'a pas d'élément ; conservé comme instruction rouge désactivée
+  note_label: l'étiquette est laissée de côté
+  note_local_class: une classe déclarée dans la méthode est laissée de côté
+  note_synchronized: synchronized – le corps est à sa place, le verrou en commentaire
+  note_fallthrough: le cas se poursuit dans le suivant ; ses instructions y sont copiées
+  note_syntax_error: l'analyseur n'a pas pu lire ceci ; conservé comme instruction rouge désactivée
+  note_using: using – la ressource est affectée, le corps est à sa place
+  note_lock: lock – le corps est à sa place, le verrou en commentaire
+  note_yield: yield n'a pas d'élément ; conservé tel qu'il est écrit
+  note_goto: goto n'a pas d'élément ; conservé comme sortie avec son texte
+  note_local_function: une fonction déclarée dans la méthode est laissée de côté
+  note_with: with – le contexte est affecté, le corps est à sa place
+  note_loop_else: le else de la boucle la suit ; il s'exécute aussi là après un break
+  note_try_else: le else de try termine le bloc try
+  note_nested_function: une fonction définie dans la fonction est laissée de côté
+  note_conditional_branch: "#if : une seule branche est lue (la première, ou celle qui suit #if 0), les autres sont laissées de côté"
+  note_case_break: "break quitte ici le switch ; conservé comme sortie, qui dans un structogramme quitte une boucle"
+sql:
+  title: Importer un dump SQL
+  found: "%{file} : %{count} tables trouvées."
+  dialect: Dialecte SQL
+  detected: "%{dialect} (détecté)"
+  notation: Notation
+  attributes: Attributs
+  attributes_all: tous
+  attributes_keys: clés seulement
+  attributes_none: aucun
+  attributes_hint: Avec tous les attributs, les grands schémas deviennent très larges.
+  schemas: Schémas
+  button: Importer
+  failed: Le dump SQL n'a pas pu être importé.
+  no_tables: Le fichier ne contient aucune table (CREATE TABLE), ou aucune dans les schémas choisis.
+  pg_custom: Le fichier est au format d'archive de pg_dump. Veuillez l'exporter en SQL simple (pg_dump -Fp) et importer ce fichier.
+  compressed: Le fichier est compressé. Veuillez d'abord le décompresser.
+  summary: "Importé depuis %{file} (%{dialect}) : %{tables} tables → %{entities} entités, %{relationships} associations, %{attributes} attributs ; %{skipped} instructions ignorées"
+  no_key: "%{table} : pas de clé primaire, l'entité n'a pas d'attribut clé"
+  placeholder: "%{table} : référencée mais absente du dump (entité de substitution)"
+  recoded: "Ligne %{line} : pas en UTF-8, lue comme Windows-1252"
+  problem: "Ligne %{line} : %{what} non comprise : %{text}"
+  problem_statement: instruction
+  problem_column: colonne
+  problem_constraint: clé
+  unknown_table: "Ligne %{line} : concerne une table absente du dump : %{text}"
+  export_title: Exporter le diagramme entité-association en SQL
+  export_hint: Les entités du diagramme deviennent des tables, leurs associations des clés étrangères, les associations plusieurs à plusieurs des tables à part entière.
+  export_button: Exporter…
+  export_not_er: Aucun diagramme entité-association ouvert.
+  export_not_er_detail: Veuillez d'abord ouvrir le diagramme entité-association dont les tables doivent être exportées.
+  export_failed: Le fichier SQL n'a pas pu être écrit.
+  export_done: "%{file} : %{tables} tables, %{foreign_keys} clés étrangères"
+  export_multivalued: "%{table}.%{attribute} : attribut multivalué, pas de colonne"
+  export_no_key: "%{table} → %{target} : %{target} n'a pas de clé primaire, donc pas de clé étrangère"
+  export_check: "%{table} : CHECK (%{check}) ne peut pas être écrit dans ce dialecte"
+  export_generated: "%{table}.%{column} : générée dans l'autre dialecte, colonne simple ici"
+  export_auto_increment: "%{table}.%{column} : MySQL ne numérote qu'une colonne en tête de clé ou unique, donc pas d'AUTO_INCREMENT"
+  export_default: "%{table}.%{column} : %{default} n'a pas d'équivalent dans ce dialecte et est laissé de côté"
+file_page:
+  back: Retour
+  info: Infos
+  new: Nouveau
+  open: Ouvrir
+  save: Enregistrer
+  save_as: Enregistrer sous
+  import: Importer
+  export: Exporter
+  settings: Paramètres
+  about: À propos
+  quit: Quitter
+  project: Projet
+  not_saved_yet: Pas encore enregistré
+  saved: Toutes les modifications sont enregistrées.
+  unsaved: Il y a des modifications non enregistrées.
+  contents: Contenu
+  diagrams: Diagrammes
+  structograms: Structogrammes
+  elements: Éléments du modèle
+  new_project: Projet vide
+  new_project_note: Un nouveau projet, encore sans diagramme
+  sample: Projet d'exemple
+  sample_note: Un projet terminé pour faire des essais
+  browse: Parcourir…
+  browse_note: Ouvrir un projet UmlCraft (.ucraft) de cet ordinateur
+  recent: Récents
+  no_recent: Aucun projet ouvert pour l'instant.
+  import_astah: Projet Astah (.asta)
+  import_astah_note: Reprendre le modèle et les diagrammes d'Astah
+  import_structogram: Structogramme (.nsd)
+  import_structogram_note: Un structogramme d'un fichier .nsd
+  import_sql: Dump SQL
+  import_sql_note: Les tables d'un dump sous forme de diagramme entité-association
+  export_svg: Diagramme en SVG
+  export_svg_note: Le diagramme affiché, en image vectorielle
+  export_png: Diagramme en PNG
+  export_png_note: Le diagramme affiché, en image
+  export_astah: Projet Astah (.asta)
+  export_astah_note: Le projet sous forme de fichier pour Astah
+  export_sql: Diagramme entité-association en SQL
+  export_sql_note: Les entités du diagramme entité-association affiché, en CREATE TABLE
+  export_structogram: Structogramme (.nsd)
+  export_structogram_note: Le structogramme affiché, en fichier .nsd
+  source: Code source
+  source_note: Reprendre dans le modèle les classes du code source
+  files: Fichiers…
+  folder: Dossier…
+structogram:
+  header:
+    preRepeat: "jusqu'à "
+    postFor: "à"
+    preReturn: "renvoyer"
+    postForIn: "dans"
+    preWhile: "tant que "
+    output: "AFFICHER"
+    input: "SAISIR"
+    preFor: "pour"
+    preExit: "quitter"
+    preLeave: "leave"
+    ignoreCase: "true"
+    preThrow: "throw"
+    preForIn: "pour chaque"
+    stepFor: "pas"
+  branches:
+    "true": "Vrai"
+    "false": "Faux"
+  new:
+    for: "pour ? <- ? à ?"
+    while: "tant que ?"
+    repeat: "jusqu'à ?"
+  examples:
+    counting: "pour i <- 1 à 10 pas 2"
+    traversing: "pour chaque x dans liste"

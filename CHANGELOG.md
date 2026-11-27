@@ -12,8 +12,11 @@ today.
 - **View tab**: the language button is a menu, like the theme's: the system's language or one
   of the files.
 - **Keywords**: matching folds case beyond ASCII, so capitals with accents are recognised.
-- **MCP**: `keywords` in structogram JSON is a language code (`de`, `en`). `english` and
+- **MCP**: `keywords` in structogram JSON is a language code (`de`, `en`, `fr`). `english` and
   `german` are still accepted as input.
+- **French**: the user interface and the structogram keywords (`pour i <- 1 à 10 pas 2`,
+  `tant que`, `jusqu'à`) are available in French. A counting loop keeps `<-` after its
+  variable, because Structorizer recognises only that.
 
 ## 0.24.2 – 2026-11-25
 

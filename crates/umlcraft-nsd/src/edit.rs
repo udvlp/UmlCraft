@@ -724,4 +724,32 @@ mod tests {
         let normal = crate::content::normalize(&d);
         assert_eq!(Keywords::of(&normal), Keywords::by_code("de").unwrap());
     }
+
+    #[test]
+    fn french_keywords_count_in_french() {
+        let fr = Keywords::by_code("fr").unwrap();
+        let made = crate::Provenance { author: "", date: "", origin: "" };
+        let mut d = Diagram::new(RootKind::Program, &lines(&["demo"]), &made);
+        d.set_keywords(fr);
+        assert_eq!(Keywords::of(&d), fr);
+        assert_eq!(fr.branch_labels(), ("Vrai", "Faux"));
+        let f = new_element(&d, ElementKind::For, &default_text(ElementKind::For, fr));
+        assert_eq!(f.text(), ["pour ? <- ? à ?"]);
+        assert_eq!(f.attr("style"), Some("COUNTER"));
+        d.children = Sequence::new(vec![f]);
+        set_text(&mut d, &[0], &lines(&["pour i <- 1 à 10 pas 2"])).unwrap();
+        let f = path::element(&d, &[0]).unwrap();
+        assert_eq!(f.attr("style"), Some("COUNTER"));
+        assert_eq!(f.attr("counterVar"), Some("i"));
+        assert_eq!((f.attr("startValue"), f.attr("endValue")), (Some("1"), Some("10")));
+        assert_eq!(f.attr("stepConst"), Some("2"));
+        // Structorizer ignores case, accented letters included.
+        set_text(&mut d, &[0], &lines(&["POUR I <- 1 À 10"])).unwrap();
+        let f = path::element(&d, &[0]).unwrap();
+        assert_eq!((f.attr("style"), f.attr("endValue")), (Some("COUNTER"), Some("10")));
+        set_text(&mut d, &[0], &lines(&["pour chaque x dans liste"])).unwrap();
+        let f = path::element(&d, &[0]).unwrap();
+        assert_eq!((f.attr("style"), f.attr("counterVar")), (Some("TRAVERSAL"), Some("x")));
+        check(&d);
+    }
 }

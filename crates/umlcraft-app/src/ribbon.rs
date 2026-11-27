@@ -341,17 +341,22 @@ fn new_diagram() -> Item {
         .fold(item, |item, (label, icon, action)| item.menu_icon_entry(label, icon, action))
 }
 
-/// `label` for sorting by the alphabet: without case, an umlaut as its vowel and ß as ss, as
-/// German dictionaries sort.
+/// `label` for sorting by the alphabet: without case, an umlaut or accented letter as its
+/// base letter, ß as ss and œ, æ as oe, ae, as German and French dictionaries sort.
 fn sort_key(label: &str) -> String {
     label
         .to_lowercase()
         .chars()
         .flat_map(|c| match c {
-            'ä' => vec!['a'],
-            'ö' => vec!['o'],
-            'ü' => vec!['u'],
+            'ä' | 'à' | 'â' => vec!['a'],
+            'ç' => vec!['c'],
+            'é' | 'è' | 'ê' | 'ë' => vec!['e'],
+            'î' | 'ï' => vec!['i'],
+            'ö' | 'ô' => vec!['o'],
+            'ü' | 'ù' | 'û' => vec!['u'],
             'ß' => vec!['s', 's'],
+            'œ' => vec!['o', 'e'],
+            'æ' => vec!['a', 'e'],
             c => vec![c],
         })
         .collect()
@@ -1012,6 +1017,29 @@ mod tests {
                 "Use case diagram",
             ]
         );
+        // "é" sorts as "e", not after "z".
+        assert_eq!(
+            sorted("fr"),
+            [
+                "Diagramme d'activité",
+                "Diagramme d'états-transitions",
+                "Diagramme d'objets",
+                "Diagramme de cas d'utilisation",
+                "Diagramme de classes",
+                "Diagramme de composants",
+                "Diagramme de déploiement",
+                "Diagramme de séquence",
+                "Diagramme de structure composite",
+                "Diagramme entité-association",
+                "Structogramme",
+            ]
+        );
+    }
+
+    #[test]
+    fn sorting_folds_accents_to_their_letter() {
+        assert_eq!(sort_key("Été"), "ete");
+        assert_eq!(sort_key("Œuvre, ça, Übung, Straße"), "oeuvre, ca, ubung, strasse");
     }
 
     #[test]
