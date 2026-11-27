@@ -25,20 +25,28 @@ pub(super) fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
     });
     let y = opt_num(args, "y").ok_or("`y` is missing")?;
     let bounds = presentation.bounds();
+    // A lifeline's `height` is how far down it runs, from the top of its head, as when its end
+    // is dragged in the app; the head keeps its height.
+    let lifeline =
+        matches!(presentation.shape, Shape::Lifeline { .. }) && is_sequence(model, diagram);
     let slot = item.and_then(|_| slot_at(host, diagram, y));
     if let (Some(item), Some(slot), None) = (item, slot, bounds) {
         change(host, "move_node", |tx| palette::move_to_slot(tx, item, slot))?;
         return Ok(Reply::json(json!({ "presentation": node, "y": y })));
     }
     let bounds = bounds.ok_or("only nodes, messages and activation bars can be moved")?;
-    // A box sized by hand keeps that size, as in the app.
-    let resized = args.get("width").is_some() || args.get("height").is_some();
-    let x = opt_num(args, "x").unwrap_or(bounds.x);
-    let width = opt_num(args, "width").unwrap_or(bounds.width).max(4.0);
-    let height = opt_num(args, "height").unwrap_or(bounds.height).max(4.0);
-    let (dx, dy) = (x - bounds.x, y - bounds.y);
     let model = host.document().model();
     let sequence = is_sequence(model, diagram);
+    let line_end = opt_num(args, "height").filter(|_| lifeline);
+    // A box sized by hand keeps that size, as in the app.
+    let resized = args.get("width").is_some() || (args.get("height").is_some() && !lifeline);
+    let x = opt_num(args, "x").unwrap_or(bounds.x);
+    let width = opt_num(args, "width").unwrap_or(bounds.width).max(4.0);
+    let height = match lifeline {
+        true => bounds.height,
+        false => opt_num(args, "height").unwrap_or(bounds.height).max(4.0),
+    };
+    let (dx, dy) = (x - bounds.x, y - bounds.y);
     // As when dragged: what lies in a container (substates, the nodes of a package or swimlane)
     // moves along, and so do the bends of lines between what moves.
     let contents: Vec<Id> = if sequence || (dx == 0.0 && dy == 0.0) {
@@ -66,8 +74,18 @@ pub(super) fn move_node(host: &mut dyn Host, args: &Value) -> Outcome {
         }
         // Lines between what moves keep their shape; a state moved into another one (or out of
         // it) becomes its substate.
-        edit::set_node_bounds(tx, diagram, &nodes)
+        edit::set_node_bounds(tx, diagram, &nodes)?;
+        match line_end {
+            Some(length) => sequence_edit::set_lifeline_end(tx, diagram, node, y + length),
+            None => Ok(()),
+        }
     })?;
+    // A lifeline stops no higher than what it reaches: the height it got.
+    let shape = host.document().model().view(diagram).and_then(|v| v.get(node)).map(|p| &p.shape);
+    let height = match shape {
+        Some(Shape::Lifeline { head, length, .. }) if lifeline => head.height + length,
+        _ => height,
+    };
     Ok(Reply::json(
         json!({ "presentation": node, "x": x, "y": y, "width": width, "height": height }),
     ))

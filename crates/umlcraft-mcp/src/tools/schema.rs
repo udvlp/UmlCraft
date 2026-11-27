@@ -755,8 +755,10 @@ pub fn list() -> Vec<Value> {
              presentation from `get_diagram`) takes a new top `y` and `height`, e.g. one bar \
              from a lifeline's first message to its last; bars it then covers stay nested in \
              it until `remove_from_diagram` removes them, and messages added later start their \
-             own bars as usual. A box given a `width` or `height` keeps that size instead of \
-             fitting its content.",
+             own bars as usual. A lifeline's `height` is how far down it runs from the top of \
+             its head, as when its end is dragged, though not above its last message, bar or \
+             fragment; its head keeps its size. A box given a `width` or `height` keeps that \
+             size instead of fitting its content.",
             json!({
                 "diagram": id("The diagram."),
                 "node": id("The element or its presentation: a node, a message, or an \
@@ -764,7 +766,8 @@ pub fn list() -> Vec<Value> {
                 "x": number("Left edge; kept if omitted. Not for activation bars."),
                 "y": number("Top edge, or a message's height."),
                 "width": number("New width. Not for activation bars."),
-                "height": number("New height."),
+                "height": number("New height; for a lifeline, its length from the top of its \
+                                  head."),
             }),
             &["diagram", "node", "y"],
         ),

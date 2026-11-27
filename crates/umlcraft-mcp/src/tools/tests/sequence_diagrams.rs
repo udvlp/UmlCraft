@@ -1055,6 +1055,66 @@ fn activation_bars_are_listed_moved_and_joined() {
     assert_eq!(bars(&mut host), after);
 }
 
+/// `move_node` with `height` on a lifeline sets how far down it runs, as dragging its end does,
+/// and leaves its head as it is; it stops no higher than its last message (#114).
+#[test]
+fn a_lifeline_given_a_height_ends_there() {
+    let mut host = Headless::new();
+    let r = build(
+        &mut host,
+        json!([
+            { "tool": "create_diagram", "arguments": { "kind": "sequence", "name": "s",
+                "message_numbers": false } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                "tool": "lifeline", "name": "a", "x": 40 } },
+            { "tool": "create_element", "arguments": { "diagram": "$0.diagram",
+                "tool": "lifeline", "name": "b", "x": 240 } },
+            { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "message",
+                "source": "$1.element", "target": "$2.element", "name": "first()", "y": 120 } },
+            { "tool": "connect", "arguments": { "diagram": "$0.diagram", "tool": "message",
+                "source": "$1.element", "target": "$2.element", "name": "second()", "y": 500 } },
+        ]),
+    );
+    let d = r[0]["diagram"].clone();
+    let a = r[1]["element"].clone();
+    let bounds = |host: &mut Headless, element: &Value| {
+        let diagram = run(host, "get_diagram", json!({ "diagram": d }));
+        let node = diagram["nodes"].as_array().unwrap().iter().find(|n| &n["element"] == element);
+        let b = node.unwrap()["bounds"].clone();
+        let n = |k: &str| b[k].as_f64().unwrap();
+        (n("y"), n("y") + n("height"))
+    };
+    let head = |host: &Headless| {
+        let model = host.document().model();
+        let view = model.view(parse_id(d.as_str().unwrap()).unwrap()).unwrap();
+        let element = parse_id(a.as_str().unwrap()).ok();
+        let lane = view.presentations().iter().find(|p| p.element == element).unwrap();
+        match lane.shape {
+            Shape::Lifeline { head, .. } => head,
+            _ => panic!("no lifeline"),
+        }
+    };
+    let move_second = json!({ "diagram": d, "node": r[4]["element"], "y": 170 });
+    run(&mut host, "move_node", move_second);
+    let (top, long) = bounds(&mut host, &a);
+    assert!(long > 500.0, "{long}");
+    let before = head(&host);
+
+    let moved =
+        run(&mut host, "move_node", json!({ "diagram": d, "node": a, "y": top, "height": 200 }));
+    let (_, short) = bounds(&mut host, &a);
+    assert_eq!(head(&host), before, "the head keeps its size");
+    assert_eq!(short, top + 200.0);
+    assert_eq!(moved["height"].as_f64(), Some(200.0));
+    // Not above its last message: it stops just below what it reaches.
+    let moved =
+        run(&mut host, "move_node", json!({ "diagram": d, "node": a, "y": top, "height": 20 }));
+    let (_, reach) = bounds(&mut host, &a);
+    assert!((170.0..260.0).contains(&reach), "{reach}");
+    assert_eq!(moved["height"].as_f64(), Some(reach - top));
+    host.document().model().check().unwrap();
+}
+
 #[test]
 fn lifelines_standing_for_an_actor_are_stick_figures() {
     let mut host = Headless::new();
