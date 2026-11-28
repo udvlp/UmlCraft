@@ -114,7 +114,9 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/umlcraft.exe \
             target/x86_64-pc-windows-msvc/release/umlcraft-cli.exe "dist/$name/"
           cp README.md LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.html "dist/$name/"
-          (cd dist && 7z a -tzip "$name.zip" "$name")
+          # The files at the top of the zip, which the Craft apps' launcher (storytold's
+          # craft-launcher) expects of a `-portable.zip`.
+          (cd "dist/$name" && 7z a -tzip "../$name-portable.zip" .)
 
       - name: Build the Windows installer
         if: runner.os == 'Windows'

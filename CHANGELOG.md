@@ -11,6 +11,8 @@ today.
   labels, the groups to its right take theirs back if they fit, so an activity diagram's notes
   stay labelled beside its many elements. Last, a group folds into one button named after it,
   which opens its buttons as a menu.
+- **Windows zip**: it is now `UmlCraft-<version>-windows-x64-portable.zip`, with `umlcraft.exe`
+  at its top instead of in a folder, as the launcher of the Craft apps expects.
 
 ## 0.25.3 – 2026-11-27
 

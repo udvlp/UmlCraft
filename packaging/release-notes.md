@@ -3,7 +3,7 @@
 | System | File |
 | --- | --- |
 | Windows 10/11 (x64) | `UmlCraft-*-windows-x64-setup.exe`: installs for you alone without administrator rights, or for all users, and opens `.ucraft` files with UmlCraft |
-| Windows 10/11 (x64), without installing | `UmlCraft-*-windows-x64.zip`: unpack and start `umlcraft.exe` |
+| Windows 10/11 (x64), without installing | `UmlCraft-*-windows-x64-portable.zip`: unpack into a folder of its own and start `umlcraft.exe` |
 | macOS 11 or later (Apple Silicon and Intel) | `UmlCraft-*-macos-universal.dmg`: drag UmlCraft into Applications |
 | Debian, Ubuntu (x64) | `UmlCraft-*-linux-x64.deb`: `sudo apt install ./UmlCraft-*-linux-x64.deb` |
 | Fedora, openSUSE (x64) | `UmlCraft-*-linux-x64.rpm`: `sudo dnf install ./UmlCraft-*-linux-x64.rpm` or `sudo zypper install ./UmlCraft-*-linux-x64.rpm` |
