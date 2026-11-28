@@ -7,7 +7,10 @@ today.
 
 - **Ribbon**: the groups shrink one at a time from the right, as in Office, instead of all
   together: in a narrower window a class diagram's notes lose their labels first, then its
-  relationships, while its elements keep theirs.
+  relationships, while its elements keep theirs. Where a group on the left had to give up its
+  labels, the groups to its right take theirs back if they fit, so an activity diagram's notes
+  stay labelled beside its many elements. Last, a group folds into one button named after it,
+  which opens its buttons as a menu.
 
 ## 0.25.3 – 2026-11-27
 

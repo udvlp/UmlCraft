@@ -6,9 +6,9 @@
 use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
+    ActiveTheme, Disableable, Icon, IconName, Selectable, Side, Sizable, StyledExt, h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -78,6 +78,18 @@ pub enum MenuEntry {
         checked: bool,
         action: Box<dyn Action>,
     },
+    /// A button of a collapsed group: its icon and label, greyed out when it is disabled,
+    /// checked when it is selected.
+    Button {
+        label: String,
+        icon: SharedString,
+        action: Box<dyn Action>,
+        enabled: bool,
+        selected: bool,
+    },
+    /// The name of the entries below, which a collapsed group's menu button had.
+    Heading(String),
+    Separator,
 }
 
 pub struct Item {
@@ -642,77 +654,122 @@ pub fn label_lines(label: &str) -> (&str, &str) {
         .unwrap_or((label, ""))
 }
 
-/// How wide the groups are with labels, each text measured by `measure` (text, font size);
-/// with less room the ribbon shows icons only.
-pub fn width(groups: &[Group], measure: impl Fn(&str, Pixels) -> f32) -> f32 {
-    let label_width = |label: &str| measure(label, LABEL);
-    groups
-        .iter()
-        .map(|g| {
-            // The widths of the group's large buttons and columns of small ones, in order.
-            let mut parts: Vec<f32> = Vec::new();
-            let mut column: Vec<f32> = Vec::new();
-            let flush = |column: &mut Vec<f32>, parts: &mut Vec<f32>| {
-                if let Some(widest) = column.iter().copied().reduce(f32::max) {
-                    parts.push(widest);
-                }
-                column.clear();
-            };
-            for item in &g.items {
-                let caret = if item.menu.is_empty() { 0.0 } else { CARET };
-                match item.size {
-                    Size::Large => {
-                        flush(&mut column, &mut parts);
-                        let (first, second) = label_lines(&item.label);
-                        let label = label_width(first).max(label_width(second) + caret);
-                        parts.push((label + BUTTON_PADDING).max(LARGE_MIN));
-                    }
-                    Size::Small | Size::Icon => {
-                        let label = match item.size {
-                            Size::Small => SMALL_GAP + label_width(&item.label),
-                            _ => 0.0,
-                        };
-                        // A small button with a menu and no action of its own has a caret.
-                        let caret = if item.action.is_none() { caret } else { 0.0 };
-                        column.push(SMALL_ICON + label + caret + BUTTON_PADDING);
-                        if column.len() == 3 {
-                            flush(&mut column, &mut parts);
-                        }
-                    }
-                }
-            }
-            flush(&mut column, &mut parts);
-            let gaps = COLUMN_GAP * parts.len().saturating_sub(1) as f32;
-            let buttons = parts.iter().sum::<f32>() + gaps;
-            buttons.max(measure(&g.caption, CAPTION)) + GROUP_PADDING
-        })
-        .sum()
+/// How wide the groups are with labels, each text measured by `measure` (text, font size).
+#[cfg(test)]
+fn width(groups: &[Group], measure: impl Fn(&str, Pixels) -> f32) -> f32 {
+    groups.iter().map(|g| group_width(g, &measure)).sum()
 }
 
+/// How wide a group is, its line after it included.
+fn group_width(g: &Group, measure: impl Fn(&str, Pixels) -> f32) -> f32 {
+    let label_width = |label: &str| measure(label, LABEL);
+    // The widths of the group's large buttons and columns of small ones, in order.
+    let mut parts: Vec<f32> = Vec::new();
+    let mut column: Vec<f32> = Vec::new();
+    let flush = |column: &mut Vec<f32>, parts: &mut Vec<f32>| {
+        if let Some(widest) = column.iter().copied().reduce(f32::max) {
+            parts.push(widest);
+        }
+        column.clear();
+    };
+    for item in &g.items {
+        let caret = if item.menu.is_empty() { 0.0 } else { CARET };
+        match item.size {
+            Size::Large => {
+                flush(&mut column, &mut parts);
+                let (first, second) = label_lines(&item.label);
+                let label = label_width(first).max(label_width(second) + caret);
+                parts.push((label + BUTTON_PADDING).max(LARGE_MIN));
+            }
+            Size::Small | Size::Icon => {
+                let label = match item.size {
+                    Size::Small => SMALL_GAP + label_width(&item.label),
+                    _ => 0.0,
+                };
+                // A small button with a menu and no action of its own has a caret.
+                let caret = if item.action.is_none() { caret } else { 0.0 };
+                column.push(SMALL_ICON + label + caret + BUTTON_PADDING);
+                if column.len() == 3 {
+                    flush(&mut column, &mut parts);
+                }
+            }
+        }
+    }
+    flush(&mut column, &mut parts);
+    let gaps = COLUMN_GAP * parts.len().saturating_sub(1) as f32;
+    let buttons = parts.iter().sum::<f32>() + gaps;
+    buttons.max(measure(&g.caption, CAPTION)) + GROUP_PADDING
+}
+
+/// How a group shrinks, one step after the other: its large buttons become small ones, its
+/// small buttons lose their labels, it folds into one button. Each step tells whether it
+/// changed the group.
+const STEPS: [fn(&mut Group) -> bool; 3] = [small_buttons, without_labels, collapsed];
+
 /// The groups `make` builds as they fit into `room` pixels, and whether they show icons only.
-/// As in Office the groups shrink one at a time from the right, until the ribbon fits: first
+/// As in Office the groups shrink one at a time from the right until the ribbon fits: first
 /// the large buttons of a group with several become small ones, their labels beside their
 /// icons, three to a column, group after group; then the small buttons lose their labels,
-/// group after group; when that is not enough either, the ribbon shows icons only.
+/// group after group; then the groups fold into a button each. Shrinking a group on the left
+/// may leave room for one on the right: from the left, each group then takes back what fits.
+/// When even folded groups are too wide, the ribbon shows icons only.
 pub fn fit(
     make: impl Fn() -> Vec<Group>,
     room: f32,
     measure: impl Fn(&str, Pixels) -> f32,
 ) -> (Vec<Group>, bool) {
-    let mut groups = make();
-    let fits = |groups: &[Group]| width(groups, &measure) <= room;
-    if fits(&groups) {
+    let groups = make();
+    let n = groups.len();
+    // The width of each group after each step (`widths[group][level]`, level 0 as built), and
+    // which groups each step changed (`changed[step]`).
+    let mut widths: Vec<Vec<f32>> = groups.iter().map(|g| vec![group_width(g, &measure)]).collect();
+    if widths.iter().map(|w| w[0]).sum::<f32>() <= room {
         return (groups, false);
     }
-    let steps: [fn(&mut Group) -> bool; 2] = [small_buttons, without_labels];
-    for step in steps {
-        for i in (0..groups.len()).rev() {
-            if step(&mut groups[i]) && fits(&groups) {
-                return (groups, false);
+    let mut shrunk = groups;
+    let mut changed: Vec<Vec<bool>> = Vec::new();
+    for step in STEPS {
+        let mut row = Vec::new();
+        for (g, w) in shrunk.iter_mut().zip(&mut widths) {
+            row.push(step(g));
+            w.push(group_width(g, &measure));
+        }
+        changed.push(row);
+    }
+
+    let total = |levels: &[usize]| -> f32 { levels.iter().zip(&widths).map(|(&l, w)| w[l]).sum() };
+    let mut levels = vec![0; n];
+    let mut fits = false;
+    'shrink: for (step, changed) in changed.iter().enumerate() {
+        for i in (0..n).rev() {
+            levels[i] = step + 1;
+            if changed[i] && total(&levels) <= room {
+                fits = true;
+                break 'shrink;
             }
         }
     }
-    (make(), true)
+    if !fits {
+        return (make(), true);
+    }
+    for i in 0..n {
+        while levels[i] > 0 {
+            let mut fewer = levels.clone();
+            fewer[i] -= 1;
+            if total(&fewer) > room {
+                break;
+            }
+            levels = fewer;
+        }
+    }
+
+    let mut groups = make();
+    for (g, &level) in groups.iter_mut().zip(&levels) {
+        for step in &STEPS[..level] {
+            step(g);
+        }
+    }
+    (groups, false)
 }
 
 /// Turns the large buttons of a group with more than two into small ones; whether any changed.
@@ -725,6 +782,44 @@ fn small_buttons(group: &mut Group) -> bool {
     for item in group.items.iter_mut().filter(|i| large(i)) {
         item.size = Size::Small;
     }
+    true
+}
+
+/// Folds a group of several buttons into one large button named after the group, which opens
+/// the group's buttons as a menu, as Office does last; whether the group had several. The
+/// button shows the selected tool's icon, else the first button's, and is selected with it.
+fn collapsed(group: &mut Group) -> bool {
+    if group.items.len() < 2 {
+        return false;
+    }
+    let items = std::mem::take(&mut group.items);
+    let shown = items.iter().find(|i| i.selected).unwrap_or(&items[0]);
+    let mut button = Item::new(format!("group-{}-collapsed", group.id), shown.icon.clone(), "");
+    button.label = std::mem::take(&mut group.caption);
+    button.selected = items.iter().any(|i| i.selected);
+    for item in items {
+        match item.action {
+            Some(action) => button.menu.push(MenuEntry::Button {
+                label: item.label,
+                icon: item.icon,
+                action,
+                enabled: item.enabled,
+                selected: item.selected,
+            }),
+            // A menu button's entries under its name, between lines.
+            None if item.enabled => {
+                if !button.menu.is_empty() {
+                    button.menu.push(MenuEntry::Separator);
+                }
+                button.menu.push(MenuEntry::Heading(item.label));
+            }
+            None => continue,
+        }
+        if !item.menu.is_empty() {
+            button.menu.extend(item.menu);
+        }
+    }
+    group.items = vec![button];
     true
 }
 
@@ -800,7 +895,20 @@ fn entries_menu(
                 MenuEntry::Check { label, checked, action } => {
                     menu.menu_with_check(label.clone(), *checked, action.boxed_clone())
                 }
+                MenuEntry::Button { label, icon, action, enabled, selected } => menu.item(
+                    PopupMenuItem::new(label.clone())
+                        .icon(shell::icon(icon.clone()))
+                        .action(action.boxed_clone())
+                        .disabled(!enabled)
+                        .checked(*selected),
+                ),
+                MenuEntry::Heading(label) => menu.label(label.clone()),
+                MenuEntry::Separator => menu.separator(),
             };
+        }
+        // A button keeps its icon, its check goes to the right.
+        if entries.iter().any(|e| matches!(e, MenuEntry::Button { .. })) {
+            menu = menu.check_side(Side::Right);
         }
         menu.action_context(focus.clone())
     }
@@ -1039,7 +1147,7 @@ mod tests {
         sort_key, tabs, view, width,
     };
     use umlcraft_model::{DiagramKind, DiagramProps, ElementKind, ErNotation};
-    use umlcraft_notation::palette::{self, Tool};
+    use umlcraft_notation::palette::{self, EdgeTool, Tool};
 
     fn props(kind: DiagramKind) -> DiagramProps {
         match ElementKind::diagram(kind) {
@@ -1269,7 +1377,65 @@ mod tests {
         assert!(sizes(&groups, "relations").iter().all(|&s| s == Size::Icon));
         assert!(sizes(&groups, "elements").iter().all(|&s| s == Size::Small));
         icons(&mut all, "elements");
-        let (_, compact) = fit(make, width(&all, measure) - 1.0, measure);
+
+        // Then the groups fold into a button each from the right, the notes first: a menu of
+        // their buttons, with their icons; the selected tool's group is selected.
+        let (groups, compact) = fit(make, width(&all, measure) - 1.0, measure);
+        assert!(!compact);
+        let notes = groups.iter().find(|g| g.id == "notes").unwrap();
+        assert_eq!(notes.items.len(), 1);
+        assert!(notes.caption.is_empty() && !notes.items[0].label.is_empty());
+        assert!(notes.items[0].action.is_none() && !notes.items[0].selected);
+        assert!(notes.items[0].menu.iter().all(|e| matches!(e, MenuEntry::Button { .. })));
+        assert!(sizes(&groups, "relations").iter().all(|&s| s == Size::Icon));
+
+        // Only when every group is folded and still too wide, icons only.
+        let mut folded = make();
+        folded.iter_mut().for_each(|g| {
+            super::collapsed(g);
+        });
+        let (groups, compact) = fit(make, width(&folded, measure), measure);
+        assert!(!compact && groups.iter().all(|g| g.items.len() == 1));
+        assert!(groups.iter().find(|g| g.id == "select").unwrap().items[0].action.is_some());
+        let (_, compact) = fit(make, 100.0, measure);
         assert!(compact);
+    }
+
+    #[test]
+    fn a_folded_group_shows_its_selected_tool() {
+        let tools = palette::diagram_palette(&props(DiagramKind::Class));
+        let mut groups = diagram(&tools, Tool::Edge(EdgeTool::Generalization), None, None);
+        let relations = groups.iter_mut().find(|g| g.id == "relations").unwrap();
+        let icon = relations.items.iter().find(|i| i.selected).unwrap().icon.clone();
+        assert!(super::collapsed(relations));
+        assert!(relations.items[0].selected);
+        assert_eq!(relations.items[0].icon, icon);
+        let checked = relations.items[0]
+            .menu
+            .iter()
+            .filter(|e| matches!(e, MenuEntry::Button { selected: true, .. }));
+        assert_eq!(checked.count(), 1);
+    }
+
+    #[test]
+    fn groups_take_back_what_fits() {
+        // An activity diagram's many elements lose their labels last; the room that leaves
+        // gives the notes and relationships theirs back.
+        let make = || {
+            let tools = palette::diagram_palette(&props(DiagramKind::Activity));
+            diagram(&tools, Tool::Select, None, None)
+        };
+        let measure = |text: &str, _| text.chars().count() as f32 * 7.0;
+        let mut bare = make();
+        bare.iter_mut().for_each(|g| {
+            super::small_buttons(g);
+            super::without_labels(g);
+        });
+        let (groups, compact) = fit(make, width(&bare, measure) + 150.0, measure);
+        assert!(!compact);
+        let elements = groups.iter().find(|g| g.id == "elements").unwrap();
+        assert!(elements.items.iter().all(|i| i.size == Size::Icon));
+        let notes = groups.iter().find(|g| g.id == "notes").unwrap();
+        assert!(notes.items.iter().all(|i| i.size == Size::Small));
     }
 }
