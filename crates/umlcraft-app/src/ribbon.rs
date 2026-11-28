@@ -689,40 +689,53 @@ pub fn width(groups: &[Group], measure: impl Fn(&str, Pixels) -> f32) -> f32 {
         .sum()
 }
 
-/// The groups `make` builds as they fit into `room` pixels, and whether they show icons only:
-/// as built; else the large buttons of a group with several become small ones, their labels
-/// beside their icons, three to a column; else the small buttons lose their labels too; else
-/// icons only. So the labels go one step at a time, as in Office, not all at once.
+/// The groups `make` builds as they fit into `room` pixels, and whether they show icons only.
+/// As in Office the groups shrink one at a time from the right, until the ribbon fits: first
+/// the large buttons of a group with several become small ones, their labels beside their
+/// icons, three to a column, group after group; then the small buttons lose their labels,
+/// group after group; when that is not enough either, the ribbon shows icons only.
 pub fn fit(
     make: impl Fn() -> Vec<Group>,
     room: f32,
     measure: impl Fn(&str, Pixels) -> f32,
 ) -> (Vec<Group>, bool) {
     let mut groups = make();
-    if width(&groups, &measure) <= room {
+    let fits = |groups: &[Group]| width(groups, &measure) <= room;
+    if fits(&groups) {
         return (groups, false);
     }
-    for g in &mut groups {
-        let large = g.items.iter().filter(|i| i.size == Size::Large).count();
-        // A large split button or menu has no small form: it keeps its size.
-        for item in g.items.iter_mut().filter(|i| large > 2 && i.menu.is_empty()) {
-            if item.size == Size::Large {
-                item.size = Size::Small;
+    let steps: [fn(&mut Group) -> bool; 2] = [small_buttons, without_labels];
+    for step in steps {
+        for i in (0..groups.len()).rev() {
+            if step(&mut groups[i]) && fits(&groups) {
+                return (groups, false);
             }
         }
     }
-    if width(&groups, &measure) <= room {
-        return (groups, false);
-    }
-    for item in groups.iter_mut().flat_map(|g| g.items.iter_mut()) {
-        if item.size == Size::Small {
-            item.size = Size::Icon;
-        }
-    }
-    if width(&groups, &measure) <= room {
-        return (groups, false);
-    }
     (make(), true)
+}
+
+/// Turns the large buttons of a group with more than two into small ones; whether any changed.
+/// A large split button or menu has no small form: it keeps its size.
+fn small_buttons(group: &mut Group) -> bool {
+    let large = |i: &Item| i.size == Size::Large && i.menu.is_empty();
+    if group.items.iter().filter(|i| large(i)).count() <= 2 {
+        return false;
+    }
+    for item in group.items.iter_mut().filter(|i| large(i)) {
+        item.size = Size::Small;
+    }
+    true
+}
+
+/// Takes the labels off a group's small buttons; whether any had one.
+fn without_labels(group: &mut Group) -> bool {
+    let mut changed = false;
+    for item in group.items.iter_mut().filter(|i| i.size == Size::Small) {
+        item.size = Size::Icon;
+        changed = true;
+    }
+    changed
 }
 
 // ----- Drawing ------------------------------------------------------------------------------
@@ -1237,10 +1250,26 @@ mod tests {
         assert!(sizes(&groups, "relations").iter().all(|&s| s == Size::Small));
         let small = width(&groups, measure);
 
-        // Less still: the small buttons lose their labels, then everything does.
+        // Less still: the small buttons lose their labels group by group from the right, the
+        // notes first, the relationships still labelled.
         let (groups, compact) = fit(make, small - 1.0, measure);
-        assert!(!compact && sizes(&groups, "relations").iter().all(|&s| s == Size::Icon));
-        let (_, compact) = fit(make, 100.0, measure);
+        assert!(!compact);
+        assert!(sizes(&groups, "notes").iter().all(|&s| s == Size::Icon));
+        assert!(sizes(&groups, "relations").iter().all(|&s| s == Size::Small));
+        assert!(sizes(&groups, "elements").iter().all(|&s| s == Size::Small));
+
+        // Then the relationships, then the elements; with less room still, icons only.
+        let icons = |groups: &mut Vec<Group>, id: &str| {
+            let g = groups.iter_mut().find(|g| g.id == id).unwrap();
+            g.items.iter_mut().for_each(|i| i.size = Size::Icon);
+        };
+        let mut all = groups;
+        icons(&mut all, "relations");
+        let (groups, _) = fit(make, width(&all, measure), measure);
+        assert!(sizes(&groups, "relations").iter().all(|&s| s == Size::Icon));
+        assert!(sizes(&groups, "elements").iter().all(|&s| s == Size::Small));
+        icons(&mut all, "elements");
+        let (_, compact) = fit(make, width(&all, measure) - 1.0, measure);
         assert!(compact);
     }
 }

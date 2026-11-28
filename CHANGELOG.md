@@ -3,6 +3,12 @@
 What changed from release to release. The [README](README.md) describes what UmlCraft can do
 today.
 
+## Unreleased
+
+- **Ribbon**: the groups shrink one at a time from the right, as in Office, instead of all
+  together: in a narrower window a class diagram's notes lose their labels first, then its
+  relationships, while its elements keep theirs.
+
 ## 0.25.3 – 2026-11-27
 
 - **Ribbon labels** go one step at a time when the window gets narrower: first a group's large
